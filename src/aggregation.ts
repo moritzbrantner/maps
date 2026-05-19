@@ -1,0 +1,20 @@
+export {
+  createGeoDensityViewportSummary as createMapDensityViewportSummary,
+  createGeoPointAggregationIndex as createPointAggregationIndex,
+  getBoundsFromGeoPoints as getBoundsFromPoints,
+} from "@moritzbrantner/data-density";
+export type {
+  AggregatedGeoDensityCluster as AggregatedMapCluster,
+  AggregatedGeoDensityFeature as AggregatedMapFeature,
+  AggregatedGeoDensityPoint as AggregatedMapPoint,
+  DataDensityMetricRecord as MapMetricRecord,
+  GeoDensityPoint as MapPoint,
+  GeoDensityViewportSummary as MapDensityViewportSummary,
+  GeoDensityPointFilter as MapPointFilter,
+  GeoPointAggregationIndex as PointAggregationIndex,
+  GeoPointAggregationIndexOptions as PointAggregationIndexOptions,
+  GeoViewportAggregation as ViewportAggregation,
+  GeoViewportAggregationQuery as ViewportAggregationQuery,
+  IndexedGeoDensityPoint as IndexedMapPoint,
+  VisibleGeoAggregationSummary as VisibleAggregationSummary,
+} from "@moritzbrantner/data-density";

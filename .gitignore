@@ -1,0 +1,15 @@
+node_modules/
+.turbo/
+dist/
+packages/*/dist/
+coverage/
+packages/*/coverage/
+playwright-report/
+packages/*/playwright-report/
+test-results/
+packages/*/test-results/
+storybook-static/
+packages/*/storybook-static/
+packages/*/*.tgz
+
+/backups/

@@ -1,0 +1,92 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@source "./dist/**/*.{js,mjs}";
+@source "./src/**/*.{ts,tsx}";
+
+@layer components {
+  .mb-maps {
+    @apply relative overflow-hidden;
+    background:
+      radial-gradient(circle at top, rgb(14 116 144 / 0.18), transparent 42%),
+      linear-gradient(180deg, rgb(15 23 42 / 0.02), rgb(15 23 42 / 0.12));
+  }
+
+  .mb-maps__canvas,
+  .mb-maps .leaflet-container {
+    @apply absolute inset-0 size-full;
+  }
+
+  .mb-maps .leaflet-control-container .leaflet-top.leaflet-left {
+    @apply left-4 top-4;
+  }
+
+  .mb-maps .leaflet-bar {
+    @apply overflow-hidden rounded-full border border-slate-900/10 shadow-[0_10px_30px_rgb(15_23_42_/_0.18)];
+  }
+
+  .mb-maps .leaflet-bar a {
+    @apply size-[34px];
+  }
+
+  .mb-maps__cluster-count {
+    @apply grid place-items-center text-xs font-bold text-white;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+
+  .mb-maps__cluster-marker,
+  .mb-maps__point-marker {
+    cursor: pointer;
+  }
+
+  .mb-maps__heat-marker {
+    mix-blend-mode: multiply;
+  }
+
+  .mb-temporal-map {
+    @apply grid gap-4;
+  }
+
+  .mb-temporal-map__timeline {
+    @apply grid items-center gap-4 rounded-[1.25rem] border border-slate-900/8 bg-white/88 px-[1.125rem] py-4 shadow-[0_16px_40px_rgb(15_23_42_/_0.08)] backdrop-blur-[16px];
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .mb-temporal-map__playback-toggle {
+    @apply cursor-pointer rounded-full border-0 px-[1.1rem] py-[0.7rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45;
+    appearance: none;
+    background: linear-gradient(135deg, #0f766e, #0f172a);
+    font: inherit;
+  }
+
+  .mb-temporal-map__axis {
+    @apply grid items-center gap-[0.85rem];
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .mb-temporal-map__axis-boundary,
+  .mb-temporal-map__current-time {
+    @apply text-[0.9rem] text-slate-900/78;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mb-temporal-map__current-time {
+    @apply justify-self-end font-semibold;
+  }
+
+  .mb-temporal-map__slider {
+    @apply w-full accent-[#0f766e];
+  }
+}
+
+@media (max-width: 720px) {
+  .mb-temporal-map__timeline,
+  .mb-temporal-map__axis {
+    grid-template-columns: 1fr;
+  }
+
+  .mb-temporal-map__current-time {
+    @apply justify-self-start;
+  }
+}
