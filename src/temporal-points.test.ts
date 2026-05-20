@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  createTemporalMapPlaybackIndex,
   getTemporalMapPointsAtTime,
   getTemporalMapTimeRange,
   snapTemporalMapTime,
@@ -170,5 +171,78 @@ describe("@moritzbrantner/maps temporal points", () => {
         properties: {},
       },
     ]);
+  });
+
+  test("indexes temporal playback with the same results as one-shot point resolution", () => {
+    const tracks: TemporalMapTrack<{ route?: string; status?: string }>[] = [
+      {
+        id: "courier-1",
+        label: "Courier 1",
+        metrics: { load: 2 },
+        properties: { route: "Seattle to Denver", status: "dispatching" },
+        frames: [
+          {
+            latitude: 39.7392,
+            longitude: -104.9903,
+            metrics: { revenue: 320 },
+            properties: { status: "arrived" },
+            time: 10,
+          },
+          {
+            latitude: 47.6062,
+            longitude: -122.3321,
+            metrics: { revenue: 120 },
+            time: 0,
+          },
+          {
+            latitude: Number.NaN,
+            longitude: -100,
+            time: 12,
+          },
+        ],
+      },
+      {
+        id: "courier-2",
+        frames: [
+          {
+            latitude: 25.7617,
+            longitude: -80.1918,
+            time: 2,
+            visible: false,
+          },
+          {
+            latitude: 29.7604,
+            longitude: -95.3698,
+            metrics: { stops: 4 },
+            properties: { route: "Gulf" },
+            time: 6,
+          },
+          {
+            latitude: 32.7767,
+            longitude: -96.797,
+            time: 10,
+            visible: false,
+          },
+        ],
+      },
+      {
+        id: "invalid",
+        frames: [
+          {
+            latitude: 0,
+            longitude: 0,
+            time: Number.POSITIVE_INFINITY,
+          },
+        ],
+      },
+    ];
+    const playbackIndex = createTemporalMapPlaybackIndex(tracks);
+
+    expect(playbackIndex.getTimeRange()).toEqual({ end: 10, start: 0 });
+    expect(playbackIndex.getPointsAtTime(Number.NaN)).toEqual([]);
+
+    for (const time of [-1, 0, 4, 5, 6, 8, 10, 12]) {
+      expect(playbackIndex.getPointsAtTime(time)).toEqual(getTemporalMapPointsAtTime(tracks, time));
+    }
   });
 });

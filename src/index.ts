@@ -42,10 +42,12 @@ export {
   type HeatMapWeightOptions,
 } from "./heat-map";
 export {
+  createTemporalMapPlaybackIndex,
   getTemporalMapPointsAtTime,
   getTemporalMapTimeRange,
   snapTemporalMapTime,
   type TemporalMapKeyframe,
+  type TemporalMapPlaybackIndex,
   type TemporalMapTimeRange,
   type TemporalMapTrack,
 } from "./temporal-points";

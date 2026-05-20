@@ -14,6 +14,7 @@ import {
   parseTemporalGeoJsonTime,
   type TemporalMapTimeRange,
 } from "./temporal-core";
+import { getMapsKernelRuntime } from "./kernels/runtime";
 
 export type GeoJsonPosition = [longitude: number, latitude: number];
 
@@ -332,6 +333,12 @@ export function createTemporalGeoJsonPlaybackIndex<TProperties = Record<string, 
   };
 }
 
+/**
+ * Resolves a temporal GeoJSON feature collection for one-off calls.
+ *
+ * For playback or repeated lookups, prefer createTemporalGeoJsonPlaybackIndex so frame
+ * sorting, normalization, dense geometry resampling, and interpolation setup happen once.
+ */
 export function getTemporalGeoJsonFeatureCollectionAtTime<TProperties = Record<string, unknown>>(
   tracks: readonly TemporalGeoJsonTrack<TProperties>[],
   time: number,
@@ -801,14 +808,18 @@ function materializePreparedPositions(
   coordinates: PreparedFlatCoordinates,
   progress: number,
 ): GeoJsonPosition[] {
-  return Array.from({ length: coordinates.coordinateCount }, (_, index) => {
+  const positions = new Array<GeoJsonPosition>(coordinates.coordinateCount);
+
+  for (let index = 0; index < coordinates.coordinateCount; index += 1) {
     const offset = index * 2;
 
-    return [
+    positions[index] = [
       coordinates.start[offset]! + coordinates.delta[offset]! * progress,
       coordinates.start[offset + 1]! + coordinates.delta[offset + 1]! * progress,
     ];
-  });
+  }
+
+  return positions;
 }
 
 function findFirstTimeIndexAfter(times: readonly number[], time: number) {
@@ -1516,87 +1527,44 @@ function resampleLine(
   coordinates: readonly GeoJsonPosition[],
   coordinateCount: number,
 ): GeoJsonPosition[] {
-  if (coordinates.length === coordinateCount) {
-    return coordinates.map(clonePosition);
-  }
-
-  const distances = getCumulativeDistances(coordinates, false);
-  const totalDistance = distances.at(-1) ?? 0;
-
-  if (totalDistance === 0) {
-    return Array.from({ length: coordinateCount }, () => clonePosition(coordinates[0]!));
-  }
-
-  return Array.from({ length: coordinateCount }, (_, index) => {
-    if (index === coordinateCount - 1) {
-      return clonePosition(coordinates[coordinates.length - 1]!);
-    }
-
-    return interpolateAlongPath(
-      coordinates,
-      distances,
-      (totalDistance * index) / (coordinateCount - 1),
-      false,
-    );
-  });
+  return flatCoordinatesToPositions(
+    getMapsKernelRuntime().resampleLineFlat(positionsToFlatCoordinates(coordinates), coordinateCount),
+  );
 }
 
 function resampleRing(
   openRing: readonly GeoJsonPosition[],
   coordinateCount: number,
 ): GeoJsonPosition[] {
-  const distances = getCumulativeDistances(openRing, true);
-  const totalDistance = distances.at(-1) ?? 0;
-
-  if (totalDistance === 0) {
-    return Array.from({ length: coordinateCount }, () => clonePosition(openRing[0]!));
-  }
-
-  return Array.from({ length: coordinateCount }, (_, index) =>
-    interpolateAlongPath(openRing, distances, (totalDistance * index) / coordinateCount, true),
+  return flatCoordinatesToPositions(
+    getMapsKernelRuntime().resampleRingFlat(positionsToFlatCoordinates(openRing), coordinateCount),
   );
 }
 
-function getCumulativeDistances(coordinates: readonly GeoJsonPosition[], closed: boolean) {
-  const distances = [0];
-  const segmentCount = closed ? coordinates.length : coordinates.length - 1;
+function positionsToFlatCoordinates(coordinates: readonly GeoJsonPosition[]) {
+  const flatCoordinates = new Float64Array(coordinates.length * 2);
 
-  for (let index = 0; index < segmentCount; index += 1) {
-    const start = coordinates[index]!;
-    const end = coordinates[(index + 1) % coordinates.length]!;
+  for (let index = 0; index < coordinates.length; index += 1) {
+    const offset = index * 2;
+    const coordinate = coordinates[index]!;
 
-    distances.push(distances[index]! + distance(start, end));
+    flatCoordinates[offset] = coordinate[0];
+    flatCoordinates[offset + 1] = coordinate[1];
   }
 
-  return distances;
+  return flatCoordinates;
 }
 
-function interpolateAlongPath(
-  coordinates: readonly GeoJsonPosition[],
-  distances: readonly number[],
-  targetDistance: number,
-  closed: boolean,
-): GeoJsonPosition {
-  const segmentCount = closed ? coordinates.length : coordinates.length - 1;
+function flatCoordinatesToPositions(coordinates: Float64Array): GeoJsonPosition[] {
+  const positions = new Array<GeoJsonPosition>(coordinates.length / 2);
 
-  for (let index = 0; index < segmentCount; index += 1) {
-    const segmentStartDistance = distances[index]!;
-    const segmentEndDistance = distances[index + 1]!;
+  for (let index = 0; index < positions.length; index += 1) {
+    const offset = index * 2;
 
-    if (targetDistance > segmentEndDistance) {
-      continue;
-    }
-
-    const start = coordinates[index]!;
-    const end = coordinates[(index + 1) % coordinates.length]!;
-    const segmentLength = segmentEndDistance - segmentStartDistance;
-    const progress =
-      segmentLength === 0 ? 0 : (targetDistance - segmentStartDistance) / segmentLength;
-
-    return interpolatePosition(start, end, progress);
+    positions[index] = [coordinates[offset]!, coordinates[offset + 1]!];
   }
 
-  return clonePosition(coordinates[coordinates.length - 1]!);
+  return positions;
 }
 
 function sampleRingByAngle(

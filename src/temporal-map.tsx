@@ -14,8 +14,7 @@ import { Button } from "@moritzbrantner/ui";
 
 import { ClusteredMap, type ClusteredMapProps } from "./clustered-map";
 import {
-  getTemporalMapPointsAtTime,
-  getTemporalMapTimeRange,
+  createTemporalMapPlaybackIndex,
   snapTemporalMapTime,
   type TemporalMapTimeRange,
   type TemporalMapTrack,
@@ -63,7 +62,8 @@ export function TemporalClusteredMap<TProperties = Record<string, unknown>>({
   tracks,
   ...mapProps
 }: TemporalClusteredMapProps<TProperties>) {
-  const timeRange = useMemo(() => getTemporalMapTimeRange(tracks), [tracks]);
+  const playbackIndex = useMemo(() => createTemporalMapPlaybackIndex(tracks), [tracks]);
+  const timeRange = useMemo(() => playbackIndex.getTimeRange(), [playbackIndex]);
   const [uncontrolledTime, setUncontrolledTime] = useState(() =>
     getInitialTime(defaultTime, timeRange),
   );
@@ -91,8 +91,8 @@ export function TemporalClusteredMap<TProperties = Record<string, unknown>>({
     return span > 0 ? span / 18 : 1;
   }, [playbackRate, timeRange]);
   const points = useMemo(
-    () => (timeRange ? getTemporalMapPointsAtTime(tracks, activeTime) : []),
-    [activeTime, timeRange, tracks],
+    () => (timeRange ? playbackIndex.getPointsAtTime(activeTime) : []),
+    [activeTime, playbackIndex, timeRange],
   );
 
   currentTimeRef.current = clampedTime;

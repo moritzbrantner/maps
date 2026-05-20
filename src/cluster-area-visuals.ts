@@ -9,8 +9,8 @@ type Coordinate = [longitude: number, latitude: number];
 
 const FOUR_COLOR_PALETTE = ["#e11d48", "#f59e0b", "#10b981", "#2563eb"] as const;
 const FALLBACK_COLOR_COUNT = 8;
-const DEFAULT_MAX_EXACT_COLORING_NODES = 96;
-const DEFAULT_MAX_EXACT_COLORING_STATES = 40_000;
+const DEFAULT_MAX_EXACT_COLORING_NODES = 64;
+const DEFAULT_MAX_EXACT_COLORING_STATES = 15_000;
 
 export type ClusterAreaSubject = {
   areaId: string;

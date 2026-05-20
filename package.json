@@ -60,12 +60,13 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean --out-dir dist",
+    "bench:performance": "bun run ./scripts/benchmark-performance.mjs",
     "bench:temporal-geojson": "bun run ./scripts/benchmark-temporal-geojson.mjs",
     "lint": "node ./scripts/verify-package-imports.mjs ./src @/ next/ && node ./scripts/verify-package-styles.mjs .",
     "prepack": "bun run build",
     "check-types": "tsc --noEmit",
     "test": "vitest run",
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
-    "verify:release": "bun run check-types && bun run lint && bun run test && bun run build && bun run bench:temporal-geojson && bun run pack:dry"
+    "verify:release": "bun run check-types && bun run lint && bun run test && bun run build && bun run bench:temporal-geojson && bun run bench:performance && bun run pack:dry"
   }
 }

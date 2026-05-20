@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
 } from "react";
 import type { LayerGroup, Map as LeafletMap, PathOptions, TileLayerOptions } from "leaflet";
 
@@ -70,6 +71,18 @@ export const defaultRasterMapStyle: RasterMapStyle = {
 
 const MAX_CLUSTER_AREA_FEATURES = 160;
 
+type ClusterAreaFeatureResult = {
+  areaFeatures: Array<
+    ReturnType<typeof createClusterAreaFeature> | ReturnType<typeof createClusterAreaBoundaryFeature>
+  >;
+  colorsByAreaId: Map<string, string>;
+};
+
+type ClusterAreaFeatureCache = {
+  key: string;
+  result: ClusterAreaFeatureResult;
+};
+
 export function ClusteredMap<TProperties = Record<string, unknown>>({
   className,
   clusterRadius,
@@ -93,6 +106,7 @@ export function ClusteredMap<TProperties = Record<string, unknown>>({
   const overlayRef = useRef<LayerGroup | null>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
+  const clusterAreaCacheRef = useRef<ClusterAreaFeatureCache | null>(null);
   const [isReady, setIsReady] = useState(false);
   const deferredPoints = useDeferredValue(points);
   const index = useMemo(
@@ -105,6 +119,10 @@ export function ClusteredMap<TProperties = Record<string, unknown>>({
       }),
     [clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
   );
+
+  useEffect(() => {
+    clusterAreaCacheRef.current = null;
+  }, [index]);
 
   const syncSource = useEffectEvent(() => {
     const map = mapRef.current;
@@ -123,6 +141,7 @@ export function ClusteredMap<TProperties = Record<string, unknown>>({
     const aggregation = index.getViewportAggregation(query);
 
     renderAggregationOverlay({
+      clusterAreaCache: clusterAreaCacheRef,
       features: aggregation.features,
       handleClick,
       index,
@@ -204,6 +223,7 @@ export function ClusteredMap<TProperties = Record<string, unknown>>({
     return () => {
       isCancelled = true;
       lastViewportSummaryKeyRef.current = null;
+      clusterAreaCacheRef.current = null;
       setIsReady(false);
 
       if (localMap) {
@@ -261,6 +281,7 @@ export function ClusteredMap<TProperties = Record<string, unknown>>({
 }
 
 function renderAggregationOverlay<TProperties>({
+  clusterAreaCache,
   features,
   handleClick,
   index,
@@ -268,6 +289,7 @@ function renderAggregationOverlay<TProperties>({
   map,
   overlay,
 }: {
+  clusterAreaCache: MutableRefObject<ClusterAreaFeatureCache | null>;
   features: readonly AggregatedMapFeature<TProperties>[];
   handleClick: (feature: AggregatedMapFeature<TProperties> | null) => void;
   index: PointAggregationIndex<TProperties>;
@@ -277,7 +299,7 @@ function renderAggregationOverlay<TProperties>({
 }) {
   overlay.clearLayers();
 
-  const areaFeatures = createClusterAreaFeatures(features, index, map);
+  const areaFeatures = createClusterAreaFeatures(features, index, map, clusterAreaCache);
 
   for (const areaFeature of areaFeatures.areaFeatures) {
     addClusterAreaLayer(areaFeature, leaflet, overlay);
@@ -425,7 +447,8 @@ function createClusterAreaFeatures<TProperties>(
   features: readonly AggregatedMapFeature<TProperties>[],
   index: PointAggregationIndex<TProperties>,
   map: LeafletMap,
-) {
+  cache: MutableRefObject<ClusterAreaFeatureCache | null>,
+): ClusterAreaFeatureResult {
   const viewportWidth = map.getContainer().clientWidth;
   const viewportHeight = map.getContainer().clientHeight;
 
@@ -435,6 +458,13 @@ function createClusterAreaFeatures<TProperties>(
 
   if (features.length > MAX_CLUSTER_AREA_FEATURES) {
     return { areaFeatures: [], colorsByAreaId: new Map<string, string>() };
+  }
+
+  const cacheKey = serializeClusterAreaFeatureCacheKey(features, map, viewportWidth, viewportHeight);
+  const cached = cache.current;
+
+  if (cached?.key === cacheKey) {
+    return cached.result;
   }
 
   const subjects = createClusterAreaSubjects(features, index);
@@ -493,10 +523,49 @@ function createClusterAreaFeatures<TProperties>(
     ),
   );
 
-  return {
+  const result = {
     areaFeatures: [...areaFeatures, ...boundaryFeatures],
     colorsByAreaId,
   };
+
+  cache.current = {
+    key: cacheKey,
+    result,
+  };
+
+  return result;
+}
+
+function serializeClusterAreaFeatureCacheKey<TProperties>(
+  features: readonly AggregatedMapFeature<TProperties>[],
+  map: LeafletMap,
+  viewportWidth: number,
+  viewportHeight: number,
+) {
+  return JSON.stringify({
+    features: features.map((feature) => {
+      if (feature.kind === "cluster") {
+        return [
+          "cluster",
+          feature.clusterId,
+          Number(feature.coordinates[0].toFixed(6)),
+          Number(feature.coordinates[1].toFixed(6)),
+          feature.pointCount,
+          feature.expansionZoom,
+        ];
+      }
+
+      return [
+        "point",
+        feature.point.id,
+        Number(feature.coordinates[0].toFixed(6)),
+        Number(feature.coordinates[1].toFixed(6)),
+      ];
+    }),
+    viewportHeight,
+    viewportWidth,
+    zoom: Number(map.getZoom().toFixed(6)),
+  });
 }
 
 function createClusterAreaFeature(

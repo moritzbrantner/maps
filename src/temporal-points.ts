@@ -27,6 +27,18 @@ export type TemporalMapTrack<TProperties = Record<string, unknown>> = {
   frames: readonly TemporalMapKeyframe<TProperties>[];
 };
 
+export type TemporalMapPlaybackIndex<TProperties = Record<string, unknown>> = {
+  getPointsAtTime(time: number): Array<MapPoint<TProperties>>;
+  getTimeRange(): TemporalMapTimeRange | null;
+};
+
+type PreparedTemporalMapTrack<TProperties> = {
+  frames: Array<TemporalMapKeyframe<TProperties>>;
+  index: number;
+  sourceTrack: TemporalMapTrack<TProperties>;
+  times: number[];
+};
+
 export { snapTemporalMapTime, type TemporalMapTimeRange };
 
 export function getTemporalMapTimeRange<TProperties = Record<string, unknown>>(
@@ -46,6 +58,36 @@ export function getTemporalMapPointsAtTime<TProperties = Record<string, unknown>
   return tracks
     .map((track, index) => resolveTrackAtTime(track, index, time))
     .filter((point): point is MapPoint<TProperties> => point !== null);
+}
+
+export function createTemporalMapPlaybackIndex<TProperties = Record<string, unknown>>(
+  tracks: readonly TemporalMapTrack<TProperties>[],
+): TemporalMapPlaybackIndex<TProperties> {
+  const preparedTracks = tracks.map(prepareTemporalMapTrack);
+  const timeRange = getTemporalTrackTimeRange(preparedTracks);
+
+  return {
+    getPointsAtTime(time) {
+      if (!Number.isFinite(time)) {
+        return [];
+      }
+
+      const points: Array<MapPoint<TProperties>> = [];
+
+      for (const track of preparedTracks) {
+        const point = resolvePreparedTrackAtTime(track, time);
+
+        if (point) {
+          points.push(point);
+        }
+      }
+
+      return points;
+    },
+    getTimeRange() {
+      return timeRange;
+    },
+  };
 }
 
 function resolveTrackAtTime<TProperties>(
@@ -103,6 +145,101 @@ function resolveTrackAtTime<TProperties>(
     ),
     properties: mergeProperties(track.properties, previousFrame.properties),
   };
+}
+
+function prepareTemporalMapTrack<TProperties>(
+  track: TemporalMapTrack<TProperties>,
+  index: number,
+): PreparedTemporalMapTrack<TProperties> {
+  const frames = getSortedValidFrames(track);
+
+  return {
+    frames,
+    index,
+    sourceTrack: track,
+    times: frames.map((frame) => frame.time),
+  };
+}
+
+function getSortedValidFrames<TProperties>(
+  track: TemporalMapTrack<TProperties>,
+): Array<TemporalMapKeyframe<TProperties>> {
+  return track.frames
+    .filter(
+      (frame) =>
+        Number.isFinite(frame.time) &&
+        Number.isFinite(frame.latitude) &&
+        Number.isFinite(frame.longitude),
+    )
+    .sort((left, right) => left.time - right.time);
+}
+
+function resolvePreparedTrackAtTime<TProperties>(
+  track: PreparedTemporalMapTrack<TProperties>,
+  time: number,
+): MapPoint<TProperties> | null {
+  if (track.frames.length === 0) {
+    return null;
+  }
+
+  const firstFrameAfterTime = findFirstTimeIndexAfter(track.times, time);
+
+  if (firstFrameAfterTime === 0) {
+    return null;
+  }
+
+  if (firstFrameAfterTime === track.frames.length) {
+    const lastFrame = track.frames[track.frames.length - 1]!;
+
+    return lastFrame.visible === false
+      ? null
+      : toMapPoint(track.sourceTrack, track.index, lastFrame);
+  }
+
+  const previousFrame = track.frames[firstFrameAfterTime - 1]!;
+
+  if (previousFrame.time === time) {
+    return previousFrame.visible === false
+      ? null
+      : toMapPoint(track.sourceTrack, track.index, previousFrame);
+  }
+
+  if (previousFrame.visible === false) {
+    return null;
+  }
+
+  const nextFrame = track.frames[firstFrameAfterTime]!;
+  const progress = (time - previousFrame.time) / (nextFrame.time - previousFrame.time);
+
+  return {
+    id: String(track.sourceTrack.id ?? track.index),
+    label: previousFrame.label ?? track.sourceTrack.label ?? "",
+    latitude: interpolate(previousFrame.latitude, nextFrame.latitude, progress),
+    longitude: interpolate(previousFrame.longitude, nextFrame.longitude, progress),
+    metrics: interpolateMetrics(
+      mergeMetrics(track.sourceTrack.metrics, previousFrame.metrics),
+      mergeMetrics(track.sourceTrack.metrics, nextFrame.metrics),
+      progress,
+    ),
+    properties: mergeProperties(track.sourceTrack.properties, previousFrame.properties),
+  };
+}
+
+function findFirstTimeIndexAfter(times: readonly number[], time: number) {
+  let low = 0;
+  let high = times.length;
+
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+
+    if (times[middle]! <= time) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+
+  return low;
 }
 
 function toMapPoint<TProperties>(

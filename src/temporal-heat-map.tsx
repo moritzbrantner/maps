@@ -19,8 +19,7 @@ import {
   type HeatMapWeightOptions,
 } from "./heat-map";
 import {
-  getTemporalMapPointsAtTime,
-  getTemporalMapTimeRange,
+  createTemporalMapPlaybackIndex,
   snapTemporalMapTime,
   type TemporalMapTimeRange,
   type TemporalMapTrack,
@@ -74,7 +73,8 @@ export function TemporalHeatMap<TProperties = Record<string, unknown>>({
   weightMetric,
   ...mapProps
 }: TemporalHeatMapProps<TProperties>) {
-  const timeRange = useMemo(() => getTemporalMapTimeRange(tracks), [tracks]);
+  const playbackIndex = useMemo(() => createTemporalMapPlaybackIndex(tracks), [tracks]);
+  const timeRange = useMemo(() => playbackIndex.getTimeRange(), [playbackIndex]);
   const [uncontrolledTime, setUncontrolledTime] = useState(() =>
     getInitialTime(defaultTime, timeRange),
   );
@@ -102,8 +102,8 @@ export function TemporalHeatMap<TProperties = Record<string, unknown>>({
     return span > 0 ? span / 18 : 1;
   }, [playbackRate, timeRange]);
   const points = useMemo(
-    () => (timeRange ? getTemporalMapPointsAtTime(tracks, activeTime) : []),
-    [activeTime, timeRange, tracks],
+    () => (timeRange ? playbackIndex.getPointsAtTime(activeTime) : []),
+    [activeTime, playbackIndex, timeRange],
   );
   const temporalMaxWeight = useMemo(() => {
     if (!preserveTemporalScale || maxWeight !== undefined) {
