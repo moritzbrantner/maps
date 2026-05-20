@@ -4,7 +4,7 @@ React map components, density aggregation helpers, and temporal geo features for
 
 ## Main APIs
 
-- `ClusteredMap`, `HeatMap`, `TemporalClusteredMap`, and `TemporalHeatMap`
+- `PointMap`, `BubbleMap`, `FlowMap`, `ClusteredMap`, `HeatMap`, `TemporalClusteredMap`, and `TemporalHeatMap`
 - `createPointAggregationIndex(...)`, `createHeatMapDensityIndex(...)`, and `createTemporalMapTracksFromGeoJson(...)`
 - `createTemporalGeoJsonTracksFromGeoJson(...)`, `getTemporalGeoJsonFeatureCollectionAtTime(...)`, and `createTemporalGeoJsonPlaybackIndex(...)`
 
@@ -64,6 +64,34 @@ export function DemandHeatMap() {
       style={{ height: 420 }}
       initialViewState={{ center: [52.52, 13.405], zoom: 9 }}
     />
+  );
+}
+```
+
+## Additional map types
+
+Use `PointMap` for raw point markers, `BubbleMap` for proportional symbols, and
+`FlowMap` for origin-to-destination connections.
+
+```tsx
+import { BubbleMap, FlowMap, PointMap, type MapFlow } from "@moritzbrantner/maps";
+
+const flows: MapFlow[] = [
+  {
+    id: "berlin-paris",
+    from: [13.405, 52.52],
+    to: [2.3522, 48.8566],
+    metrics: { trips: 180 },
+  },
+];
+
+export function NetworkMaps() {
+  return (
+    <>
+      <PointMap points={points} style={{ height: 360 }} />
+      <BubbleMap points={points} weightMetric="demand" style={{ height: 360 }} />
+      <FlowMap flows={flows} weightMetric="trips" style={{ height: 360 }} />
+    </>
   );
 }
 ```

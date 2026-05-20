@@ -44,6 +44,26 @@ export {
   type HeatMapWeightOptions,
 } from "./heat-map";
 export {
+  BubbleMap,
+  PointMap,
+  createBubbleMapFeatures,
+  createPointMapFeatures,
+  type BubbleMapFeature,
+  type BubbleMapProps,
+  type BubbleMapWeightAccessor,
+  type PointMapFeature,
+  type PointMapProps,
+} from "./point-map";
+export {
+  FlowMap,
+  createFlowMapFeatures,
+  type FlowMapFeature,
+  type FlowMapProps,
+  type FlowMapWeightAccessor,
+  type IndexedMapFlow,
+  type MapFlow,
+} from "./flow-map";
+export {
   createTemporalMapPlaybackIndex,
   getTemporalMapPointsAtTime,
   getTemporalMapTimeRange,

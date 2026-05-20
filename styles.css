@@ -97,12 +97,32 @@
   }
 
   .mb-maps__cluster-marker,
-  .mb-maps__point-marker {
+  .mb-maps__point-marker,
+  .mb-maps__flow-line {
     cursor: pointer;
   }
 
   .mb-maps__heat-marker {
     mix-blend-mode: multiply;
+  }
+
+  .mb-maps__flow-line {
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mb-maps__flow-endpoint {
+    pointer-events: none;
+  }
+
+  .mb-maps__globe-flow {
+    cursor: pointer;
+  }
+
+  .mb-maps__globe-flow path {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .mb-temporal-map {
