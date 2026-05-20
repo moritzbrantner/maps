@@ -7,6 +7,7 @@ React map components, density aggregation helpers, and temporal geo features for
 - `PointMap`, `BubbleMap`, `FlowMap`, `ClusteredMap`, `HeatMap`, `TemporalClusteredMap`, and `TemporalHeatMap`
 - `createPointAggregationIndex(...)`, `createHeatMapDensityIndex(...)`, and `createTemporalMapTracksFromGeoJson(...)`
 - `createTemporalGeoJsonTracksFromGeoJson(...)`, `getTemporalGeoJsonFeatureCollectionAtTime(...)`, and `createTemporalGeoJsonPlaybackIndex(...)`
+- `drawLineOnPolygonGeometry(...)` for turning drawn lines into polygon holes or splits
 
 ## Styles
 
@@ -141,6 +142,28 @@ The first click starts a draft line, pointer movement previews the distance, and
 the second click completes the measurement. Press `Escape` to cancel a draft.
 Metric auto-formatting is the default: distances below `1000m` render as meters
 and longer distances render as kilometers.
+
+## Polygon line drawing
+
+Use `drawLineOnPolygonGeometry(...)` after collecting a drawn `LineString`.
+Closed lines inside a polygon become holes. Open lines that cross a polygon
+shell twice split the affected polygon and return a `MultiPolygon`.
+
+```ts
+import { drawLineOnPolygonGeometry } from "@moritzbrantner/maps";
+
+const result = drawLineOnPolygonGeometry(polygonOrMultiPolygon, {
+  coordinates: [
+    [13.3, 52.4],
+    [13.5, 52.6],
+  ],
+  type: "LineString",
+});
+
+if (result.operation !== "none") {
+  saveGeometry(result.geometry);
+}
+```
 
 ## Temporal playback
 

@@ -41,17 +41,20 @@
     "tailwindcss": "^4.1.14"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
     "@testing-library/react": "^16.3.0",
     "@types/d3-delaunay": "^6.0.4",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^6.0.2",
     "jsdom": "^26.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tsup": "^8.5.0",
     "typescript": "6.0.2",
+    "vite": "^8.0.13",
     "vitest": "^4.1.2"
   },
   "publishConfig": {
@@ -62,6 +65,7 @@
     "build": "tsup src/index.ts --format esm --dts --clean --out-dir dist",
     "bench:performance": "bun run ./scripts/benchmark-performance.mjs",
     "bench:temporal-geojson": "bun run ./scripts/benchmark-temporal-geojson.mjs",
+    "dev": "vite --host 0.0.0.0",
     "lint": "node ./scripts/verify-package-imports.mjs ./src @/ next/ && node ./scripts/verify-package-styles.mjs .",
     "prepack": "bun run build",
     "check-types": "tsc --noEmit",

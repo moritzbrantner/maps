@@ -116,6 +116,13 @@ export {
   type TemporalGeoJsonSupportedGeometry,
   type TemporalGeoJsonTrack,
 } from "./temporal-geojson-geometries";
+export {
+  drawLineOnPolygonGeometry,
+  type PolygonLineDrawingMode,
+  type PolygonLineDrawingOperation,
+  type PolygonLineDrawingOptions,
+  type PolygonLineDrawingResult,
+} from "./polygon-line-drawing";
 export { TemporalClusteredMap, type TemporalClusteredMapProps } from "./temporal-map";
 export {
   TemporalHeatMap,
