@@ -1,5 +1,11 @@
 # @moritzbrantner/maps
 
+## Unreleased
+
+### Patch Changes
+
+- Added controlled bee-line measurement props for flat Leaflet maps.
+
 ## 0.1.3
 
 ### Patch Changes

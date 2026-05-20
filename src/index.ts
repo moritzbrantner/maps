@@ -64,6 +64,18 @@ export {
   type MapFlow,
 } from "./flow-map";
 export {
+  formatMapDistance,
+  getBeeLineDistanceMeters,
+  getBeeLineMeasurementLabel,
+  type MapBeeLineMeasurement,
+  type MapBeeLineMeasurementDraft,
+  type MapBeeLineMeasurementResult,
+  type MapCoordinate,
+  type MapDistanceFormat,
+  type MapMeasurementMode,
+  type MapMeasurementProps,
+} from "./measurement";
+export {
   createTemporalMapPlaybackIndex,
   getTemporalMapPointsAtTime,
   getTemporalMapTimeRange,

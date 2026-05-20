@@ -51,6 +51,8 @@ import {
   type MapViewState,
   type RasterMapStyle,
 } from "./map-display";
+import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
+import type { MapMeasurementProps } from "./measurement";
 
 export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
   className?: string;
@@ -70,7 +72,7 @@ export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
   points: readonly MapPoint<TProperties>[];
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
-};
+} & MapMeasurementProps;
 
 const MAX_CLUSTER_AREA_FEATURES = 160;
 
@@ -108,10 +110,18 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
   mapDisplay: _mapDisplay,
   mapLabel = "Interactive map",
   mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
   maxZoom,
   minZoom,
   onFeatureSelect,
   onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
   onViewportAggregationChange,
   points,
   showAttributionControl = true,
@@ -120,6 +130,7 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const overlayRef = useRef<LayerGroup | null>(null);
+  const measurementLayerRef = useRef<LayerGroup | null>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
   const clusterAreaCacheRef = useRef<ClusterAreaFeatureCache | null>(null);
@@ -139,6 +150,19 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
   useEffect(() => {
     clusterAreaCacheRef.current = null;
   }, [index]);
+  const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
+    layerRef: measurementLayerRef,
+    leafletRef,
+    mapRef,
+    measurementDistanceFormat,
+    measurementDraftLineColor,
+    measurementLineColor,
+    measurementMode,
+    measurements,
+    onMeasurementCreate,
+    onMeasurementDraftChange,
+    onMeasurementSelect,
+  });
 
   const syncSource = useEffectEvent(() => {
     const map = mapRef.current;
@@ -161,6 +185,7 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
       features: aggregation.features,
       handleClick,
       index,
+      isMeasuring,
       leaflet,
       map,
       overlay,
@@ -222,6 +247,7 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
       }
 
       overlayRef.current = leaflet.layerGroup().addTo(localMap);
+      measurementLayerRef.current = leaflet.layerGroup().addTo(localMap);
       localMap.on("moveend", syncSource);
 
       queueMicrotask(() => {
@@ -248,6 +274,7 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
       }
 
       overlayRef.current = null;
+      measurementLayerRef.current = null;
       mapRef.current = null;
       leafletRef.current = null;
     };
@@ -278,13 +305,13 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
     }
 
     syncSource();
-  }, [deferredPoints, fitBoundsPadding, fitToData, index, initialViewState, syncSource]);
+  }, [deferredPoints, fitBoundsPadding, fitToData, index, initialViewState, isMeasuring, syncSource]);
 
   return (
     <div
       aria-label={mapLabel}
       data-map-ready={isReady ? "true" : "false"}
-      className={joinClassNames("mb-maps", className)}
+      className={joinClassNames("mb-maps", isMeasuring && "mb-maps--measuring", className)}
       style={{
         minHeight: 480,
         width: "100%",
@@ -303,9 +330,17 @@ function GlobeClusteredMap<TProperties = Record<string, unknown>>({
   fitToData = true,
   initialViewState,
   mapLabel = "Interactive map",
+  measurementDistanceFormat: _measurementDistanceFormat,
+  measurementDraftLineColor: _measurementDraftLineColor,
+  measurementLineColor: _measurementLineColor,
+  measurementMode: _measurementMode,
+  measurements: _measurements,
   maxZoom,
   minZoom,
   onFeatureSelect,
+  onMeasurementCreate: _onMeasurementCreate,
+  onMeasurementDraftChange: _onMeasurementDraftChange,
+  onMeasurementSelect: _onMeasurementSelect,
   onViewportAggregationChange,
   points,
   style,
@@ -540,6 +575,7 @@ function renderAggregationOverlay<TProperties>({
   features,
   handleClick,
   index,
+  isMeasuring,
   leaflet,
   map,
   overlay,
@@ -548,6 +584,7 @@ function renderAggregationOverlay<TProperties>({
   features: readonly AggregatedMapFeature<TProperties>[];
   handleClick: (feature: AggregatedMapFeature<TProperties> | null) => void;
   index: PointAggregationIndex<TProperties>;
+  isMeasuring: boolean;
   leaflet: typeof import("leaflet");
   map: LeafletMap;
   overlay: LayerGroup;
@@ -557,24 +594,25 @@ function renderAggregationOverlay<TProperties>({
   const areaFeatures = createClusterAreaFeatures(features, index, map, clusterAreaCache);
 
   for (const areaFeature of areaFeatures.areaFeatures) {
-    addClusterAreaLayer(areaFeature, leaflet, overlay);
+    addClusterAreaLayer(areaFeature, isMeasuring, leaflet, overlay);
   }
 
   for (const feature of features) {
     const clusterColor = areaFeatures.colorsByAreaId.get(getClusterAreaId(feature)) ?? null;
 
     if (feature.kind === "cluster") {
-      addClusterMarker(feature, clusterColor, leaflet, map, overlay, handleClick);
+      addClusterMarker(feature, clusterColor, isMeasuring, leaflet, map, overlay, handleClick);
       continue;
     }
 
-    addPointMarker(feature, clusterColor, leaflet, map, overlay, handleClick);
+    addPointMarker(feature, clusterColor, isMeasuring, leaflet, map, overlay, handleClick);
   }
 }
 
 function addClusterMarker<TProperties>(
   feature: Extract<AggregatedMapFeature<TProperties>, { kind: "cluster" }>,
   clusterColor: string | null,
+  isMeasuring: boolean,
   leaflet: typeof import("leaflet"),
   map: LeafletMap,
   overlay: LayerGroup,
@@ -585,23 +623,26 @@ function addClusterMarker<TProperties>(
     color: "#ffffff",
     fillColor: clusterColor ?? getClusterColor(feature.pointCount),
     fillOpacity: 0.9,
+    interactive: !isMeasuring,
     opacity: 1,
     radius: getClusterRadius(feature.pointCount),
     weight: 2,
   });
 
-  marker.on("click", () => {
-    map.setView(toLeafletLatLng(feature.coordinates), feature.expansionZoom, {
-      animate: false,
+  if (!isMeasuring) {
+    marker.on("click", () => {
+      map.setView(toLeafletLatLng(feature.coordinates), feature.expansionZoom, {
+        animate: false,
+      });
+      handleClick(feature);
     });
-    handleClick(feature);
-  });
-  marker.on("mouseover", () => {
-    map.getContainer().style.cursor = "pointer";
-  });
-  marker.on("mouseout", () => {
-    map.getContainer().style.cursor = "";
-  });
+    marker.on("mouseover", () => {
+      map.getContainer().style.cursor = "pointer";
+    });
+    marker.on("mouseout", () => {
+      map.getContainer().style.cursor = "";
+    });
+  }
   marker.addTo(overlay);
 
   leaflet
@@ -620,6 +661,7 @@ function addClusterMarker<TProperties>(
 function addPointMarker<TProperties>(
   feature: Extract<AggregatedMapFeature<TProperties>, { kind: "point" }>,
   clusterColor: string | null,
+  isMeasuring: boolean,
   leaflet: typeof import("leaflet"),
   map: LeafletMap,
   overlay: LayerGroup,
@@ -630,20 +672,23 @@ function addPointMarker<TProperties>(
     color: "#ffffff",
     fillColor: clusterColor ?? "#0f172a",
     fillOpacity: 0.92,
+    interactive: !isMeasuring,
     opacity: 1,
     radius: 6,
     weight: 2,
   });
 
-  marker.on("click", () => {
-    handleClick(feature);
-  });
-  marker.on("mouseover", () => {
-    map.getContainer().style.cursor = "pointer";
-  });
-  marker.on("mouseout", () => {
-    map.getContainer().style.cursor = "";
-  });
+  if (!isMeasuring) {
+    marker.on("click", () => {
+      handleClick(feature);
+    });
+    marker.on("mouseover", () => {
+      map.getContainer().style.cursor = "pointer";
+    });
+    marker.on("mouseout", () => {
+      map.getContainer().style.cursor = "";
+    });
+  }
   marker.addTo(overlay);
 }
 
@@ -651,6 +696,7 @@ function addClusterAreaLayer(
   feature:
     | ReturnType<typeof createClusterAreaFeature>
     | ReturnType<typeof createClusterAreaBoundaryFeature>,
+  isMeasuring: boolean,
   leaflet: typeof import("leaflet"),
   overlay: LayerGroup,
 ) {
@@ -661,6 +707,7 @@ function addClusterAreaLayer(
       .polyline(coordinates.map(toLeafletLatLng), {
         className: "mb-maps__cluster-area-boundary",
         color: feature.properties.lineColor,
+        interactive: !isMeasuring,
         opacity: 0.9,
         weight: 2,
       })

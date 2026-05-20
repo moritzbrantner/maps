@@ -36,6 +36,8 @@ import {
   type MapViewState,
   type RasterMapStyle,
 } from "./map-display";
+import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
+import type { MapMeasurementProps } from "./measurement";
 
 export type PointMapFeature<TProperties = Record<string, unknown>> = {
   coordinates: [longitude: number, latitude: number];
@@ -60,7 +62,7 @@ export type PointMapProps<TProperties = Record<string, unknown>> = {
   pointRadius?: number;
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
-};
+} & MapMeasurementProps;
 
 export type BubbleMapWeightAccessor<TProperties = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
@@ -173,6 +175,14 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
   initialViewState,
   mapLabel = "Interactive point map",
   mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
   onFeatureSelect,
   onMapReady,
   points,
@@ -184,6 +194,7 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const overlayRef = useRef<LayerGroup | null>(null);
+  const measurementLayerRef = useRef<LayerGroup | null>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const [isReady, setIsReady] = useState(false);
   const deferredPoints = useDeferredValue(points);
@@ -191,6 +202,19 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
     () => createPointMapFeatures(deferredPoints, { filterPoint }),
     [deferredPoints, filterPoint],
   );
+  const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
+    layerRef: measurementLayerRef,
+    leafletRef,
+    mapRef,
+    measurementDistanceFormat,
+    measurementDraftLineColor,
+    measurementLineColor,
+    measurementMode,
+    measurements,
+    onMeasurementCreate,
+    onMeasurementDraftChange,
+    onMeasurementSelect,
+  });
 
   const syncSource = useEffectEvent(() => {
     const map = mapRef.current;
@@ -206,6 +230,7 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
       getPointColor,
       getPointRadius,
       handleClick,
+      isMeasuring,
       leaflet,
       map,
       overlay,
@@ -258,6 +283,7 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
       }
 
       overlayRef.current = leaflet.layerGroup().addTo(localMap);
+      measurementLayerRef.current = leaflet.layerGroup().addTo(localMap);
 
       queueMicrotask(() => {
         if (isCancelled || !localMap) {
@@ -280,6 +306,7 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
       }
 
       overlayRef.current = null;
+      measurementLayerRef.current = null;
       mapRef.current = null;
       leafletRef.current = null;
     };
@@ -310,12 +337,12 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
     }
 
     syncSource();
-  }, [deferredPoints, features, fitBoundsPadding, fitToData, initialViewState, syncSource]);
+  }, [deferredPoints, features, fitBoundsPadding, fitToData, initialViewState, isMeasuring, syncSource]);
 
   return (
     <div
       aria-label={mapLabel}
-      className={joinClassNames("mb-maps", className)}
+      className={joinClassNames("mb-maps", isMeasuring && "mb-maps--measuring", className)}
       data-map-ready={isReady ? "true" : "false"}
       style={{
         minHeight: 480,
@@ -336,6 +363,14 @@ function GlobePointMap<TProperties = Record<string, unknown>>({
   getPointRadius,
   initialViewState,
   mapLabel = "Interactive point map",
+  measurementDistanceFormat: _measurementDistanceFormat,
+  measurementDraftLineColor: _measurementDraftLineColor,
+  measurementLineColor: _measurementLineColor,
+  measurementMode: _measurementMode,
+  measurements: _measurements,
+  onMeasurementCreate: _onMeasurementCreate,
+  onMeasurementDraftChange: _onMeasurementDraftChange,
+  onMeasurementSelect: _onMeasurementSelect,
   onFeatureSelect,
   points,
   pointColor = "#0f172a",
@@ -530,6 +565,7 @@ function renderPointOverlay<TProperties>({
   getPointColor,
   getPointRadius,
   handleClick,
+  isMeasuring,
   leaflet,
   map,
   overlay,
@@ -540,6 +576,7 @@ function renderPointOverlay<TProperties>({
   getPointColor?: (feature: PointMapFeature<TProperties>) => string;
   getPointRadius?: (feature: PointMapFeature<TProperties>) => number;
   handleClick: (feature: PointMapFeature<TProperties> | null) => void;
+  isMeasuring: boolean;
   leaflet: typeof import("leaflet");
   map: LeafletMap;
   overlay: LayerGroup;
@@ -554,20 +591,23 @@ function renderPointOverlay<TProperties>({
       color: "#ffffff",
       fillColor: getPointColor?.(feature) ?? pointColor,
       fillOpacity: 0.92,
+      interactive: !isMeasuring,
       opacity: 1,
       radius: Math.max(0, getPointRadius?.(feature) ?? pointRadius),
       weight: 2,
     });
 
-    marker.on("click", () => {
-      handleClick(feature);
-    });
-    marker.on("mouseover", () => {
-      map.getContainer().style.cursor = "pointer";
-    });
-    marker.on("mouseout", () => {
-      map.getContainer().style.cursor = "";
-    });
+    if (!isMeasuring) {
+      marker.on("click", () => {
+        handleClick(feature);
+      });
+      marker.on("mouseover", () => {
+        map.getContainer().style.cursor = "pointer";
+      });
+      marker.on("mouseout", () => {
+        map.getContainer().style.cursor = "";
+      });
+    }
     marker.addTo(overlay);
   }
 }

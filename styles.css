@@ -17,6 +17,11 @@
     @apply absolute inset-0 size-full;
   }
 
+  .mb-maps--measuring,
+  .mb-maps--measuring .leaflet-container {
+    cursor: crosshair;
+  }
+
   .mb-maps--globe {
     @apply grid place-items-center bg-slate-950;
   }
@@ -113,6 +118,31 @@
 
   .mb-maps__flow-endpoint {
     pointer-events: none;
+  }
+
+  .mb-maps__measurement-line {
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mb-maps__measurement-line--draft {
+    stroke-dasharray: 6 6;
+  }
+
+  .mb-maps__measurement-endpoint {
+    pointer-events: none;
+  }
+
+  .mb-maps__measurement-label {
+    border: 0;
+    border-radius: 999px;
+    background: rgb(15 23 42 / 0.9);
+    color: white;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    padding: 4px 8px;
+    box-shadow: 0 8px 24px rgb(15 23 42 / 0.18);
   }
 
   .mb-maps__globe-flow {

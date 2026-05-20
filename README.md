@@ -96,6 +96,52 @@ export function NetworkMaps() {
 }
 ```
 
+## Bee-line measurements
+
+Flat maps support controlled bee-line measurement. Consumers own the toolbar,
+IDs, persistence, and clearing; maps only collect the two clicks and render the
+controlled `measurements` prop. Globe maps accept the same props for API
+consistency, but measurement rendering is flat maps only in the first version.
+
+```tsx
+import { useState } from "react";
+import { PointMap, type MapBeeLineMeasurement } from "@moritzbrantner/maps";
+
+function MeasuringMap() {
+  const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
+  const [isMeasuring, setIsMeasuring] = useState(false);
+
+  return (
+    <>
+      <button onClick={() => setIsMeasuring((value) => !value)}>
+        {isMeasuring ? "Stop measuring" : "Measure"}
+      </button>
+      <PointMap
+        points={points}
+        measurementMode={isMeasuring ? "bee-line" : "none"}
+        measurements={measurements}
+        onMeasurementCreate={(measurement) => {
+          setMeasurements((current) => [
+            ...current,
+            {
+              id: crypto.randomUUID(),
+              from: measurement.from,
+              to: measurement.to,
+            },
+          ]);
+        }}
+        style={{ height: 420 }}
+      />
+    </>
+  );
+}
+```
+
+The first click starts a draft line, pointer movement previews the distance, and
+the second click completes the measurement. Press `Escape` to cancel a draft.
+Metric auto-formatting is the default: distances below `1000m` render as meters
+and longer distances render as kilometers.
+
 ## Temporal playback
 
 Use `TemporalClusteredMap` or `TemporalHeatMap` for moving point tracks. The

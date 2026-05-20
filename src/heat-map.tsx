@@ -41,6 +41,8 @@ import {
   type MapViewState,
   type RasterMapStyle,
 } from "./map-display";
+import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
+import type { MapMeasurementProps } from "./measurement";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
 
@@ -103,7 +105,8 @@ export type HeatMapDensityIndex = {
 };
 
 export type HeatMapProps<TProperties = Record<string, unknown>> =
-  HeatMapWeightOptions<TProperties> & {
+  HeatMapWeightOptions<TProperties> &
+    MapMeasurementProps & {
     className?: string;
     fitBoundsPadding?: number;
     fitToData?: boolean;
@@ -166,8 +169,16 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
   mapDisplay: _mapDisplay,
   mapLabel = "Interactive heat map",
   mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
   maxWeight,
   onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
   points,
   showAttributionControl = true,
   style,
@@ -176,6 +187,7 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const heatLayerRef = useRef<LayerGroup | null>(null);
+  const measurementLayerRef = useRef<LayerGroup | null>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const [isReady, setIsReady] = useState(false);
   const deferredPoints = useDeferredValue(points);
@@ -202,6 +214,19 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
       weightMetric,
     ],
   );
+  const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
+    layerRef: measurementLayerRef,
+    leafletRef,
+    mapRef,
+    measurementDistanceFormat,
+    measurementDraftLineColor,
+    measurementLineColor,
+    measurementMode,
+    measurements,
+    onMeasurementCreate,
+    onMeasurementDraftChange,
+    onMeasurementSelect,
+  });
 
   const syncSource = useEffectEvent(() => {
     const map = mapRef.current;
@@ -222,6 +247,7 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
       colorRamp: heatmapColorRamp,
       data: densityIndex.getFeatureCollection(query),
       intensity: heatmapIntensity,
+      isMeasuring,
       layer: heatLayer,
       leaflet,
       map,
@@ -269,6 +295,7 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
       }
 
       heatLayerRef.current = leaflet.layerGroup().addTo(localMap);
+      measurementLayerRef.current = leaflet.layerGroup().addTo(localMap);
       localMap.on("moveend", syncSource);
 
       queueMicrotask(() => {
@@ -293,6 +320,7 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
       }
 
       heatLayerRef.current = null;
+      measurementLayerRef.current = null;
       mapRef.current = null;
       leafletRef.current = null;
     };
@@ -323,12 +351,12 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
     }
 
     syncSource();
-  }, [deferredPoints, densityIndex, fitBoundsPadding, fitToData, initialViewState, syncSource]);
+  }, [deferredPoints, densityIndex, fitBoundsPadding, fitToData, initialViewState, isMeasuring, syncSource]);
 
   return (
     <div
       aria-label={mapLabel}
-      className={joinClassNames("mb-maps", className)}
+      className={joinClassNames("mb-maps", isMeasuring && "mb-maps--measuring", className)}
       data-map-ready={isReady ? "true" : "false"}
       style={{
         minHeight: 480,
@@ -359,7 +387,15 @@ function GlobeHeatMap<TProperties = Record<string, unknown>>({
   },
   initialViewState,
   mapLabel = "Interactive heat map",
+  measurementDistanceFormat: _measurementDistanceFormat,
+  measurementDraftLineColor: _measurementDraftLineColor,
+  measurementLineColor: _measurementLineColor,
+  measurementMode: _measurementMode,
+  measurements: _measurements,
   maxWeight,
+  onMeasurementCreate: _onMeasurementCreate,
+  onMeasurementDraftChange: _onMeasurementDraftChange,
+  onMeasurementSelect: _onMeasurementSelect,
   points,
   style,
   weightMetric,
@@ -688,6 +724,7 @@ function renderHeatOverlay({
   colorRamp,
   data,
   intensity,
+  isMeasuring,
   layer,
   leaflet,
   map,
@@ -698,6 +735,7 @@ function renderHeatOverlay({
   colorRamp: readonly HeatMapColorStop[];
   data: HeatMapFeatureCollection;
   intensity: number;
+  isMeasuring: boolean;
   layer: LayerGroup;
   leaflet: typeof import("leaflet");
   map: LeafletMap;
@@ -728,6 +766,7 @@ function renderHeatOverlay({
         color: "transparent",
         fillColor: resolveHeatMapColor(colorRamp, normalizedWeight),
         fillOpacity: safeOpacity * Math.min(1, 0.35 + normalizedWeight * 0.65),
+        interactive: !isMeasuring,
         opacity: 0,
         radius: markerRadius,
         weight: 0,

@@ -29,6 +29,8 @@ import {
   type MapViewState,
   type RasterMapStyle,
 } from "./map-display";
+import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
+import type { MapMeasurementProps } from "./measurement";
 
 export type MapFlow<TProperties = Record<string, unknown>> = {
   from: [longitude: number, latitude: number];
@@ -80,7 +82,7 @@ export type FlowMapProps<TProperties = Record<string, unknown>> = {
   showEndpoints?: boolean;
   style?: React.CSSProperties;
   weightMetric?: string;
-};
+} & MapMeasurementProps;
 
 export function FlowMap<TProperties = Record<string, unknown>>({
   mapDisplay = "flat",
@@ -140,11 +142,19 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
   initialViewState,
   mapLabel = "Interactive flow map",
   mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
   maxWeight,
   maxWidth,
   minWidth,
   onFeatureSelect,
   onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
   showAttributionControl = true,
   showEndpoints = true,
   style,
@@ -153,6 +163,7 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const overlayRef = useRef<LayerGroup | null>(null);
+  const measurementLayerRef = useRef<LayerGroup | null>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const [isReady, setIsReady] = useState(false);
   const deferredFlows = useDeferredValue(flows);
@@ -167,6 +178,19 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
       }),
     [deferredFlows, getWeight, maxWeight, maxWidth, minWidth, weightMetric],
   );
+  const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
+    layerRef: measurementLayerRef,
+    leafletRef,
+    mapRef,
+    measurementDistanceFormat,
+    measurementDraftLineColor,
+    measurementLineColor,
+    measurementMode,
+    measurements,
+    onMeasurementCreate,
+    onMeasurementDraftChange,
+    onMeasurementSelect,
+  });
 
   const syncSource = useEffectEvent(() => {
     const map = mapRef.current;
@@ -182,6 +206,7 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
       flowColor,
       getFlowColor,
       handleClick,
+      isMeasuring,
       leaflet,
       map,
       overlay,
@@ -233,6 +258,7 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
       }
 
       overlayRef.current = leaflet.layerGroup().addTo(localMap);
+      measurementLayerRef.current = leaflet.layerGroup().addTo(localMap);
 
       queueMicrotask(() => {
         if (isCancelled || !localMap) {
@@ -255,6 +281,7 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
       }
 
       overlayRef.current = null;
+      measurementLayerRef.current = null;
       mapRef.current = null;
       leafletRef.current = null;
     };
@@ -285,12 +312,12 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
     }
 
     syncSource();
-  }, [deferredFlows, features, fitBoundsPadding, fitToData, initialViewState, syncSource]);
+  }, [deferredFlows, features, fitBoundsPadding, fitToData, initialViewState, isMeasuring, syncSource]);
 
   return (
     <div
       aria-label={mapLabel}
-      className={joinClassNames("mb-maps", className)}
+      className={joinClassNames("mb-maps", isMeasuring && "mb-maps--measuring", className)}
       data-map-ready={isReady ? "true" : "false"}
       style={{
         minHeight: 480,
@@ -312,10 +339,18 @@ function GlobeFlowMap<TProperties = Record<string, unknown>>({
   getWeight,
   initialViewState,
   mapLabel = "Interactive flow map",
+  measurementDistanceFormat: _measurementDistanceFormat,
+  measurementDraftLineColor: _measurementDraftLineColor,
+  measurementLineColor: _measurementLineColor,
+  measurementMode: _measurementMode,
+  measurements: _measurements,
   maxWeight,
   maxWidth,
   minWidth,
   onFeatureSelect,
+  onMeasurementCreate: _onMeasurementCreate,
+  onMeasurementDraftChange: _onMeasurementDraftChange,
+  onMeasurementSelect: _onMeasurementSelect,
   showEndpoints = true,
   style,
   weightMetric,
@@ -524,6 +559,7 @@ function renderFlowOverlay<TProperties>({
   flowColor,
   getFlowColor,
   handleClick,
+  isMeasuring,
   leaflet,
   map,
   overlay,
@@ -533,6 +569,7 @@ function renderFlowOverlay<TProperties>({
   flowColor: string;
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
   handleClick: (feature: FlowMapFeature<TProperties> | null) => void;
+  isMeasuring: boolean;
   leaflet: typeof import("leaflet");
   map: LeafletMap;
   overlay: LayerGroup;
@@ -545,19 +582,22 @@ function renderFlowOverlay<TProperties>({
     const line = leaflet.polyline([toLeafletLatLng(feature.flow.from), toLeafletLatLng(feature.flow.to)], {
       className: "mb-maps__flow-line",
       color,
+      interactive: !isMeasuring,
       opacity: 0.72,
       weight: feature.width,
     });
 
-    line.on("click", () => {
-      handleClick(feature);
-    });
-    line.on("mouseover", () => {
-      map.getContainer().style.cursor = "pointer";
-    });
-    line.on("mouseout", () => {
-      map.getContainer().style.cursor = "";
-    });
+    if (!isMeasuring) {
+      line.on("click", () => {
+        handleClick(feature);
+      });
+      line.on("mouseover", () => {
+        map.getContainer().style.cursor = "pointer";
+      });
+      line.on("mouseout", () => {
+        map.getContainer().style.cursor = "";
+      });
+    }
     line.addTo(overlay);
 
     if (showEndpoints) {
@@ -567,6 +607,7 @@ function renderFlowOverlay<TProperties>({
           color: "#ffffff",
           fillColor: color,
           fillOpacity: 0.9,
+          interactive: false,
           opacity: 1,
           radius: Math.max(3, feature.width * 0.55),
           weight: 1.5,
@@ -578,6 +619,7 @@ function renderFlowOverlay<TProperties>({
           color: "#ffffff",
           fillColor: color,
           fillOpacity: 0.95,
+          interactive: false,
           opacity: 1,
           radius: Math.max(4, feature.width * 0.75),
           weight: 1.5,
