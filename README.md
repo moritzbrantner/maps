@@ -41,6 +41,13 @@ export function FleetMap() {
 }
 ```
 
+Set `mapDisplay="globe"` to render the same point aggregation on an
+interactive orthographic globe:
+
+```tsx
+<ClusteredMap mapDisplay="globe" points={points} style={{ height: 420 }} />
+```
+
 ## Heat maps
 
 Use `HeatMap` when users need density instead of discrete marker interaction.
@@ -51,6 +58,7 @@ import { HeatMap } from "@moritzbrantner/maps";
 export function DemandHeatMap() {
   return (
     <HeatMap
+      mapDisplay="globe"
       points={points}
       getWeight={(point) => point.metrics?.demand ?? 1}
       style={{ height: 420 }}

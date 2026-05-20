@@ -17,6 +17,67 @@
     @apply absolute inset-0 size-full;
   }
 
+  .mb-maps--globe {
+    @apply grid place-items-center bg-slate-950;
+  }
+
+  .mb-maps__globe {
+    @apply size-full touch-none select-none;
+    cursor: grab;
+  }
+
+  .mb-maps__globe:active {
+    cursor: grabbing;
+  }
+
+  .mb-maps__globe-ocean {
+    fill: url("#mb-maps-globe-ocean");
+    stroke: rgb(255 255 255 / 0.78);
+    stroke-width: 1.5;
+  }
+
+  .mb-maps__globe-graticule path {
+    fill: none;
+    stroke: rgb(15 23 42 / 0.22);
+    stroke-width: 0.8;
+  }
+
+  .mb-maps__globe-rim {
+    fill: none;
+    stroke: rgb(255 255 255 / 0.9);
+    stroke-width: 2.5;
+  }
+
+  .mb-maps__globe-cluster,
+  .mb-maps__globe-point {
+    cursor: pointer;
+  }
+
+  .mb-maps__globe-cluster circle {
+    stroke: rgb(255 255 255 / 0.92);
+    stroke-width: 2.2;
+  }
+
+  .mb-maps__globe-cluster text {
+    fill: white;
+    font-size: 12px;
+    font-weight: 700;
+    dominant-baseline: middle;
+    pointer-events: none;
+    text-anchor: middle;
+  }
+
+  .mb-maps__globe-point {
+    fill: #0f172a;
+    stroke: rgb(255 255 255 / 0.92);
+    stroke-width: 2;
+  }
+
+  .mb-maps__globe-heat-marker {
+    mix-blend-mode: screen;
+    stroke: transparent;
+  }
+
   .mb-maps .leaflet-control-container .leaflet-top.leaflet-left {
     @apply left-4 top-4;
   }

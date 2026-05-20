@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { TemporalClusteredMap, type TemporalMapTrack } from ".";
+import { ClusteredMap, TemporalClusteredMap, type TemporalMapTrack } from ".";
 
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -155,6 +155,31 @@ afterEach(() => {
 });
 
 describe("@moritzbrantner/maps TemporalClusteredMap", () => {
+  test("renders clustered points on the globe display", () => {
+    render(
+      <ClusteredMap
+        initialViewState={{ center: [13, 52], zoom: 2 }}
+        mapDisplay="globe"
+        mapLabel="Warehouse globe"
+        points={[
+          {
+            id: "berlin",
+            label: "Berlin",
+            latitude: 52,
+            longitude: 13,
+          },
+        ]}
+      />,
+    );
+
+    const map = screen.getByLabelText("Warehouse globe");
+
+    expect(map.getAttribute("data-map-ready")).toBe("true");
+    expect(map.querySelector(".mb-maps__globe")).toBeTruthy();
+    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
+    expect(leafletMock.getMaps()).toHaveLength(0);
+  });
+
   test("renders timeline controls and slices track points into the map overlay", async () => {
     const tracks: TemporalMapTrack<{ status: string }>[] = [
       {

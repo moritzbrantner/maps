@@ -10,7 +10,7 @@ import {
   useState,
   type MutableRefObject,
 } from "react";
-import type { LayerGroup, Map as LeafletMap, PathOptions, TileLayerOptions } from "leaflet";
+import type { LayerGroup, Map as LeafletMap, PathOptions } from "leaflet";
 
 import {
   createPointAggregationIndex,
@@ -30,19 +30,27 @@ import {
   createClusterAreaSubjects,
   getClusterAreaId,
 } from "./cluster-area-visuals";
-
-export type MapViewState = {
-  center: [longitude: number, latitude: number];
-  zoom: number;
-};
-
-export type RasterMapStyle = {
-  attribution?: string;
-  maxZoom?: number;
-  minZoom?: number;
-  tileSize?: number;
-  tiles?: string | readonly string[] | false;
-} & Record<string, unknown>;
+import {
+  createGlobalViewportQuery,
+  createGlobeGraticuleLines,
+  createInitialGlobeViewState,
+  createVisibleSvgPath,
+  defaultRasterMapStyle,
+  escapeHtml,
+  getGlobeDragCenter,
+  getGlobeRadius,
+  getGlobeZoom,
+  GLOBE_VIEWBOX_HEIGHT,
+  GLOBE_VIEWBOX_WIDTH,
+  joinClassNames,
+  projectGlobeCoordinate,
+  resolveTileLayerOptions,
+  toLeafletLatLng,
+  type GlobeViewState,
+  type MapDisplayMode,
+  type MapViewState,
+  type RasterMapStyle,
+} from "./map-display";
 
 export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
   className?: string;
@@ -51,6 +59,7 @@ export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
   fitBoundsPadding?: number;
   fitToData?: boolean;
   initialViewState?: MapViewState;
+  mapDisplay?: MapDisplayMode;
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;
   maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
@@ -61,12 +70,6 @@ export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
   points: readonly MapPoint<TProperties>[];
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
-};
-
-export const defaultRasterMapStyle: RasterMapStyle = {
-  attribution: "\u00a9 OpenStreetMap contributors",
-  tiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-  tileSize: 256,
 };
 
 const MAX_CLUSTER_AREA_FEATURES = 160;
@@ -83,13 +86,26 @@ type ClusterAreaFeatureCache = {
   result: ClusterAreaFeatureResult;
 };
 
-export function ClusteredMap<TProperties = Record<string, unknown>>({
+export { defaultRasterMapStyle, type MapDisplayMode, type MapViewState, type RasterMapStyle };
+
+export function ClusteredMap<TProperties = Record<string, unknown>>(
+  props: ClusteredMapProps<TProperties>,
+) {
+  if (props.mapDisplay === "globe") {
+    return <GlobeClusteredMap {...props} />;
+  }
+
+  return <FlatClusteredMap {...props} />;
+}
+
+function FlatClusteredMap<TProperties = Record<string, unknown>>({
   className,
   clusterRadius,
   filterPoint,
   fitBoundsPadding = 56,
   fitToData = true,
   initialViewState,
+  mapDisplay: _mapDisplay,
   mapLabel = "Interactive map",
   mapStyle = defaultRasterMapStyle,
   maxZoom,
@@ -277,6 +293,245 @@ export function ClusteredMap<TProperties = Record<string, unknown>>({
     >
       <div ref={containerRef} className="mb-maps__canvas" />
     </div>
+  );
+}
+
+function GlobeClusteredMap<TProperties = Record<string, unknown>>({
+  className,
+  clusterRadius,
+  filterPoint,
+  fitToData = true,
+  initialViewState,
+  mapLabel = "Interactive map",
+  maxZoom,
+  minZoom,
+  onFeatureSelect,
+  onViewportAggregationChange,
+  points,
+  style,
+}: ClusteredMapProps<TProperties>) {
+  const deferredPoints = useDeferredValue(points);
+  const dragRef = useRef<{
+    center: [number, number];
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [viewState, setViewState] = useState<GlobeViewState>(() =>
+    createInitialGlobeViewState({
+      fitToData,
+      initialViewState,
+      points,
+    }),
+  );
+  const lastViewportSummaryKeyRef = useRef<string | null>(null);
+  const index = useMemo(
+    () =>
+      createPointAggregationIndex(deferredPoints, {
+        filterPoint,
+        maxZoom,
+        minZoom,
+        radius: clusterRadius,
+      }),
+    [clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
+  );
+  const query = useMemo(() => createGlobalViewportQuery(viewState.zoom), [viewState.zoom]);
+  const aggregation = useMemo(() => index.getViewportAggregation(query), [index, query]);
+
+  useEffect(() => {
+    if (initialViewState || !fitToData) {
+      return;
+    }
+
+    setViewState(createInitialGlobeViewState({ fitToData, initialViewState, points: deferredPoints }));
+  }, [deferredPoints, fitToData, initialViewState]);
+
+  useEffect(() => {
+    const nextSummaryKey = serializeVisibleAggregationSummary(aggregation.summary);
+
+    if (lastViewportSummaryKeyRef.current === nextSummaryKey) {
+      return;
+    }
+
+    lastViewportSummaryKeyRef.current = nextSummaryKey;
+    startTransition(() => {
+      onViewportAggregationChange?.(aggregation.summary);
+    });
+  }, [aggregation.summary, onViewportAggregationChange]);
+
+  const handleFeatureClick = useEffectEvent((feature: AggregatedMapFeature<TProperties>) => {
+    if (feature.kind === "cluster") {
+      setViewState((current) => ({
+        center: feature.coordinates,
+        zoom: Math.min(8, Math.max(current.zoom + 0.8, feature.expansionZoom)),
+      }));
+    }
+
+    startTransition(() => {
+      onFeatureSelect?.(feature);
+    });
+  });
+
+  return (
+    <div
+      aria-label={mapLabel}
+      className={joinClassNames("mb-maps", "mb-maps--globe", className)}
+      data-map-ready="true"
+      style={{
+        minHeight: 480,
+        width: "100%",
+        ...style,
+      }}
+    >
+      <svg
+        className="mb-maps__globe"
+        viewBox={`0 0 ${GLOBE_VIEWBOX_WIDTH} ${GLOBE_VIEWBOX_HEIGHT}`}
+        role="img"
+        onPointerDown={(event) => {
+          dragRef.current = {
+            center: viewState.center,
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const drag = dragRef.current;
+
+          if (!drag || drag.pointerId !== event.pointerId) {
+            return;
+          }
+
+          setViewState((current) => ({
+            ...current,
+            center: getGlobeDragCenter(
+              drag.center,
+              event.clientX - drag.x,
+              event.clientY - drag.y,
+              current.zoom,
+            ),
+          }));
+        }}
+        onPointerUp={(event) => {
+          if (dragRef.current?.pointerId === event.pointerId) {
+            dragRef.current = null;
+          }
+        }}
+        onWheel={(event) => {
+          event.preventDefault();
+          setViewState((current) => ({
+            ...current,
+            zoom: getGlobeZoom(current.zoom, event.deltaY),
+          }));
+        }}
+      >
+        <GlobeBase viewState={viewState} />
+        <g className="mb-maps__globe-features">
+          {aggregation.features.map((feature) => (
+            <GlobeAggregationFeature
+              feature={feature}
+              key={feature.kind === "cluster" ? `cluster-${feature.clusterId}` : feature.point.id}
+              onClick={handleFeatureClick}
+              viewState={viewState}
+            />
+          ))}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
+  const radius = getGlobeRadius(viewState.zoom);
+
+  return (
+    <>
+      <defs>
+        <radialGradient id="mb-maps-globe-ocean" cx="38%" cy="30%" r="70%">
+          <stop offset="0%" stopColor="#dbeafe" />
+          <stop offset="58%" stopColor="#67e8f9" />
+          <stop offset="100%" stopColor="#0f766e" />
+        </radialGradient>
+      </defs>
+      <circle
+        className="mb-maps__globe-ocean"
+        cx={GLOBE_VIEWBOX_WIDTH / 2}
+        cy={GLOBE_VIEWBOX_HEIGHT / 2}
+        r={radius}
+      />
+      <g className="mb-maps__globe-graticule">
+        {createGlobeGraticuleLines(viewState).map((line, index) => {
+          const path = createVisibleSvgPath(line);
+
+          return path ? <path d={path} key={index} /> : null;
+        })}
+      </g>
+      <circle
+        className="mb-maps__globe-rim"
+        cx={GLOBE_VIEWBOX_WIDTH / 2}
+        cy={GLOBE_VIEWBOX_HEIGHT / 2}
+        r={radius}
+      />
+    </>
+  );
+}
+
+function GlobeAggregationFeature<TProperties>({
+  feature,
+  onClick,
+  viewState,
+}: {
+  feature: AggregatedMapFeature<TProperties>;
+  onClick: (feature: AggregatedMapFeature<TProperties>) => void;
+  viewState: GlobeViewState;
+}) {
+  const projected = projectGlobeCoordinate(feature.coordinates, viewState);
+
+  if (!projected.visible) {
+    return null;
+  }
+
+  if (feature.kind === "cluster") {
+    const radius = getClusterRadius(feature.pointCount) * (0.72 + projected.scale * 0.28);
+
+    return (
+      <g
+        className="mb-maps__globe-cluster"
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick(feature);
+        }}
+        style={{ opacity: 0.38 + projected.scale * 0.62 }}
+      >
+        <title>{feature.pointCountAbbreviated}</title>
+        <circle
+          cx={projected.x}
+          cy={projected.y}
+          fill={getClusterColor(feature.pointCount)}
+          r={radius}
+        />
+        <text x={projected.x} y={projected.y}>
+          {feature.pointCountAbbreviated}
+        </text>
+      </g>
+    );
+  }
+
+  return (
+    <circle
+      className="mb-maps__globe-point"
+      cx={projected.x}
+      cy={projected.y}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick(feature);
+      }}
+      r={6 * (0.72 + projected.scale * 0.28)}
+      style={{ opacity: 0.42 + projected.scale * 0.58 }}
+    >
+      <title>{feature.point.label}</title>
+    </circle>
   );
 }
 
@@ -626,38 +881,6 @@ function createClusterAreaBoundaryFeature(
   };
 }
 
-function resolveTileLayerOptions(mapStyle: string | RasterMapStyle): {
-  options: TileLayerOptions;
-  url: string;
-} | null {
-  if (typeof mapStyle === "string") {
-    return {
-      options: {
-        attribution: defaultRasterMapStyle.attribution,
-      },
-      url: mapStyle,
-    };
-  }
-
-  const tiles = mapStyle.tiles ?? defaultRasterMapStyle.tiles;
-
-  if (tiles === false) {
-    return null;
-  }
-
-  const url = Array.isArray(tiles) ? tiles[0] : tiles;
-
-  return {
-    options: {
-      attribution: mapStyle.attribution ?? defaultRasterMapStyle.attribution,
-      maxZoom: typeof mapStyle.maxZoom === "number" ? mapStyle.maxZoom : undefined,
-      minZoom: typeof mapStyle.minZoom === "number" ? mapStyle.minZoom : undefined,
-      tileSize: typeof mapStyle.tileSize === "number" ? mapStyle.tileSize : undefined,
-    },
-    url: url ?? String(defaultRasterMapStyle.tiles),
-  };
-}
-
 function getClusterColor(pointCount: number) {
   if (pointCount >= 2_500) {
     return "#ea580c";
@@ -690,14 +913,6 @@ function getClusterRadius(pointCount: number) {
   return 18;
 }
 
-function toLeafletLatLng([longitude, latitude]: [number, number]) {
-  return [latitude, longitude] as [number, number];
-}
-
-function joinClassNames(...values: Array<string | undefined>) {
-  return values.filter(Boolean).join(" ");
-}
-
 function isDefined<T>(value: T | null): value is T {
   return value !== null;
 }
@@ -713,13 +928,4 @@ function serializeVisibleAggregationSummary(summary: VisibleAggregationSummary) 
     visibleUnclusteredCount: summary.visibleUnclusteredCount,
     zoom: Number(summary.zoom.toFixed(6)),
   });
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }

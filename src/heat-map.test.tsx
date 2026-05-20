@@ -319,6 +319,35 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(marker?.options?.radius).toBeGreaterThan(0);
   });
 
+  test("renders heat markers on the globe display", () => {
+    render(
+      <HeatMap
+        initialViewState={{ center: [-74, 40], zoom: 2 }}
+        mapDisplay="globe"
+        mapLabel="Demand globe heat map"
+        points={[
+          {
+            id: "a",
+            label: "New York",
+            latitude: 40,
+            longitude: -74,
+            metrics: {
+              demand: 6,
+            },
+          },
+        ]}
+        weightMetric="demand"
+      />,
+    );
+
+    const map = screen.getByLabelText("Demand globe heat map");
+
+    expect(map.getAttribute("data-map-ready")).toBe("true");
+    expect(map.querySelector(".mb-maps__globe")).toBeTruthy();
+    expect(map.querySelector(".mb-maps__globe-heat-marker")).toBeTruthy();
+    expect(leafletMock.getMaps()).toHaveLength(0);
+  });
+
   test("slices temporal tracks into weighted heat-map frames", async () => {
     const tracks: TemporalMapTrack<{ route: string }>[] = [
       {

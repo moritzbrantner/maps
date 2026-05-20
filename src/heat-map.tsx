@@ -21,7 +21,26 @@ import {
   type PointAggregationIndexOptions,
   type ViewportAggregationQuery,
 } from "./aggregation";
-import { defaultRasterMapStyle, type MapViewState, type RasterMapStyle } from "./clustered-map";
+import {
+  createGlobalViewportQuery,
+  createGlobeGraticuleLines,
+  createInitialGlobeViewState,
+  createVisibleSvgPath,
+  defaultRasterMapStyle,
+  getGlobeDragCenter,
+  getGlobeRadius,
+  getGlobeZoom,
+  GLOBE_VIEWBOX_HEIGHT,
+  GLOBE_VIEWBOX_WIDTH,
+  joinClassNames,
+  projectGlobeCoordinate,
+  resolveTileLayerOptions,
+  toLeafletLatLng,
+  type GlobeViewState,
+  type MapDisplayMode,
+  type MapViewState,
+  type RasterMapStyle,
+} from "./map-display";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
 
@@ -97,6 +116,7 @@ export type HeatMapProps<TProperties = Record<string, unknown>> =
     heatmapOpacity?: number;
     heatmapRadius?: HeatMapRadius;
     initialViewState?: MapViewState;
+    mapDisplay?: MapDisplayMode;
     mapLabel?: string;
     mapStyle?: string | RasterMapStyle;
     onMapReady?: (map: LeafletMap) => void;
@@ -115,6 +135,17 @@ const defaultHeatMapColorRamp = [
 ] as const satisfies readonly HeatMapColorStop[];
 
 export function HeatMap<TProperties = Record<string, unknown>>({
+  mapDisplay = "flat",
+  ...props
+}: HeatMapProps<TProperties>) {
+  if (mapDisplay === "globe") {
+    return <GlobeHeatMap {...props} mapDisplay={mapDisplay} />;
+  }
+
+  return <FlatHeatMap {...props} mapDisplay={mapDisplay} />;
+}
+
+function FlatHeatMap<TProperties = Record<string, unknown>>({
   className,
   filterPoint,
   fitBoundsPadding = 56,
@@ -132,6 +163,7 @@ export function HeatMap<TProperties = Record<string, unknown>>({
     min: 12,
   },
   initialViewState,
+  mapDisplay: _mapDisplay,
   mapLabel = "Interactive heat map",
   mapStyle = defaultRasterMapStyle,
   maxWeight,
@@ -306,6 +338,231 @@ export function HeatMap<TProperties = Record<string, unknown>>({
     >
       <div ref={containerRef} className="mb-maps__canvas" />
     </div>
+  );
+}
+
+function GlobeHeatMap<TProperties = Record<string, unknown>>({
+  className,
+  filterPoint,
+  fitToData = true,
+  getWeight,
+  heatmapAggregationMaxZoom,
+  heatmapAggregationMinZoom,
+  heatmapAggregationRadius = 56,
+  heatmapColorRamp = defaultHeatMapColorRamp,
+  heatmapIntensity = 1,
+  heatmapMaxZoom = 16,
+  heatmapOpacity = 0.84,
+  heatmapRadius = {
+    max: 42,
+    min: 12,
+  },
+  initialViewState,
+  mapLabel = "Interactive heat map",
+  maxWeight,
+  points,
+  style,
+  weightMetric,
+}: HeatMapProps<TProperties>) {
+  const deferredPoints = useDeferredValue(points);
+  const dragRef = useRef<{
+    center: [number, number];
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [viewState, setViewState] = useState<GlobeViewState>(() =>
+    createInitialGlobeViewState({
+      fitToData,
+      initialViewState,
+      points,
+    }),
+  );
+  const densityIndex = useMemo(
+    () =>
+      createHeatMapDensityIndex(deferredPoints, {
+        filterPoint,
+        getWeight,
+        maxZoom: heatmapAggregationMaxZoom ?? heatmapMaxZoom,
+        maxWeight,
+        minZoom: heatmapAggregationMinZoom,
+        radius: heatmapAggregationRadius,
+        weightMetric,
+      }),
+    [
+      deferredPoints,
+      filterPoint,
+      getWeight,
+      heatmapAggregationMaxZoom,
+      heatmapAggregationMinZoom,
+      heatmapAggregationRadius,
+      heatmapMaxZoom,
+      maxWeight,
+      weightMetric,
+    ],
+  );
+  const query = useMemo(() => createGlobalViewportQuery(viewState.zoom), [viewState.zoom]);
+  const data = useMemo(() => densityIndex.getFeatureCollection(query), [densityIndex, query]);
+
+  useEffect(() => {
+    if (initialViewState || !fitToData) {
+      return;
+    }
+
+    setViewState(createInitialGlobeViewState({ fitToData, initialViewState, points: deferredPoints }));
+  }, [deferredPoints, fitToData, initialViewState]);
+
+  return (
+    <div
+      aria-label={mapLabel}
+      className={joinClassNames("mb-maps", "mb-maps--globe", className)}
+      data-map-ready="true"
+      style={{
+        minHeight: 480,
+        width: "100%",
+        ...style,
+      }}
+    >
+      <svg
+        className="mb-maps__globe"
+        viewBox={`0 0 ${GLOBE_VIEWBOX_WIDTH} ${GLOBE_VIEWBOX_HEIGHT}`}
+        role="img"
+        onPointerDown={(event) => {
+          dragRef.current = {
+            center: viewState.center,
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const drag = dragRef.current;
+
+          if (!drag || drag.pointerId !== event.pointerId) {
+            return;
+          }
+
+          setViewState((current) => ({
+            ...current,
+            center: getGlobeDragCenter(
+              drag.center,
+              event.clientX - drag.x,
+              event.clientY - drag.y,
+              current.zoom,
+            ),
+          }));
+        }}
+        onPointerUp={(event) => {
+          if (dragRef.current?.pointerId === event.pointerId) {
+            dragRef.current = null;
+          }
+        }}
+        onWheel={(event) => {
+          event.preventDefault();
+          setViewState((current) => ({
+            ...current,
+            zoom: getGlobeZoom(current.zoom, event.deltaY),
+          }));
+        }}
+      >
+        <HeatGlobeBase viewState={viewState} />
+        <g className="mb-maps__globe-features">
+          {viewState.zoom <= heatmapMaxZoom
+            ? data.features.map((feature) => (
+                <GlobeHeatFeature
+                  colorRamp={heatmapColorRamp}
+                  feature={feature}
+                  intensity={heatmapIntensity}
+                  key={feature.properties.pointId}
+                  opacity={heatmapOpacity}
+                  radius={heatmapRadius}
+                  viewState={viewState}
+                />
+              ))
+            : null}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+function HeatGlobeBase({ viewState }: { viewState: GlobeViewState }) {
+  const radius = getGlobeRadius(viewState.zoom);
+
+  return (
+    <>
+      <defs>
+        <radialGradient id="mb-maps-globe-ocean" cx="38%" cy="30%" r="70%">
+          <stop offset="0%" stopColor="#e0f2fe" />
+          <stop offset="62%" stopColor="#a7f3d0" />
+          <stop offset="100%" stopColor="#0f766e" />
+        </radialGradient>
+      </defs>
+      <circle
+        className="mb-maps__globe-ocean"
+        cx={GLOBE_VIEWBOX_WIDTH / 2}
+        cy={GLOBE_VIEWBOX_HEIGHT / 2}
+        r={radius}
+      />
+      <g className="mb-maps__globe-graticule">
+        {createGlobeGraticuleLines(viewState).map((line, index) => {
+          const path = createVisibleSvgPath(line);
+
+          return path ? <path d={path} key={index} /> : null;
+        })}
+      </g>
+      <circle
+        className="mb-maps__globe-rim"
+        cx={GLOBE_VIEWBOX_WIDTH / 2}
+        cy={GLOBE_VIEWBOX_HEIGHT / 2}
+        r={radius}
+      />
+    </>
+  );
+}
+
+function GlobeHeatFeature({
+  colorRamp,
+  feature,
+  intensity,
+  opacity,
+  radius,
+  viewState,
+}: {
+  colorRamp: readonly HeatMapColorStop[];
+  feature: HeatMapFeature;
+  intensity: number;
+  opacity: number;
+  radius: HeatMapRadius;
+  viewState: GlobeViewState;
+}) {
+  const projected = projectGlobeCoordinate(feature.geometry.coordinates, viewState);
+
+  if (!projected.visible) {
+    return null;
+  }
+
+  const normalizedWeight = clamp(feature.properties.weight, 0, 1);
+  const markerRadius =
+    resolveHeatMapRadius(radius, viewState.zoom) *
+    Math.max(0.35, Math.sqrt(normalizedWeight)) *
+    Math.max(0, intensity) *
+    (0.62 + projected.scale * 0.38);
+  const safeOpacity = clamp(opacity, 0, 1);
+
+  return (
+    <circle
+      className="mb-maps__globe-heat-marker"
+      cx={projected.x}
+      cy={projected.y}
+      fill={resolveHeatMapColor(colorRamp, normalizedWeight)}
+      fillOpacity={safeOpacity * Math.min(1, 0.35 + normalizedWeight * 0.65)}
+      r={markerRadius}
+      style={{ opacity: 0.34 + projected.scale * 0.66 }}
+    >
+      <title>{feature.properties.label}</title>
+    </circle>
   );
 }
 
@@ -540,35 +797,6 @@ function getRawHeatMapPointWeight<TProperties>(
   return point.metrics.weight ?? 1;
 }
 
-function resolveTileLayerOptions(mapStyle: string | RasterMapStyle) {
-  if (typeof mapStyle === "string") {
-    return {
-      options: {
-        attribution: defaultRasterMapStyle.attribution,
-      },
-      url: mapStyle,
-    };
-  }
-
-  const tiles = mapStyle.tiles ?? defaultRasterMapStyle.tiles;
-
-  if (tiles === false) {
-    return null;
-  }
-
-  const url = Array.isArray(tiles) ? tiles[0] : tiles;
-
-  return {
-    options: {
-      attribution: mapStyle.attribution ?? defaultRasterMapStyle.attribution,
-      maxZoom: typeof mapStyle.maxZoom === "number" ? mapStyle.maxZoom : undefined,
-      minZoom: typeof mapStyle.minZoom === "number" ? mapStyle.minZoom : undefined,
-      tileSize: typeof mapStyle.tileSize === "number" ? mapStyle.tileSize : undefined,
-    },
-    url: url ?? String(defaultRasterMapStyle.tiles),
-  };
-}
-
 function resolveHeatMapRadius(radius: HeatMapRadius, zoom: number) {
   if (typeof radius === "number") {
     return Math.max(0, radius);
@@ -629,16 +857,8 @@ function isValidHeatMapPoint<TProperties>(point: IndexedMapPoint<TProperties>) {
   return Number.isFinite(point.latitude) && Number.isFinite(point.longitude);
 }
 
-function toLeafletLatLng([longitude, latitude]: [number, number]) {
-  return [latitude, longitude] as [number, number];
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-function joinClassNames(...values: Array<string | undefined>) {
-  return values.filter(Boolean).join(" ");
 }
 
 function isDefined<T>(value: T | null): value is T {

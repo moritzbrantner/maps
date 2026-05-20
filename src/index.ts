@@ -22,7 +22,9 @@ export {
   ClusteredMap,
   defaultRasterMapStyle,
   type ClusteredMapProps,
+  type MapDisplayMode,
   type MapViewState,
+  type RasterMapStyle,
 } from "./clustered-map";
 export {
   HeatMap,
