@@ -13,8 +13,7 @@ import {
   type MapFlow,
   type MapPoint,
 } from ".";
-import { createGlobeLandPaths } from "./globe-base";
-import { getGlobeZoom, GLOBE_MAX_ZOOM } from "./map-display";
+import { getGlobeRadius, getGlobeZoom, GLOBE_MAX_ZOOM } from "./map-display";
 
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -364,14 +363,15 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     const map = screen.getByLabelText("Demand bubbles");
 
     expect(map.getAttribute("data-map-ready")).toBe("true");
-    expect(map.querySelector(".mb-maps__globe-land path")).toBeTruthy();
+    expect(map.querySelector(".mb-maps__globe-renderer")).toBeTruthy();
+    expect(map.querySelector(".mb-maps__globe-rim")).toBeTruthy();
     expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
     expect(leafletMock.getMaps()).toHaveLength(0);
   });
 
-  test("renders globe land paths and allows a closer zoom", () => {
-    expect(createGlobeLandPaths({ center: [12, 25], zoom: 1.35 }).length).toBeGreaterThan(0);
+  test("allows a closer globe zoom", () => {
     expect(getGlobeZoom(GLOBE_MAX_ZOOM - 0.1, -1000)).toBe(GLOBE_MAX_ZOOM);
+    expect(getGlobeRadius(18) / getGlobeRadius(17)).toBeCloseTo(2, 5);
   });
 
   test("renders weighted flat flow lines with endpoints", async () => {

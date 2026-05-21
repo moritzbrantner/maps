@@ -1,153 +1,176 @@
 "use client";
 
+import { useEffect, useRef } from "react";
+import * as THREE from "three";
+import { feature } from "topojson-client";
+import worldTopology from "world-atlas/countries-50m.json";
+
 import {
   createGlobeGraticuleLines,
   createVisibleSvgPath,
   getGlobeRadius,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
-  projectGlobeCoordinate,
-  type GlobeProjectionResult,
   type GlobeViewState,
 } from "./map-display";
 
-const globeLandmasses: ReadonlyArray<ReadonlyArray<[longitude: number, latitude: number]>> = [
-  [
-    [-168, 72],
-    [-146, 70],
-    [-126, 61],
-    [-124, 49],
-    [-117, 33],
-    [-105, 24],
-    [-96, 16],
-    [-84, 10],
-    [-79, 18],
-    [-66, 18],
-    [-60, 45],
-    [-52, 55],
-    [-62, 63],
-    [-86, 71],
-    [-116, 74],
-    [-144, 73],
-    [-168, 72],
-  ],
-  [
-    [-82, 12],
-    [-70, 12],
-    [-50, 5],
-    [-35, -8],
-    [-43, -23],
-    [-54, -37],
-    [-68, -55],
-    [-76, -42],
-    [-73, -16],
-    [-82, 0],
-    [-82, 12],
-  ],
-  [
-    [-52, 60],
-    [-37, 65],
-    [-22, 75],
-    [-40, 83],
-    [-62, 76],
-    [-72, 68],
-    [-52, 60],
-  ],
-  [
-    [-10, 36],
-    [0, 52],
-    [22, 70],
-    [60, 72],
-    [100, 70],
-    [140, 61],
-    [170, 55],
-    [160, 36],
-    [137, 33],
-    [121, 20],
-    [105, 8],
-    [81, 8],
-    [70, 25],
-    [50, 30],
-    [44, 12],
-    [35, 31],
-    [29, 45],
-    [12, 43],
-    [0, 36],
-    [-10, 36],
-  ],
-  [
-    [-17, 35],
-    [5, 37],
-    [30, 31],
-    [42, 12],
-    [51, -2],
-    [40, -20],
-    [31, -35],
-    [18, -35],
-    [7, -25],
-    [-5, -12],
-    [-17, 5],
-    [-17, 35],
-  ],
-  [
-    [113, -11],
-    [130, -10],
-    [153, -24],
-    [145, -39],
-    [121, -35],
-    [112, -22],
-    [113, -11],
-  ],
-  [
-    [-180, -70],
-    [-130, -74],
-    [-70, -72],
-    [-10, -75],
-    [50, -70],
-    [110, -74],
-    [180, -70],
-  ],
-  [
-    [47, -13],
-    [50, -18],
-    [49, -25],
-    [45, -25],
-    [43, -18],
-    [47, -13],
-  ],
-  [
-    [138, 35],
-    [142, 40],
-    [145, 44],
-    [140, 45],
-    [136, 38],
-    [138, 35],
-  ],
-];
+type GeoJsonPosition = [longitude: number, latitude: number];
+type GeoJsonPolygon = {
+  coordinates: GeoJsonPosition[][];
+  type: "Polygon";
+};
+type GeoJsonMultiPolygon = {
+  coordinates: GeoJsonPosition[][][];
+  type: "MultiPolygon";
+};
+type GeoJsonCountryFeature = {
+  geometry: GeoJsonMultiPolygon | GeoJsonPolygon | null;
+  type: "Feature";
+};
+type GeoJsonFeatureCollection = {
+  features: GeoJsonCountryFeature[];
+  type: "FeatureCollection";
+};
+
+const DEG_TO_RAD = Math.PI / 180;
+const TEXTURE_HEIGHT = 1024;
+const TEXTURE_WIDTH = 2048;
 
 export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewStateRef = useRef(viewState);
+
+  viewStateRef.current = viewState;
+
+  useEffect(() => {
+    const container = containerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    if (typeof WebGLRenderingContext === "undefined") {
+      return;
+    }
+
+    let animationFrame = 0;
+    let renderer: THREE.WebGLRenderer;
+
+    try {
+      renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true,
+        powerPreference: "high-performance",
+      });
+    } catch {
+      return;
+    }
+
+    renderer.setClearAlpha(0);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.domElement.className = "mb-maps__globe-canvas";
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(
+      -GLOBE_VIEWBOX_WIDTH / 2,
+      GLOBE_VIEWBOX_WIDTH / 2,
+      GLOBE_VIEWBOX_HEIGHT / 2,
+      -GLOBE_VIEWBOX_HEIGHT / 2,
+      0.1,
+      2000,
+    );
+
+    camera.position.set(0, 0, 1000);
+    camera.lookAt(0, 0, 0);
+
+    const texture = new THREE.CanvasTexture(createGlobeMapTextureCanvas());
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 128, 96),
+      new THREE.MeshStandardMaterial({
+        map: texture,
+        metalness: 0,
+        roughness: 0.72,
+      }),
+    );
+
+    scene.add(sphere);
+    scene.add(new THREE.AmbientLight(0xffffff, 1.9));
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.45);
+    keyLight.position.set(-280, 320, 700);
+    scene.add(keyLight);
+
+    const rimLight = new THREE.DirectionalLight(0x8bd3ff, 0.9);
+    rimLight.position.set(500, -180, 420);
+    scene.add(rimLight);
+
+    const resize = () => {
+      const rect = container.getBoundingClientRect();
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
+      const aspect = width / height;
+      const viewBoxAspect = GLOBE_VIEWBOX_WIDTH / GLOBE_VIEWBOX_HEIGHT;
+      let frustumWidth = GLOBE_VIEWBOX_WIDTH;
+      let frustumHeight = GLOBE_VIEWBOX_HEIGHT;
+
+      if (aspect > viewBoxAspect) {
+        frustumWidth = GLOBE_VIEWBOX_HEIGHT * aspect;
+      } else {
+        frustumHeight = GLOBE_VIEWBOX_WIDTH / aspect;
+      }
+
+      camera.left = -frustumWidth / 2;
+      camera.right = frustumWidth / 2;
+      camera.top = frustumHeight / 2;
+      camera.bottom = -frustumHeight / 2;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height, false);
+    };
+
+    const resizeObserver = new ResizeObserver(resize);
+
+    resizeObserver.observe(container);
+    resize();
+
+    const render = () => {
+      const current = viewStateRef.current;
+      const radius = getGlobeRadius(current.zoom);
+
+      camera.position.set(0, 0, radius + 1000);
+      camera.near = 1;
+      camera.far = radius * 2 + 2000;
+      camera.updateProjectionMatrix();
+      sphere.scale.setScalar(radius);
+      sphere.rotation.set(current.center[1] * DEG_TO_RAD, -current.center[0] * DEG_TO_RAD, 0);
+      renderer.render(scene, camera);
+      animationFrame = requestAnimationFrame(render);
+    };
+
+    render();
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      sphere.geometry.dispose();
+      texture.dispose();
+      (sphere.material as THREE.Material).dispose();
+      renderer.dispose();
+      renderer.domElement.remove();
+    };
+  }, []);
+
+  return <div aria-hidden="true" className="mb-maps__globe-renderer" ref={containerRef} />;
+}
+
+export function GlobeSvgOverlayBase({ viewState }: { viewState: GlobeViewState }) {
   const radius = getGlobeRadius(viewState.zoom);
 
   return (
     <>
-      <defs>
-        <radialGradient id="mb-maps-globe-ocean" cx="38%" cy="30%" r="70%">
-          <stop offset="0%" stopColor="#f8fafc" />
-          <stop offset="58%" stopColor="#bae6fd" />
-          <stop offset="100%" stopColor="#0f766e" />
-        </radialGradient>
-      </defs>
-      <circle
-        className="mb-maps__globe-ocean"
-        cx={GLOBE_VIEWBOX_WIDTH / 2}
-        cy={GLOBE_VIEWBOX_HEIGHT / 2}
-        r={radius}
-      />
-      <g className="mb-maps__globe-land">
-        {createGlobeLandPaths(viewState).map((path, index) => (
-          <path d={path} key={index} />
-        ))}
-      </g>
       <g className="mb-maps__globe-graticule">
         {createGlobeGraticuleLines(viewState).map((line, index) => {
           const path = createVisibleSvgPath(line);
@@ -165,35 +188,114 @@ export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
   );
 }
 
-export function createGlobeLandPaths(viewState: GlobeViewState) {
-  return globeLandmasses.flatMap((landmass) =>
-    createVisibleSvgPolygons(landmass.map((coordinate) => projectGlobeCoordinate(coordinate, viewState))),
-  );
+export function createGlobeMapTextureCanvas() {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  canvas.width = TEXTURE_WIDTH;
+  canvas.height = TEXTURE_HEIGHT;
+
+  if (!context) {
+    return canvas;
+  }
+
+  const ocean = context.createLinearGradient(0, 0, 0, TEXTURE_HEIGHT);
+
+  ocean.addColorStop(0, "#dbeafe");
+  ocean.addColorStop(0.52, "#38bdf8");
+  ocean.addColorStop(1, "#0f766e");
+  context.fillStyle = ocean;
+  context.fillRect(0, 0, TEXTURE_WIDTH, TEXTURE_HEIGHT);
+  drawLatitudeBands(context);
+
+  const countries = feature(
+    worldTopology,
+    worldTopology.objects.countries,
+  ) as unknown as GeoJsonFeatureCollection;
+  const land = feature(worldTopology, worldTopology.objects.land) as unknown as GeoJsonFeatureCollection;
+
+  context.fillStyle = "#64a874";
+  context.strokeStyle = "rgba(21, 94, 117, 0.28)";
+  context.lineWidth = 1.2;
+  drawFeatureCollection(context, land, true);
+
+  context.strokeStyle = "rgba(248, 250, 252, 0.42)";
+  context.lineWidth = 0.62;
+  drawFeatureCollection(context, countries, false);
+
+  return canvas;
 }
 
-function createVisibleSvgPolygons(points: readonly GlobeProjectionResult[]) {
-  const paths: string[] = [];
-  let segment: GlobeProjectionResult[] = [];
+function drawLatitudeBands(context: CanvasRenderingContext2D) {
+  context.save();
 
-  for (const point of points) {
-    if (!point.visible) {
-      pushSegment(paths, segment);
-      segment = [];
+  for (let latitude = -60; latitude <= 60; latitude += 30) {
+    const y = latitudeToTextureY(latitude);
+
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(TEXTURE_WIDTH, y);
+    context.strokeStyle = "rgba(255, 255, 255, 0.14)";
+    context.lineWidth = latitude === 0 ? 2 : 1;
+    context.stroke();
+  }
+
+  context.restore();
+}
+
+function drawFeatureCollection(
+  context: CanvasRenderingContext2D,
+  collection: GeoJsonFeatureCollection,
+  fill: boolean,
+) {
+  for (const currentFeature of collection.features) {
+    const geometry = currentFeature.geometry;
+
+    if (!geometry) {
       continue;
     }
 
-    segment.push(point);
+    if (geometry.type === "Polygon") {
+      drawPolygon(context, geometry.coordinates, fill);
+      continue;
+    }
+
+    for (const polygon of geometry.coordinates) {
+      drawPolygon(context, polygon, fill);
+    }
   }
-
-  pushSegment(paths, segment);
-
-  return paths;
 }
 
-function pushSegment(paths: string[], segment: readonly GlobeProjectionResult[]) {
-  if (segment.length < 3) {
-    return;
+function drawPolygon(context: CanvasRenderingContext2D, rings: GeoJsonPosition[][], fill: boolean) {
+  context.beginPath();
+
+  for (const ring of rings) {
+    if (ring.length === 0) {
+      continue;
+    }
+
+    const [first, ...rest] = ring;
+
+    context.moveTo(longitudeToTextureX(first[0]), latitudeToTextureY(first[1]));
+
+    for (const coordinate of rest) {
+      context.lineTo(longitudeToTextureX(coordinate[0]), latitudeToTextureY(coordinate[1]));
+    }
+
+    context.closePath();
   }
 
-  paths.push(`${createVisibleSvgPath(segment)}Z`);
+  if (fill) {
+    context.fill();
+  }
+
+  context.stroke();
+}
+
+function longitudeToTextureX(longitude: number) {
+  return ((longitude + 180) / 360) * TEXTURE_WIDTH;
+}
+
+function latitudeToTextureY(latitude: number) {
+  return ((90 - latitude) / 180) * TEXTURE_HEIGHT;
 }

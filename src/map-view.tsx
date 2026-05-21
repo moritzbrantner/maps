@@ -14,7 +14,7 @@ import {
 import type { LayerGroup, Map as LeafletMap } from "leaflet";
 
 import { FeatureOverlays, type FeatureOverlayState } from "./feature-overlays";
-import { GlobeBase } from "./globe-base";
+import { GlobeBase, GlobeSvgOverlayBase } from "./globe-base";
 import {
   defaultRasterMapStyle,
   getGlobeDragCenter,
@@ -588,59 +588,62 @@ export function MapView({
       >
         {mapDisplay === "flat" ? <div ref={containerRef} className="mb-maps__canvas" /> : null}
         {mapDisplay === "globe" ? (
-          <svg
-            ref={svgRef}
-            className="mb-maps__globe"
-            viewBox={`0 0 ${GLOBE_VIEWBOX_WIDTH} ${GLOBE_VIEWBOX_HEIGHT}`}
-            role="img"
-            onPointerDown={(event) => {
-              dragRef.current = {
-                center: currentViewState.center,
-                pointerId: event.pointerId,
-                x: event.clientX,
-                y: event.clientY,
-              };
-              event.currentTarget.setPointerCapture(event.pointerId);
-            }}
-            onPointerMove={(event) => {
-              const drag = dragRef.current;
-
-              if (!drag || drag.pointerId !== event.pointerId) {
-                return;
-              }
-
-              setViewState(
-                {
-                  ...currentViewState,
-                  center: getGlobeDragCenter(
-                    drag.center,
-                    event.clientX - drag.x,
-                    event.clientY - drag.y,
-                    currentViewState.zoom,
-                  ),
-                },
-                "pan",
-              );
-            }}
-            onPointerUp={(event) => {
-              if (dragRef.current?.pointerId === event.pointerId) {
-                dragRef.current = null;
-              }
-            }}
-            onWheel={(event) => {
-              event.preventDefault();
-              setViewState(
-                {
-                  ...currentViewState,
-                  zoom: getGlobeZoom(currentViewState.zoom, event.deltaY),
-                },
-                "zoom",
-              );
-            }}
-          >
+          <>
             <GlobeBase viewState={currentViewState as GlobeViewState} />
-            <g className="mb-maps__globe-features">{children}</g>
-          </svg>
+            <svg
+              ref={svgRef}
+              className="mb-maps__globe"
+              viewBox={`0 0 ${GLOBE_VIEWBOX_WIDTH} ${GLOBE_VIEWBOX_HEIGHT}`}
+              role="img"
+              onPointerDown={(event) => {
+                dragRef.current = {
+                  center: currentViewState.center,
+                  pointerId: event.pointerId,
+                  x: event.clientX,
+                  y: event.clientY,
+                };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                const drag = dragRef.current;
+
+                if (!drag || drag.pointerId !== event.pointerId) {
+                  return;
+                }
+
+                setViewState(
+                  {
+                    ...currentViewState,
+                    center: getGlobeDragCenter(
+                      drag.center,
+                      event.clientX - drag.x,
+                      event.clientY - drag.y,
+                      currentViewState.zoom,
+                    ),
+                  },
+                  "pan",
+                );
+              }}
+              onPointerUp={(event) => {
+                if (dragRef.current?.pointerId === event.pointerId) {
+                  dragRef.current = null;
+                }
+              }}
+              onWheel={(event) => {
+                event.preventDefault();
+                setViewState(
+                  {
+                    ...currentViewState,
+                    zoom: getGlobeZoom(currentViewState.zoom, event.deltaY),
+                  },
+                  "zoom",
+                );
+              }}
+            >
+              <GlobeSvgOverlayBase viewState={currentViewState as GlobeViewState} />
+              <g className="mb-maps__globe-features">{children}</g>
+            </svg>
+          </>
         ) : (
           children
         )}

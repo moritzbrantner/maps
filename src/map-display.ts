@@ -67,6 +67,8 @@ export const GLOBE_VIEWBOX_HEIGHT = 480;
 export const GLOBE_VIEWBOX_WIDTH = 960;
 export const GLOBE_MAX_ZOOM = 18;
 export const GLOBE_MIN_ZOOM = 0.8;
+const GLOBE_BASE_ZOOM = 1.35;
+const GLOBE_BASE_RADIUS_FACTOR = 0.42;
 export const defaultRasterMapStyle: RasterMapStyle = {
   attribution: "\u00a9 OpenStreetMap contributors",
   tiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -194,9 +196,10 @@ export function unprojectGlobePoint(
 }
 
 export function getGlobeRadius(zoom: number) {
-  const safeZoom = Number.isFinite(zoom) ? zoom : 1.35;
+  const safeZoom = Number.isFinite(zoom) ? clamp(zoom, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM) : GLOBE_BASE_ZOOM;
+  const baseRadius = Math.min(GLOBE_VIEWBOX_HEIGHT, GLOBE_VIEWBOX_WIDTH) * GLOBE_BASE_RADIUS_FACTOR;
 
-  return Math.min(GLOBE_VIEWBOX_HEIGHT, GLOBE_VIEWBOX_WIDTH) * (0.36 + safeZoom * 0.045);
+  return baseRadius * 2 ** (safeZoom - GLOBE_BASE_ZOOM);
 }
 
 export function getGlobeDragCenter(

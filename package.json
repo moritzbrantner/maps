@@ -38,7 +38,10 @@
     "@turf/helpers": "^7.3.5",
     "d3-delaunay": "^6.0.4",
     "leaflet": "^1.9.4",
-    "tailwindcss": "^4.1.14"
+    "tailwindcss": "^4.1.14",
+    "three": "^0.184.0",
+    "topojson-client": "^3.1.0",
+    "world-atlas": "^2.0.2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",
@@ -48,6 +51,8 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
+    "@types/three": "^0.184.1",
+    "@types/topojson-client": "^3.1.5",
     "@vitejs/plugin-react": "^6.0.2",
     "jsdom": "^26.1.0",
     "react": "^19.2.0",

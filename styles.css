@@ -23,11 +23,11 @@
   }
 
   .mb-maps--globe {
-    @apply grid place-items-center bg-slate-950;
+    @apply bg-slate-950;
   }
 
   .mb-maps__globe {
-    @apply size-full touch-none select-none;
+    @apply absolute inset-0 z-[1] size-full touch-none select-none;
     cursor: grab;
   }
 
@@ -35,23 +35,18 @@
     cursor: grabbing;
   }
 
-  .mb-maps__globe-ocean {
-    fill: url("#mb-maps-globe-ocean");
-    stroke: rgb(255 255 255 / 0.78);
-    stroke-width: 1.5;
+  .mb-maps__globe-renderer {
+    @apply pointer-events-none absolute inset-0 z-0 size-full;
+  }
+
+  .mb-maps__globe-canvas {
+    @apply block size-full;
   }
 
   .mb-maps__globe-graticule path {
     fill: none;
-    stroke: rgb(15 23 42 / 0.22);
-    stroke-width: 0.8;
-  }
-
-  .mb-maps__globe-land path {
-    fill: rgb(34 197 94 / 0.56);
-    stroke: rgb(21 128 61 / 0.8);
-    stroke-linejoin: round;
-    stroke-width: 1;
+    stroke: rgb(255 255 255 / 0.32);
+    stroke-width: 0.9;
   }
 
   .mb-maps__globe-rim {
