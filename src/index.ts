@@ -71,6 +71,22 @@ export {
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
 export {
+  createGeoJsonOverlayFeatureCollection,
+  createMapFlowsFromGeoJson,
+  createMapPointsFromGeoJson,
+  flattenGeoJsonFeatures,
+  getBoundsFromGeoJson,
+  type GeoJsonMapSource,
+  type GeoJsonOverlayMode,
+  type GeoJsonOverlayOptions,
+  type GeoJsonOverlayTarget,
+  type GeoJsonSourceOptions,
+} from "./geojson-source";
+export {
+  GeoJsonMap,
+  type GeoJsonMapProps,
+} from "./geojson-map";
+export {
   BeeLineMeasurementLayer,
   type BeeLineMeasurementLayerProps,
 } from "./measurement-map-layer";
@@ -148,6 +164,7 @@ export {
   interpolateTemporalGeoJsonGeometry,
   type GeoJsonLineStringGeometry,
   type GeoJsonMultiLineStringGeometry,
+  type GeoJsonMultiPointGeometry,
   type GeoJsonMultiPolygonGeometry,
   type GeoJsonPointGeometry,
   type GeoJsonPolygonGeometry,

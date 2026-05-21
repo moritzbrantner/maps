@@ -1,0 +1,110 @@
+"use client";
+
+import type { Map as LeafletMap } from "leaflet";
+
+import {
+  getBoundsFromGeoJson,
+  type GeoJsonMapSource,
+} from "./geojson-source";
+import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
+import {
+  defaultRasterMapStyle,
+  type MapDisplayMode,
+  type MapSurfaceController,
+  type MapViewState,
+  type MapViewportProps,
+  type RasterMapStyle,
+} from "./map-display";
+import type { MapContextMenuContext } from "./map-interaction";
+import { MapView } from "./map-view";
+import { BeeLineMeasurementLayer } from "./measurement-map-layer";
+import type { MapMeasurementProps } from "./measurement";
+
+export type GeoJsonMapProps<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = Omit<GeoJsonLayerProps<TProperties>, "featureCollection"> &
+  MapMeasurementProps &
+  MapViewportProps & {
+    className?: string;
+    fitBoundsPadding?: number;
+    fitToData?: boolean;
+    geoJson: GeoJsonMapSource<TProperties>;
+    initialViewState?: MapViewState;
+    mapDisplay?: MapDisplayMode;
+    mapLabel?: string;
+    mapStyle?: string | RasterMapStyle;
+    onMapControllerReady?: (controller: MapSurfaceController) => void;
+    onMapContextMenu?: (context: MapContextMenuContext) => void;
+    onMapReady?: (map: LeafletMap) => void;
+    renderMapContextMenu?: (context: MapContextMenuContext) => React.ReactNode;
+    showAttributionControl?: boolean;
+    style?: React.CSSProperties;
+  };
+
+export function GeoJsonMap<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>({
+  className,
+  fitBoundsPadding = 56,
+  fitToData = true,
+  geoJson,
+  initialViewState,
+  mapDisplay = "flat",
+  mapLabel = "Interactive GeoJSON map",
+  mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
+  onMapControllerReady,
+  onMapContextMenu,
+  onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
+  onViewStateChange,
+  renderMapContextMenu,
+  showAttributionControl = true,
+  style,
+  viewState,
+  defaultViewState,
+  ...layerProps
+}: GeoJsonMapProps<TProperties>) {
+  return (
+    <MapView
+      className={className}
+      dataBounds={getBoundsFromGeoJson(geoJson)}
+      defaultViewState={defaultViewState}
+      fitBoundsPadding={fitBoundsPadding}
+      fitToData={fitToData}
+      initialViewState={initialViewState}
+      mapDisplay={mapDisplay}
+      mapLabel={mapLabel}
+      mapStyle={mapStyle}
+      onMapControllerReady={onMapControllerReady}
+      onMapContextMenu={onMapContextMenu}
+      onMapReady={onMapReady}
+      onViewStateChange={onViewStateChange}
+      renderMapContextMenu={renderMapContextMenu}
+      showAttributionControl={showAttributionControl}
+      style={style}
+      viewState={viewState}
+    >
+      <GeoJsonLayer
+        {...(layerProps as Omit<GeoJsonLayerProps<TProperties>, "featureCollection">)}
+        featureCollection={geoJson}
+      />
+      <BeeLineMeasurementLayer
+        measurementDistanceFormat={measurementDistanceFormat}
+        measurementDraftLineColor={measurementDraftLineColor}
+        measurementLineColor={measurementLineColor}
+        measurementMode={measurementMode}
+        measurements={measurements}
+        onMeasurementCreate={onMeasurementCreate}
+        onMeasurementDraftChange={onMeasurementDraftChange}
+        onMeasurementSelect={onMeasurementSelect}
+      />
+    </MapView>
+  );
+}

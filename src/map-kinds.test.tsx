@@ -4,14 +4,21 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   BubbleMap,
   FlowMap,
+  GeoJsonMap,
   GeoJsonLayer,
+  HeatMap,
   MapView,
   PointLayer,
   PointMap,
   createBubbleMapFeatures,
   createFlowMapFeatures,
+  createGeoJsonOverlayFeatureCollection,
   createGeoJsonLayerFeatures,
+  createMapFlowsFromGeoJson,
+  createMapPointsFromGeoJson,
   createPointMapFeatures,
+  getBoundsFromGeoJson,
+  type GeoJsonMapSource,
   type MapFlow,
   type MapPoint,
 } from ".";
@@ -172,6 +179,8 @@ const leafletMock = vi.hoisted(() => {
       createLayer("circleMarker", latLng, options),
     getLayerGroups: () => layerGroups,
     getMaps: () => maps,
+    imageOverlay: (_url: string, _bounds: unknown, options: Record<string, unknown>) =>
+      createLayer("imageOverlay", undefined, options),
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
     polygon: (latLngs: unknown, options: Record<string, unknown>) =>
@@ -339,6 +348,96 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(features.map((feature) => feature.geometry.type)).toEqual(["Point", "LineString", "Polygon"]);
   });
 
+  test("creates map points, flows, bounds, and overlays from GeoJSON", () => {
+    const collection: GeoJsonMapSource = {
+      features: [
+        {
+          geometry: {
+            coordinates: [
+              [-74, 40],
+              [-71, 42],
+            ],
+            type: "MultiPoint" as const,
+          },
+          id: "stores",
+          properties: {
+            demand: 8,
+            label: "Stores",
+          },
+          type: "Feature" as const,
+        },
+        {
+          geometry: {
+            coordinates: [
+              [-74, 40],
+              [-73, 41],
+              [-71, 42],
+            ],
+            type: "LineString" as const,
+          },
+          id: "route",
+          properties: {
+            trips: 12,
+          },
+          type: "Feature" as const,
+        },
+        {
+          geometry: {
+            coordinates: [
+              [
+                [-75, 39],
+                [-70, 39],
+                [-70, 43],
+                [-75, 39],
+              ],
+            ],
+            type: "Polygon" as const,
+          },
+          id: "zone",
+          type: "Feature" as const,
+        },
+      ],
+      type: "FeatureCollection" as const,
+    };
+
+    expect(createMapPointsFromGeoJson(collection, { metricKeys: ["demand"] })).toMatchObject([
+      {
+        id: "stores:part-0",
+        latitude: 40,
+        longitude: -74,
+        metrics: {
+          demand: 8,
+        },
+      },
+      {
+        id: "stores:part-1",
+        latitude: 42,
+        longitude: -71,
+      },
+    ]);
+    expect(createMapFlowsFromGeoJson(collection, { metricKeys: ["trips"] })).toMatchObject([
+      {
+        from: [-74, 40],
+        id: "route",
+        metrics: {
+          trips: 12,
+        },
+        to: [-71, 42],
+      },
+    ]);
+    expect(getBoundsFromGeoJson(collection)).toEqual([-75, 39, -70, 43]);
+    expect(
+      createGeoJsonOverlayFeatureCollection(collection, {
+        target: "point",
+      }).features.map((feature) => feature.geometry?.type),
+    ).toEqual(["LineString", "Polygon"]);
+    expect(
+      createGeoJsonOverlayFeatureCollection(collection, {
+        target: "flow",
+      }).features.map((feature) => feature.id),
+    ).toEqual(["stores", "route", "zone"]);
+  });
+
   test("renders flat point markers with Leaflet", async () => {
     render(
       <PointMap
@@ -492,6 +591,257 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       "circleMarker",
       "polyline",
       "polygon",
+    ]);
+  });
+
+  test("renders MultiPoint and GeometryCollection GeoJSON layers", async () => {
+    render(
+      <MapView
+        defaultViewState={{ center: [-73, 41], zoom: 5 }}
+        mapLabel="Collected GeoJSON layers"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            features: [
+              {
+                geometry: {
+                  coordinates: [
+                    [-74, 40],
+                    [-71, 42],
+                  ],
+                  type: "MultiPoint",
+                },
+                id: "points-a",
+                type: "Feature",
+              },
+              {
+                geometry: {
+                  geometries: [
+                    {
+                      coordinates: [
+                        [-74, 40],
+                        [-71, 42],
+                      ],
+                      type: "LineString",
+                    },
+                    {
+                      coordinates: [
+                        [
+                          [-75, 39],
+                          [-70, 39],
+                          [-70, 43],
+                          [-75, 39],
+                        ],
+                      ],
+                      type: "Polygon",
+                    },
+                  ],
+                  type: "GeometryCollection",
+                },
+                id: "collection-a",
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          }}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Collected GeoJSON layers").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    expect(leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
+      "circleMarker",
+      "circleMarker",
+      "polyline",
+      "polygon",
+    ]);
+  });
+
+  test("renders PointMap from GeoJSON points with incompatible geometry overlays", async () => {
+    render(
+      <PointMap
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [-74, 40],
+                type: "Point",
+              },
+              id: "store-a",
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [-75, 39],
+                    [-70, 39],
+                    [-70, 43],
+                    [-75, 39],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              id: "zone-a",
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        mapLabel="GeoJSON point map"
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("GeoJSON point map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(leafletMock.getLayerGroups()[0]?.layers).toMatchObject([
+      {
+        options: {
+          className: "mb-maps__geojson-feature",
+        },
+        type: "polygon",
+      },
+    ]);
+    expect(leafletMock.getLayerGroups()[1]?.layers).toMatchObject([
+      {
+        options: {
+          className: "mb-maps__point-marker",
+        },
+        type: "circleMarker",
+      },
+    ]);
+  });
+
+  test("renders HeatMap from GeoJSON point weights", async () => {
+    render(
+      <HeatMap
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [-74, 40],
+                type: "Point",
+              },
+              id: "demand-a",
+              properties: {
+                demand: 6,
+              },
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        geoJsonOptions={{ metricKeys: ["demand"] }}
+        heatmapSurfaceMode="data"
+        mapLabel="GeoJSON heat map"
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("GeoJSON heat map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(leafletMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
+      options: {
+        className: "mb-maps__heat-surface mb-maps__heat-surface--data",
+      },
+      type: "imageOverlay",
+    });
+  });
+
+  test("renders FlowMap from GeoJSON routes and preserves multi-vertex route overlays", async () => {
+    render(
+      <FlowMap
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [
+                  [-74, 40],
+                  [-73, 41],
+                  [-71, 42],
+                ],
+                type: "LineString",
+              },
+              id: "route-a",
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        mapLabel="GeoJSON flow map"
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("GeoJSON flow map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(leafletMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
+      options: {
+        className: "mb-maps__geojson-feature",
+      },
+      type: "polyline",
+    });
+    expect(leafletMock.getLayerGroups()[1]?.layers[0]).toMatchObject({
+      options: {
+        className: "mb-maps__flow-line",
+      },
+      type: "polyline",
+    });
+  });
+
+  test("renders GeoJsonMap as a pure GeoJSON convenience map", async () => {
+    render(
+      <GeoJsonMap
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [-74, 40],
+                type: "Point",
+              },
+              id: "point-a",
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [-74, 40],
+                  [-71, 42],
+                ],
+                type: "LineString",
+              },
+              id: "line-a",
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        mapLabel="Pure GeoJSON map"
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Pure GeoJSON map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
+      "circleMarker",
+      "polyline",
     ]);
   });
 

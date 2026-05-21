@@ -15,6 +15,7 @@ import {
 import type {
   GeoJsonLineStringGeometry,
   GeoJsonMultiLineStringGeometry,
+  GeoJsonMultiPointGeometry,
   GeoJsonMultiPolygonGeometry,
   GeoJsonPointGeometry,
   GeoJsonPolygonGeometry,
@@ -42,6 +43,10 @@ export type PreparedGeometryInterpolator =
   | {
       point: PreparedFlatCoordinates;
       type: "Point";
+    }
+  | {
+      points: PreparedFlatCoordinates;
+      type: "MultiPoint";
     }
   | {
       line: PreparedFlatCoordinates;
@@ -112,6 +117,18 @@ export function prepareMatchingGeometryInterpolator(
         ),
         type: "Point",
       };
+    case "MultiPoint": {
+      const nextPoints = (nextGeometry as GeoJsonMultiPointGeometry).coordinates;
+
+      if (previousGeometry.coordinates.length !== nextPoints.length) {
+        return null;
+      }
+
+      return {
+        points: createPreparedFlatCoordinates(previousGeometry.coordinates, nextPoints),
+        type: "MultiPoint",
+      };
+    }
     case "LineString": {
       const line = prepareLineInterpolator(
         previousGeometry.coordinates,
@@ -299,6 +316,11 @@ export function materializePreparedGeometry(
         coordinates: materializePreparedPositions(interpolator.point, progress)[0]!,
         type: "Point",
       };
+    case "MultiPoint":
+      return {
+        coordinates: materializePreparedPositions(interpolator.points, progress),
+        type: "MultiPoint",
+      };
     case "LineString":
       return {
         coordinates: materializePreparedPositions(interpolator.line, progress),
@@ -386,6 +408,20 @@ function interpolateMatchingGeometry(
         ),
         type: "Point",
       };
+    case "MultiPoint": {
+      const nextPoints = (nextGeometry as GeoJsonMultiPointGeometry).coordinates;
+
+      if (previousGeometry.coordinates.length !== nextPoints.length) {
+        return null;
+      }
+
+      return {
+        coordinates: previousGeometry.coordinates.map((position, index) =>
+          interpolatePosition(position, nextPoints[index]!, progress),
+        ),
+        type: "MultiPoint",
+      };
+    }
     case "LineString":
       return interpolateLineStringGeometry(
         previousGeometry,

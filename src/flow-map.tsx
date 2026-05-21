@@ -32,13 +32,22 @@ import {
   type RasterMapStyle,
 } from "./map-display";
 import { FlowLayer } from "./flow-layer";
+import {
+  createGeoJsonOverlayFeatureCollection,
+  createMapFlowsFromGeoJson,
+  getBoundsFromGeoJson,
+  type GeoJsonMapSource,
+  type GeoJsonOverlayMode,
+  type GeoJsonSourceOptions,
+} from "./geojson-source";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
+import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 
-export type MapFlow<TProperties = Record<string, unknown>> = {
+export type MapFlow<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   from: [longitude: number, latitude: number];
   id: string;
   label?: string;
@@ -47,7 +56,7 @@ export type MapFlow<TProperties = Record<string, unknown>> = {
   to: [longitude: number, latitude: number];
 };
 
-export type IndexedMapFlow<TProperties = Record<string, unknown>> = {
+export type IndexedMapFlow<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   from: [longitude: number, latitude: number];
   id: string;
   label: string;
@@ -56,23 +65,27 @@ export type IndexedMapFlow<TProperties = Record<string, unknown>> = {
   to: [longitude: number, latitude: number];
 };
 
-export type FlowMapFeature<TProperties = Record<string, unknown>> = {
+export type FlowMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   flow: IndexedMapFlow<TProperties>;
   rawValue: number;
   value: number;
   width: number;
 };
 
-export type FlowMapWeightAccessor<TProperties = Record<string, unknown>> = (
+export type FlowMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> = (
   flow: IndexedMapFlow<TProperties>,
 ) => number;
 
-export type FlowMapProps<TProperties = Record<string, unknown>> = {
+export type FlowMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   className?: string;
   fitBoundsPadding?: number;
   fitToData?: boolean;
   flowColor?: string;
-  flows: readonly MapFlow<TProperties>[];
+  flows?: readonly MapFlow<TProperties>[];
+  geoJson?: GeoJsonMapSource<TProperties>;
+  geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
+  geoJsonOverlay?: GeoJsonOverlayMode;
+  geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
   getWeight?: FlowMapWeightAccessor<TProperties>;
   initialViewState?: MapViewState;
@@ -93,7 +106,7 @@ export type FlowMapProps<TProperties = Record<string, unknown>> = {
   MapViewportProps &
   MapFeatureInteractionProps<FlowMapFeature<TProperties>>;
 
-export function FlowMap<TProperties = Record<string, unknown>>({
+export function FlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
   className,
   fitBoundsPadding = 56,
@@ -112,6 +125,10 @@ export function FlowMap<TProperties = Record<string, unknown>>({
   onMeasurementDraftChange,
   onMeasurementSelect,
   flows,
+  geoJson,
+  geoJsonOptions,
+  geoJsonOverlay,
+  geoJsonOverlayProps,
   showAttributionControl = true,
   style,
   viewState,
@@ -119,10 +136,18 @@ export function FlowMap<TProperties = Record<string, unknown>>({
   onViewStateChange,
   ...props
 }: FlowMapProps<TProperties>) {
+  const resolvedFlows = flows ?? (geoJson ? createMapFlowsFromGeoJson(geoJson, geoJsonOptions) : []);
+  const geoJsonOverlayCollection = geoJson
+    ? createGeoJsonOverlayFeatureCollection(geoJson, {
+        mode: geoJsonOverlay,
+        target: "flow",
+      })
+    : null;
+
   return (
     <MapView
       className={className}
-      dataBounds={getBoundsFromFlows(flows)}
+      dataBounds={geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromFlows(resolvedFlows)}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
@@ -137,7 +162,13 @@ export function FlowMap<TProperties = Record<string, unknown>>({
       style={style}
       viewState={viewState}
     >
-      <FlowLayer {...(props as React.ComponentProps<typeof FlowLayer<TProperties>>)} flows={flows} />
+      {geoJsonOverlayCollection && geoJsonOverlayCollection.features.length > 0 ? (
+        <GeoJsonLayer
+          {...(geoJsonOverlayProps as Omit<GeoJsonLayerProps, "featureCollection"> | undefined)}
+          featureCollection={geoJsonOverlayCollection}
+        />
+      ) : null}
+      <FlowLayer {...(props as React.ComponentProps<typeof FlowLayer<TProperties>>)} flows={resolvedFlows} />
       <BeeLineMeasurementLayer
         measurementDistanceFormat={measurementDistanceFormat}
         measurementDraftLineColor={measurementDraftLineColor}
@@ -152,7 +183,7 @@ export function FlowMap<TProperties = Record<string, unknown>>({
   );
 }
 
-export function createFlowMapFeatures<TProperties = Record<string, unknown>>(
+export function createFlowMapFeatures<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   flows: readonly MapFlow<TProperties>[],
   options: {
     getWeight?: FlowMapWeightAccessor<TProperties>;
@@ -188,12 +219,12 @@ export function createFlowMapFeatures<TProperties = Record<string, unknown>>(
   });
 }
 
-function FlatFlowMap<TProperties = Record<string, unknown>>({
+function FlatFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   fitBoundsPadding = 56,
   fitToData = true,
   flowColor = "#0f766e",
-  flows,
+  flows = [],
   getFlowColor,
   getWeight,
   initialViewState,
@@ -387,11 +418,11 @@ function FlatFlowMap<TProperties = Record<string, unknown>>({
   );
 }
 
-function GlobeFlowMap<TProperties = Record<string, unknown>>({
+function GlobeFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   fitToData = true,
   flowColor = "#0f766e",
-  flows,
+  flows = [],
   getFlowColor,
   getWeight,
   initialViewState,
@@ -560,7 +591,7 @@ function FlowGlobeBase({ viewState }: { viewState: GlobeViewState }) {
   );
 }
 
-function GlobeFlowFeature<TProperties>({
+function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
   feature,
   flowColor,
   getFlowColor,
@@ -611,7 +642,7 @@ function GlobeFlowFeature<TProperties>({
   );
 }
 
-function renderFlowOverlay<TProperties>({
+function renderFlowOverlay<TProperties extends Record<string, unknown>>({
   features,
   flowColor,
   getFlowColor,
@@ -686,7 +717,7 @@ function renderFlowOverlay<TProperties>({
   }
 }
 
-function createInitialFlowGlobeViewState<TProperties>({
+function createInitialFlowGlobeViewState<TProperties extends Record<string, unknown>>({
   fitToData,
   flows,
   initialViewState,
@@ -714,7 +745,7 @@ function createInitialFlowGlobeViewState<TProperties>({
   };
 }
 
-function getBoundsFromFlows<TProperties>(flows: readonly MapFlow<TProperties>[]) {
+function getBoundsFromFlows<TProperties extends Record<string, unknown>>(flows: readonly MapFlow<TProperties>[]) {
   const coordinates = flows
     .flatMap((flow) => [flow.from, flow.to])
     .filter(([longitude, latitude]) => Number.isFinite(longitude) && Number.isFinite(latitude));
@@ -735,7 +766,7 @@ function getBoundsFromFlows<TProperties>(flows: readonly MapFlow<TProperties>[])
   );
 }
 
-function resolveFlowWeight<TProperties>(
+function resolveFlowWeight<TProperties extends Record<string, unknown>>(
   flow: IndexedMapFlow<TProperties>,
   options: {
     getWeight?: FlowMapWeightAccessor<TProperties>;
@@ -755,7 +786,7 @@ function resolveFlowWeight<TProperties>(
   return Math.max(0, rawWeight);
 }
 
-function toIndexedFlow<TProperties>(
+function toIndexedFlow<TProperties extends Record<string, unknown>>(
   flow: MapFlow<TProperties>,
   index: number,
 ): IndexedMapFlow<TProperties> {
@@ -769,7 +800,7 @@ function toIndexedFlow<TProperties>(
   };
 }
 
-function isValidFlow<TProperties>(flow: IndexedMapFlow<TProperties>) {
+function isValidFlow<TProperties extends Record<string, unknown>>(flow: IndexedMapFlow<TProperties>) {
   return (
     Number.isFinite(flow.from[0]) &&
     Number.isFinite(flow.from[1]) &&

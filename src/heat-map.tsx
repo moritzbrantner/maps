@@ -22,6 +22,14 @@ import {
   type ViewportAggregationQuery,
 } from "./aggregation";
 import {
+  createGeoJsonOverlayFeatureCollection,
+  createMapPointsFromGeoJson,
+  getBoundsFromGeoJson,
+  type GeoJsonMapSource,
+  type GeoJsonOverlayMode,
+  type GeoJsonSourceOptions,
+} from "./geojson-source";
+import {
   createGlobalViewportQuery,
   createGlobeGraticuleLines,
   createInitialGlobeViewState,
@@ -44,14 +52,16 @@ import {
   type RasterMapStyle,
 } from "./map-display";
 import { HeatLayer, type HeatLayerSurfaceMode } from "./heat-layer";
+import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
+import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
 
-export type HeatMapWeightAccessor<TProperties = Record<string, unknown>> = (
+export type HeatMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
 ) => number;
 
@@ -91,14 +101,14 @@ export type HeatMapFeatureCollection = {
   type: "FeatureCollection";
 };
 
-export type HeatMapWeightOptions<TProperties = Record<string, unknown>> = {
+export type HeatMapWeightOptions<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   filterPoint?: MapPointFilter<TProperties>;
   getWeight?: HeatMapWeightAccessor<TProperties>;
   maxWeight?: number;
   weightMetric?: string;
 };
 
-export type HeatMapDensityIndexOptions<TProperties = Record<string, unknown>> =
+export type HeatMapDensityIndexOptions<TProperties extends Record<string, unknown> = Record<string, unknown>> =
   HeatMapWeightOptions<TProperties> & {
     maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
     minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
@@ -111,12 +121,17 @@ export type HeatMapDensityIndex = {
   pointCount: number;
 };
 
-export type HeatMapProps<TProperties = Record<string, unknown>> =
+export type HeatMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> =
   HeatMapWeightOptions<TProperties> &
     MapMeasurementProps & {
     className?: string;
     fitBoundsPadding?: number;
     fitToData?: boolean;
+    geoJson?: GeoJsonMapSource<TProperties>;
+    geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
+    geoJsonOverlay?: GeoJsonOverlayMode;
+    geoJsonOverlayCollection?: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
+    geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
     heatmapAggregationMaxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
     heatmapAggregationMinZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
     heatmapAggregationRadius?: PointAggregationIndexOptions<TProperties>["radius"];
@@ -132,7 +147,7 @@ export type HeatMapProps<TProperties = Record<string, unknown>> =
     mapStyle?: string | RasterMapStyle;
     onMapControllerReady?: (controller: MapSurfaceController) => void;
     onMapReady?: (map: LeafletMap) => void;
-    points: readonly MapPoint<TProperties>[];
+    points?: readonly MapPoint<TProperties>[];
     showAttributionControl?: boolean;
     style?: React.CSSProperties;
   } & MapViewportProps;
@@ -146,7 +161,7 @@ const defaultHeatMapColorRamp = [
   [1, "#dc2626"],
 ] as const satisfies readonly HeatMapColorStop[];
 
-export function HeatMap<TProperties = Record<string, unknown>>({
+export function HeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
   className,
   fitBoundsPadding = 56,
@@ -165,6 +180,11 @@ export function HeatMap<TProperties = Record<string, unknown>>({
   onMeasurementDraftChange,
   onMeasurementSelect,
   points,
+  geoJson,
+  geoJsonOptions,
+  geoJsonOverlay,
+  geoJsonOverlayCollection,
+  geoJsonOverlayProps,
   showAttributionControl = true,
   style,
   viewState,
@@ -172,10 +192,20 @@ export function HeatMap<TProperties = Record<string, unknown>>({
   onViewStateChange,
   ...props
 }: HeatMapProps<TProperties>) {
+  const resolvedPoints = points ?? (geoJson ? createMapPointsFromGeoJson(geoJson, geoJsonOptions) : []);
+  const resolvedGeoJsonOverlayCollection =
+    geoJsonOverlayCollection ??
+    (geoJson
+      ? createGeoJsonOverlayFeatureCollection(geoJson, {
+          mode: geoJsonOverlay,
+          target: "point",
+        })
+      : null);
+
   return (
     <MapView
       className={className}
-      dataBounds={getBoundsFromPoints(points)}
+      dataBounds={geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints)}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
@@ -190,7 +220,13 @@ export function HeatMap<TProperties = Record<string, unknown>>({
       style={style}
       viewState={viewState}
     >
-      <HeatLayer {...(props as React.ComponentProps<typeof HeatLayer<TProperties>>)} points={points} />
+      {resolvedGeoJsonOverlayCollection && resolvedGeoJsonOverlayCollection.features.length > 0 ? (
+        <GeoJsonLayer
+          {...(geoJsonOverlayProps as Omit<GeoJsonLayerProps, "featureCollection"> | undefined)}
+          featureCollection={resolvedGeoJsonOverlayCollection}
+        />
+      ) : null}
+      <HeatLayer {...(props as React.ComponentProps<typeof HeatLayer<TProperties>>)} points={resolvedPoints} />
       <BeeLineMeasurementLayer
         measurementDistanceFormat={measurementDistanceFormat}
         measurementDraftLineColor={measurementDraftLineColor}
@@ -205,7 +241,7 @@ export function HeatMap<TProperties = Record<string, unknown>>({
   );
 }
 
-function FlatHeatMap<TProperties = Record<string, unknown>>({
+function FlatHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitBoundsPadding = 56,
@@ -236,7 +272,7 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
   onMeasurementCreate,
   onMeasurementDraftChange,
   onMeasurementSelect,
-  points,
+  points = [],
   showAttributionControl = true,
   style,
   weightMetric,
@@ -426,7 +462,7 @@ function FlatHeatMap<TProperties = Record<string, unknown>>({
   );
 }
 
-function GlobeHeatMap<TProperties = Record<string, unknown>>({
+function GlobeHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitToData = true,
@@ -453,7 +489,7 @@ function GlobeHeatMap<TProperties = Record<string, unknown>>({
   onMeasurementCreate: _onMeasurementCreate,
   onMeasurementDraftChange: _onMeasurementDraftChange,
   onMeasurementSelect: _onMeasurementSelect,
-  points,
+  points = [],
   style,
   weightMetric,
 }: HeatMapProps<TProperties>) {
@@ -659,7 +695,7 @@ function GlobeHeatFeature({
   );
 }
 
-export function createHeatMapFeatureCollection<TProperties = Record<string, unknown>>(
+export function createHeatMapFeatureCollection<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: HeatMapWeightOptions<TProperties> = {},
 ): HeatMapFeatureCollection {
@@ -702,7 +738,7 @@ export function createHeatMapFeatureCollection<TProperties = Record<string, unkn
   };
 }
 
-export function createHeatMapDensityIndex<TProperties = Record<string, unknown>>(
+export function createHeatMapDensityIndex<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: HeatMapDensityIndexOptions<TProperties> = {},
 ): HeatMapDensityIndex {
@@ -750,7 +786,7 @@ export function createHeatMapDensityIndex<TProperties = Record<string, unknown>>
   };
 }
 
-export function getHeatMapMaxWeight<TProperties = Record<string, unknown>>(
+export function getHeatMapMaxWeight<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: Omit<HeatMapWeightOptions<TProperties>, "maxWeight"> = {},
 ) {
@@ -764,7 +800,7 @@ export function getHeatMapMaxWeight<TProperties = Record<string, unknown>>(
   );
 }
 
-export function resolveHeatMapPointWeight<TProperties = Record<string, unknown>>(
+export function resolveHeatMapPointWeight<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   point: IndexedMapPoint<TProperties>,
   options: Omit<HeatMapWeightOptions<TProperties>, "maxWeight"> = {},
 ) {
@@ -878,7 +914,7 @@ function copyPublicHeatMapMetrics(metrics: Record<string, number>) {
   );
 }
 
-function getRawHeatMapPointWeight<TProperties>(
+function getRawHeatMapPointWeight<TProperties extends Record<string, unknown>>(
   point: IndexedMapPoint<TProperties>,
   options: Omit<HeatMapWeightOptions<TProperties>, "maxWeight">,
 ) {

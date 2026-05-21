@@ -14,13 +14,29 @@ import { Button } from "@moritzbrantner/ui";
 
 import { ClusteredMap, type ClusteredMapProps } from "./clustered-map";
 import {
+  createGeoJsonOverlayFeatureCollection,
+  type GeoJsonMapSource,
+  type GeoJsonOverlayMode,
+} from "./geojson-source";
+import type { GeoJsonLayerProps } from "./geojson-layer";
+import {
   createTemporalMapPlaybackIndex,
   snapTemporalMapTime,
   type TemporalMapTimeRange,
   type TemporalMapTrack,
 } from "./temporal-points";
+import {
+  createTemporalMapTracksFromGeoJson,
+  type TemporalGeoJsonTrackOptions,
+} from "./temporal-geojson";
+import {
+  createTemporalGeoJsonPlaybackIndex,
+  createTemporalGeoJsonTracksFromGeoJson,
+  type TemporalGeoJsonGeometryTrackOptions,
+  type TemporalGeoJsonPlaybackIndexOptions,
+} from "./temporal-geojson-geometries";
 
-export type TemporalClusteredMapProps<TProperties = Record<string, unknown>> = Omit<
+export type TemporalClusteredMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = Omit<
   ClusteredMapProps<TProperties>,
   "points"
 > & {
@@ -28,13 +44,19 @@ export type TemporalClusteredMapProps<TProperties = Record<string, unknown>> = O
   currentTime?: number;
   defaultTime?: number;
   formatTimeLabel?: (time: number) => string;
+  geoJson?: GeoJsonMapSource<TProperties>;
+  geoJsonOverlay?: GeoJsonOverlayMode;
+  geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
+  geoJsonPlaybackOptions?: TemporalGeoJsonPlaybackIndexOptions;
+  geoJsonTrackOptions?: TemporalGeoJsonTrackOptions<TProperties, TProperties>;
+  geoJsonOverlayTrackOptions?: TemporalGeoJsonGeometryTrackOptions<TProperties, TProperties>;
   loopPlayback?: boolean;
   onTimeChange?: (time: number) => void;
   playbackRate?: number;
   showPlaybackControls?: boolean;
   timeStep?: number | "any";
   timelineLabel?: string;
-  tracks: readonly TemporalMapTrack<TProperties>[];
+  tracks?: readonly TemporalMapTrack<TProperties>[];
 };
 
 const defaultNumberFormatter = new Intl.NumberFormat("en", {
@@ -45,12 +67,18 @@ const defaultDateTimeFormatter = new Intl.DateTimeFormat("en", {
   timeStyle: "short",
 });
 
-export function TemporalClusteredMap<TProperties = Record<string, unknown>>({
+export function TemporalClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   autoPlay = false,
   className,
   currentTime,
   defaultTime,
   formatTimeLabel = defaultFormatTimeLabel,
+  geoJson,
+  geoJsonOverlay,
+  geoJsonOverlayProps,
+  geoJsonPlaybackOptions,
+  geoJsonTrackOptions,
+  geoJsonOverlayTrackOptions,
   loopPlayback = true,
   mapLabel = "Interactive timeline map",
   onTimeChange,
@@ -62,7 +90,42 @@ export function TemporalClusteredMap<TProperties = Record<string, unknown>>({
   tracks,
   ...mapProps
 }: TemporalClusteredMapProps<TProperties>) {
-  const playbackIndex = useMemo(() => createTemporalMapPlaybackIndex(tracks), [tracks]);
+  const resolvedTracks = useMemo(
+    () =>
+      tracks ??
+      (geoJson
+        ? createTemporalMapTracksFromGeoJson(
+            geoJson as Parameters<typeof createTemporalMapTracksFromGeoJson<TProperties, TProperties>>[0],
+            geoJsonTrackOptions,
+          )
+        : []),
+    [geoJson, geoJsonTrackOptions, tracks],
+  );
+  const playbackIndex = useMemo(() => createTemporalMapPlaybackIndex(resolvedTracks), [resolvedTracks]);
+  const overlaySource = useMemo(
+    () =>
+      geoJson
+        ? createGeoJsonOverlayFeatureCollection(geoJson, {
+            mode: geoJsonOverlay,
+            target: "point",
+          })
+        : null,
+    [geoJson, geoJsonOverlay],
+  );
+  const overlayPlaybackIndex = useMemo(() => {
+    if (!overlaySource || overlaySource.features.length === 0) {
+      return null;
+    }
+
+    return createTemporalGeoJsonPlaybackIndex(
+      createTemporalGeoJsonTracksFromGeoJson(
+        overlaySource,
+        geoJsonOverlayTrackOptions ??
+          (geoJsonTrackOptions as unknown as TemporalGeoJsonGeometryTrackOptions<TProperties, TProperties> | undefined),
+      ),
+      geoJsonPlaybackOptions,
+    );
+  }, [geoJsonOverlayTrackOptions, geoJsonPlaybackOptions, geoJsonTrackOptions, overlaySource]);
   const timeRange = useMemo(() => playbackIndex.getTimeRange(), [playbackIndex]);
   const [uncontrolledTime, setUncontrolledTime] = useState(() =>
     getInitialTime(defaultTime, timeRange),
@@ -93,6 +156,10 @@ export function TemporalClusteredMap<TProperties = Record<string, unknown>>({
   const points = useMemo(
     () => (timeRange ? playbackIndex.getPointsAtTime(activeTime) : []),
     [activeTime, playbackIndex, timeRange],
+  );
+  const geoJsonOverlayCollection = useMemo(
+    () => overlayPlaybackIndex?.getFeatureCollectionAtTime(activeTime) ?? null,
+    [activeTime, overlayPlaybackIndex],
   );
 
   currentTimeRef.current = clampedTime;
@@ -195,6 +262,8 @@ export function TemporalClusteredMap<TProperties = Record<string, unknown>>({
       <ClusteredMap
         {...mapProps}
         className="mb-temporal-map__surface"
+        geoJsonOverlayCollection={geoJsonOverlayCollection ?? undefined}
+        geoJsonOverlayProps={geoJsonOverlayProps}
         mapLabel={mapLabel}
         points={points}
         style={style}

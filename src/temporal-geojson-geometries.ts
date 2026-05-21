@@ -37,6 +37,7 @@ export { interpolateTemporalGeoJsonGeometry } from "./temporal-geojson-interpola
 export type {
   GeoJsonLineStringGeometry,
   GeoJsonMultiLineStringGeometry,
+  GeoJsonMultiPointGeometry,
   GeoJsonMultiPolygonGeometry,
   GeoJsonPointGeometry,
   GeoJsonPolygonGeometry,

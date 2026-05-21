@@ -23,6 +23,14 @@ import {
   type ViewportAggregationQuery,
   type VisibleAggregationSummary,
 } from "./aggregation";
+import {
+  createGeoJsonOverlayFeatureCollection,
+  createMapPointsFromGeoJson,
+  getBoundsFromGeoJson,
+  type GeoJsonMapSource,
+  type GeoJsonOverlayMode,
+  type GeoJsonSourceOptions,
+} from "./geojson-source";
 import { createProjectedClusterVoronoiGeometry } from "./cluster-area";
 import {
   assignClusterAreaColors,
@@ -58,16 +66,23 @@ import {
 import { ClusterLayer } from "./cluster-layer";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
+import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
+import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
-export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
+export type ClusteredMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   className?: string;
   clusterRadius?: PointAggregationIndexOptions<TProperties>["radius"];
   filterPoint?: MapPointFilter<TProperties>;
   fitBoundsPadding?: number;
   fitToData?: boolean;
+  geoJson?: GeoJsonMapSource<TProperties>;
+  geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
+  geoJsonOverlay?: GeoJsonOverlayMode;
+  geoJsonOverlayCollection?: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
+  geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -78,7 +93,7 @@ export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
   onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: LeafletMap) => void;
   onViewportAggregationChange?: (summary: VisibleAggregationSummary) => void;
-  points: readonly MapPoint<TProperties>[];
+  points?: readonly MapPoint<TProperties>[];
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
 } & MapMeasurementProps &
@@ -110,7 +125,7 @@ export {
   type RasterMapStyle,
 };
 
-export function ClusteredMap<TProperties = Record<string, unknown>>(
+export function ClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   {
     className,
     fitBoundsPadding = 56,
@@ -130,6 +145,11 @@ export function ClusteredMap<TProperties = Record<string, unknown>>(
     onMeasurementDraftChange,
     onMeasurementSelect,
     points,
+    geoJson,
+    geoJsonOptions,
+    geoJsonOverlay,
+    geoJsonOverlayCollection,
+    geoJsonOverlayProps,
     showAttributionControl = true,
     style,
     viewState,
@@ -138,10 +158,20 @@ export function ClusteredMap<TProperties = Record<string, unknown>>(
     ...props
   }: ClusteredMapProps<TProperties>,
 ) {
+  const resolvedPoints = points ?? (geoJson ? createMapPointsFromGeoJson(geoJson, geoJsonOptions) : []);
+  const resolvedGeoJsonOverlayCollection =
+    geoJsonOverlayCollection ??
+    (geoJson
+      ? createGeoJsonOverlayFeatureCollection(geoJson, {
+          mode: geoJsonOverlay,
+          target: "point",
+        })
+      : null);
+
   return (
     <MapView
       className={className}
-      dataBounds={getBoundsFromPoints(points)}
+      dataBounds={geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints)}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
@@ -156,7 +186,13 @@ export function ClusteredMap<TProperties = Record<string, unknown>>(
       style={style}
       viewState={viewState}
     >
-      <ClusterLayer {...(props as React.ComponentProps<typeof ClusterLayer<TProperties>>)} points={points} />
+      {resolvedGeoJsonOverlayCollection && resolvedGeoJsonOverlayCollection.features.length > 0 ? (
+        <GeoJsonLayer
+          {...(geoJsonOverlayProps as Omit<GeoJsonLayerProps, "featureCollection"> | undefined)}
+          featureCollection={resolvedGeoJsonOverlayCollection}
+        />
+      ) : null}
+      <ClusterLayer {...(props as React.ComponentProps<typeof ClusterLayer<TProperties>>)} points={resolvedPoints} />
       <BeeLineMeasurementLayer
         measurementDistanceFormat={measurementDistanceFormat}
         measurementDraftLineColor={measurementDraftLineColor}
@@ -171,7 +207,7 @@ export function ClusteredMap<TProperties = Record<string, unknown>>(
   );
 }
 
-function FlatClusteredMap<TProperties = Record<string, unknown>>({
+function FlatClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   clusterRadius,
   filterPoint,
@@ -194,7 +230,7 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
   onMeasurementDraftChange,
   onMeasurementSelect,
   onViewportAggregationChange,
-  points,
+  points = [],
   showAttributionControl = true,
   style,
 }: ClusteredMapProps<TProperties>) {
@@ -394,7 +430,7 @@ function FlatClusteredMap<TProperties = Record<string, unknown>>({
   );
 }
 
-function GlobeClusteredMap<TProperties = Record<string, unknown>>({
+function GlobeClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   clusterRadius,
   filterPoint,
@@ -413,7 +449,7 @@ function GlobeClusteredMap<TProperties = Record<string, unknown>>({
   onMeasurementDraftChange: _onMeasurementDraftChange,
   onMeasurementSelect: _onMeasurementSelect,
   onViewportAggregationChange,
-  points,
+  points = [],
   style,
 }: ClusteredMapProps<TProperties>) {
   const deferredPoints = useDeferredValue(points);

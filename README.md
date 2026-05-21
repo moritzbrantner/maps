@@ -73,6 +73,47 @@ export function DemandHeatMap() {
 }
 ```
 
+## GeoJSON-first maps
+
+Specialized maps can use GeoJSON as their primary source. Compatible geometries
+feed the native renderer, while incompatible geometries stay visible as
+contextual `GeoJsonLayer` overlays.
+
+```tsx
+import { FlowMap, GeoJsonMap, HeatMap, PointMap, TemporalClusteredMap } from "@moritzbrantner/maps";
+
+<PointMap geoJson={storesAndZones} style={{ height: 360 }} />
+
+<HeatMap
+  geoJson={demandCollection}
+  geoJsonOptions={{ metricKeys: ["demand"] }}
+  weightMetric="demand"
+  style={{ height: 360 }}
+/>
+
+<FlowMap
+  geoJson={routeCollection}
+  geoJsonOptions={{ metricKeys: ["trips"] }}
+  weightMetric="trips"
+  style={{ height: 360 }}
+/>
+
+<GeoJsonMap geoJson={mixedCollection} style={{ height: 360 }} />
+
+<TemporalClusteredMap
+  geoJson={temporalCollection}
+  geoJsonTrackOptions={{ metricKeys: ["load"] }}
+  style={{ height: 420 }}
+/>
+```
+
+`PointMap`, `BubbleMap`, `ClusteredMap`, and `HeatMap` derive native marks from
+`Point` and `MultiPoint` features. `FlowMap` derives native flows from
+`LineString` and `MultiLineString` features, using the first and last coordinate
+as endpoints and preserving multi-vertex route shapes as overlays. Use
+`geoJsonOverlay="none"` to disable contextual overlays, or `geoJsonOverlay="all"`
+to draw the full GeoJSON source below the native layer.
+
 ## Controlled viewport
 
 Every map accepts `viewState`, `defaultViewState`, and

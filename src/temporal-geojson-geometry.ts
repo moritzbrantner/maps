@@ -4,6 +4,7 @@ import { isRecord } from "./temporal-core";
 import type {
   GeoJsonLineStringGeometry,
   GeoJsonMultiLineStringGeometry,
+  GeoJsonMultiPointGeometry,
   GeoJsonMultiPolygonGeometry,
   GeoJsonPointGeometry,
   GeoJsonPolygonGeometry,
@@ -22,6 +23,8 @@ export function normalizeSupportedGeometry(
   switch (geometry.type) {
     case "Point":
       return normalizePointGeometry(geometry);
+    case "MultiPoint":
+      return normalizeMultiPointGeometry(geometry);
     case "LineString":
       return normalizeLineStringGeometry(geometry);
     case "MultiLineString":
@@ -35,6 +38,30 @@ export function normalizeSupportedGeometry(
   }
 }
 
+export function normalizeGeometryCollection(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
+): TemporalGeoJsonSupportedGeometry[] {
+  if (!geometry || !isRecord(geometry)) {
+    return [];
+  }
+
+  if (geometry.type !== "GeometryCollection") {
+    const normalized = normalizeSupportedGeometry(geometry);
+
+    return normalized ? [normalized] : [];
+  }
+
+  const collection = geometry as { geometries?: unknown; type: "GeometryCollection" };
+
+  if (!Array.isArray(collection.geometries)) {
+    return [];
+  }
+
+  return collection.geometries.flatMap((item: unknown) =>
+    normalizeGeometryCollection(item as TemporalGeoJsonGeometryFeature["geometry"]),
+  );
+}
+
 function normalizePointGeometry(geometry: {
   coordinates?: unknown;
   type: string;
@@ -42,6 +69,26 @@ function normalizePointGeometry(geometry: {
   const position = normalizePosition(geometry.coordinates);
 
   return position ? { coordinates: position, type: "Point" } : null;
+}
+
+function normalizeMultiPointGeometry(geometry: {
+  coordinates?: unknown;
+  type: string;
+}): GeoJsonMultiPointGeometry | null {
+  if (!Array.isArray(geometry.coordinates) || geometry.coordinates.length === 0) {
+    return null;
+  }
+
+  const coordinates = geometry.coordinates.map(normalizePosition);
+
+  if (coordinates.some((position) => position === null)) {
+    return null;
+  }
+
+  return {
+    coordinates: coordinates as GeoJsonPosition[],
+    type: "MultiPoint",
+  };
 }
 
 function normalizeLineStringGeometry(geometry: {
@@ -231,6 +278,11 @@ export function cloneGeometry(
       return {
         coordinates: clonePosition(geometry.coordinates),
         type: "Point",
+      };
+    case "MultiPoint":
+      return {
+        coordinates: geometry.coordinates.map(clonePosition),
+        type: "MultiPoint",
       };
     case "LineString":
       return {

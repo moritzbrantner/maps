@@ -244,6 +244,63 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
     });
   });
 
+  test("derives temporal points from GeoJSON and renders synchronized geometry overlays", async () => {
+    render(
+      <TemporalClusteredMap
+        defaultTime={0}
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [20, 10],
+                type: "Point",
+              },
+              id: "courier-geojson",
+              properties: {
+                time: 0,
+                trackId: "courier-geojson",
+              },
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [18, 8],
+                    [22, 8],
+                    [22, 12],
+                    [18, 8],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              id: "service-zone",
+              properties: {
+                time: 0,
+                trackId: "service-zone",
+              },
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        mapLabel="GeoJSON timeline"
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("GeoJSON timeline").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(
+      leafletMock
+        .getLayerGroups()
+        .flatMap((group) => group.layers)
+        .map((layer) => layer.type),
+    ).toEqual(expect.arrayContaining(["polygon", "circleMarker"]));
+  });
+
   test("snaps slider changes and reports the active time", async () => {
     const onTimeChange = vi.fn();
     const tracks: TemporalMapTrack[] = [

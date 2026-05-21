@@ -9,9 +9,10 @@ import {
 } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-view";
-import { cloneGeometry, normalizeSupportedGeometry } from "./temporal-geojson-geometry";
+import { cloneGeometry, normalizeGeometryCollection } from "./temporal-geojson-geometry";
 import type {
   GeoJsonLineStringGeometry,
+  GeoJsonMultiPointGeometry,
   GeoJsonPointGeometry,
   GeoJsonPolygonGeometry,
   GeoJsonPosition,
@@ -214,20 +215,14 @@ export function createGeoJsonLayerFeatures<
   collection: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
 ): Array<GeoJsonLayerFeature<TProperties>> {
   return collection.features.flatMap((feature, index) => {
-    const geometry = normalizeSupportedGeometry(feature.geometry);
+    const geometries = normalizeGeometryCollection(feature.geometry);
 
-    if (!geometry) {
-      return [];
-    }
-
-    return [
-      {
+    return geometries.map((geometry, geometryIndex) => ({
         geometry: cloneGeometry(geometry),
-        id: String(feature.id ?? feature.properties?.id ?? feature.properties?.trackId ?? `feature-${index}`),
+        id: createGeoJsonLayerFeatureId(feature, index, geometries.length > 1 ? geometryIndex : undefined),
         properties: feature.properties ?? ({} as TProperties),
         sourceIndex: index,
-      },
-    ];
+      }));
   });
 }
 
@@ -257,6 +252,19 @@ function createFlatGeometryLayers(
           weight: selected ? 3 : 2,
         }) as FlatGeometryLayer,
       ];
+    case "MultiPoint":
+      return geometry.coordinates.map((coordinates) =>
+        leaflet.circleMarker(toLeafletLatLng(coordinates), {
+          className,
+          color: "#ffffff",
+          fillColor: style.pointColor,
+          fillOpacity: 0.94,
+          interactive,
+          opacity: 1,
+          radius: style.pointRadius,
+          weight: selected ? 3 : 2,
+        }) as FlatGeometryLayer,
+      );
     case "LineString":
       return [createFlatLineLayer(leaflet, geometry, className, interactive, selected, style)];
     case "MultiLineString":
@@ -316,6 +324,8 @@ function renderGlobeGeometry(
   switch (geometry.type) {
     case "Point":
       return <GlobePoint geometry={geometry} style={style} selected={selected} />;
+    case "MultiPoint":
+      return <GlobeMultiPoint geometry={geometry} style={style} selected={selected} />;
     case "LineString":
       return <GlobeLine geometry={geometry} style={style} selected={selected} />;
     case "MultiLineString":
@@ -337,6 +347,29 @@ function renderGlobeGeometry(
         </>
       );
   }
+}
+
+function GlobeMultiPoint({
+  geometry,
+  selected,
+  style,
+}: {
+  geometry: GeoJsonMultiPointGeometry;
+  selected: boolean;
+  style: Required<GeoJsonLayerStyle>;
+}) {
+  return (
+    <>
+      {geometry.coordinates.map((coordinates, index) => (
+        <GlobePoint
+          geometry={{ coordinates, type: "Point" }}
+          key={`${coordinates[0]}:${coordinates[1]}:${index}`}
+          selected={selected}
+          style={style}
+        />
+      ))}
+    </>
+  );
 }
 
 function GlobePoint({
@@ -534,6 +567,8 @@ function getGeometryPositions(geometry: TemporalGeoJsonSupportedGeometry): GeoJs
   switch (geometry.type) {
     case "Point":
       return [geometry.coordinates];
+    case "MultiPoint":
+      return geometry.coordinates;
     case "LineString":
       return geometry.coordinates;
     case "MultiLineString":
@@ -543,6 +578,16 @@ function getGeometryPositions(geometry: TemporalGeoJsonSupportedGeometry): GeoJs
     case "MultiPolygon":
       return geometry.coordinates.flat(2);
   }
+}
+
+function createGeoJsonLayerFeatureId<TProperties extends Record<string, unknown>>(
+  feature: TemporalGeoJsonGeometryFeatureCollection<TProperties>["features"][number],
+  index: number,
+  partIndex?: number,
+) {
+  const baseId = feature.id ?? feature.properties?.id ?? feature.properties?.trackId ?? `feature-${index}`;
+
+  return partIndex === undefined ? String(baseId) : `${String(baseId)}:part-${partIndex}`;
 }
 
 function resolveFeatureStyle<TProperties extends Record<string, unknown>>(

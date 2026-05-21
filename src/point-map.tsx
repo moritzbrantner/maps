@@ -18,6 +18,14 @@ import {
   type MapPointFilter,
 } from "./aggregation";
 import {
+  createGeoJsonOverlayFeatureCollection,
+  createMapPointsFromGeoJson,
+  getBoundsFromGeoJson,
+  type GeoJsonMapSource,
+  type GeoJsonOverlayMode,
+  type GeoJsonSourceOptions,
+} from "./geojson-source";
+import {
   createInitialGlobeViewState,
   createGlobeGraticuleLines,
   createVisibleSvgPath,
@@ -40,22 +48,27 @@ import {
 } from "./map-display";
 import type { MapContextMenuContext, MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
+import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 import { BubbleLayer, PointLayer } from "./point-layer";
 
-export type PointMapFeature<TProperties = Record<string, unknown>> = {
+export type PointMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   coordinates: [longitude: number, latitude: number];
   point: IndexedMapPoint<TProperties>;
 };
 
-export type PointMapProps<TProperties = Record<string, unknown>> = {
+export type PointMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   className?: string;
   draggable?: boolean | ((feature: PointMapFeature<TProperties>) => boolean);
   filterPoint?: MapPointFilter<TProperties>;
   fitBoundsPadding?: number;
   fitToData?: boolean;
+  geoJson?: GeoJsonMapSource<TProperties>;
+  geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
+  geoJsonOverlay?: GeoJsonOverlayMode;
+  geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   getPointColor?: (feature: PointMapFeature<TProperties>) => string;
   getPointRadius?: (feature: PointMapFeature<TProperties>) => number;
   initialViewState?: MapViewState;
@@ -74,7 +87,7 @@ export type PointMapProps<TProperties = Record<string, unknown>> = {
   onMapContextMenu?: (context: MapContextMenuContext) => void;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: LeafletMap) => void;
-  points: readonly MapPoint<TProperties>[];
+  points?: readonly MapPoint<TProperties>[];
   pointColor?: string;
   pointRadius?: number;
   renderMapContextMenu?: (context: MapContextMenuContext) => React.ReactNode;
@@ -84,17 +97,17 @@ export type PointMapProps<TProperties = Record<string, unknown>> = {
   MapViewportProps &
   MapFeatureInteractionProps<PointMapFeature<TProperties>>;
 
-export type BubbleMapWeightAccessor<TProperties = Record<string, unknown>> = (
+export type BubbleMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
 ) => number;
 
-export type BubbleMapFeature<TProperties = Record<string, unknown>> = PointMapFeature<TProperties> & {
+export type BubbleMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> = PointMapFeature<TProperties> & {
   rawValue: number;
   radius: number;
   value: number;
 };
 
-export type BubbleMapProps<TProperties = Record<string, unknown>> = Omit<
+export type BubbleMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = Omit<
   PointMapProps<TProperties>,
   | "draggable"
   | "getPointColor"
@@ -124,7 +137,7 @@ export type BubbleMapProps<TProperties = Record<string, unknown>> = Omit<
   weightMetric?: string;
 };
 
-export function PointMap<TProperties = Record<string, unknown>>({
+export function PointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
   className,
   fitBoundsPadding = 56,
@@ -144,6 +157,10 @@ export function PointMap<TProperties = Record<string, unknown>>({
   onMeasurementDraftChange,
   onMeasurementSelect,
   points,
+  geoJson,
+  geoJsonOptions,
+  geoJsonOverlay,
+  geoJsonOverlayProps,
   renderMapContextMenu,
   showAttributionControl = true,
   style,
@@ -152,10 +169,18 @@ export function PointMap<TProperties = Record<string, unknown>>({
   onViewStateChange,
   ...props
 }: PointMapProps<TProperties>) {
+  const resolvedPoints = points ?? (geoJson ? createMapPointsFromGeoJson(geoJson, geoJsonOptions) : []);
+  const geoJsonOverlayCollection = geoJson
+    ? createGeoJsonOverlayFeatureCollection(geoJson, {
+        mode: geoJsonOverlay,
+        target: "point",
+      })
+    : null;
+
   return (
     <MapView
       className={className}
-      dataBounds={getBoundsFromPoints(points)}
+      dataBounds={geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints)}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
@@ -172,9 +197,15 @@ export function PointMap<TProperties = Record<string, unknown>>({
       style={style}
       viewState={viewState}
     >
+      {geoJsonOverlayCollection && geoJsonOverlayCollection.features.length > 0 ? (
+        <GeoJsonLayer
+          {...(geoJsonOverlayProps as Omit<GeoJsonLayerProps, "featureCollection"> | undefined)}
+          featureCollection={geoJsonOverlayCollection}
+        />
+      ) : null}
       <PointLayer
         {...(props as React.ComponentProps<typeof PointLayer<TProperties>>)}
-        points={points}
+        points={resolvedPoints}
       />
       <BeeLineMeasurementLayer
         measurementDistanceFormat={measurementDistanceFormat}
@@ -190,7 +221,7 @@ export function PointMap<TProperties = Record<string, unknown>>({
   );
 }
 
-export function BubbleMap<TProperties = Record<string, unknown>>({
+export function BubbleMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
   className,
   fitBoundsPadding = 56,
@@ -210,6 +241,10 @@ export function BubbleMap<TProperties = Record<string, unknown>>({
   onMeasurementDraftChange,
   onMeasurementSelect,
   points,
+  geoJson,
+  geoJsonOptions,
+  geoJsonOverlay,
+  geoJsonOverlayProps,
   renderMapContextMenu,
   showAttributionControl = true,
   style,
@@ -218,10 +253,18 @@ export function BubbleMap<TProperties = Record<string, unknown>>({
   onViewStateChange,
   ...props
 }: BubbleMapProps<TProperties>) {
+  const resolvedPoints = points ?? (geoJson ? createMapPointsFromGeoJson(geoJson, geoJsonOptions) : []);
+  const geoJsonOverlayCollection = geoJson
+    ? createGeoJsonOverlayFeatureCollection(geoJson, {
+        mode: geoJsonOverlay,
+        target: "point",
+      })
+    : null;
+
   return (
     <MapView
       className={className}
-      dataBounds={getBoundsFromPoints(points)}
+      dataBounds={geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints)}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
@@ -238,7 +281,13 @@ export function BubbleMap<TProperties = Record<string, unknown>>({
       style={style}
       viewState={viewState}
     >
-      <BubbleLayer {...(props as React.ComponentProps<typeof BubbleLayer<TProperties>>)} points={points} />
+      {geoJsonOverlayCollection && geoJsonOverlayCollection.features.length > 0 ? (
+        <GeoJsonLayer
+          {...(geoJsonOverlayProps as Omit<GeoJsonLayerProps, "featureCollection"> | undefined)}
+          featureCollection={geoJsonOverlayCollection}
+        />
+      ) : null}
+      <BubbleLayer {...(props as React.ComponentProps<typeof BubbleLayer<TProperties>>)} points={resolvedPoints} />
       <BeeLineMeasurementLayer
         measurementDistanceFormat={measurementDistanceFormat}
         measurementDraftLineColor={measurementDraftLineColor}
@@ -253,7 +302,7 @@ export function BubbleMap<TProperties = Record<string, unknown>>({
   );
 }
 
-export function createPointMapFeatures<TProperties = Record<string, unknown>>(
+export function createPointMapFeatures<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: {
     filterPoint?: MapPointFilter<TProperties>;
@@ -269,7 +318,7 @@ export function createPointMapFeatures<TProperties = Record<string, unknown>>(
     }));
 }
 
-export function createBubbleMapFeatures<TProperties = Record<string, unknown>>(
+export function createBubbleMapFeatures<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: {
     filterPoint?: MapPointFilter<TProperties>;
@@ -306,7 +355,7 @@ export function createBubbleMapFeatures<TProperties = Record<string, unknown>>(
   });
 }
 
-function FlatPointMap<TProperties = Record<string, unknown>>({
+function FlatPointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitBoundsPadding = 56,
@@ -326,7 +375,7 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
   onMeasurementSelect,
   onFeatureSelect,
   onMapReady,
-  points,
+  points = [],
   pointColor = "#0f172a",
   pointRadius = 6,
   showAttributionControl = true,
@@ -496,7 +545,7 @@ function FlatPointMap<TProperties = Record<string, unknown>>({
   );
 }
 
-function GlobePointMap<TProperties = Record<string, unknown>>({
+function GlobePointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitToData = true,
@@ -513,7 +562,7 @@ function GlobePointMap<TProperties = Record<string, unknown>>({
   onMeasurementDraftChange: _onMeasurementDraftChange,
   onMeasurementSelect: _onMeasurementSelect,
   onFeatureSelect,
-  points,
+  points = [],
   pointColor = "#0f172a",
   pointRadius = 6,
   style,
@@ -660,7 +709,7 @@ function PointGlobeBase({ viewState }: { viewState: GlobeViewState }) {
   );
 }
 
-function GlobePointFeature<TProperties>({
+function GlobePointFeature<TProperties extends Record<string, unknown>>({
   feature,
   getPointColor,
   getPointRadius,
@@ -701,7 +750,7 @@ function GlobePointFeature<TProperties>({
   );
 }
 
-function renderPointOverlay<TProperties>({
+function renderPointOverlay<TProperties extends Record<string, unknown>>({
   features,
   getPointColor,
   getPointRadius,
@@ -753,7 +802,7 @@ function renderPointOverlay<TProperties>({
   }
 }
 
-function useBubbleMapPointProps<TProperties>(
+function useBubbleMapPointProps<TProperties extends Record<string, unknown>>(
   props: BubbleMapProps<TProperties>,
 ): PointMapProps<TProperties> {
   const {
@@ -770,7 +819,7 @@ function useBubbleMapPointProps<TProperties>(
     weightMetric,
     ...pointProps
   } = props;
-  const deferredPoints = useDeferredValue(pointProps.points);
+  const deferredPoints = useDeferredValue(pointProps.points ?? []);
   const bubbleFeatures = useMemo(
     () =>
       createBubbleMapFeatures(deferredPoints, {
@@ -840,7 +889,7 @@ function useBubbleMapPointProps<TProperties>(
   };
 }
 
-function resolveBubbleMapPointWeight<TProperties>(
+function resolveBubbleMapPointWeight<TProperties extends Record<string, unknown>>(
   point: IndexedMapPoint<TProperties>,
   options: {
     getWeight?: BubbleMapWeightAccessor<TProperties>;

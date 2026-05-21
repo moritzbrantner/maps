@@ -8,6 +8,11 @@ export type GeoJsonPointGeometry = {
   type: "Point";
 };
 
+export type GeoJsonMultiPointGeometry = {
+  coordinates: GeoJsonPosition[];
+  type: "MultiPoint";
+};
+
 export type GeoJsonLineStringGeometry = {
   coordinates: GeoJsonPosition[];
   type: "LineString";
@@ -30,6 +35,7 @@ export type GeoJsonMultiPolygonGeometry = {
 
 export type TemporalGeoJsonSupportedGeometry =
   | GeoJsonPointGeometry
+  | GeoJsonMultiPointGeometry
   | GeoJsonLineStringGeometry
   | GeoJsonMultiLineStringGeometry
   | GeoJsonPolygonGeometry
@@ -40,6 +46,10 @@ export type TemporalGeoJsonGeometryFeature<
 > = {
   geometry:
     | TemporalGeoJsonSupportedGeometry
+    | {
+        geometries?: unknown;
+        type: "GeometryCollection";
+      }
     | {
         coordinates?: unknown;
         type: string;
