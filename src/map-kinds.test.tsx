@@ -1,14 +1,16 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   BubbleMap,
   FlowMap,
+  GeoJsonLayer,
   MapView,
   PointLayer,
   PointMap,
   createBubbleMapFeatures,
   createFlowMapFeatures,
+  createGeoJsonLayerFeatures,
   createPointMapFeatures,
   type MapFlow,
   type MapPoint,
@@ -18,9 +20,12 @@ import { getGlobeRadius, getGlobeZoom, GLOBE_MAX_ZOOM } from "./map-display";
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
+    bringToFront?: () => Layer;
+    handlers: Map<string, Handler[]>;
     latLng?: [number, number];
     latLngs?: unknown;
     options?: Record<string, unknown>;
+    setLatLng?: (latLng: [number, number]) => Layer;
     type: string;
   };
 
@@ -64,6 +69,11 @@ const leafletMock = vi.hoisted(() => {
       },
     };
 
+    dragging = {
+      disable() {},
+      enable() {},
+    };
+
     fitBounds() {}
 
     getBounds() {
@@ -83,7 +93,28 @@ const leafletMock = vi.hoisted(() => {
       return this.zoom;
     }
 
-    off() {}
+    latLngToContainerPoint([latitude, longitude]: [number, number]) {
+      return {
+        x: ((longitude + 180) / 360) * this.container.clientWidth,
+        y: ((90 - latitude) / 180) * this.container.clientHeight,
+      };
+    }
+
+    containerPointToLatLng([x, y]: [number, number]) {
+      return {
+        lat: 90 - (y / this.container.clientHeight) * 180,
+        lng: -180 + (x / this.container.clientWidth) * 360,
+      };
+    }
+
+    off(event: string, handler: Handler) {
+      const handlers = this.handlers.get(event) ?? [];
+
+      this.handlers.set(
+        event,
+        handlers.filter((item) => item !== handler),
+      );
+    }
 
     on(event: string, handler: Handler) {
       const handlers = this.handlers.get(event) ?? [];
@@ -105,8 +136,9 @@ const leafletMock = vi.hoisted(() => {
   ) {
     const layer: Layer & {
       addTo: (group: MockLayerGroup) => typeof layer;
-      on: () => typeof layer;
+      on: (event: string, handler: Handler) => typeof layer;
     } = {
+      handlers: new Map(),
       latLng,
       latLngs,
       options,
@@ -115,7 +147,19 @@ const leafletMock = vi.hoisted(() => {
         group.addLayer(this);
         return this;
       },
-      on() {
+      bringToFront() {
+        return this;
+      },
+      on(event: string, handler: Handler) {
+        const handlers = this.handlers.get(event) ?? [];
+
+        handlers.push(handler);
+        this.handlers.set(event, handlers);
+
+        return this;
+      },
+      setLatLng(nextLatLng: [number, number]) {
+        this.latLng = nextLatLng;
         return this;
       },
     };
@@ -130,6 +174,8 @@ const leafletMock = vi.hoisted(() => {
     getMaps: () => maps,
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
+    polygon: (latLngs: unknown, options: Record<string, unknown>) =>
+      createLayer("polygon", undefined, options, latLngs),
     polyline: (latLngs: unknown, options: Record<string, unknown>) =>
       createLayer("polyline", undefined, options, latLngs),
     reset: () => {
@@ -246,6 +292,53 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     ]);
   });
 
+  test("creates renderable GeoJSON layer features from supported geometries", () => {
+    const features = createGeoJsonLayerFeatures({
+      features: [
+        {
+          geometry: {
+            coordinates: [-74, 40],
+            type: "Point",
+          },
+          id: "point-a",
+          properties: {
+            label: "Point A",
+          },
+          type: "Feature",
+        },
+        {
+          geometry: {
+            coordinates: [
+              [-74, 40],
+              [-71, 42],
+            ],
+            type: "LineString",
+          },
+          id: "line-a",
+          type: "Feature",
+        },
+        {
+          geometry: {
+            coordinates: [
+              [
+                [-74, 40],
+                [-71, 40],
+                [-71, 42],
+                [-74, 40],
+              ],
+            ],
+            type: "Polygon",
+          },
+          id: "polygon-a",
+          type: "Feature",
+        },
+      ],
+      type: "FeatureCollection",
+    });
+
+    expect(features.map((feature) => feature.geometry.type)).toEqual(["Point", "LineString", "Polygon"]);
+  });
+
   test("renders flat point markers with Leaflet", async () => {
     render(
       <PointMap
@@ -338,6 +431,212 @@ describe("@moritzbrantner/maps additional map kinds", () => {
         }),
       ]);
     });
+  });
+
+  test("renders GeoJSON points, lines, and polygons as flat map layers", async () => {
+    render(
+      <MapView
+        defaultViewState={{ center: [-73, 41], zoom: 5 }}
+        mapLabel="GeoJSON layers"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            features: [
+              {
+                geometry: {
+                  coordinates: [-74, 40],
+                  type: "Point",
+                },
+                id: "point-a",
+                type: "Feature",
+              },
+              {
+                geometry: {
+                  coordinates: [
+                    [-74, 40],
+                    [-71, 42],
+                  ],
+                  type: "LineString",
+                },
+                id: "line-a",
+                type: "Feature",
+              },
+              {
+                geometry: {
+                  coordinates: [
+                    [
+                      [-74, 40],
+                      [-71, 40],
+                      [-71, 42],
+                      [-74, 40],
+                    ],
+                  ],
+                  type: "Polygon",
+                },
+                id: "polygon-a",
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          }}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("GeoJSON layers").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
+      "circleMarker",
+      "polyline",
+      "polygon",
+    ]);
+  });
+
+  test("handles right-click feature interactions on flat point markers", async () => {
+    const onFeatureContextMenu = vi.fn();
+    const preventDefault = vi.fn();
+
+    render(
+      <PointMap
+        mapLabel="Interactive store points"
+        onFeatureContextMenu={onFeatureContextMenu}
+        points={[
+          {
+            id: "store-1",
+            label: "Store 1",
+            latitude: 40,
+            longitude: -74,
+          },
+        ]}
+        renderFeaturePopup={(feature) => <strong>{feature.point.label}</strong>}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Interactive store points").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const marker = leafletMock.getLayerGroups()[0]?.layers[0];
+    const [handleContextMenu] = marker?.handlers.get("contextmenu") ?? [];
+
+    act(() => {
+      handleContextMenu?.({
+        containerPoint: { x: 120, y: 80 },
+        originalEvent: { preventDefault },
+      });
+    });
+
+    await waitFor(() => {
+      expect(onFeatureContextMenu).toHaveBeenCalledWith(
+        expect.objectContaining({
+          point: expect.objectContaining({
+            id: "store-1",
+          }),
+        }),
+      );
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(screen.getByText("Store 1")).toBeTruthy();
+  });
+
+  test("renders map context menus with clicked coordinates", async () => {
+    const onMapContextMenu = vi.fn();
+
+    render(
+      <MapView
+        mapLabel="Editable map"
+        onMapContextMenu={onMapContextMenu}
+        renderMapContextMenu={(context) => (
+          <button type="button">
+            Create {context.coordinates[0].toFixed(1)}, {context.coordinates[1].toFixed(1)}
+          </button>
+        )}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Editable map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = leafletMock.getMaps()[0];
+    const [handleContextMenu] = map?.handlers.get("contextmenu") ?? [];
+
+    act(() => {
+      handleContextMenu?.({
+        containerPoint: { x: 480, y: 320 },
+        latlng: { lat: 50, lng: 8 },
+        originalEvent: { preventDefault() {}, stopPropagation() {} },
+      });
+    });
+
+    expect(onMapContextMenu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        coordinates: [8, 50],
+      }),
+    );
+    expect(screen.getByText("Create 8.0, 50.0")).toBeTruthy();
+  });
+
+  test("drags flat point markers and emits updated coordinates", async () => {
+    const onFeatureDragEnd = vi.fn();
+
+    render(
+      <PointMap
+        draggable
+        fitToData={false}
+        mapLabel="Draggable store points"
+        onFeatureDragEnd={onFeatureDragEnd}
+        points={[
+          {
+            id: "store-1",
+            label: "Store 1",
+            latitude: 40,
+            longitude: -74,
+          },
+        ]}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Draggable store points").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const map = leafletMock.getMaps()[0];
+    const marker = leafletMock.getLayerGroups()[0]?.layers[0];
+    const [handleMouseDown] = marker?.handlers.get("mousedown") ?? [];
+
+    act(() => {
+      handleMouseDown?.({
+        latlng: { lat: 40, lng: -74 },
+        originalEvent: { preventDefault() {}, stopPropagation() {} },
+      });
+      map?.handlers.get("mousemove")?.[0]?.({
+        latlng: { lat: 41, lng: -73 },
+      });
+      map?.handlers.get("mouseup")?.[0]?.({
+        latlng: { lat: 42, lng: -72 },
+      });
+    });
+
+    expect(marker?.latLng).toEqual([42, -72]);
+    expect(onFeatureDragEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        point: expect.objectContaining({
+          id: "store-1",
+        }),
+      }),
+      [-72, 42],
+    );
   });
 
   test("renders globe bubble markers without Leaflet", () => {

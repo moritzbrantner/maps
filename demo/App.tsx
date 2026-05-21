@@ -8,17 +8,22 @@ import {
   ClusteredMap,
   FlowLayer,
   FlowMap,
+  GeoJsonLayer,
   HeatLayer,
   HeatMap,
   MapView,
   PointMap,
   PointLayer,
   TemporalClusteredMap,
+  createTemporalGeoJsonPlaybackIndex,
+  createTemporalGeoJsonTracksFromGeoJson,
   type MapBeeLineMeasurement,
   type MapBeeLineMeasurementResult,
   type MapFlow,
   type MapPoint,
+  type PointMapFeature,
   type MapViewState,
+  type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalMapTrack,
 } from "@moritzbrantner/maps";
 
@@ -27,7 +32,32 @@ type DemoPointProperties = {
   region: string;
 };
 
-type DemoView = "clusters" | "points" | "heat" | "flows" | "composed" | "temporal" | "globe";
+type DemoPointGeoJsonProperties = DemoPointProperties & {
+  demand: number;
+  label: string;
+};
+
+type DemoFlowGeoJsonProperties = {
+  label: string;
+  trips: number;
+};
+
+type DemoGeoJsonProperties = {
+  kind: string;
+  label: string;
+  time: number;
+  trackId: string;
+};
+
+type DemoView =
+  | "clusters"
+  | "points"
+  | "heat"
+  | "flows"
+  | "composed"
+  | "temporal"
+  | "globe"
+  | "geojson";
 type DemoLayerKind = "clusters" | "points" | "bubbles" | "heat" | "flows";
 
 type DemoLayerConfig = {
@@ -38,40 +68,61 @@ type DemoLayerConfig = {
   name: string;
 };
 
-const demoPointHubs: Array<MapPoint<DemoPointProperties>> = [
-  point("berlin", "Berlin", "DACH", 52.52, 13.405, 940),
-  point("hamburg", "Hamburg", "DACH", 53.551, 9.9937, 420),
-  point("munich", "Munich", "DACH", 48.1351, 11.582, 610),
-  point("cologne", "Cologne", "DACH", 50.9375, 6.9603, 350),
-  point("zurich", "Zurich", "DACH", 47.3769, 8.5417, 520),
-  point("vienna", "Vienna", "DACH", 48.2082, 16.3738, 560),
-  point("paris", "Paris", "West", 48.8566, 2.3522, 880),
-  point("london", "London", "West", 51.5072, -0.1276, 910),
-  point("amsterdam", "Amsterdam", "West", 52.3676, 4.9041, 470),
-  point("brussels", "Brussels", "West", 50.8503, 4.3517, 300),
-  point("madrid", "Madrid", "South", 40.4168, -3.7038, 760),
-  point("barcelona", "Barcelona", "South", 41.3874, 2.1686, 690),
-  point("milan", "Milan", "South", 45.4642, 9.19, 580),
-  point("rome", "Rome", "South", 41.9028, 12.4964, 640),
-  point("warsaw", "Warsaw", "East", 52.2297, 21.0122, 430),
-  point("prague", "Prague", "East", 50.0755, 14.4378, 390),
-  point("copenhagen", "Copenhagen", "North", 55.6761, 12.5683, 330),
-  point("stockholm", "Stockholm", "North", 59.3293, 18.0686, 370),
-  point("oslo", "Oslo", "North", 59.9139, 10.7522, 280),
-  point("helsinki", "Helsinki", "North", 60.1699, 24.9384, 260),
-];
+type EditablePointContext = {
+  onCreatePoint: (coordinates: [longitude: number, latitude: number]) => void;
+  onDeletePoint: (feature: PointMapFeature<DemoPointProperties>) => void;
+  onMovePoint: (
+    feature: PointMapFeature<DemoPointProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
+  onSelectPoint: (feature: PointMapFeature<DemoPointProperties> | null) => void;
+  points: Array<MapPoint<DemoPointProperties>>;
+  selectedPointId: string | null;
+};
 
+const demoPointFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties> = {
+  features: [
+    pointFeature("berlin", "Berlin", "DACH", 52.52, 13.405, 940),
+    pointFeature("hamburg", "Hamburg", "DACH", 53.551, 9.9937, 420),
+    pointFeature("munich", "Munich", "DACH", 48.1351, 11.582, 610),
+    pointFeature("cologne", "Cologne", "DACH", 50.9375, 6.9603, 350),
+    pointFeature("zurich", "Zurich", "DACH", 47.3769, 8.5417, 520),
+    pointFeature("vienna", "Vienna", "DACH", 48.2082, 16.3738, 560),
+    pointFeature("paris", "Paris", "West", 48.8566, 2.3522, 880),
+    pointFeature("london", "London", "West", 51.5072, -0.1276, 910),
+    pointFeature("amsterdam", "Amsterdam", "West", 52.3676, 4.9041, 470),
+    pointFeature("brussels", "Brussels", "West", 50.8503, 4.3517, 300),
+    pointFeature("madrid", "Madrid", "South", 40.4168, -3.7038, 760),
+    pointFeature("barcelona", "Barcelona", "South", 41.3874, 2.1686, 690),
+    pointFeature("milan", "Milan", "South", 45.4642, 9.19, 580),
+    pointFeature("rome", "Rome", "South", 41.9028, 12.4964, 640),
+    pointFeature("warsaw", "Warsaw", "East", 52.2297, 21.0122, 430),
+    pointFeature("prague", "Prague", "East", 50.0755, 14.4378, 390),
+    pointFeature("copenhagen", "Copenhagen", "North", 55.6761, 12.5683, 330),
+    pointFeature("stockholm", "Stockholm", "North", 59.3293, 18.0686, 370),
+    pointFeature("oslo", "Oslo", "North", 59.9139, 10.7522, 280),
+    pointFeature("helsinki", "Helsinki", "North", 60.1699, 24.9384, 260),
+  ],
+  type: "FeatureCollection",
+};
+
+const demoPointHubs = createDemoPointsFromGeoJson(demoPointFeatureCollection);
 const demoPoints = createDenseDemoPoints(demoPointHubs);
 
-const demoFlows: MapFlow[] = [
-  flow("berlin-paris", "Berlin to Paris", [13.405, 52.52], [2.3522, 48.8566], 180),
-  flow("berlin-london", "Berlin to London", [13.405, 52.52], [-0.1276, 51.5072], 145),
-  flow("hamburg-stockholm", "Hamburg to Stockholm", [9.9937, 53.551], [18.0686, 59.3293], 82),
-  flow("munich-milan", "Munich to Milan", [11.582, 48.1351], [9.19, 45.4642], 120),
-  flow("vienna-prague", "Vienna to Prague", [16.3738, 48.2082], [14.4378, 50.0755], 96),
-  flow("madrid-barcelona", "Madrid to Barcelona", [-3.7038, 40.4168], [2.1686, 41.3874], 165),
-  flow("amsterdam-brussels", "Amsterdam to Brussels", [4.9041, 52.3676], [4.3517, 50.8503], 74),
-];
+const demoFlowFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties> = {
+  features: [
+    flowFeature("berlin-paris", "Berlin to Paris", [13.405, 52.52], [2.3522, 48.8566], 180),
+    flowFeature("berlin-london", "Berlin to London", [13.405, 52.52], [-0.1276, 51.5072], 145),
+    flowFeature("hamburg-stockholm", "Hamburg to Stockholm", [9.9937, 53.551], [18.0686, 59.3293], 82),
+    flowFeature("munich-milan", "Munich to Milan", [11.582, 48.1351], [9.19, 45.4642], 120),
+    flowFeature("vienna-prague", "Vienna to Prague", [16.3738, 48.2082], [14.4378, 50.0755], 96),
+    flowFeature("madrid-barcelona", "Madrid to Barcelona", [-3.7038, 40.4168], [2.1686, 41.3874], 165),
+    flowFeature("amsterdam-brussels", "Amsterdam to Brussels", [4.9041, 52.3676], [4.3517, 50.8503], 74),
+  ],
+  type: "FeatureCollection",
+};
+
+const demoFlows = createDemoFlowsFromGeoJson(demoFlowFeatureCollection);
 
 const demoTracks: TemporalMapTrack[] = [
   track("cargo-1", "North sea freight", [
@@ -97,6 +148,73 @@ const demoTracks: TemporalMapTrack[] = [
   ]),
 ];
 
+const demoGeoJsonCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> = {
+  features: [
+    geoJsonFeature("geojson-point", "Point", "Paris checkpoint", {
+      coordinates: [2.3522, 48.8566],
+      type: "Point",
+    }),
+    geoJsonFeature("geojson-line", "LineString", "Rhine freight corridor", {
+      coordinates: [
+        [7.5886, 47.5596],
+        [7.4653, 50.0014],
+        [6.9603, 50.9375],
+        [6.7735, 51.2277],
+      ],
+      type: "LineString",
+    }),
+    geoJsonFeature("geojson-multiline", "MultiLineString", "Nordic connectors", {
+      coordinates: [
+        [
+          [10.7522, 59.9139],
+          [12.5683, 55.6761],
+        ],
+        [
+          [18.0686, 59.3293],
+          [24.9384, 60.1699],
+        ],
+      ],
+      type: "MultiLineString",
+    }),
+    geoJsonFeature("geojson-polygon", "Polygon", "Alpine service zone", {
+      coordinates: [
+        [
+          [6.4, 45.6],
+          [12.2, 45.6],
+          [12.2, 48.6],
+          [6.4, 48.6],
+          [6.4, 45.6],
+        ],
+      ],
+      type: "Polygon",
+    }),
+    geoJsonFeature("geojson-multipolygon", "MultiPolygon", "Iberian operating areas", {
+      coordinates: [
+        [
+          [
+            [-4.4, 39.5],
+            [-2.8, 39.5],
+            [-2.8, 41.1],
+            [-4.4, 41.1],
+            [-4.4, 39.5],
+          ],
+        ],
+        [
+          [
+            [1.5, 40.8],
+            [2.9, 40.8],
+            [2.9, 42.0],
+            [1.5, 42.0],
+            [1.5, 40.8],
+          ],
+        ],
+      ],
+      type: "MultiPolygon",
+    }),
+  ],
+  type: "FeatureCollection",
+};
+
 const views: Array<{ id: DemoView; label: string }> = [
   { id: "clusters", label: "Clusters" },
   { id: "points", label: "Points" },
@@ -105,6 +223,7 @@ const views: Array<{ id: DemoView; label: string }> = [
   { id: "composed", label: "Composed" },
   { id: "temporal", label: "Timeline" },
   { id: "globe", label: "Globe" },
+  { id: "geojson", label: "GeoJSON" },
 ];
 
 const layerKinds: Array<{ id: DemoLayerKind; label: string }> = [
@@ -147,6 +266,8 @@ export function App() {
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [layers, setLayers] = useState<DemoLayerConfig[]>(initialLayers);
   const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
+  const [editablePoints, setEditablePoints] = useState<Array<MapPoint<DemoPointProperties>>>(demoPointHubs);
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewState>({
     center: [13.405, 52.52],
     zoom: 5,
@@ -158,6 +279,14 @@ export function App() {
         : demoPoints.filter((item) => item.properties?.region === selectedRegion),
     [selectedRegion],
   );
+  const visibleEditablePoints = useMemo(
+    () =>
+      selectedRegion === "all"
+        ? editablePoints
+        : editablePoints.filter((item) => item.properties?.region === selectedRegion),
+    [editablePoints, selectedRegion],
+  );
+  const activeInspectorPoints = view === "points" ? visibleEditablePoints : visiblePoints;
   const addLayer = (kind: DemoLayerKind) => {
     setLayers((current) => {
       const nextNumber = current.filter((layer) => layer.kind === kind).length + 1;
@@ -190,6 +319,50 @@ export function App() {
   };
   const removeLayer = (id: string) => {
     setLayers((current) => current.filter((layer) => layer.id !== id));
+  };
+  const createEditablePoint = (coordinates: [longitude: number, latitude: number]) => {
+    const id = `custom-${Date.now()}`;
+
+    setEditablePoints((current) => [
+      ...current,
+      point(
+        id,
+        `Custom point ${current.filter((item) => String(item.id).startsWith("custom-")).length + 1}`,
+        selectedRegion === "all" ? "DACH" : selectedRegion,
+        Number(coordinates[1].toFixed(4)),
+        Number(coordinates[0].toFixed(4)),
+        120,
+      ),
+    ]);
+    setSelectedPointId(id);
+  };
+  const moveEditablePoint = (
+    feature: PointMapFeature<DemoPointProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => {
+    setEditablePoints((current) =>
+      current.map((item) =>
+        String(item.id) === feature.point.id
+          ? {
+              ...item,
+              latitude: Number(coordinates[1].toFixed(4)),
+              longitude: Number(coordinates[0].toFixed(4)),
+            }
+          : item,
+      ),
+    );
+  };
+  const deleteEditablePoint = (feature: PointMapFeature<DemoPointProperties>) => {
+    setEditablePoints((current) => current.filter((item) => String(item.id) !== feature.point.id));
+    setSelectedPointId((current) => (current === feature.point.id ? null : current));
+  };
+  const editablePointContext: EditablePointContext = {
+    onCreatePoint: createEditablePoint,
+    onDeletePoint: deleteEditablePoint,
+    onMovePoint: moveEditablePoint,
+    onSelectPoint: (feature) => setSelectedPointId(feature?.point.id ?? null),
+    points: visibleEditablePoints,
+    selectedPointId,
   };
 
   return (
@@ -241,7 +414,16 @@ export function App() {
 
       <section className="demo-stage">
         <div className="demo-map-frame">
-          {renderMap(view, visiblePoints, measurements, setMeasurements, isMeasuring, setViewport, layers)}
+          {renderMap(
+            view,
+            visiblePoints,
+            measurements,
+            setMeasurements,
+            isMeasuring,
+            setViewport,
+            layers,
+            editablePointContext,
+          )}
         </div>
         <aside className="demo-inspector" aria-label="Current dataset">
           <h2>Dataset</h2>
@@ -255,11 +437,11 @@ export function App() {
             </div>
             <div>
               <dt>Points</dt>
-              <dd>{visiblePoints.length}</dd>
+              <dd>{activeInspectorPoints.length}</dd>
             </div>
             <div>
               <dt>Demand</dt>
-              <dd>{visiblePoints.reduce((total, item) => total + (item.metrics?.demand ?? 0), 0)}</dd>
+              <dd>{activeInspectorPoints.reduce((total, item) => total + (item.metrics?.demand ?? 0), 0)}</dd>
             </div>
             <div>
               <dt>Measurements</dt>
@@ -348,6 +530,7 @@ function renderMap(
   isMeasuring: boolean,
   setViewport: Dispatch<SetStateAction<MapViewState>>,
   layers: DemoLayerConfig[],
+  editablePoints: EditablePointContext,
 ) {
   const sharedMeasurementProps = {
     measurementMode: isMeasuring ? ("bee-line" as const) : ("none" as const),
@@ -368,9 +551,30 @@ function renderMap(
       return (
         <PointMap
           {...sharedMeasurementProps}
+          draggable
+          fitToData={false}
+          initialViewState={{ center: [9.8, 50.8], zoom: 5 }}
+          onFeatureDragEnd={editablePoints.onMovePoint}
+          onFeatureSelect={editablePoints.onSelectPoint}
+          onMapContextMenu={() => {
+            editablePoints.onSelectPoint(null);
+          }}
           onViewStateChange={setViewport}
-          points={points}
+          points={editablePoints.points}
           pointColor="#115e59"
+          renderFeatureContextMenu={(feature, context) => (
+            <div className="demo-context-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  editablePoints.onDeletePoint(feature);
+                  context.close();
+                }}
+              >
+                Delete point
+              </button>
+            </div>
+          )}
           renderFeaturePopup={(feature) => (
             <div className="demo-popup">
               <strong>{feature.point.label}</strong>
@@ -378,6 +582,20 @@ function renderMap(
             </div>
           )}
           renderFeatureTooltip={(feature) => feature.point.label}
+          renderMapContextMenu={(context) => (
+            <div className="demo-context-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  editablePoints.onCreatePoint(context.coordinates);
+                  context.close();
+                }}
+              >
+                Create point
+              </button>
+            </div>
+          )}
+          selectedFeatureId={editablePoints.selectedPointId}
           style={{ minHeight: 620 }}
         />
       );
@@ -439,6 +657,8 @@ function renderMap(
           weightMetric="demand"
         />
       );
+    case "geojson":
+      return <GeoJsonGeometryExample />;
     case "clusters":
     default:
       return (
@@ -457,6 +677,56 @@ function renderMap(
         />
       );
   }
+}
+
+function GeoJsonGeometryExample() {
+  const tracks = createTemporalGeoJsonTracksFromGeoJson(demoGeoJsonCollection);
+  const frame = createTemporalGeoJsonPlaybackIndex(tracks).getFeatureCollectionAtTime(0);
+
+  return (
+    <section className="demo-geojson-example" aria-label="GeoJSON geometry examples">
+      <MapView
+        defaultViewState={{ center: [8.4, 50.4], zoom: 4.4 }}
+        fitToData={false}
+        mapLabel="Rendered GeoJSON geometries"
+        style={{ minHeight: 620 }}
+      >
+        <HeatLayer
+          heatmapColorRamp={getHeatLayerColorRamp("#0f766e")}
+          layerId="geojson-heat-from-point-features"
+          points={demoPoints}
+          weightMetric="demand"
+        />
+        <FlowLayer
+          flowColor="#b45309"
+          flows={demoFlows}
+          layerId="geojson-flows-from-line-features"
+          maxWidth={14}
+          showEndpoints
+          weightMetric="trips"
+        />
+        <GeoJsonLayer
+          featureCollection={frame}
+          getFeatureStyle={(feature) => getGeoJsonFeatureStyle(feature.geometry.type)}
+          layerId="geojson-primitives"
+          renderFeaturePopup={(feature) => (
+            <div className="demo-popup">
+              <strong>{String(feature.properties.temporalLabel)}</strong>
+              <span>{feature.geometry.type}</span>
+            </div>
+          )}
+          renderFeatureTooltip={(feature) =>
+            `${String(feature.properties.temporalLabel)} (${feature.geometry.type})`
+          }
+        />
+      </MapView>
+      <div className="demo-geojson-example__legend">
+        <span>Point heat from GeoJSON point features</span>
+        <span>Flows from GeoJSON LineString features</span>
+        <span>{frame.features.length} rendered temporal GeoJSON primitives</span>
+      </div>
+    </section>
+  );
 }
 
 function renderComposedLayer(
@@ -537,6 +807,75 @@ function getHeatLayerColorRamp(color: string) {
   ] as const;
 }
 
+function getGeoJsonFeatureStyle(geometryType: string) {
+  switch (geometryType) {
+    case "Point":
+      return {
+        pointColor: "#be123c",
+        pointRadius: 8,
+      };
+    case "LineString":
+    case "MultiLineString":
+      return {
+        lineColor: "#2563eb",
+        lineWidth: 5,
+      };
+    case "Polygon":
+    case "MultiPolygon":
+      return {
+        polygonFillColor: "#14b8a6",
+        polygonFillOpacity: 0.26,
+        polygonStrokeColor: "#0f766e",
+        polygonStrokeWidth: 2.5,
+      };
+    default:
+      return {};
+  }
+}
+
+function pointFeature(
+  id: string,
+  city: string,
+  region: string,
+  latitude: number,
+  longitude: number,
+  demand: number,
+): TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties>["features"][number] {
+  return {
+    geometry: {
+      coordinates: [longitude, latitude],
+      type: "Point",
+    },
+    id,
+    properties: {
+      city,
+      demand,
+      label: city,
+      region,
+    },
+    type: "Feature",
+  };
+}
+
+function createDemoPointsFromGeoJson(
+  collection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties>,
+): Array<MapPoint<DemoPointProperties>> {
+  return collection.features.flatMap((feature, index) => {
+    if (feature.geometry?.type !== "Point") {
+      return [];
+    }
+
+    const [longitude, latitude] = feature.geometry.coordinates;
+    const id = String(feature.id ?? feature.properties?.label ?? `point-${index}`);
+    const label = feature.properties?.label ?? id;
+    const region = feature.properties?.region ?? "Other";
+    const city = feature.properties?.city ?? label;
+    const demand = feature.properties?.demand ?? 1;
+
+    return [point(id, label, region, latitude, longitude, demand, city)];
+  });
+}
+
 function point(
   id: string,
   city: string,
@@ -544,6 +883,7 @@ function point(
   latitude: number,
   longitude: number,
   demand: number,
+  propertyCity = city,
 ): MapPoint<DemoPointProperties> {
   return {
     id,
@@ -551,7 +891,7 @@ function point(
     latitude,
     longitude,
     metrics: { demand },
-    properties: { city, region },
+    properties: { city: propertyCity, region },
   };
 }
 
@@ -596,6 +936,62 @@ function flow(
     label,
     metrics: { trips },
     to,
+  };
+}
+
+function flowFeature(
+  id: string,
+  label: string,
+  from: [longitude: number, latitude: number],
+  to: [longitude: number, latitude: number],
+  trips: number,
+): TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties>["features"][number] {
+  return {
+    geometry: {
+      coordinates: [from, to],
+      type: "LineString",
+    },
+    id,
+    properties: {
+      label,
+      trips,
+    },
+    type: "Feature",
+  };
+}
+
+function createDemoFlowsFromGeoJson(
+  collection: TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties>,
+): MapFlow[] {
+  return collection.features.flatMap((feature, index) => {
+    if (feature.geometry?.type !== "LineString" || feature.geometry.coordinates.length < 2) {
+      return [];
+    }
+
+    const coordinates = feature.geometry.coordinates;
+    const id = String(feature.id ?? feature.properties?.label ?? `flow-${index}`);
+    const from = coordinates[0]!;
+    const to = coordinates.at(-1)!;
+
+    return [flow(id, feature.properties?.label ?? id, from, to, feature.properties?.trips ?? 1)];
+  });
+}
+
+function geoJsonFeature(
+  trackId: string,
+  kind: DemoGeoJsonProperties["kind"],
+  label: string,
+  geometry: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>["features"][number]["geometry"],
+): TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>["features"][number] {
+  return {
+    geometry,
+    properties: {
+      kind,
+      label,
+      time: 0,
+      trackId,
+    },
+    type: "Feature",
   };
 }
 

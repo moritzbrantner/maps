@@ -5,7 +5,7 @@ React map components, density aggregation helpers, and temporal geo features for
 ## Main APIs
 
 - `PointMap`, `BubbleMap`, `FlowMap`, `ClusteredMap`, `HeatMap`, `TemporalClusteredMap`, and `TemporalHeatMap`
-- `MapView` plus `PointLayer`, `BubbleLayer`, `ClusterLayer`, `HeatLayer`, `FlowLayer`, and `BeeLineMeasurementLayer`
+- `MapView` plus `PointLayer`, `BubbleLayer`, `ClusterLayer`, `HeatLayer`, `FlowLayer`, `GeoJsonLayer`, and `BeeLineMeasurementLayer`
 - `createPointAggregationIndex(...)`, `createHeatMapDensityIndex(...)`, and `createTemporalMapTracksFromGeoJson(...)`
 - `createTemporalGeoJsonTracksFromGeoJson(...)`, `getTemporalGeoJsonFeatureCollectionAtTime(...)`, and `createTemporalGeoJsonPlaybackIndex(...)`
 - `drawLineOnPolygonGeometry(...)` for turning drawn lines into polygon holes or splits
@@ -137,9 +137,14 @@ export function NetworkMaps() {
 }
 ```
 
-Use `onFeatureHover`, `renderFeatureTooltip`, `renderFeaturePopup`, and
-`selectedFeatureId` on point, bubble, clustered, and flow layers or convenience
-maps. Existing `onFeatureSelect` remains the click selection callback.
+Use `onFeatureHover`, `onFeatureContextMenu`, `renderFeatureContextMenu`,
+`renderFeatureTooltip`, `renderFeaturePopup`, and `selectedFeatureId` on point,
+bubble, clustered, GeoJSON, and flow layers or convenience maps. Existing
+`onFeatureSelect` remains the click selection callback; right-clicking a feature
+calls `onFeatureContextMenu` and can render a feature-specific menu. `MapView`,
+`PointMap`, and `BubbleMap` also accept `renderMapContextMenu` for background
+right-click menus. Point and bubble layers can be made draggable with
+`draggable`, `onFeatureDrag`, and `onFeatureDragEnd`.
 
 ## Composable layers
 
@@ -150,6 +155,7 @@ interaction surface.
 import {
   BeeLineMeasurementLayer,
   FlowLayer,
+  GeoJsonLayer,
   HeatLayer,
   MapView,
   PointLayer,
@@ -164,6 +170,7 @@ function OperationsMap() {
     >
       <HeatLayer points={points} weightMetric="demand" />
       <FlowLayer flows={flows} weightMetric="trips" />
+      <GeoJsonLayer featureCollection={geoJsonFeatureCollection} />
       <PointLayer
         points={points}
         renderFeatureTooltip={(feature) => feature.point.label}
@@ -290,6 +297,121 @@ const frameData = playbackIndex.getFeatureCollectionAtTime(currentTime);
 ```
 
 By default, dense compatible lines and rings are resampled to the configured playback budget when they exceed `maxCoordinatesPerLine` or `maxCoordinatesPerRing`. Use `denseGeometryBehavior: "preserve"` if you want the prepared index to keep the exact `compatible` interpolation semantics instead of switching dense shapes to bounded playback geometry.
+
+The temporal GeoJSON helpers accept every supported geometry type, not just
+points. `GeoJsonLayer` renders the resulting `FeatureCollection`; point and
+line features can also be transformed into the existing point, heat, and flow
+maps when those specialized views are a better fit.
+
+```ts
+import {
+  createTemporalGeoJsonPlaybackIndex,
+  createTemporalGeoJsonTracksFromGeoJson,
+  type TemporalGeoJsonGeometryFeatureCollection,
+} from "@moritzbrantner/maps";
+
+const collection: TemporalGeoJsonGeometryFeatureCollection = {
+  type: "FeatureCollection",
+  features: [
+    {
+      type: "Feature",
+      properties: { label: "Depot", time: 0, trackId: "depot" },
+      geometry: { type: "Point", coordinates: [13.405, 52.52] },
+    },
+    {
+      type: "Feature",
+      properties: { label: "Route", time: 0, trackId: "route" },
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [13.405, 52.52],
+          [9.9937, 53.551],
+        ],
+      },
+    },
+    {
+      type: "Feature",
+      properties: { label: "Split route", time: 0, trackId: "split-route" },
+      geometry: {
+        type: "MultiLineString",
+        coordinates: [
+          [
+            [10.7522, 59.9139],
+            [12.5683, 55.6761],
+          ],
+          [
+            [18.0686, 59.3293],
+            [24.9384, 60.1699],
+          ],
+        ],
+      },
+    },
+    {
+      type: "Feature",
+      properties: { label: "Service zone", time: 0, trackId: "zone" },
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [6.4, 45.6],
+            [12.2, 45.6],
+            [12.2, 48.6],
+            [6.4, 48.6],
+            [6.4, 45.6],
+          ],
+        ],
+      },
+    },
+    {
+      type: "Feature",
+      properties: { label: "Operating areas", time: 0, trackId: "areas" },
+      geometry: {
+        type: "MultiPolygon",
+        coordinates: [
+          [
+            [
+              [-4.4, 39.5],
+              [-2.8, 39.5],
+              [-2.8, 41.1],
+              [-4.4, 41.1],
+              [-4.4, 39.5],
+            ],
+          ],
+          [
+            [
+              [1.5, 40.8],
+              [2.9, 40.8],
+              [2.9, 42.0],
+              [1.5, 42.0],
+              [1.5, 40.8],
+            ],
+          ],
+        ],
+      },
+    },
+  ],
+};
+
+const tracks = createTemporalGeoJsonTracksFromGeoJson(collection);
+const frame = createTemporalGeoJsonPlaybackIndex(tracks).getFeatureCollectionAtTime(0);
+```
+
+```tsx
+import { GeoJsonLayer, HeatLayer, FlowLayer, MapView } from "@moritzbrantner/maps";
+
+export function GeoJsonOperationsMap() {
+  return (
+    <MapView defaultViewState={{ center: [8.4, 50.4], zoom: 4.4 }}>
+      <HeatLayer points={pointsFromGeoJsonPointFeatures} weightMetric="demand" />
+      <FlowLayer flows={flowsFromGeoJsonLineStrings} weightMetric="trips" />
+      <GeoJsonLayer
+        featureCollection={frame}
+        renderFeatureTooltip={(feature) => feature.geometry.type}
+      />
+    </MapView>
+  );
+}
+```
 
 ## Notes
 

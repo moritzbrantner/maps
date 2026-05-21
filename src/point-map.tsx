@@ -38,7 +38,7 @@ import {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
-import type { MapFeatureInteractionProps } from "./map-interaction";
+import type { MapContextMenuContext, MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
@@ -52,6 +52,7 @@ export type PointMapFeature<TProperties = Record<string, unknown>> = {
 
 export type PointMapProps<TProperties = Record<string, unknown>> = {
   className?: string;
+  draggable?: boolean | ((feature: PointMapFeature<TProperties>) => boolean);
   filterPoint?: MapPointFilter<TProperties>;
   fitBoundsPadding?: number;
   fitToData?: boolean;
@@ -61,12 +62,22 @@ export type PointMapProps<TProperties = Record<string, unknown>> = {
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;
+  onFeatureDrag?: (
+    feature: PointMapFeature<TProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
+  onFeatureDragEnd?: (
+    feature: PointMapFeature<TProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
   onFeatureSelect?: (feature: PointMapFeature<TProperties> | null) => void;
+  onMapContextMenu?: (context: MapContextMenuContext) => void;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: LeafletMap) => void;
   points: readonly MapPoint<TProperties>[];
   pointColor?: string;
   pointRadius?: number;
+  renderMapContextMenu?: (context: MapContextMenuContext) => React.ReactNode;
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
 } & MapMeasurementProps &
@@ -85,14 +96,30 @@ export type BubbleMapFeature<TProperties = Record<string, unknown>> = PointMapFe
 
 export type BubbleMapProps<TProperties = Record<string, unknown>> = Omit<
   PointMapProps<TProperties>,
-  "getPointColor" | "getPointRadius" | "onFeatureSelect" | "pointColor" | "pointRadius"
+  | "draggable"
+  | "getPointColor"
+  | "getPointRadius"
+  | "onFeatureDrag"
+  | "onFeatureDragEnd"
+  | "onFeatureSelect"
+  | "pointColor"
+  | "pointRadius"
 > & {
   bubbleColor?: string;
+  draggable?: boolean | ((feature: BubbleMapFeature<TProperties>) => boolean);
   getBubbleColor?: (feature: BubbleMapFeature<TProperties>) => string;
   getWeight?: BubbleMapWeightAccessor<TProperties>;
   maxRadius?: number;
   maxWeight?: number;
   minRadius?: number;
+  onFeatureDrag?: (
+    feature: BubbleMapFeature<TProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
+  onFeatureDragEnd?: (
+    feature: BubbleMapFeature<TProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
   onFeatureSelect?: (feature: BubbleMapFeature<TProperties> | null) => void;
   weightMetric?: string;
 };
@@ -111,11 +138,13 @@ export function PointMap<TProperties = Record<string, unknown>>({
   measurementMode,
   measurements,
   onMapControllerReady,
+  onMapContextMenu,
   onMapReady,
   onMeasurementCreate,
   onMeasurementDraftChange,
   onMeasurementSelect,
   points,
+  renderMapContextMenu,
   showAttributionControl = true,
   style,
   viewState,
@@ -135,8 +164,10 @@ export function PointMap<TProperties = Record<string, unknown>>({
       mapLabel={mapLabel}
       mapStyle={mapStyle}
       onMapControllerReady={onMapControllerReady}
+      onMapContextMenu={onMapContextMenu}
       onMapReady={onMapReady}
       onViewStateChange={onViewStateChange}
+      renderMapContextMenu={renderMapContextMenu}
       showAttributionControl={showAttributionControl}
       style={style}
       viewState={viewState}
@@ -173,11 +204,13 @@ export function BubbleMap<TProperties = Record<string, unknown>>({
   measurementMode,
   measurements,
   onMapControllerReady,
+  onMapContextMenu,
   onMapReady,
   onMeasurementCreate,
   onMeasurementDraftChange,
   onMeasurementSelect,
   points,
+  renderMapContextMenu,
   showAttributionControl = true,
   style,
   viewState,
@@ -197,8 +230,10 @@ export function BubbleMap<TProperties = Record<string, unknown>>({
       mapLabel={mapLabel}
       mapStyle={mapStyle}
       onMapControllerReady={onMapControllerReady}
+      onMapContextMenu={onMapContextMenu}
       onMapReady={onMapReady}
       onViewStateChange={onViewStateChange}
+      renderMapContextMenu={renderMapContextMenu}
       showAttributionControl={showAttributionControl}
       style={style}
       viewState={viewState}
@@ -723,11 +758,14 @@ function useBubbleMapPointProps<TProperties>(
 ): PointMapProps<TProperties> {
   const {
     bubbleColor = "#2563eb",
+    draggable,
     getBubbleColor,
     getWeight,
     maxRadius = 32,
     maxWeight,
     minRadius = 5,
+    onFeatureDrag,
+    onFeatureDragEnd,
     onFeatureSelect,
     weightMetric,
     ...pointProps
@@ -763,6 +801,15 @@ function useBubbleMapPointProps<TProperties>(
     filterPoint(point) {
       return featureById.has(point.id);
     },
+    draggable(feature) {
+      const bubbleFeature = featureById.get(feature.point.id);
+
+      if (!bubbleFeature) {
+        return false;
+      }
+
+      return typeof draggable === "function" ? draggable(bubbleFeature) : draggable === true;
+    },
     getPointColor(feature) {
       const bubbleFeature = featureById.get(feature.point.id);
 
@@ -772,6 +819,20 @@ function useBubbleMapPointProps<TProperties>(
       return featureById.get(feature.point.id)?.radius ?? minRadius;
     },
     mapLabel: pointProps.mapLabel ?? "Interactive bubble map",
+    onFeatureDrag(feature, coordinates) {
+      const bubbleFeature = featureById.get(feature.point.id);
+
+      if (bubbleFeature) {
+        onFeatureDrag?.(bubbleFeature, coordinates);
+      }
+    },
+    onFeatureDragEnd(feature, coordinates) {
+      const bubbleFeature = featureById.get(feature.point.id);
+
+      if (bubbleFeature) {
+        onFeatureDragEnd?.(bubbleFeature, coordinates);
+      }
+    },
     onFeatureSelect(feature) {
       onFeatureSelect?.(feature ? featureById.get(feature.point.id) ?? null : null);
     },

@@ -60,8 +60,10 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   maxWeight,
   maxWidth,
   minWidth,
+  onFeatureContextMenu,
   onFeatureHover,
   onFeatureSelect,
+  renderFeatureContextMenu,
   renderFeaturePopup,
   renderFeatureTooltip,
   selectedFeatureId,
@@ -115,6 +117,16 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
               renderFeaturePopup,
             });
           });
+          line.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+            suppressNativeContextMenu(event);
+            surface.handleFeatureContextMenu(feature, getFlowPosition(map, feature, event), {
+              coordinates: getFlowCenter(feature),
+              onFeatureContextMenu,
+              onFeatureSelect,
+              renderFeatureContextMenu,
+              renderFeaturePopup,
+            });
+          });
           line.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             map.getContainer().style.cursor = "pointer";
             surface.handleFeatureHover(feature, getFlowPosition(map, feature, event), {
@@ -164,9 +176,11 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     getFeatureId,
     getFlowColor,
     resolvedLayerId,
+    onFeatureContextMenu,
     onFeatureHover,
     onFeatureSelect,
     renderFeaturePopup,
+    renderFeatureContextMenu,
     renderFeatureTooltip,
     selectedFeatureId,
     showEndpoints,
@@ -209,6 +223,18 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
                 suppress: surface.isMeasuring,
               });
             }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              surface.handleFeatureContextMenu(feature, position, {
+                coordinates: getFlowCenter(feature),
+                onFeatureContextMenu,
+                onFeatureSelect,
+                renderFeatureContextMenu,
+                renderFeaturePopup,
+                suppress: surface.isMeasuring,
+              });
+            }}
             onPointerEnter={() => {
               if (!surface.isMeasuring) {
                 surface.handleFeatureHover(feature, position, {
@@ -240,6 +266,15 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
       })}
     </>
   );
+}
+
+function getFlowCenter<TProperties>(
+  feature: FlowLayerFeature<TProperties>,
+): [longitude: number, latitude: number] {
+  return [
+    (feature.flow.from[0] + feature.flow.to[0]) / 2,
+    (feature.flow.from[1] + feature.flow.to[1]) / 2,
+  ];
 }
 
 export function createFlowLayerFeatures<TProperties = Record<string, unknown>>(
@@ -314,6 +349,17 @@ function getFlowPosition<TProperties>(
   ];
 
   return map.latLngToContainerPoint?.(toLeafletLatLng(midpoint)) ?? { x: 0, y: 0 };
+}
+
+type LeafletFeaturePointerEvent = {
+  containerPoint?: { x: number; y: number };
+  originalEvent?: {
+    preventDefault?: () => void;
+  };
+};
+
+function suppressNativeContextMenu(event: LeafletFeaturePointerEvent) {
+  event.originalEvent?.preventDefault?.();
 }
 
 function resolveFlowWeight<TProperties>(

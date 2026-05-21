@@ -33,10 +33,12 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   layerId,
   maxZoom,
   minZoom,
+  onFeatureContextMenu,
   onFeatureHover,
   onFeatureSelect,
   onViewportAggregationChange,
   points,
+  renderFeatureContextMenu,
   renderFeaturePopup,
   renderFeatureTooltip,
   selectedFeatureId,
@@ -110,6 +112,16 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 renderFeaturePopup,
               });
             });
+            marker.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+              suppressNativeContextMenu(event);
+              surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                coordinates: feature.coordinates,
+                onFeatureContextMenu,
+                onFeatureSelect,
+                renderFeatureContextMenu,
+                renderFeaturePopup,
+              });
+            });
             marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
               map.getContainer().style.cursor = "pointer";
               surface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
@@ -160,6 +172,16 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
               renderFeaturePopup,
             });
           });
+          marker.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+            suppressNativeContextMenu(event);
+            surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+              coordinates: feature.coordinates,
+              onFeatureContextMenu,
+              onFeatureSelect,
+              renderFeatureContextMenu,
+              renderFeaturePopup,
+            });
+          });
           marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             map.getContainer().style.cursor = "pointer";
             surface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
@@ -180,10 +202,12 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
     getFeatureId,
     index,
     resolvedLayerId,
+    onFeatureContextMenu,
     onFeatureHover,
     onFeatureSelect,
     onViewportAggregationChange,
     renderFeaturePopup,
+    renderFeatureContextMenu,
     renderFeatureTooltip,
     selectedFeatureId,
     surface,
@@ -245,6 +269,18 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                   renderFeaturePopup,
                 });
               }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
+                  onFeatureContextMenu,
+                  onFeatureSelect,
+                  renderFeatureContextMenu,
+                  renderFeaturePopup,
+                  suppress: surface.isMeasuring,
+                  coordinates: feature.coordinates,
+                });
+              }}
               onPointerEnter={() => {
                 if (!surface.isMeasuring) {
                   surface.handleFeatureHover(feature, { x: projected.x, y: projected.y }, {
@@ -288,6 +324,18 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 onFeatureSelect,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
+              });
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
+                onFeatureContextMenu,
+                onFeatureSelect,
+                renderFeatureContextMenu,
+                renderFeaturePopup,
+                suppress: surface.isMeasuring,
+                coordinates: feature.coordinates,
               });
             }}
             onPointerEnter={() => {
@@ -339,6 +387,17 @@ function getFlatFeaturePosition(
   }
 
   return map.latLngToContainerPoint?.(toLeafletLatLng(coordinates)) ?? { x: 0, y: 0 };
+}
+
+type LeafletFeaturePointerEvent = {
+  containerPoint?: { x: number; y: number };
+  originalEvent?: {
+    preventDefault?: () => void;
+  };
+};
+
+function suppressNativeContextMenu(event: LeafletFeaturePointerEvent) {
+  event.originalEvent?.preventDefault?.();
 }
 
 function getClusterColor(pointCount: number) {

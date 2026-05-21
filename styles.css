@@ -105,7 +105,8 @@
 
   .mb-maps__cluster-marker,
   .mb-maps__point-marker,
-  .mb-maps__flow-line {
+  .mb-maps__flow-line,
+  .mb-maps__geojson-feature {
     cursor: pointer;
   }
 
@@ -116,6 +117,14 @@
   .mb-maps__feature--selected {
     filter: drop-shadow(0 0 8px rgb(14 165 233 / 0.55));
     outline: 2px solid rgb(14 165 233 / 0.9);
+  }
+
+  .mb-maps__feature--draggable {
+    cursor: grab;
+  }
+
+  .mb-maps__feature--draggable:active {
+    cursor: grabbing;
   }
 
   .mb-maps__heat-surface,
@@ -159,6 +168,15 @@
 
   .mb-maps__globe-flow {
     cursor: pointer;
+  }
+
+  .mb-maps__globe-geojson {
+    cursor: pointer;
+  }
+
+  .mb-maps__globe-geojson path {
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .mb-maps__globe-flow path {
@@ -208,6 +226,20 @@
   .mb-maps__feature-popup {
     @apply pointer-events-auto rounded-lg px-3 py-2;
     transform: translate(-50%, 0);
+  }
+
+  .mb-maps__context-menu {
+    @apply pointer-events-auto absolute min-w-40 overflow-hidden rounded-lg border border-slate-900/10 bg-white py-1 text-sm text-slate-950 shadow-[0_16px_40px_rgb(15_23_42_/_0.18)];
+  }
+
+  .mb-maps__context-menu button {
+    @apply block w-full cursor-pointer border-0 bg-transparent px-3 py-2 text-left font-semibold text-slate-950;
+    font: inherit;
+  }
+
+  .mb-maps__context-menu button:hover,
+  .mb-maps__context-menu button:focus-visible {
+    @apply bg-slate-100 outline-none;
   }
 
   .mb-temporal-map {

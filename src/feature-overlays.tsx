@@ -15,23 +15,34 @@ export type FeatureOverlayState = {
   render: (feature: unknown) => ReactNode;
 };
 
+export type ContextMenuOverlayState = {
+  context: unknown;
+  position: FeatureOverlayPosition;
+  render: (context: unknown) => ReactNode;
+};
+
 export function FeatureOverlays({
+  contextMenu,
   popup,
   tooltip,
+  onCloseContextMenu,
   onClosePopup,
 }: {
+  contextMenu: ContextMenuOverlayState | null;
   popup: FeatureOverlayState | null;
   tooltip: FeatureOverlayState | null;
+  onCloseContextMenu: () => void;
   onClosePopup: () => void;
 }) {
   useEffect(() => {
-    if (!popup) {
+    if (!popup && !contextMenu) {
       return;
     }
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         onClosePopup();
+        onCloseContextMenu();
       }
     }
 
@@ -40,9 +51,9 @@ export function FeatureOverlays({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onClosePopup, popup]);
+  }, [contextMenu, onCloseContextMenu, onClosePopup, popup]);
 
-  if (!tooltip && !popup) {
+  if (!tooltip && !popup && !contextMenu) {
     return null;
   }
 
@@ -65,6 +76,22 @@ export function FeatureOverlays({
           {popup.render(popup.feature)}
         </div>
       ) : null}
+      {contextMenu ? (
+        <div
+          className="mb-maps__context-menu"
+          style={createContextMenuStyle(contextMenu.position)}
+          role="menu"
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          {contextMenu.render(contextMenu.context)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -73,5 +100,12 @@ function createOverlayStyle(position: FeatureOverlayPosition, offsetY: number) {
   return {
     left: Math.max(8, position.x),
     top: Math.max(8, position.y + offsetY),
+  };
+}
+
+function createContextMenuStyle(position: FeatureOverlayPosition) {
+  return {
+    left: Math.max(8, position.x),
+    top: Math.max(8, position.y),
   };
 }

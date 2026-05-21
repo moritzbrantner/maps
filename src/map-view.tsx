@@ -13,7 +13,11 @@ import {
 } from "react";
 import type { LayerGroup, Map as LeafletMap } from "leaflet";
 
-import { FeatureOverlays, type FeatureOverlayState } from "./feature-overlays";
+import {
+  FeatureOverlays,
+  type ContextMenuOverlayState,
+  type FeatureOverlayState,
+} from "./feature-overlays";
 import { GlobeBase, GlobeSvgOverlayBase } from "./globe-base";
 import {
   defaultRasterMapStyle,
@@ -35,6 +39,10 @@ import {
   type RasterMapStyle,
 } from "./map-display";
 import { areMapViewStatesEqual, useControllableMapViewState } from "./map-view-state";
+import type {
+  MapContextMenuContext,
+  MapFeatureContextMenuContext,
+} from "./map-interaction";
 import type { MapCoordinate } from "./measurement";
 
 export type FlatLayerRender = (context: {
@@ -47,13 +55,28 @@ export type FlatLayerRender = (context: {
 export type MapSurfaceContextValue = {
   closeFeaturePopup: () => void;
   display: MapDisplayMode;
-  getGlobePointerCoordinate: (event: React.PointerEvent<SVGSVGElement>) => MapCoordinate | null;
+  getGlobePointerCoordinate: (event: { clientX: number; clientY: number }) => MapCoordinate | null;
   handleBackgroundClick: () => void;
   handleFeatureClick: <TFeature>(
     feature: TFeature,
     position: { x: number; y: number },
     options?: {
       onFeatureSelect?: (feature: TFeature | null) => void;
+      renderFeaturePopup?: (feature: TFeature) => ReactNode;
+      suppress?: boolean;
+    },
+  ) => void;
+  handleFeatureContextMenu: <TFeature>(
+    feature: TFeature,
+    position: { x: number; y: number },
+    options?: {
+      coordinates?: [longitude: number, latitude: number];
+      onFeatureContextMenu?: (feature: TFeature) => void;
+      onFeatureSelect?: (feature: TFeature | null) => void;
+      renderFeatureContextMenu?: (
+        feature: TFeature,
+        context: MapFeatureContextMenuContext<TFeature>,
+      ) => ReactNode;
       renderFeaturePopup?: (feature: TFeature) => ReactNode;
       suppress?: boolean;
     },
@@ -93,7 +116,9 @@ export type MapViewProps = MapViewportProps & {
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
+  onMapContextMenu?: (context: MapContextMenuContext) => void;
   onMapReady?: (map: LeafletMap) => void;
+  renderMapContextMenu?: (context: MapContextMenuContext) => ReactNode;
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
 };
@@ -118,8 +143,10 @@ export function MapView({
   mapLabel = "Interactive map",
   mapStyle = defaultRasterMapStyle,
   onMapControllerReady,
+  onMapContextMenu,
   onMapReady,
   onViewStateChange,
+  renderMapContextMenu,
   showAttributionControl = true,
   style,
   viewState,
@@ -128,6 +155,10 @@ export function MapView({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
+  const mapContextMenuOptionsRef = useRef<{
+    onMapContextMenu?: (context: MapContextMenuContext) => void;
+    renderMapContextMenu?: (context: MapContextMenuContext) => ReactNode;
+  }>({});
   const layersRef = useRef<Map<string, RegisteredFlatLayer>>(new Map());
   const dragRef = useRef<{
     center: [number, number];
@@ -144,6 +175,7 @@ export function MapView({
   const [hovered, setHovered] = useState<{ feature: unknown; id: string | null } | null>(null);
   const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
   const [popup, setPopup] = useState<FeatureOverlayState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuOverlayState | null>(null);
   const { controlled, setViewState, viewState: currentViewState } = useControllableMapViewState({
     defaultViewState,
     display: mapDisplay,
@@ -156,6 +188,13 @@ export function MapView({
   const requestRender = useCallback(() => {
     setRenderVersion((version) => version + 1);
   }, []);
+
+  useEffect(() => {
+    mapContextMenuOptionsRef.current = {
+      onMapContextMenu,
+      renderMapContextMenu,
+    };
+  }, [onMapContextMenu, renderMapContextMenu]);
 
   const renderFlatLayers = useEffectEvent(() => {
     const leaflet = leafletRef.current;
@@ -315,6 +354,15 @@ export function MapView({
       localMap.on("moveend", emitFlatMoveEnd);
       localMap.on("click", () => {
         setPopup(null);
+        setContextMenu(null);
+      });
+      localMap.on("contextmenu", (event: LeafletMapContextMenuEvent = {}) => {
+        if (isLeafletOriginalEventPrevented(event)) {
+          return;
+        }
+
+        suppressNativeContextMenu(event);
+        handleMapContextMenu(getFlatContextMenuContext(localMap!, event), mapContextMenuOptionsRef.current);
       });
 
       queueMicrotask(() => {
@@ -443,7 +491,7 @@ export function MapView({
   );
 
   const getGlobePointerCoordinate = useCallback(
-    (event: React.PointerEvent<SVGSVGElement>) => {
+    (event: { clientX: number; clientY: number }) => {
       const svg = svgRef.current;
 
       if (!svg) {
@@ -475,6 +523,55 @@ export function MapView({
     return "";
   }, []);
 
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  const createMapContextMenuContext = useCallback(
+    (input: {
+      coordinates: [longitude: number, latitude: number];
+      position: { x: number; y: number };
+    }): MapContextMenuContext => ({
+      close: closeContextMenu,
+      coordinates: input.coordinates,
+      position: input.position,
+    }),
+    [closeContextMenu],
+  );
+
+  const handleMapContextMenu = useEffectEvent(
+    (
+      input: {
+        coordinates: [longitude: number, latitude: number];
+        position: { x: number; y: number };
+      },
+      options?: {
+        onMapContextMenu?: (context: MapContextMenuContext) => void;
+        renderMapContextMenu?: (context: MapContextMenuContext) => ReactNode;
+      },
+    ) => {
+      if (isMeasuring) {
+        return;
+      }
+
+      const context = createMapContextMenuContext(input);
+
+      startTransition(() => {
+        options?.onMapContextMenu?.(context);
+      });
+
+      if (options?.renderMapContextMenu) {
+        setPopup(null);
+        setTooltip(null);
+        setContextMenu({
+          context,
+          position: input.position,
+          render: options.renderMapContextMenu as (context: unknown) => ReactNode,
+        });
+      }
+    },
+  );
+
   const context = useMemo<MapSurfaceContextValue>(
     () => ({
       closeFeaturePopup: () => setPopup(null),
@@ -482,15 +579,61 @@ export function MapView({
       getGlobePointerCoordinate,
       handleBackgroundClick: () => {
         setPopup(null);
+        setContextMenu(null);
       },
       handleFeatureClick(feature, position, options) {
         if (options?.suppress) {
           return;
         }
 
+        setContextMenu(null);
+
         startTransition(() => {
           options?.onFeatureSelect?.(feature);
         });
+
+        if (options?.renderFeaturePopup) {
+          setPopup({
+            feature,
+            position,
+            render: options.renderFeaturePopup as (feature: unknown) => ReactNode,
+          });
+        }
+      },
+      handleFeatureContextMenu(feature, position, options) {
+        if (options?.suppress) {
+          return;
+        }
+
+        const coordinates = options?.coordinates ?? getFeatureCoordinate(feature);
+        const context: MapFeatureContextMenuContext<typeof feature> = {
+          close: closeContextMenu,
+          coordinates,
+          feature,
+          position,
+        };
+
+        startTransition(() => {
+          options?.onFeatureContextMenu?.(feature);
+          options?.onFeatureSelect?.(feature);
+        });
+
+        if (options?.renderFeatureContextMenu) {
+          setPopup(null);
+          setTooltip(null);
+          setContextMenu({
+            context,
+            position,
+            render: (value) =>
+              options.renderFeatureContextMenu!(
+                (value as MapFeatureContextMenuContext<typeof feature>).feature,
+                value as MapFeatureContextMenuContext<typeof feature>,
+              ),
+          });
+          return;
+        }
+
+        setContextMenu(null);
 
         if (options?.renderFeaturePopup) {
           setPopup({
@@ -580,9 +723,10 @@ export function MapView({
           width: "100%",
           ...style,
         }}
-        onClick={() => {
+      onClick={() => {
           if (mapDisplay === "globe") {
             setPopup(null);
+            setContextMenu(null);
           }
         }}
       >
@@ -639,6 +783,32 @@ export function MapView({
                   "zoom",
                 );
               }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const coordinate = getGlobePointerCoordinate(event);
+
+                if (!coordinate) {
+                  return;
+                }
+
+                const rect = event.currentTarget.getBoundingClientRect();
+
+                handleMapContextMenu(
+                  {
+                    coordinates: coordinate,
+                    position: {
+                      x: event.clientX - rect.left,
+                      y: event.clientY - rect.top,
+                    },
+                  },
+                  {
+                    onMapContextMenu,
+                    renderMapContextMenu,
+                  },
+                );
+              }}
             >
               <GlobeSvgOverlayBase viewState={currentViewState as GlobeViewState} />
               <g className="mb-maps__globe-features">{children}</g>
@@ -648,8 +818,12 @@ export function MapView({
           children
         )}
         <FeatureOverlays
+          contextMenu={contextMenu}
           popup={popup}
           tooltip={tooltip}
+          onCloseContextMenu={() => {
+            setContextMenu(null);
+          }}
           onClosePopup={() => {
             setPopup(null);
           }}
@@ -657,6 +831,90 @@ export function MapView({
       </div>
     </MapSurfaceContext.Provider>
   );
+}
+
+type LeafletMapContextMenuEvent = {
+  containerPoint?: { x: number; y: number };
+  latlng?: { lat: number; lng: number };
+  originalEvent?: {
+    defaultPrevented?: boolean;
+    preventDefault?: () => void;
+    stopPropagation?: () => void;
+  };
+};
+
+function getFlatContextMenuContext(
+  map: LeafletMap & {
+    containerPointToLatLng?: (point: [number, number]) => { lat: number; lng: number };
+    latLngToContainerPoint?: (latLng: { lat: number; lng: number }) => { x: number; y: number };
+  },
+  event: LeafletMapContextMenuEvent,
+) {
+  const position = event.containerPoint ?? getFlatContextMenuPosition(map, event);
+  const latlng =
+    event.latlng ??
+    map.containerPointToLatLng?.([position.x, position.y]) ??
+    map.getCenter?.() ?? { lat: 25, lng: 12 };
+
+  return {
+    coordinates: [latlng.lng, latlng.lat] as [number, number],
+    position,
+  };
+}
+
+function getFlatContextMenuPosition(
+  map: LeafletMap & {
+    latLngToContainerPoint?: (latLng: { lat: number; lng: number }) => { x: number; y: number };
+  },
+  event: LeafletMapContextMenuEvent,
+) {
+  if (event.latlng && map.latLngToContainerPoint) {
+    return map.latLngToContainerPoint(event.latlng);
+  }
+
+  return { x: 0, y: 0 };
+}
+
+function getFeatureCoordinate(feature: unknown): [longitude: number, latitude: number] {
+  if (feature && typeof feature === "object") {
+    const record = feature as Record<string, unknown>;
+    const coordinates = record.coordinates;
+
+    if (isCoordinate(coordinates)) {
+      return coordinates;
+    }
+
+    const point = record.point as Record<string, unknown> | undefined;
+    const flow = record.flow as Record<string, unknown> | undefined;
+
+    if (typeof point?.longitude === "number" && typeof point.latitude === "number") {
+      return [point.longitude, point.latitude];
+    }
+
+    if (isCoordinate(flow?.from) && isCoordinate(flow?.to)) {
+      return [(flow.from[0] + flow.to[0]) / 2, (flow.from[1] + flow.to[1]) / 2];
+    }
+  }
+
+  return [0, 0];
+}
+
+function isCoordinate(value: unknown): value is [number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    typeof value[0] === "number" &&
+    typeof value[1] === "number"
+  );
+}
+
+function isLeafletOriginalEventPrevented(event: LeafletMapContextMenuEvent) {
+  return event.originalEvent?.defaultPrevented === true;
+}
+
+function suppressNativeContextMenu(event: LeafletMapContextMenuEvent) {
+  event.originalEvent?.preventDefault?.();
+  event.originalEvent?.stopPropagation?.();
 }
 
 function getLeafletViewState(map: LeafletMap): MapViewState {

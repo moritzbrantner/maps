@@ -36,6 +36,12 @@ export {
   type FlatLayerRender,
 } from "./map-view";
 export {
+  type MapContextMenuContext,
+  type MapFeatureContextMenuContext,
+  type MapFeatureInteractionProps,
+  type MapFeatureInteractionState,
+} from "./map-interaction";
+export {
   ClusterLayer,
   type ClusterLayerProps,
 } from "./cluster-layer";
@@ -57,6 +63,13 @@ export {
   type FlowLayerFeature as FlowMapLayerFeature,
   type FlowLayerProps,
 } from "./flow-layer";
+export {
+  GeoJsonLayer,
+  createGeoJsonLayerFeatures,
+  type GeoJsonLayerFeature,
+  type GeoJsonLayerProps,
+  type GeoJsonLayerStyle,
+} from "./geojson-layer";
 export {
   BeeLineMeasurementLayer,
   type BeeLineMeasurementLayerProps,
