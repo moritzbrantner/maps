@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useContext, useDeferredValue, useEffect, useMemo, useRef } from "react";
+import { startTransition, useContext, useDeferredValue, useEffect, useId, useMemo, useRef } from "react";
 
 import {
   createPointAggregationIndex,
@@ -18,6 +18,7 @@ export type ClusterLayerProps<TProperties = Record<string, unknown>> =
   MapFeatureInteractionProps<AggregatedMapFeature<TProperties>> & {
     clusterRadius?: PointAggregationIndexOptions<TProperties>["radius"];
     filterPoint?: MapPointFilter<TProperties>;
+    layerId?: string;
     maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
     minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
     onFeatureSelect?: (feature: AggregatedMapFeature<TProperties> | null) => void;
@@ -29,6 +30,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   clusterRadius,
   filterPoint,
   getFeatureId,
+  layerId,
   maxZoom,
   minZoom,
   onFeatureHover,
@@ -40,6 +42,8 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   selectedFeatureId,
 }: ClusterLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
+  const generatedLayerId = useId();
+  const resolvedLayerId = layerId ?? `cluster-layer-${generatedLayerId}`;
   const deferredPoints = useDeferredValue(points);
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
   const index = useMemo(
@@ -58,7 +62,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    return surface.registerFlatLayer("cluster-layer", ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
       layer.clearLayers();
 
       const bounds = map.getBounds();
@@ -175,6 +179,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   }, [
     getFeatureId,
     index,
+    resolvedLayerId,
     onFeatureHover,
     onFeatureSelect,
     onViewportAggregationChange,

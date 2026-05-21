@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useMemo } from "react";
+import { useContext, useDeferredValue, useEffect, useId, useMemo } from "react";
 
 import {
   createPointAggregationIndex,
@@ -67,6 +67,7 @@ export type HeatLayerProps<TProperties = Record<string, unknown>> =
     heatmapMaxZoom?: number;
     heatmapOpacity?: number;
     heatmapRadius?: HeatLayerRadius;
+    layerId?: string;
     maxWeight?: number;
     points: readonly MapPoint<TProperties>[];
     weightMetric?: string;
@@ -95,11 +96,14 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     max: 42,
     min: 12,
   },
+  layerId,
   maxWeight,
   points,
   weightMetric,
 }: HeatLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
+  const generatedLayerId = useId();
+  const resolvedLayerId = layerId ?? `heat-layer-${generatedLayerId}`;
   const deferredPoints = useDeferredValue(points);
   const densityIndex = useMemo(
     () =>
@@ -130,7 +134,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    return surface.registerFlatLayer("heat-layer", ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
       layer.clearLayers();
 
       if (map.getZoom() > heatmapMaxZoom) {
@@ -173,6 +177,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     heatmapMaxZoom,
     heatmapOpacity,
     heatmapRadius,
+    resolvedLayerId,
     surface,
   ]);
 

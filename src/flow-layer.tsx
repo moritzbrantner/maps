@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useMemo } from "react";
+import { useContext, useDeferredValue, useEffect, useId, useMemo } from "react";
 
 import { joinClassNames, toLeafletLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
@@ -41,6 +41,7 @@ export type FlowLayerProps<TProperties = Record<string, unknown>> =
     flows: readonly MapFlow<TProperties>[];
     getFlowColor?: (feature: FlowLayerFeature<TProperties>) => string;
     getWeight?: FlowLayerWeightAccessor<TProperties>;
+    layerId?: string;
     maxWeight?: number;
     maxWidth?: number;
     minWidth?: number;
@@ -55,6 +56,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   getFeatureId,
   getFlowColor,
   getWeight,
+  layerId,
   maxWeight,
   maxWidth,
   minWidth,
@@ -67,6 +69,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   weightMetric,
 }: FlowLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
+  const generatedLayerId = useId();
+  const resolvedLayerId = layerId ?? `flow-layer-${generatedLayerId}`;
   const deferredFlows = useDeferredValue(flows);
   const features = useMemo(
     () =>
@@ -85,7 +89,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    return surface.registerFlatLayer("flow-layer", ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
       layer.clearLayers();
 
       for (const feature of features) {
@@ -159,6 +163,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     flowColor,
     getFeatureId,
     getFlowColor,
+    resolvedLayerId,
     onFeatureHover,
     onFeatureSelect,
     renderFeaturePopup,

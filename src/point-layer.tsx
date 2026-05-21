@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useMemo } from "react";
+import { useContext, useDeferredValue, useEffect, useId, useMemo } from "react";
 
 import {
   type IndexedMapPoint,
@@ -21,6 +21,7 @@ export type PointLayerProps<TProperties = Record<string, unknown>> =
     filterPoint?: MapPointFilter<TProperties>;
     getPointColor?: (feature: PointLayerFeature<TProperties>) => string;
     getPointRadius?: (feature: PointLayerFeature<TProperties>) => number;
+    layerId?: string;
     onFeatureSelect?: (feature: PointLayerFeature<TProperties> | null) => void;
     points: readonly MapPoint<TProperties>[];
     pointColor?: string;
@@ -59,6 +60,7 @@ export function PointLayer<TProperties = Record<string, unknown>>({
   getFeatureId,
   getPointColor,
   getPointRadius,
+  layerId,
   onFeatureHover,
   onFeatureSelect,
   points,
@@ -81,6 +83,7 @@ export function PointLayer<TProperties = Record<string, unknown>>({
       getFeatureId={getFeatureId}
       getPointColor={getPointColor}
       getPointRadius={getPointRadius}
+      layerId={layerId}
       onFeatureHover={onFeatureHover}
       onFeatureSelect={onFeatureSelect}
       pointColor={pointColor}
@@ -105,6 +108,7 @@ function PointFeatureLayer<
   getFeatureId,
   getPointColor,
   getPointRadius,
+  layerId,
   onFeatureHover,
   onFeatureSelect,
   pointColor,
@@ -116,18 +120,21 @@ function PointFeatureLayer<
   features: readonly TFeature[];
   getPointColor?: (feature: TFeature) => string;
   getPointRadius?: (feature: TFeature) => number;
+  layerId?: string;
   onFeatureSelect?: (feature: TFeature | null) => void;
   pointColor: string;
   pointRadius: number;
 }) {
   const surface = useContext(MapSurfaceContext);
+  const generatedLayerId = useId();
+  const resolvedLayerId = layerId ?? `point-layer-${generatedLayerId}`;
 
   useEffect(() => {
     if (!surface || surface.display !== "flat") {
       return;
     }
 
-    return surface.registerFlatLayer("point-layer", ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
       layer.clearLayers();
 
       for (const feature of features) {
@@ -182,6 +189,7 @@ function PointFeatureLayer<
     getFeatureId,
     getPointColor,
     getPointRadius,
+    resolvedLayerId,
     onFeatureHover,
     onFeatureSelect,
     pointColor,
@@ -255,6 +263,7 @@ export function BubbleLayer<TProperties = Record<string, unknown>>({
   filterPoint,
   getBubbleColor,
   getWeight,
+  layerId,
   maxRadius,
   maxWeight,
   minRadius,
@@ -283,6 +292,7 @@ export function BubbleLayer<TProperties = Record<string, unknown>>({
       features={features}
       getPointColor={(feature) => getBubbleColor?.(feature) ?? bubbleColor}
       getPointRadius={(feature) => feature.radius}
+      layerId={layerId}
       onFeatureSelect={onFeatureSelect}
       pointColor={bubbleColor}
       pointRadius={6}

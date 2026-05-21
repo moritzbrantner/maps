@@ -3,6 +3,8 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BubbleMap,
   BeeLineMeasurementLayer,
+  BubbleLayer,
+  ClusterLayer,
   ClusteredMap,
   FlowLayer,
   FlowMap,
@@ -26,6 +28,15 @@ type DemoPointProperties = {
 };
 
 type DemoView = "clusters" | "points" | "heat" | "flows" | "composed" | "temporal" | "globe";
+type DemoLayerKind = "clusters" | "points" | "bubbles" | "heat" | "flows";
+
+type DemoLayerConfig = {
+  color: string;
+  enabled: boolean;
+  id: string;
+  kind: DemoLayerKind;
+  name: string;
+};
 
 const demoPoints: Array<MapPoint<DemoPointProperties>> = [
   point("berlin", "Berlin", "DACH", 52.52, 13.405, 940),
@@ -94,10 +105,45 @@ const views: Array<{ id: DemoView; label: string }> = [
   { id: "globe", label: "Globe" },
 ];
 
+const layerKinds: Array<{ id: DemoLayerKind; label: string }> = [
+  { id: "points", label: "Points" },
+  { id: "bubbles", label: "Bubbles" },
+  { id: "heat", label: "Heat" },
+  { id: "flows", label: "Flows" },
+  { id: "clusters", label: "Clusters" },
+];
+
+const layerColors = ["#0f172a", "#0f766e", "#2563eb", "#b45309", "#be123c"];
+
+const initialLayers: DemoLayerConfig[] = [
+  {
+    color: "#0f766e",
+    enabled: true,
+    id: "layer-heat-1",
+    kind: "heat",
+    name: "Heat 1",
+  },
+  {
+    color: "#b45309",
+    enabled: true,
+    id: "layer-flows-1",
+    kind: "flows",
+    name: "Flows 1",
+  },
+  {
+    color: "#0f172a",
+    enabled: true,
+    id: "layer-points-1",
+    kind: "points",
+    name: "Points 1",
+  },
+];
+
 export function App() {
   const [view, setView] = useState<DemoView>("clusters");
   const [selectedRegion, setSelectedRegion] = useState("all");
   const [isMeasuring, setIsMeasuring] = useState(false);
+  const [layers, setLayers] = useState<DemoLayerConfig[]>(initialLayers);
   const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
   const [viewport, setViewport] = useState<MapViewState>({
     center: [13.405, 52.52],
@@ -110,6 +156,39 @@ export function App() {
         : demoPoints.filter((item) => item.properties?.region === selectedRegion),
     [selectedRegion],
   );
+  const addLayer = (kind: DemoLayerKind) => {
+    setLayers((current) => {
+      const nextNumber = current.filter((layer) => layer.kind === kind).length + 1;
+      const color = layerColors[current.length % layerColors.length];
+
+      return [
+        ...current,
+        {
+          color,
+          enabled: true,
+          id: `layer-${kind}-${Date.now()}-${current.length}`,
+          kind,
+          name: `${getLayerKindLabel(kind)} ${nextNumber}`,
+        },
+      ];
+    });
+  };
+  const updateLayer = (id: string, patch: Partial<DemoLayerConfig>) => {
+    setLayers((current) =>
+      current.map((layer) =>
+        layer.id === id
+          ? {
+              ...layer,
+              ...patch,
+              name: patch.kind && patch.kind !== layer.kind ? getLayerKindLabel(patch.kind) : layer.name,
+            }
+          : layer,
+      ),
+    );
+  };
+  const removeLayer = (id: string) => {
+    setLayers((current) => current.filter((layer) => layer.id !== id));
+  };
 
   return (
     <main className="demo-shell">
@@ -160,7 +239,7 @@ export function App() {
 
       <section className="demo-stage">
         <div className="demo-map-frame">
-          {renderMap(view, visiblePoints, measurements, setMeasurements, isMeasuring, setViewport)}
+          {renderMap(view, visiblePoints, measurements, setMeasurements, isMeasuring, setViewport, layers)}
         </div>
         <aside className="demo-inspector" aria-label="Current dataset">
           <h2>Dataset</h2>
@@ -185,6 +264,74 @@ export function App() {
               <dd>{measurements.length}</dd>
             </div>
           </dl>
+          {view === "composed" ? (
+            <div className="demo-layer-manager" aria-label="Layer manager">
+              <div className="demo-layer-manager__header">
+                <h2>Layers</h2>
+                <div className="demo-layer-add">
+                  {layerKinds.map((kind) => (
+                    <button
+                      className="demo-button demo-button--compact"
+                      key={kind.id}
+                      type="button"
+                      onClick={() => addLayer(kind.id)}
+                    >
+                      + {kind.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="demo-layer-list">
+                {layers.map((layer) => (
+                  <div className="demo-layer-row" key={layer.id}>
+                    <label className="demo-layer-toggle">
+                      <input
+                        checked={layer.enabled}
+                        type="checkbox"
+                        onChange={(event) => updateLayer(layer.id, { enabled: event.target.checked })}
+                      />
+                      <span>{layer.name}</span>
+                    </label>
+                    <label className="demo-field">
+                      <span>Type</span>
+                      <select
+                        value={layer.kind}
+                        onChange={(event) =>
+                          updateLayer(layer.id, { kind: event.target.value as DemoLayerKind })
+                        }
+                      >
+                        {layerKinds.map((kind) => (
+                          <option key={kind.id} value={kind.id}>
+                            {kind.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="demo-layer-colors" aria-label={`${layer.name} color`}>
+                      {layerColors.map((color) => (
+                        <button
+                          aria-pressed={layer.color === color}
+                          className="demo-color-swatch"
+                          key={color}
+                          style={{ background: color }}
+                          title={color}
+                          type="button"
+                          onClick={() => updateLayer(layer.id, { color })}
+                        />
+                      ))}
+                    </div>
+                    <button
+                      className="demo-button demo-button--compact"
+                      type="button"
+                      onClick={() => removeLayer(layer.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </aside>
       </section>
     </main>
@@ -198,6 +345,7 @@ function renderMap(
   setMeasurements: Dispatch<SetStateAction<MapBeeLineMeasurement[]>>,
   isMeasuring: boolean,
   setViewport: Dispatch<SetStateAction<MapViewState>>,
+  layers: DemoLayerConfig[],
 ) {
   const sharedMeasurementProps = {
     measurementMode: isMeasuring ? ("bee-line" as const) : ("none" as const),
@@ -261,14 +409,8 @@ function renderMap(
           onViewStateChange={setViewport}
           style={{ minHeight: 620 }}
         >
-          <HeatLayer points={points} weightMetric="demand" />
-          <FlowLayer flowColor="#7c2d12" flows={demoFlows} weightMetric="trips" />
-          <PointLayer
-            pointColor="#0f172a"
-            points={points}
-            renderFeatureTooltip={(feature) => feature.point.label}
-          />
-          <BeeLineMeasurementLayer {...sharedMeasurementProps} />
+          {layers.filter((layer) => layer.enabled).map((layer) => renderComposedLayer(layer, points))}
+          <BeeLineMeasurementLayer {...sharedMeasurementProps} layerId="composed-measurements" />
         </MapView>
       );
     case "temporal":
@@ -313,6 +455,84 @@ function renderMap(
         />
       );
   }
+}
+
+function renderComposedLayer(
+  layer: DemoLayerConfig,
+  points: Array<MapPoint<DemoPointProperties>>,
+) {
+  switch (layer.kind) {
+    case "bubbles":
+      return (
+        <BubbleLayer
+          bubbleColor={layer.color}
+          key={layer.id}
+          layerId={layer.id}
+          maxRadius={28}
+          points={points}
+          renderFeatureTooltip={(feature) => feature.point.label}
+          weightMetric="demand"
+        />
+      );
+    case "clusters":
+      return (
+        <ClusterLayer
+          clusterRadius={72}
+          key={layer.id}
+          layerId={layer.id}
+          points={points}
+          renderFeatureTooltip={(feature) =>
+            feature.kind === "cluster" ? feature.pointCountAbbreviated : feature.point.label
+          }
+        />
+      );
+    case "flows":
+      return (
+        <FlowLayer
+          flowColor={layer.color}
+          flows={demoFlows}
+          key={layer.id}
+          layerId={layer.id}
+          maxWidth={16}
+          showEndpoints
+          weightMetric="trips"
+        />
+      );
+    case "heat":
+      return (
+        <HeatLayer
+          heatmapColorRamp={getHeatLayerColorRamp(layer.color)}
+          key={layer.id}
+          layerId={layer.id}
+          points={points}
+          weightMetric="demand"
+        />
+      );
+    case "points":
+    default:
+      return (
+        <PointLayer
+          key={layer.id}
+          layerId={layer.id}
+          pointColor={layer.color}
+          points={points}
+          renderFeatureTooltip={(feature) => feature.point.label}
+        />
+      );
+  }
+}
+
+function getLayerKindLabel(kind: DemoLayerKind) {
+  return layerKinds.find((item) => item.id === kind)?.label ?? "Layer";
+}
+
+function getHeatLayerColorRamp(color: string) {
+  return [
+    [0, "rgba(15, 23, 42, 0)"],
+    [0.18, "#67e8f9"],
+    [0.58, color],
+    [1, "#dc2626"],
+  ] as const;
 }
 
 function point(

@@ -415,14 +415,30 @@ export function MapView({
           layer.group.clearLayers();
         }
 
-        if (layer) {
-          layersRef.current.set(id, {
-            ...layer,
-            render({ layer: currentLayer }) {
-              currentLayer.clearLayers();
-            },
-          });
+        if (!layer) {
+          return;
         }
+
+        const clearRender: FlatLayerRender = ({ layer: currentLayer }) => {
+          currentLayer.clearLayers();
+        };
+
+        layersRef.current.set(id, {
+          ...layer,
+          render: clearRender,
+        });
+
+        queueMicrotask(() => {
+          const current = layersRef.current.get(id);
+
+          if (current?.render !== clearRender) {
+            return;
+          }
+
+          current.group?.clearLayers();
+          current.group?.remove?.();
+          layersRef.current.delete(id);
+        });
       };
     },
     [isMeasuring],

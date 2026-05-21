@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useId, useState } from "react";
 
 import { toLeafletLatLng } from "./map-display";
 import { MapSurfaceContext } from "./map-view";
@@ -18,7 +18,9 @@ import {
   type MapMeasurementProps,
 } from "./measurement";
 
-export type BeeLineMeasurementLayerProps = MapMeasurementProps;
+export type BeeLineMeasurementLayerProps = MapMeasurementProps & {
+  layerId?: string;
+};
 
 export function BeeLineMeasurementLayer({
   measurementDistanceFormat = "metric",
@@ -26,11 +28,14 @@ export function BeeLineMeasurementLayer({
   measurementLineColor = "#0f766e",
   measurementMode = "none",
   measurements = [],
+  layerId,
   onMeasurementCreate,
   onMeasurementDraftChange,
   onMeasurementSelect,
 }: BeeLineMeasurementLayerProps) {
   const surface = useContext(MapSurfaceContext);
+  const generatedLayerId = useId();
+  const resolvedLayerId = layerId ?? `measurement-layer-${generatedLayerId}`;
   const [draft, setDraft] = useState<MapBeeLineMeasurementDraft | null>(null);
   const isMeasuring = measurementMode === "bee-line";
   const draftLineColor = measurementDraftLineColor ?? measurementLineColor;
@@ -55,7 +60,7 @@ export function BeeLineMeasurementLayer({
       return;
     }
 
-    return surface.registerFlatLayer("measurement-layer", ({ layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ layer, leaflet, map }) => {
       layer.clearLayers();
 
       for (const measurement of measurements) {
@@ -94,6 +99,7 @@ export function BeeLineMeasurementLayer({
     measurementLineColor,
     measurements,
     onMeasurementSelect,
+    resolvedLayerId,
     surface,
   ]);
 

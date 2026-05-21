@@ -4,6 +4,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   BubbleMap,
   FlowMap,
+  MapView,
+  PointLayer,
   PointMap,
   createBubbleMapFeatures,
   createFlowMapFeatures,
@@ -273,6 +275,68 @@ describe("@moritzbrantner/maps additional map kinds", () => {
         type: "circleMarker",
       },
     ]);
+  });
+
+  test("renders multiple flat layers of the same kind independently", async () => {
+    const { rerender } = render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        mapLabel="Composed layers"
+        showAttributionControl={false}
+      >
+        <PointLayer
+          layerId="stores"
+          pointColor="#dc2626"
+          points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+        />
+        <PointLayer
+          layerId="warehouses"
+          pointColor="#2563eb"
+          points={[{ id: "warehouse-1", latitude: 42, longitude: -71 }]}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Composed layers").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(leafletMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
+      options: {
+        fillColor: "#dc2626",
+      },
+    });
+    expect(leafletMock.getLayerGroups()[1]?.layers[0]).toMatchObject({
+      options: {
+        fillColor: "#2563eb",
+      },
+    });
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        mapLabel="Composed layers"
+        showAttributionControl={false}
+      >
+        <PointLayer
+          layerId="stores"
+          pointColor="#16a34a"
+          points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      const layers = leafletMock.getLayerGroups().flatMap((group) => group.layers);
+
+      expect(layers).toEqual([
+        expect.objectContaining({
+          options: expect.objectContaining({
+            fillColor: "#16a34a",
+          }),
+        }),
+      ]);
+    });
   });
 
   test("renders globe bubble markers without Leaflet", () => {
