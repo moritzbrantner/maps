@@ -38,7 +38,7 @@ type DemoLayerConfig = {
   name: string;
 };
 
-const demoPoints: Array<MapPoint<DemoPointProperties>> = [
+const demoPointHubs: Array<MapPoint<DemoPointProperties>> = [
   point("berlin", "Berlin", "DACH", 52.52, 13.405, 940),
   point("hamburg", "Hamburg", "DACH", 53.551, 9.9937, 420),
   point("munich", "Munich", "DACH", 48.1351, 11.582, 610),
@@ -60,6 +60,8 @@ const demoPoints: Array<MapPoint<DemoPointProperties>> = [
   point("oslo", "Oslo", "North", 59.9139, 10.7522, 280),
   point("helsinki", "Helsinki", "North", 60.1699, 24.9384, 260),
 ];
+
+const demoPoints = createDenseDemoPoints(demoPointHubs);
 
 const demoFlows: MapFlow[] = [
   flow("berlin-paris", "Berlin to Paris", [13.405, 52.52], [2.3522, 48.8566], 180),
@@ -551,6 +553,34 @@ function point(
     metrics: { demand },
     properties: { city, region },
   };
+}
+
+function createDenseDemoPoints(
+  hubs: Array<MapPoint<DemoPointProperties>>,
+): Array<MapPoint<DemoPointProperties>> {
+  return hubs.flatMap((hub) => [
+    hub,
+    ...Array.from({ length: 18 }, (_, index) => {
+      const ring = Math.floor(index / 6) + 1;
+      const step = index % 6;
+      const angle = ((step * 60 + ring * 17) * Math.PI) / 180;
+      const radius = 0.12 * ring + (step % 3) * 0.025;
+      const latitude = hub.latitude + Math.sin(angle) * radius;
+      const longitudeScale = Math.max(Math.cos((hub.latitude * Math.PI) / 180), 0.35);
+      const longitude = hub.longitude + (Math.cos(angle) * radius) / longitudeScale;
+      const demand = Math.max(12, Math.round((hub.metrics?.demand ?? 120) * (0.16 + ring * 0.035)));
+      const placeNumber = String(index + 1).padStart(2, "0");
+
+      return point(
+        `${hub.id}-area-${placeNumber}`,
+        `${hub.properties?.city ?? hub.label} area ${placeNumber}`,
+        hub.properties?.region ?? "Other",
+        Number(latitude.toFixed(4)),
+        Number(longitude.toFixed(4)),
+        demand,
+      );
+    }),
+  ]);
 }
 
 function flow(
