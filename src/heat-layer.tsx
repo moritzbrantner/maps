@@ -134,7 +134,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ layer, leaflet, map }) => {
       layer.clearLayers();
 
       if (map.getZoom() > heatmapMaxZoom) {
@@ -146,29 +146,17 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
         zoom: map.getZoom(),
       });
-      const safeOpacity = clamp(heatmapOpacity, 0, 1);
 
-      for (const feature of data.features) {
-        const [longitude, latitude] = feature.geometry.coordinates;
-        const normalizedWeight = clamp(feature.properties.weight, 0, 1);
-        const markerRadius =
-          resolveHeatLayerRadius(heatmapRadius, map.getZoom()) *
-          Math.max(0.35, Math.sqrt(normalizedWeight)) *
-          Math.max(0, heatmapIntensity);
-
-        leaflet
-          .circleMarker([latitude, longitude], {
-            className: "mb-maps__heat-marker",
-            color: "transparent",
-            fillColor: resolveHeatLayerColor(heatmapColorRamp, normalizedWeight),
-            fillOpacity: safeOpacity * Math.min(1, 0.35 + normalizedWeight * 0.65),
-            interactive: !isMeasuring,
-            opacity: 0,
-            radius: markerRadius,
-            weight: 0,
-          })
-          .addTo(layer);
-      }
+      renderHeatLayerLevelSurface({
+        colorRamp: heatmapColorRamp,
+        data,
+        intensity: heatmapIntensity,
+        layer,
+        leaflet,
+        map,
+        opacity: heatmapOpacity,
+        radius: heatmapRadius,
+      });
     });
   }, [
     densityIndex,
@@ -285,6 +273,143 @@ export function createHeatLayerDensityIndex<TProperties = Record<string, unknown
     maxWeight: effectiveMaxWeight,
     pointCount: weightedPoints.length,
   };
+}
+
+function renderHeatLayerLevelSurface({
+  colorRamp,
+  data,
+  intensity,
+  layer,
+  leaflet,
+  map,
+  opacity,
+  radius,
+}: {
+  colorRamp: readonly HeatLayerColorStop[];
+  data: HeatLayerFeatureCollection;
+  intensity: number;
+  layer: import("leaflet").LayerGroup;
+  leaflet: typeof import("leaflet");
+  map: import("leaflet").Map;
+  opacity: number;
+  radius: HeatLayerRadius;
+}) {
+  const viewport = map.getContainer();
+  const width = viewport.clientWidth;
+  const height = viewport.clientHeight;
+  const baseRadius = resolveHeatLayerRadius(radius, map.getZoom()) * Math.max(0, intensity);
+  const influenceRadius = Math.max(24, baseRadius * 2.6);
+  const cellSize = clamp(Math.round(influenceRadius / 3), 18, 42);
+  const safeOpacity = clamp(opacity, 0, 1);
+  const sources = data.features
+    .map((feature) => {
+      const [longitude, latitude] = feature.geometry.coordinates;
+      const point = map.latLngToContainerPoint(toLeafletLatLng([longitude, latitude]));
+
+      return {
+        point,
+        weight: clamp(feature.properties.weight, 0, Number.POSITIVE_INFINITY),
+      };
+    })
+    .filter((source) => source.weight > 0);
+
+  if (width <= 0 || height <= 0 || sources.length === 0 || influenceRadius <= 0) {
+    return;
+  }
+
+  const cells: HeatLayerSurfaceCell[] = [];
+  const startX = -cellSize;
+  const startY = -cellSize;
+  const endX = width + cellSize;
+  const endY = height + cellSize;
+
+  for (let y = startY; y < endY; y += cellSize) {
+    for (let x = startX; x < endX; x += cellSize) {
+      const centerX = x + cellSize / 2;
+      const centerY = y + cellSize / 2;
+      const density = getHeatLayerCellDensity(sources, centerX, centerY, influenceRadius);
+
+      if (density > 0) {
+        cells.push({ density, x, y });
+      }
+    }
+  }
+
+  const maxDensity = Math.max(1, ...cells.map((cell) => cell.density));
+
+  for (const cell of cells) {
+    const normalizedDensity = clamp(cell.density / maxDensity, 0, 1);
+
+    if (normalizedDensity < 0.025) {
+      continue;
+    }
+
+    const westX = clamp(cell.x, 0, width);
+    const eastX = clamp(cell.x + cellSize, 0, width);
+    const northY = clamp(cell.y, 0, height);
+    const southY = clamp(cell.y + cellSize, 0, height);
+
+    if (westX >= eastX || northY >= southY) {
+      continue;
+    }
+
+    const northWest = map.containerPointToLatLng([westX, northY]);
+    const southEast = map.containerPointToLatLng([eastX, southY]);
+    const color = resolveHeatLayerColor(colorRamp, normalizedDensity);
+
+    leaflet
+      .rectangle(
+        [
+          [southEast.lat, northWest.lng],
+          [northWest.lat, southEast.lng],
+        ],
+        {
+          className: "mb-maps__heat-cell",
+          color,
+          fillColor: color,
+          fillOpacity: safeOpacity * Math.min(1, 0.22 + normalizedDensity * 0.78),
+          interactive: false,
+          opacity: safeOpacity * 0.22,
+          stroke: false,
+          weight: 0,
+        },
+      )
+      .addTo(layer);
+  }
+}
+
+type HeatLayerSurfaceCell = {
+  density: number;
+  x: number;
+  y: number;
+};
+
+function getHeatLayerCellDensity(
+  sources: readonly {
+    point: { x: number; y: number };
+    weight: number;
+  }[],
+  x: number,
+  y: number,
+  influenceRadius: number,
+) {
+  const radiusSquared = influenceRadius * influenceRadius;
+  let density = 0;
+
+  for (const source of sources) {
+    const dx = source.point.x - x;
+    const dy = source.point.y - y;
+    const distanceSquared = dx * dx + dy * dy;
+
+    if (distanceSquared > radiusSquared) {
+      continue;
+    }
+
+    const falloff = Math.exp((-3 * distanceSquared) / radiusSquared);
+    density += source.weight * falloff;
+  }
+
+  return density;
 }
 
 function createHeatLayerFeatureCollectionFromAggregates<TProperties>(

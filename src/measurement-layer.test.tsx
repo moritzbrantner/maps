@@ -15,6 +15,7 @@ import {
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
+    bounds?: [[number, number], [number, number]];
     handlers: Map<string, Handler[]>;
     latLng?: [number, number];
     latLngs?: unknown;
@@ -198,6 +199,13 @@ const leafletMock = vi.hoisted(() => {
       createLayer("polygon", undefined, options, latLngs),
     polyline: (latLngs: unknown, options: Record<string, unknown>) =>
       createLayer("polyline", undefined, options, latLngs),
+    rectangle: (
+      bounds: [[number, number], [number, number]],
+      options: Record<string, unknown>,
+    ) => ({
+      ...createLayer("rectangle", undefined, options),
+      bounds,
+    }),
     reset: () => {
       maps.length = 0;
       layerGroups.length = 0;

@@ -14,6 +14,7 @@ import {
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
+    bounds?: [[number, number], [number, number]];
     latLng?: [number, number];
     options?: Record<string, unknown>;
     type: string;
@@ -78,6 +79,20 @@ const leafletMock = vi.hoisted(() => {
       return this.zoom;
     }
 
+    latLngToContainerPoint([latitude, longitude]: [number, number]) {
+      return {
+        x: ((longitude + 180) / 360) * this.container.clientWidth,
+        y: ((85 - latitude) / 170) * this.container.clientHeight,
+      };
+    }
+
+    containerPointToLatLng([x, y]: [number, number]) {
+      return {
+        lat: 85 - (y / this.container.clientHeight) * 170,
+        lng: -180 + (x / this.container.clientWidth) * 360,
+      };
+    }
+
     off() {}
 
     on(event: string, handler: Handler) {
@@ -115,6 +130,13 @@ const leafletMock = vi.hoisted(() => {
     getMaps: () => maps,
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
+    rectangle: (
+      bounds: [[number, number], [number, number]],
+      options: Record<string, unknown>,
+    ) => ({
+      ...createLayer("rectangle", undefined, options),
+      bounds,
+    }),
     reset: () => {
       maps.length = 0;
       layerGroups.length = 0;
@@ -280,7 +302,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(data.features[0]?.properties).not.toHaveProperty("__moritzbrantnerHeatMapWeight");
   });
 
-  test("renders weighted Leaflet heat markers", async () => {
+  test("renders weighted Leaflet heat level cells", async () => {
     render(
       <HeatMap
         heatmapIntensity={1.4}
@@ -305,18 +327,23 @@ describe("@moritzbrantner/maps heat maps", () => {
       expect(screen.getByLabelText("Demand heat map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const marker = leafletMock
+    const cell = leafletMock
       .getLayerGroups()[0]
-      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-marker");
+      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-cell");
 
-    expect(marker).toMatchObject({
-      latLng: [40, -74],
+    expect(cell).toMatchObject({
       options: {
-        fillOpacity: 0.84,
+        fillOpacity: expect.any(Number),
+        interactive: false,
+        stroke: false,
       },
-      type: "circleMarker",
+      type: "rectangle",
     });
-    expect(marker?.options?.radius).toBeGreaterThan(0);
+    expect(cell?.bounds).toHaveLength(2);
+    expect(cell?.options?.fillOpacity).toBeGreaterThan(0);
+    expect(
+      leafletMock.getLayerGroups()[0]?.layers.some((layer) => layer.type === "circleMarker"),
+    ).toBe(false);
   });
 
   test("renders heat markers on the globe display", () => {
@@ -401,13 +428,12 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const marker = leafletMock
+    const cell = leafletMock
       .getLayerGroups()[0]
-      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-marker");
+      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-cell");
 
-    expect(marker).toMatchObject({
-      latLng: [15, 30],
-      type: "circleMarker",
+    expect(cell).toMatchObject({
+      type: "rectangle",
     });
   });
 });
