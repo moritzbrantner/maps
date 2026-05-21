@@ -18,6 +18,7 @@ const leafletMock = vi.hoisted(() => {
     latLng?: [number, number];
     options?: Record<string, unknown>;
     type: string;
+    url?: string;
   };
 
   const maps: MockMap[] = [];
@@ -128,6 +129,15 @@ const leafletMock = vi.hoisted(() => {
       createLayer("circleMarker", latLng, options),
     getLayerGroups: () => layerGroups,
     getMaps: () => maps,
+    imageOverlay: (
+      url: string,
+      bounds: [[number, number], [number, number]],
+      options: Record<string, unknown>,
+    ) => ({
+      ...createLayer("imageOverlay", undefined, options),
+      bounds,
+      url,
+    }),
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
     rectangle: (
@@ -302,7 +312,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(data.features[0]?.properties).not.toHaveProperty("__moritzbrantnerHeatMapWeight");
   });
 
-  test("renders weighted Leaflet heat level cells", async () => {
+  test("renders weighted Leaflet heat as a smooth interpolated surface by default", async () => {
     render(
       <HeatMap
         heatmapIntensity={1.4}
@@ -327,23 +337,59 @@ describe("@moritzbrantner/maps heat maps", () => {
       expect(screen.getByLabelText("Demand heat map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const cell = leafletMock
+    const surface = leafletMock
       .getLayerGroups()[0]
-      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-cell");
+      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated");
 
-    expect(cell).toMatchObject({
+    expect(surface).toMatchObject({
       options: {
-        fillOpacity: expect.any(Number),
         interactive: false,
-        stroke: false,
+        opacity: 0.84,
       },
-      type: "rectangle",
+      type: "imageOverlay",
     });
-    expect(cell?.bounds).toHaveLength(2);
-    expect(cell?.options?.fillOpacity).toBeGreaterThan(0);
+    expect(surface?.bounds).toHaveLength(2);
+    expect(surface?.url).toContain("data:image/svg+xml");
+    expect(decodeURIComponent(surface?.url ?? "")).toContain("heat-soften");
     expect(
-      leafletMock.getLayerGroups()[0]?.layers.some((layer) => layer.type === "circleMarker"),
+      leafletMock
+        .getLayerGroups()[0]
+        ?.layers.some((layer) => layer.type === "circleMarker" || layer.type === "rectangle"),
     ).toBe(false);
+  });
+
+  test("supports a data-anchored heat surface mode", async () => {
+    render(
+      <HeatMap
+        heatmapSurfaceMode="data"
+        mapLabel="Data heat map"
+        points={[
+          {
+            id: "a",
+            latitude: 40,
+            longitude: -74,
+            metrics: {
+              demand: 6,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Data heat map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const surface = leafletMock
+      .getLayerGroups()[0]
+      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data");
+
+    expect(surface).toMatchObject({
+      type: "imageOverlay",
+    });
+    expect(decodeURIComponent(surface?.url ?? "")).toContain("<circle");
   });
 
   test("renders heat markers on the globe display", () => {
@@ -428,12 +474,12 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const cell = leafletMock
+    const surface = leafletMock
       .getLayerGroups()[0]
-      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-cell");
+      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated");
 
-    expect(cell).toMatchObject({
-      type: "rectangle",
+    expect(surface).toMatchObject({
+      type: "imageOverlay",
     });
   });
 });

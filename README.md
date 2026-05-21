@@ -53,6 +53,9 @@ interactive orthographic globe:
 ## Heat maps
 
 Use `HeatMap` when users need density instead of discrete marker interaction.
+Flat heat maps default to `heatmapSurfaceMode="interpolated"` for a smooth
+temperature-map style surface. Use `heatmapSurfaceMode="data"` when the surface
+should stay anchored to the underlying data locations.
 
 ```tsx
 import { HeatMap } from "@moritzbrantner/maps";

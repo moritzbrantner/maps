@@ -43,7 +43,7 @@ import {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
-import { HeatLayer } from "./heat-layer";
+import { HeatLayer, type HeatLayerSurfaceMode } from "./heat-layer";
 import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
@@ -56,6 +56,8 @@ export type HeatMapWeightAccessor<TProperties = Record<string, unknown>> = (
 ) => number;
 
 export type HeatMapColorStop = readonly [density: number, color: string];
+
+export type HeatMapSurfaceMode = HeatLayerSurfaceMode;
 
 export type HeatMapRadius =
   | number
@@ -123,6 +125,7 @@ export type HeatMapProps<TProperties = Record<string, unknown>> =
     heatmapMaxZoom?: number;
     heatmapOpacity?: number;
     heatmapRadius?: HeatMapRadius;
+    heatmapSurfaceMode?: HeatMapSurfaceMode;
     initialViewState?: MapViewState;
     mapDisplay?: MapDisplayMode;
     mapLabel?: string;

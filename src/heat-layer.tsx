@@ -23,6 +23,8 @@ export type HeatLayerWeightAccessor<TProperties = Record<string, unknown>> = (
 
 export type HeatLayerColorStop = readonly [density: number, color: string];
 
+export type HeatLayerSurfaceMode = "data" | "interpolated";
+
 export type HeatLayerRadius =
   | number
   | {
@@ -65,6 +67,7 @@ export type HeatLayerProps<TProperties = Record<string, unknown>> =
     heatmapColorRamp?: readonly HeatLayerColorStop[];
     heatmapIntensity?: number;
     heatmapMaxZoom?: number;
+    heatmapSurfaceMode?: HeatLayerSurfaceMode;
     heatmapOpacity?: number;
     heatmapRadius?: HeatLayerRadius;
     layerId?: string;
@@ -96,6 +99,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     max: 42,
     min: 12,
   },
+  heatmapSurfaceMode = "interpolated",
   layerId,
   maxWeight,
   points,
@@ -147,13 +151,14 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         zoom: map.getZoom(),
       });
 
-      renderHeatLayerLevelSurface({
+      renderHeatLayerSurface({
         colorRamp: heatmapColorRamp,
         data,
         intensity: heatmapIntensity,
         layer,
         leaflet,
         map,
+        mode: heatmapSurfaceMode,
         opacity: heatmapOpacity,
         radius: heatmapRadius,
       });
@@ -165,6 +170,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     heatmapMaxZoom,
     heatmapOpacity,
     heatmapRadius,
+    heatmapSurfaceMode,
     resolvedLayerId,
     surface,
   ]);
@@ -275,13 +281,14 @@ export function createHeatLayerDensityIndex<TProperties = Record<string, unknown
   };
 }
 
-function renderHeatLayerLevelSurface({
+function renderHeatLayerSurface({
   colorRamp,
   data,
   intensity,
   layer,
   leaflet,
   map,
+  mode,
   opacity,
   radius,
 }: {
@@ -291,6 +298,7 @@ function renderHeatLayerLevelSurface({
   layer: import("leaflet").LayerGroup;
   leaflet: typeof import("leaflet");
   map: import("leaflet").Map;
+  mode: HeatLayerSurfaceMode;
   opacity: number;
   radius: HeatLayerRadius;
 }) {
@@ -299,7 +307,6 @@ function renderHeatLayerLevelSurface({
   const height = viewport.clientHeight;
   const baseRadius = resolveHeatLayerRadius(radius, map.getZoom()) * Math.max(0, intensity);
   const influenceRadius = Math.max(24, baseRadius * 2.6);
-  const cellSize = clamp(Math.round(influenceRadius / 3), 18, 42);
   const safeOpacity = clamp(opacity, 0, 1);
   const sources = data.features
     .map((feature) => {
@@ -317,6 +324,92 @@ function renderHeatLayerLevelSurface({
     return;
   }
 
+  const northWest = map.containerPointToLatLng([0, 0]);
+  const southEast = map.containerPointToLatLng([width, height]);
+  const svg =
+    mode === "data"
+      ? createHeatLayerDataSurfaceSvg({
+          colorRamp,
+          height,
+          influenceRadius,
+          sources,
+          width,
+        })
+      : createHeatLayerInterpolatedSurfaceSvg({
+          colorRamp,
+          height,
+          influenceRadius,
+          sources,
+          width,
+        });
+
+  leaflet
+    .imageOverlay(
+      createSvgDataUrl(svg),
+      [
+        [southEast.lat, northWest.lng],
+        [northWest.lat, southEast.lng],
+      ],
+      {
+        className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
+        interactive: false,
+        opacity: safeOpacity,
+      },
+    )
+    .addTo(layer);
+}
+
+type HeatLayerSurfaceCell = {
+  density: number;
+  x: number;
+  y: number;
+};
+
+function createHeatLayerDataSurfaceSvg({
+  colorRamp,
+  height,
+  influenceRadius,
+  sources,
+  width,
+}: {
+  colorRamp: readonly HeatLayerColorStop[];
+  height: number;
+  influenceRadius: number;
+  sources: readonly HeatLayerSurfaceSource[];
+  width: number;
+}) {
+  const blur = Math.max(6, influenceRadius * 0.16);
+  const circles = sources
+    .map((source) => {
+      const normalizedWeight = clamp(source.weight, 0, 1);
+      const radius = influenceRadius * (0.42 + Math.sqrt(normalizedWeight) * 0.5);
+      const opacity = Math.min(1, 0.22 + normalizedWeight * 0.78);
+
+      return `<circle cx="${roundSvgNumber(source.point.x)}" cy="${roundSvgNumber(
+        source.point.y,
+      )}" r="${roundSvgNumber(radius)}" fill="${escapeSvgAttribute(
+        resolveHeatLayerInterpolatedColor(colorRamp, normalizedWeight),
+      )}" opacity="${roundSvgNumber(opacity)}" />`;
+    })
+    .join("");
+
+  return createHeatLayerSvg({ blur, content: circles, height, width });
+}
+
+function createHeatLayerInterpolatedSurfaceSvg({
+  colorRamp,
+  height,
+  influenceRadius,
+  sources,
+  width,
+}: {
+  colorRamp: readonly HeatLayerColorStop[];
+  height: number;
+  influenceRadius: number;
+  sources: readonly HeatLayerSurfaceSource[];
+  width: number;
+}) {
+  const cellSize = resolveHeatLayerSampleSize(width, height, influenceRadius);
   const cells: HeatLayerSurfaceCell[] = [];
   const startX = -cellSize;
   const startY = -cellSize;
@@ -330,65 +423,63 @@ function renderHeatLayerLevelSurface({
       const density = getHeatLayerCellDensity(sources, centerX, centerY, influenceRadius);
 
       if (density > 0) {
-        cells.push({ density, x, y });
+        cells.push({ density, x: centerX, y: centerY });
       }
     }
   }
 
   const maxDensity = Math.max(1, ...cells.map((cell) => cell.density));
+  const sampleRadius = cellSize * 1.15;
+  const circles = cells
+    .map((cell) => {
+      const normalizedDensity = clamp(cell.density / maxDensity, 0, 1);
 
-  for (const cell of cells) {
-    const normalizedDensity = clamp(cell.density / maxDensity, 0, 1);
+      if (normalizedDensity < 0.015) {
+        return "";
+      }
 
-    if (normalizedDensity < 0.025) {
-      continue;
-    }
+      return `<circle cx="${roundSvgNumber(cell.x)}" cy="${roundSvgNumber(cell.y)}" r="${roundSvgNumber(
+        sampleRadius,
+      )}" fill="${escapeSvgAttribute(
+        resolveHeatLayerInterpolatedColor(colorRamp, normalizedDensity),
+      )}" opacity="${roundSvgNumber(Math.min(1, 0.28 + normalizedDensity * 0.72))}" />`;
+    })
+    .join("");
 
-    const westX = clamp(cell.x, 0, width);
-    const eastX = clamp(cell.x + cellSize, 0, width);
-    const northY = clamp(cell.y, 0, height);
-    const southY = clamp(cell.y + cellSize, 0, height);
-
-    if (westX >= eastX || northY >= southY) {
-      continue;
-    }
-
-    const northWest = map.containerPointToLatLng([westX, northY]);
-    const southEast = map.containerPointToLatLng([eastX, southY]);
-    const color = resolveHeatLayerColor(colorRamp, normalizedDensity);
-
-    leaflet
-      .rectangle(
-        [
-          [southEast.lat, northWest.lng],
-          [northWest.lat, southEast.lng],
-        ],
-        {
-          className: "mb-maps__heat-cell",
-          color,
-          fillColor: color,
-          fillOpacity: safeOpacity * Math.min(1, 0.22 + normalizedDensity * 0.78),
-          interactive: false,
-          opacity: safeOpacity * 0.22,
-          stroke: false,
-          weight: 0,
-        },
-      )
-      .addTo(layer);
-  }
+  return createHeatLayerSvg({
+    blur: Math.max(5, cellSize * 0.75),
+    content: circles,
+    height,
+    width,
+  });
 }
 
-type HeatLayerSurfaceCell = {
-  density: number;
-  x: number;
-  y: number;
+function resolveHeatLayerSampleSize(width: number, height: number, influenceRadius: number) {
+  const preferredCellSize = clamp(Math.round(influenceRadius / 7), 8, 18);
+  const maxSamples = 8_000;
+  const estimatedSamples =
+    Math.ceil((width + preferredCellSize * 2) / preferredCellSize) *
+    Math.ceil((height + preferredCellSize * 2) / preferredCellSize);
+
+  if (estimatedSamples <= maxSamples) {
+    return preferredCellSize;
+  }
+
+  return Math.ceil(
+    Math.sqrt(((width + preferredCellSize * 2) * (height + preferredCellSize * 2)) / maxSamples),
+  );
+}
+
+type HeatLayerSurfaceSource = {
+  point: {
+    x: number;
+    y: number;
+  };
+  weight: number;
 };
 
 function getHeatLayerCellDensity(
-  sources: readonly {
-    point: { x: number; y: number };
-    weight: number;
-  }[],
+  sources: readonly HeatLayerSurfaceSource[],
   x: number,
   y: number,
   influenceRadius: number,
@@ -410,6 +501,149 @@ function getHeatLayerCellDensity(
   }
 
   return density;
+}
+
+function createHeatLayerSvg({
+  blur,
+  content,
+  height,
+  width,
+}: {
+  blur: number;
+  content: string;
+  height: number;
+  width: number;
+}) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(width)}" height="${Math.ceil(
+    height,
+  )}" viewBox="0 0 ${roundSvgNumber(width)} ${roundSvgNumber(
+    height,
+  )}" preserveAspectRatio="none"><defs><filter id="heat-soften" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${roundSvgNumber(
+    blur,
+  )}" /></filter></defs><rect width="100%" height="100%" fill="transparent" /><g filter="url(#heat-soften)">${content}</g></svg>`;
+}
+
+function createSvgDataUrl(svg: string) {
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function resolveHeatLayerInterpolatedColor(
+  colorRamp: readonly HeatLayerColorStop[],
+  weight: number,
+) {
+  if (colorRamp.length === 0) {
+    return "#dc2626";
+  }
+
+  const sortedRamp = [...colorRamp].sort(([left], [right]) => left - right);
+  const normalizedWeight = clamp(weight, 0, 1);
+  const first = sortedRamp[0];
+
+  if (!first || normalizedWeight <= first[0]) {
+    return first?.[1] ?? "#dc2626";
+  }
+
+  for (let index = 1; index < sortedRamp.length; index += 1) {
+    const previous = sortedRamp[index - 1]!;
+    const next = sortedRamp[index]!;
+
+    if (normalizedWeight > next[0]) {
+      continue;
+    }
+
+    const previousColor = parseHeatLayerColor(previous[1]);
+    const nextColor = parseHeatLayerColor(next[1]);
+
+    if (!previousColor || !nextColor) {
+      return resolveHeatLayerColor(colorRamp, normalizedWeight);
+    }
+
+    const progress =
+      next[0] <= previous[0] ? 1 : clamp((normalizedWeight - previous[0]) / (next[0] - previous[0]), 0, 1);
+
+    return formatHeatLayerColor({
+      alpha: previousColor.alpha + (nextColor.alpha - previousColor.alpha) * progress,
+      blue: previousColor.blue + (nextColor.blue - previousColor.blue) * progress,
+      green: previousColor.green + (nextColor.green - previousColor.green) * progress,
+      red: previousColor.red + (nextColor.red - previousColor.red) * progress,
+    });
+  }
+
+  return sortedRamp[sortedRamp.length - 1]?.[1] ?? "#dc2626";
+}
+
+type HeatLayerParsedColor = {
+  alpha: number;
+  blue: number;
+  green: number;
+  red: number;
+};
+
+function parseHeatLayerColor(color: string): HeatLayerParsedColor | null {
+  const trimmedColor = color.trim();
+
+  if (trimmedColor === "transparent") {
+    return {
+      alpha: 0,
+      blue: 0,
+      green: 0,
+      red: 0,
+    };
+  }
+
+  const hexMatch = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(trimmedColor);
+
+  if (hexMatch?.[1]) {
+    const hex = hexMatch[1];
+    const normalizedHex =
+      hex.length === 3
+        ? hex
+            .split("")
+            .map((channel) => `${channel}${channel}`)
+            .join("")
+        : hex;
+
+    return {
+      alpha: 1,
+      blue: Number.parseInt(normalizedHex.slice(4, 6), 16),
+      green: Number.parseInt(normalizedHex.slice(2, 4), 16),
+      red: Number.parseInt(normalizedHex.slice(0, 2), 16),
+    };
+  }
+
+  const rgbMatch =
+    /^rgba?\(\s*([0-9.]+)(?:,|\s)\s*([0-9.]+)(?:,|\s)\s*([0-9.]+)(?:(?:,|\s*\/\s*)\s*([0-9.]+))?\s*\)$/i.exec(
+      trimmedColor,
+    );
+
+  if (!rgbMatch) {
+    return null;
+  }
+
+  return {
+    alpha: rgbMatch[4] === undefined ? 1 : clamp(Number(rgbMatch[4]), 0, 1),
+    blue: clamp(Number(rgbMatch[3]), 0, 255),
+    green: clamp(Number(rgbMatch[2]), 0, 255),
+    red: clamp(Number(rgbMatch[1]), 0, 255),
+  };
+}
+
+function formatHeatLayerColor(color: HeatLayerParsedColor) {
+  return `rgba(${Math.round(clamp(color.red, 0, 255))}, ${Math.round(
+    clamp(color.green, 0, 255),
+  )}, ${Math.round(clamp(color.blue, 0, 255))}, ${roundSvgNumber(clamp(color.alpha, 0, 1))})`;
+}
+
+function escapeSvgAttribute(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function roundSvgNumber(value: number) {
+  return Number(value.toFixed(3));
 }
 
 function createHeatLayerFeatureCollectionFromAggregates<TProperties>(

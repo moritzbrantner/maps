@@ -50,6 +50,7 @@ export {
 export {
   HeatLayer,
   type HeatLayerProps,
+  type HeatLayerSurfaceMode,
 } from "./heat-layer";
 export {
   FlowLayer,
@@ -74,6 +75,7 @@ export {
   type HeatMapFeatureProperties,
   type HeatMapProps,
   type HeatMapRadius,
+  type HeatMapSurfaceMode,
   type HeatMapWeightAccessor,
   type HeatMapWeightOptions,
 } from "./heat-map";

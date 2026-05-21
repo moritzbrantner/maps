@@ -116,7 +116,7 @@
     outline: 2px solid rgb(14 165 233 / 0.9);
   }
 
-  .mb-maps__heat-cell,
+  .mb-maps__heat-surface,
   .mb-maps__heat-marker {
     mix-blend-mode: multiply;
   }

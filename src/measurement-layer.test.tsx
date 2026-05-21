@@ -26,6 +26,7 @@ const leafletMock = vi.hoisted(() => {
       options?: Record<string, unknown>;
     };
     type: string;
+    url?: string;
     fire: (event: string, payload?: unknown) => void;
   };
 
@@ -191,6 +192,15 @@ const leafletMock = vi.hoisted(() => {
     divIcon: (options: Record<string, unknown>) => options,
     getLayerGroups: () => layerGroups,
     getMaps: () => maps,
+    imageOverlay: (
+      url: string,
+      bounds: [[number, number], [number, number]],
+      options: Record<string, unknown>,
+    ) => ({
+      ...createLayer("imageOverlay", undefined, options),
+      bounds,
+      url,
+    }),
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
     marker: (latLng: [number, number], options: Record<string, unknown>) =>
