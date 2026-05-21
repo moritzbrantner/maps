@@ -3,12 +3,44 @@
 import type { TileLayerOptions } from "leaflet";
 
 import { getBoundsFromPoints, type MapPoint } from "./aggregation";
+import type { MapCoordinate } from "./measurement";
 
 export type MapDisplayMode = "flat" | "globe";
 
 export type MapViewState = {
   center: [longitude: number, latitude: number];
   zoom: number;
+};
+
+export type MapViewStateChangeReason =
+  | "initial"
+  | "fit-to-data"
+  | "pan"
+  | "zoom"
+  | "cluster-expand"
+  | "prop-change"
+  | "programmatic";
+
+export type MapViewStateChangeContext = {
+  display: MapDisplayMode;
+  reason: MapViewStateChangeReason;
+};
+
+export type MapViewportProps = {
+  viewState?: MapViewState;
+  defaultViewState?: MapViewState;
+  initialViewState?: MapViewState;
+  onViewStateChange?: (
+    viewState: MapViewState,
+    context: MapViewStateChangeContext,
+  ) => void;
+};
+
+export type MapSurfaceController = {
+  display: MapDisplayMode;
+  fitToData: () => void;
+  getViewState: () => MapViewState;
+  setViewState: (viewState: MapViewState, reason?: MapViewStateChangeReason) => void;
 };
 
 export type RasterMapStyle = {
@@ -111,6 +143,52 @@ export function projectGlobeCoordinate(
         (cosCenterLatitude * sinLatitude -
           sinCenterLatitude * cosLatitude * cosDeltaLongitude),
   };
+}
+
+export function unprojectGlobePoint(
+  point: { x: number; y: number },
+  viewState: GlobeViewState,
+): MapCoordinate | null {
+  const radius = getGlobeRadius(viewState.zoom);
+  const normalizedX = (point.x - GLOBE_VIEWBOX_WIDTH / 2) / radius;
+  const normalizedY = -(point.y - GLOBE_VIEWBOX_HEIGHT / 2) / radius;
+  const radiusSquared = normalizedX ** 2 + normalizedY ** 2;
+
+  if (radiusSquared > 1) {
+    return null;
+  }
+
+  const rho = Math.sqrt(radiusSquared);
+  const centerLongitude = viewState.center[0] * DEG_TO_RAD;
+  const centerLatitude = viewState.center[1] * DEG_TO_RAD;
+
+  if (rho === 0) {
+    return [normalizeLongitude(viewState.center[0]), clampLatitude(viewState.center[1])];
+  }
+
+  const angularDistance = Math.asin(Math.min(1, rho));
+  const sinAngularDistance = Math.sin(angularDistance);
+  const cosAngularDistance = Math.cos(angularDistance);
+  const sinCenterLatitude = Math.sin(centerLatitude);
+  const cosCenterLatitude = Math.cos(centerLatitude);
+  const latitude = Math.asin(
+    cosAngularDistance * sinCenterLatitude +
+      (normalizedY * sinAngularDistance * cosCenterLatitude) / rho,
+  );
+  const longitude =
+    centerLongitude +
+    Math.atan2(
+      normalizedX * sinAngularDistance,
+      rho * cosCenterLatitude * cosAngularDistance -
+        normalizedY * sinCenterLatitude * sinAngularDistance,
+    );
+  const coordinate: MapCoordinate = [
+    normalizeLongitude(longitude / DEG_TO_RAD),
+    clampLatitude(latitude / DEG_TO_RAD),
+  ];
+  const projected = projectGlobeCoordinate(coordinate, viewState);
+
+  return projected.visible ? coordinate : null;
 }
 
 export function getGlobeRadius(zoom: number) {

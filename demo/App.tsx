@@ -2,15 +2,21 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 
 import {
   BubbleMap,
+  BeeLineMeasurementLayer,
   ClusteredMap,
+  FlowLayer,
   FlowMap,
+  HeatLayer,
   HeatMap,
+  MapView,
   PointMap,
+  PointLayer,
   TemporalClusteredMap,
   type MapBeeLineMeasurement,
   type MapBeeLineMeasurementResult,
   type MapFlow,
   type MapPoint,
+  type MapViewState,
   type TemporalMapTrack,
 } from "@moritzbrantner/maps";
 
@@ -19,7 +25,7 @@ type DemoPointProperties = {
   region: string;
 };
 
-type DemoView = "clusters" | "points" | "heat" | "flows" | "temporal" | "globe";
+type DemoView = "clusters" | "points" | "heat" | "flows" | "composed" | "temporal" | "globe";
 
 const demoPoints: Array<MapPoint<DemoPointProperties>> = [
   point("berlin", "Berlin", "DACH", 52.52, 13.405, 940),
@@ -83,6 +89,7 @@ const views: Array<{ id: DemoView; label: string }> = [
   { id: "points", label: "Points" },
   { id: "heat", label: "Heat" },
   { id: "flows", label: "Flows" },
+  { id: "composed", label: "Composed" },
   { id: "temporal", label: "Timeline" },
   { id: "globe", label: "Globe" },
 ];
@@ -92,6 +99,10 @@ export function App() {
   const [selectedRegion, setSelectedRegion] = useState("all");
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
+  const [viewport, setViewport] = useState<MapViewState>({
+    center: [13.405, 52.52],
+    zoom: 5,
+  });
   const visiblePoints = useMemo(
     () =>
       selectedRegion === "all"
@@ -148,10 +159,19 @@ export function App() {
       </nav>
 
       <section className="demo-stage">
-        <div className="demo-map-frame">{renderMap(view, visiblePoints, measurements, setMeasurements, isMeasuring)}</div>
+        <div className="demo-map-frame">
+          {renderMap(view, visiblePoints, measurements, setMeasurements, isMeasuring, setViewport)}
+        </div>
         <aside className="demo-inspector" aria-label="Current dataset">
           <h2>Dataset</h2>
           <dl>
+            <div>
+              <dt>Viewport</dt>
+              <dd>
+                {viewport.center[0].toFixed(2)}, {viewport.center[1].toFixed(2)} /{" "}
+                {viewport.zoom.toFixed(1)}
+              </dd>
+            </div>
             <div>
               <dt>Points</dt>
               <dd>{visiblePoints.length}</dd>
@@ -177,6 +197,7 @@ function renderMap(
   measurements: MapBeeLineMeasurement[],
   setMeasurements: Dispatch<SetStateAction<MapBeeLineMeasurement[]>>,
   isMeasuring: boolean,
+  setViewport: Dispatch<SetStateAction<MapViewState>>,
 ) {
   const sharedMeasurementProps = {
     measurementMode: isMeasuring ? ("bee-line" as const) : ("none" as const),
@@ -197,8 +218,16 @@ function renderMap(
       return (
         <PointMap
           {...sharedMeasurementProps}
+          onViewStateChange={setViewport}
           points={points}
           pointColor="#115e59"
+          renderFeaturePopup={(feature) => (
+            <div className="demo-popup">
+              <strong>{feature.point.label}</strong>
+              <span>{feature.point.metrics.demand ?? 0} demand</span>
+            </div>
+          )}
+          renderFeatureTooltip={(feature) => feature.point.label}
           style={{ minHeight: 620 }}
         />
       );
@@ -207,6 +236,7 @@ function renderMap(
         <HeatMap
           {...sharedMeasurementProps}
           getWeight={(item) => item.metrics?.demand ?? 1}
+          onViewStateChange={setViewport}
           points={points}
           style={{ minHeight: 620 }}
         />
@@ -218,10 +248,28 @@ function renderMap(
           flowColor="#b45309"
           flows={demoFlows}
           maxWidth={18}
+          onViewStateChange={setViewport}
           showEndpoints
           weightMetric="trips"
           style={{ minHeight: 620 }}
         />
+      );
+    case "composed":
+      return (
+        <MapView
+          defaultViewState={{ center: [9.8, 50.8], zoom: 5 }}
+          onViewStateChange={setViewport}
+          style={{ minHeight: 620 }}
+        >
+          <HeatLayer points={points} weightMetric="demand" />
+          <FlowLayer flowColor="#7c2d12" flows={demoFlows} weightMetric="trips" />
+          <PointLayer
+            pointColor="#0f172a"
+            points={points}
+            renderFeatureTooltip={(feature) => feature.point.label}
+          />
+          <BeeLineMeasurementLayer {...sharedMeasurementProps} />
+        </MapView>
       );
     case "temporal":
       return (
@@ -237,9 +285,12 @@ function renderMap(
     case "globe":
       return (
         <BubbleMap
+          {...sharedMeasurementProps}
           bubbleColor="#0f766e"
           mapDisplay="globe"
+          onViewStateChange={setViewport}
           points={points}
+          renderFeatureTooltip={(feature) => feature.point.label}
           style={{ minHeight: 620 }}
           weightMetric="demand"
         />
@@ -250,7 +301,14 @@ function renderMap(
         <ClusteredMap
           {...sharedMeasurementProps}
           clusterRadius={76}
+          onViewStateChange={setViewport}
           points={points}
+          renderFeaturePopup={(feature) =>
+            feature.kind === "cluster" ? `${feature.pointCount} locations` : feature.point.label
+          }
+          renderFeatureTooltip={(feature) =>
+            feature.kind === "cluster" ? feature.pointCountAbbreviated : feature.point.label
+          }
           style={{ minHeight: 620 }}
         />
       );

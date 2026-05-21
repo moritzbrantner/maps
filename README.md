@@ -5,6 +5,7 @@ React map components, density aggregation helpers, and temporal geo features for
 ## Main APIs
 
 - `PointMap`, `BubbleMap`, `FlowMap`, `ClusteredMap`, `HeatMap`, `TemporalClusteredMap`, and `TemporalHeatMap`
+- `MapView` plus `PointLayer`, `BubbleLayer`, `ClusterLayer`, `HeatLayer`, `FlowLayer`, and `BeeLineMeasurementLayer`
 - `createPointAggregationIndex(...)`, `createHeatMapDensityIndex(...)`, and `createTemporalMapTracksFromGeoJson(...)`
 - `createTemporalGeoJsonTracksFromGeoJson(...)`, `getTemporalGeoJsonFeatureCollectionAtTime(...)`, and `createTemporalGeoJsonPlaybackIndex(...)`
 - `drawLineOnPolygonGeometry(...)` for turning drawn lines into polygon holes or splits
@@ -63,11 +64,42 @@ export function DemandHeatMap() {
       points={points}
       getWeight={(point) => point.metrics?.demand ?? 1}
       style={{ height: 420 }}
-      initialViewState={{ center: [52.52, 13.405], zoom: 9 }}
+      defaultViewState={{ center: [13.405, 52.52], zoom: 9 }}
     />
   );
 }
 ```
+
+## Controlled viewport
+
+Every map accepts `viewState`, `defaultViewState`, and
+`onViewStateChange`. Passing `viewState` makes the viewport controlled; user
+pan, zoom, and cluster expansion call `onViewStateChange` without committing an
+internal viewport.
+
+```tsx
+import { useState } from "react";
+import { ClusteredMap, type MapViewState } from "@moritzbrantner/maps";
+
+function ControlledMap() {
+  const [viewState, setViewState] = useState<MapViewState>({
+    center: [13.405, 52.52],
+    zoom: 8,
+  });
+
+  return (
+    <ClusteredMap
+      points={points}
+      viewState={viewState}
+      onViewStateChange={(next) => setViewState(next)}
+      style={{ height: 420 }}
+    />
+  );
+}
+```
+
+`initialViewState` remains supported as a legacy alias for the uncontrolled
+initial viewport. New code should prefer `defaultViewState`.
 
 ## Additional map types
 
@@ -89,7 +121,12 @@ const flows: MapFlow[] = [
 export function NetworkMaps() {
   return (
     <>
-      <PointMap points={points} style={{ height: 360 }} />
+      <PointMap
+        points={points}
+        renderFeatureTooltip={(feature) => feature.point.label}
+        renderFeaturePopup={(feature) => <strong>{feature.point.label}</strong>}
+        style={{ height: 360 }}
+      />
       <BubbleMap points={points} weightMetric="demand" style={{ height: 360 }} />
       <FlowMap flows={flows} weightMetric="trips" style={{ height: 360 }} />
     </>
@@ -97,12 +134,52 @@ export function NetworkMaps() {
 }
 ```
 
+Use `onFeatureHover`, `renderFeatureTooltip`, `renderFeaturePopup`, and
+`selectedFeatureId` on point, bubble, clustered, and flow layers or convenience
+maps. Existing `onFeatureSelect` remains the click selection callback.
+
+## Composable layers
+
+Use `MapView` when multiple visual layers should share one viewport and
+interaction surface.
+
+```tsx
+import {
+  BeeLineMeasurementLayer,
+  FlowLayer,
+  HeatLayer,
+  MapView,
+  PointLayer,
+} from "@moritzbrantner/maps";
+
+function OperationsMap() {
+  return (
+    <MapView
+      mapDisplay="flat"
+      defaultViewState={{ center: [13.405, 52.52], zoom: 8 }}
+      style={{ height: 420 }}
+    >
+      <HeatLayer points={points} weightMetric="demand" />
+      <FlowLayer flows={flows} weightMetric="trips" />
+      <PointLayer
+        points={points}
+        renderFeatureTooltip={(feature) => feature.point.label}
+      />
+      <BeeLineMeasurementLayer
+        measurementMode={isMeasuring ? "bee-line" : "none"}
+        measurements={measurements}
+        onMeasurementCreate={handleMeasurementCreate}
+      />
+    </MapView>
+  );
+}
+```
+
 ## Bee-line measurements
 
-Flat maps support controlled bee-line measurement. Consumers own the toolbar,
-IDs, persistence, and clearing; maps only collect the two clicks and render the
-controlled `measurements` prop. Globe maps accept the same props for API
-consistency, but measurement rendering is flat maps only in the first version.
+Flat and globe maps support controlled bee-line measurement. Consumers own the
+toolbar, IDs, persistence, and clearing; maps collect the two clicks and render
+the controlled `measurements` prop.
 
 ```tsx
 import { useState } from "react";

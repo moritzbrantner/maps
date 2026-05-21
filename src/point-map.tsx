@@ -33,11 +33,17 @@ import {
   toLeafletLatLng,
   type GlobeViewState,
   type MapDisplayMode,
+  type MapSurfaceController,
   type MapViewState,
+  type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
+import type { MapFeatureInteractionProps } from "./map-interaction";
+import { MapView } from "./map-view";
+import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
+import { BubbleLayer, PointLayer } from "./point-layer";
 
 export type PointMapFeature<TProperties = Record<string, unknown>> = {
   coordinates: [longitude: number, latitude: number];
@@ -56,13 +62,16 @@ export type PointMapProps<TProperties = Record<string, unknown>> = {
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;
   onFeatureSelect?: (feature: PointMapFeature<TProperties> | null) => void;
+  onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: LeafletMap) => void;
   points: readonly MapPoint<TProperties>[];
   pointColor?: string;
   pointRadius?: number;
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
-} & MapMeasurementProps;
+} & MapMeasurementProps &
+  MapViewportProps &
+  MapFeatureInteractionProps<PointMapFeature<TProperties>>;
 
 export type BubbleMapWeightAccessor<TProperties = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
@@ -90,26 +99,123 @@ export type BubbleMapProps<TProperties = Record<string, unknown>> = Omit<
 
 export function PointMap<TProperties = Record<string, unknown>>({
   mapDisplay = "flat",
+  className,
+  fitBoundsPadding = 56,
+  fitToData = true,
+  initialViewState,
+  mapLabel = "Interactive point map",
+  mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
+  onMapControllerReady,
+  onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
+  points,
+  showAttributionControl = true,
+  style,
+  viewState,
+  defaultViewState,
+  onViewStateChange,
   ...props
 }: PointMapProps<TProperties>) {
-  if (mapDisplay === "globe") {
-    return <GlobePointMap {...props} mapDisplay={mapDisplay} />;
-  }
-
-  return <FlatPointMap {...props} mapDisplay={mapDisplay} />;
+  return (
+    <MapView
+      className={className}
+      dataBounds={getBoundsFromPoints(points)}
+      defaultViewState={defaultViewState}
+      fitBoundsPadding={fitBoundsPadding}
+      fitToData={fitToData}
+      initialViewState={initialViewState}
+      mapDisplay={mapDisplay}
+      mapLabel={mapLabel}
+      mapStyle={mapStyle}
+      onMapControllerReady={onMapControllerReady}
+      onMapReady={onMapReady}
+      onViewStateChange={onViewStateChange}
+      showAttributionControl={showAttributionControl}
+      style={style}
+      viewState={viewState}
+    >
+      <PointLayer
+        {...(props as React.ComponentProps<typeof PointLayer<TProperties>>)}
+        points={points}
+      />
+      <BeeLineMeasurementLayer
+        measurementDistanceFormat={measurementDistanceFormat}
+        measurementDraftLineColor={measurementDraftLineColor}
+        measurementLineColor={measurementLineColor}
+        measurementMode={measurementMode}
+        measurements={measurements}
+        onMeasurementCreate={onMeasurementCreate}
+        onMeasurementDraftChange={onMeasurementDraftChange}
+        onMeasurementSelect={onMeasurementSelect}
+      />
+    </MapView>
+  );
 }
 
 export function BubbleMap<TProperties = Record<string, unknown>>({
   mapDisplay = "flat",
+  className,
+  fitBoundsPadding = 56,
+  fitToData = true,
+  initialViewState,
+  mapLabel = "Interactive point map",
+  mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
+  onMapControllerReady,
+  onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
+  points,
+  showAttributionControl = true,
+  style,
+  viewState,
+  defaultViewState,
+  onViewStateChange,
   ...props
 }: BubbleMapProps<TProperties>) {
-  const pointProps = useBubbleMapPointProps(props);
-
-  if (mapDisplay === "globe") {
-    return <GlobePointMap {...pointProps} mapDisplay={mapDisplay} />;
-  }
-
-  return <FlatPointMap {...pointProps} mapDisplay={mapDisplay} />;
+  return (
+    <MapView
+      className={className}
+      dataBounds={getBoundsFromPoints(points)}
+      defaultViewState={defaultViewState}
+      fitBoundsPadding={fitBoundsPadding}
+      fitToData={fitToData}
+      initialViewState={initialViewState}
+      mapDisplay={mapDisplay}
+      mapLabel={mapLabel}
+      mapStyle={mapStyle}
+      onMapControllerReady={onMapControllerReady}
+      onMapReady={onMapReady}
+      onViewStateChange={onViewStateChange}
+      showAttributionControl={showAttributionControl}
+      style={style}
+      viewState={viewState}
+    >
+      <BubbleLayer {...(props as React.ComponentProps<typeof BubbleLayer<TProperties>>)} points={points} />
+      <BeeLineMeasurementLayer
+        measurementDistanceFormat={measurementDistanceFormat}
+        measurementDraftLineColor={measurementDraftLineColor}
+        measurementLineColor={measurementLineColor}
+        measurementMode={measurementMode}
+        measurements={measurements}
+        onMeasurementCreate={onMeasurementCreate}
+        onMeasurementDraftChange={onMeasurementDraftChange}
+        onMeasurementSelect={onMeasurementSelect}
+      />
+    </MapView>
+  );
 }
 
 export function createPointMapFeatures<TProperties = Record<string, unknown>>(

@@ -48,9 +48,17 @@ import {
   toLeafletLatLng,
   type GlobeViewState,
   type MapDisplayMode,
+  type MapSurfaceController,
   type MapViewState,
+  type MapViewStateChangeContext,
+  type MapViewStateChangeReason,
+  type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
+import { ClusterLayer } from "./cluster-layer";
+import type { MapFeatureInteractionProps } from "./map-interaction";
+import { MapView } from "./map-view";
+import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 
@@ -67,12 +75,15 @@ export type ClusteredMapProps<TProperties = Record<string, unknown>> = {
   maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
   minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
   onFeatureSelect?: (feature: AggregatedMapFeature<TProperties> | null) => void;
+  onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: LeafletMap) => void;
   onViewportAggregationChange?: (summary: VisibleAggregationSummary) => void;
   points: readonly MapPoint<TProperties>[];
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
-} & MapMeasurementProps;
+} & MapMeasurementProps &
+  MapViewportProps &
+  MapFeatureInteractionProps<AggregatedMapFeature<TProperties>>;
 
 const MAX_CLUSTER_AREA_FEATURES = 160;
 
@@ -88,16 +99,76 @@ type ClusterAreaFeatureCache = {
   result: ClusterAreaFeatureResult;
 };
 
-export { defaultRasterMapStyle, type MapDisplayMode, type MapViewState, type RasterMapStyle };
+export {
+  defaultRasterMapStyle,
+  type MapDisplayMode,
+  type MapSurfaceController,
+  type MapViewState,
+  type MapViewStateChangeContext,
+  type MapViewStateChangeReason,
+  type MapViewportProps,
+  type RasterMapStyle,
+};
 
 export function ClusteredMap<TProperties = Record<string, unknown>>(
-  props: ClusteredMapProps<TProperties>,
+  {
+    className,
+    fitBoundsPadding = 56,
+    fitToData = true,
+    initialViewState,
+    mapDisplay = "flat",
+    mapLabel = "Interactive map",
+    mapStyle = defaultRasterMapStyle,
+    measurementDistanceFormat,
+    measurementDraftLineColor,
+    measurementLineColor,
+    measurementMode,
+    measurements,
+    onMapControllerReady,
+    onMapReady,
+    onMeasurementCreate,
+    onMeasurementDraftChange,
+    onMeasurementSelect,
+    points,
+    showAttributionControl = true,
+    style,
+    viewState,
+    defaultViewState,
+    onViewStateChange,
+    ...props
+  }: ClusteredMapProps<TProperties>,
 ) {
-  if (props.mapDisplay === "globe") {
-    return <GlobeClusteredMap {...props} />;
-  }
-
-  return <FlatClusteredMap {...props} />;
+  return (
+    <MapView
+      className={className}
+      dataBounds={getBoundsFromPoints(points)}
+      defaultViewState={defaultViewState}
+      fitBoundsPadding={fitBoundsPadding}
+      fitToData={fitToData}
+      initialViewState={initialViewState}
+      mapDisplay={mapDisplay}
+      mapLabel={mapLabel}
+      mapStyle={mapStyle}
+      onMapControllerReady={onMapControllerReady}
+      onMapReady={onMapReady}
+      onViewStateChange={onViewStateChange}
+      showAttributionControl={showAttributionControl}
+      style={style}
+      viewState={viewState}
+    >
+      <ClusterLayer {...(props as React.ComponentProps<typeof ClusterLayer<TProperties>>)} points={points} />
+      <BeeLineMeasurementLayer
+        measurementDistanceFormat={measurementDistanceFormat}
+        measurementDraftLineColor={measurementDraftLineColor}
+        measurementLineColor={measurementLineColor}
+        measurementMode={measurementMode}
+        measurements={measurements}
+        onMeasurementCreate={onMeasurementCreate}
+        onMeasurementDraftChange={onMeasurementDraftChange}
+        onMeasurementSelect={onMeasurementSelect}
+      />
+    </MapView>
+  );
 }
 
 function FlatClusteredMap<TProperties = Record<string, unknown>>({

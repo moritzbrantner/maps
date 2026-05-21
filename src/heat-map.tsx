@@ -38,9 +38,14 @@ import {
   toLeafletLatLng,
   type GlobeViewState,
   type MapDisplayMode,
+  type MapSurfaceController,
   type MapViewState,
+  type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
+import { HeatLayer } from "./heat-layer";
+import { MapView } from "./map-view";
+import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 
@@ -122,11 +127,12 @@ export type HeatMapProps<TProperties = Record<string, unknown>> =
     mapDisplay?: MapDisplayMode;
     mapLabel?: string;
     mapStyle?: string | RasterMapStyle;
+    onMapControllerReady?: (controller: MapSurfaceController) => void;
     onMapReady?: (map: LeafletMap) => void;
     points: readonly MapPoint<TProperties>[];
     showAttributionControl?: boolean;
     style?: React.CSSProperties;
-  };
+  } & MapViewportProps;
 
 const defaultHeatMapColorRamp = [
   [0, "rgba(15, 23, 42, 0)"],
@@ -139,13 +145,61 @@ const defaultHeatMapColorRamp = [
 
 export function HeatMap<TProperties = Record<string, unknown>>({
   mapDisplay = "flat",
+  className,
+  fitBoundsPadding = 56,
+  fitToData = true,
+  initialViewState,
+  mapLabel = "Interactive heat map",
+  mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
+  onMapControllerReady,
+  onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
+  points,
+  showAttributionControl = true,
+  style,
+  viewState,
+  defaultViewState,
+  onViewStateChange,
   ...props
 }: HeatMapProps<TProperties>) {
-  if (mapDisplay === "globe") {
-    return <GlobeHeatMap {...props} mapDisplay={mapDisplay} />;
-  }
-
-  return <FlatHeatMap {...props} mapDisplay={mapDisplay} />;
+  return (
+    <MapView
+      className={className}
+      dataBounds={getBoundsFromPoints(points)}
+      defaultViewState={defaultViewState}
+      fitBoundsPadding={fitBoundsPadding}
+      fitToData={fitToData}
+      initialViewState={initialViewState}
+      mapDisplay={mapDisplay}
+      mapLabel={mapLabel}
+      mapStyle={mapStyle}
+      onMapControllerReady={onMapControllerReady}
+      onMapReady={onMapReady}
+      onViewStateChange={onViewStateChange}
+      showAttributionControl={showAttributionControl}
+      style={style}
+      viewState={viewState}
+    >
+      <HeatLayer {...(props as React.ComponentProps<typeof HeatLayer<TProperties>>)} points={points} />
+      <BeeLineMeasurementLayer
+        measurementDistanceFormat={measurementDistanceFormat}
+        measurementDraftLineColor={measurementDraftLineColor}
+        measurementLineColor={measurementLineColor}
+        measurementMode={measurementMode}
+        measurements={measurements}
+        onMeasurementCreate={onMeasurementCreate}
+        onMeasurementDraftChange={onMeasurementDraftChange}
+        onMeasurementSelect={onMeasurementSelect}
+      />
+    </MapView>
+  );
 }
 
 function FlatHeatMap<TProperties = Record<string, unknown>>({

@@ -26,9 +26,15 @@ import {
   toLeafletLatLng,
   type GlobeViewState,
   type MapDisplayMode,
+  type MapSurfaceController,
   type MapViewState,
+  type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
+import { FlowLayer } from "./flow-layer";
+import type { MapFeatureInteractionProps } from "./map-interaction";
+import { MapView } from "./map-view";
+import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 
@@ -77,22 +83,73 @@ export type FlowMapProps<TProperties = Record<string, unknown>> = {
   maxWidth?: number;
   minWidth?: number;
   onFeatureSelect?: (feature: FlowMapFeature<TProperties> | null) => void;
+  onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: LeafletMap) => void;
   showAttributionControl?: boolean;
   showEndpoints?: boolean;
   style?: React.CSSProperties;
   weightMetric?: string;
-} & MapMeasurementProps;
+} & MapMeasurementProps &
+  MapViewportProps &
+  MapFeatureInteractionProps<FlowMapFeature<TProperties>>;
 
 export function FlowMap<TProperties = Record<string, unknown>>({
   mapDisplay = "flat",
+  className,
+  fitBoundsPadding = 56,
+  fitToData = true,
+  initialViewState,
+  mapLabel = "Interactive flow map",
+  mapStyle = defaultRasterMapStyle,
+  measurementDistanceFormat,
+  measurementDraftLineColor,
+  measurementLineColor,
+  measurementMode,
+  measurements,
+  onMapControllerReady,
+  onMapReady,
+  onMeasurementCreate,
+  onMeasurementDraftChange,
+  onMeasurementSelect,
+  flows,
+  showAttributionControl = true,
+  style,
+  viewState,
+  defaultViewState,
+  onViewStateChange,
   ...props
 }: FlowMapProps<TProperties>) {
-  if (mapDisplay === "globe") {
-    return <GlobeFlowMap {...props} mapDisplay={mapDisplay} />;
-  }
-
-  return <FlatFlowMap {...props} mapDisplay={mapDisplay} />;
+  return (
+    <MapView
+      className={className}
+      dataBounds={getBoundsFromFlows(flows)}
+      defaultViewState={defaultViewState}
+      fitBoundsPadding={fitBoundsPadding}
+      fitToData={fitToData}
+      initialViewState={initialViewState}
+      mapDisplay={mapDisplay}
+      mapLabel={mapLabel}
+      mapStyle={mapStyle}
+      onMapControllerReady={onMapControllerReady}
+      onMapReady={onMapReady}
+      onViewStateChange={onViewStateChange}
+      showAttributionControl={showAttributionControl}
+      style={style}
+      viewState={viewState}
+    >
+      <FlowLayer {...(props as React.ComponentProps<typeof FlowLayer<TProperties>>)} flows={flows} />
+      <BeeLineMeasurementLayer
+        measurementDistanceFormat={measurementDistanceFormat}
+        measurementDraftLineColor={measurementDraftLineColor}
+        measurementLineColor={measurementLineColor}
+        measurementMode={measurementMode}
+        measurements={measurements}
+        onMeasurementCreate={onMeasurementCreate}
+        onMeasurementDraftChange={onMeasurementDraftChange}
+        onMeasurementSelect={onMeasurementSelect}
+      />
+    </MapView>
+  );
 }
 
 export function createFlowMapFeatures<TProperties = Record<string, unknown>>(

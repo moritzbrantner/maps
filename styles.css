@@ -107,6 +107,15 @@
     cursor: pointer;
   }
 
+  .mb-maps__feature--hovered {
+    filter: brightness(1.08) saturate(1.12);
+  }
+
+  .mb-maps__feature--selected {
+    filter: drop-shadow(0 0 8px rgb(14 165 233 / 0.55));
+    outline: 2px solid rgb(14 165 233 / 0.9);
+  }
+
   .mb-maps__heat-marker {
     mix-blend-mode: multiply;
   }
@@ -153,6 +162,49 @@
     fill: none;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+
+  .mb-maps__globe-measurements {
+    cursor: crosshair;
+  }
+
+  .mb-maps__globe-measurements .mb-maps__measurement-line {
+    stroke-width: 3;
+  }
+
+  .mb-maps__globe-measurements .mb-maps__measurement-endpoint {
+    fill: white;
+    stroke: currentColor;
+    stroke-width: 2;
+  }
+
+  .mb-maps__globe-measurements .mb-maps__measurement-label {
+    fill: white;
+    paint-order: stroke;
+    pointer-events: none;
+    stroke: rgb(15 23 42 / 0.86);
+    stroke-linejoin: round;
+    stroke-width: 5px;
+    text-anchor: middle;
+  }
+
+  .mb-maps__feature-overlay {
+    @apply pointer-events-none absolute inset-0 z-[500];
+  }
+
+  .mb-maps__feature-tooltip,
+  .mb-maps__feature-popup {
+    @apply absolute max-w-[min(18rem,calc(100%-1rem))] border border-slate-900/10 bg-white text-sm text-slate-950 shadow-[0_16px_40px_rgb(15_23_42_/_0.18)];
+    transform: translate(-50%, -100%);
+  }
+
+  .mb-maps__feature-tooltip {
+    @apply rounded-md px-2.5 py-1.5 font-medium;
+  }
+
+  .mb-maps__feature-popup {
+    @apply pointer-events-auto rounded-lg px-3 py-2;
+    transform: translate(-50%, 0);
   }
 
   .mb-temporal-map {

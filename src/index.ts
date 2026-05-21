@@ -23,9 +23,43 @@ export {
   defaultRasterMapStyle,
   type ClusteredMapProps,
   type MapDisplayMode,
+  type MapSurfaceController,
   type MapViewState,
+  type MapViewStateChangeContext,
+  type MapViewStateChangeReason,
+  type MapViewportProps,
   type RasterMapStyle,
 } from "./clustered-map";
+export {
+  MapView,
+  type MapViewProps,
+  type FlatLayerRender,
+} from "./map-view";
+export {
+  ClusterLayer,
+  type ClusterLayerProps,
+} from "./cluster-layer";
+export {
+  BubbleLayer,
+  PointLayer,
+  type BubbleLayerFeature as BubbleMapLayerFeature,
+  type BubbleLayerProps,
+  type PointLayerFeature as PointMapLayerFeature,
+  type PointLayerProps,
+} from "./point-layer";
+export {
+  HeatLayer,
+  type HeatLayerProps,
+} from "./heat-layer";
+export {
+  FlowLayer,
+  type FlowLayerFeature as FlowMapLayerFeature,
+  type FlowLayerProps,
+} from "./flow-layer";
+export {
+  BeeLineMeasurementLayer,
+  type BeeLineMeasurementLayerProps,
+} from "./measurement-map-layer";
 export {
   HeatMap,
   createHeatMapDensityIndex,
