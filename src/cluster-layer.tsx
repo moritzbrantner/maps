@@ -10,7 +10,7 @@ import {
   type PointAggregationIndexOptions,
   type VisibleAggregationSummary,
 } from "./aggregation";
-import { escapeHtml, joinClassNames, toLeafletLatLng } from "./map-display";
+import { escapeHtml, GLOBE_MAX_ZOOM, joinClassNames, toLeafletLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 
@@ -233,7 +233,10 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 surface.setViewState(
                   {
                     center: feature.coordinates,
-                    zoom: Math.min(8, Math.max(surface.viewState.zoom + 0.8, feature.expansionZoom)),
+                    zoom: Math.min(
+                      GLOBE_MAX_ZOOM,
+                      Math.max(surface.viewState.zoom + 0.8, feature.expansionZoom),
+                    ),
                   },
                   "cluster-expand",
                 );

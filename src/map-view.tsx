@@ -14,12 +14,10 @@ import {
 import type { LayerGroup, Map as LeafletMap } from "leaflet";
 
 import { FeatureOverlays, type FeatureOverlayState } from "./feature-overlays";
+import { GlobeBase } from "./globe-base";
 import {
-  createGlobeGraticuleLines,
-  createVisibleSvgPath,
   defaultRasterMapStyle,
   getGlobeDragCenter,
-  getGlobeRadius,
   getGlobeZoom,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
@@ -655,41 +653,6 @@ export function MapView({
         />
       </div>
     </MapSurfaceContext.Provider>
-  );
-}
-
-function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
-  const radius = getGlobeRadius(viewState.zoom);
-
-  return (
-    <>
-      <defs>
-        <radialGradient id="mb-maps-globe-ocean" cx="38%" cy="30%" r="70%">
-          <stop offset="0%" stopColor="#f8fafc" />
-          <stop offset="58%" stopColor="#bae6fd" />
-          <stop offset="100%" stopColor="#0f766e" />
-        </radialGradient>
-      </defs>
-      <circle
-        className="mb-maps__globe-ocean"
-        cx={GLOBE_VIEWBOX_WIDTH / 2}
-        cy={GLOBE_VIEWBOX_HEIGHT / 2}
-        r={radius}
-      />
-      <g className="mb-maps__globe-graticule">
-        {createGlobeGraticuleLines(viewState).map((line, index) => {
-          const path = createVisibleSvgPath(line);
-
-          return path ? <path d={path} key={index} /> : null;
-        })}
-      </g>
-      <circle
-        className="mb-maps__globe-rim"
-        cx={GLOBE_VIEWBOX_WIDTH / 2}
-        cy={GLOBE_VIEWBOX_HEIGHT / 2}
-        r={radius}
-      />
-    </>
   );
 }
 

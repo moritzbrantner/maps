@@ -65,6 +65,8 @@ export type GlobeProjectionResult = {
 
 export const GLOBE_VIEWBOX_HEIGHT = 480;
 export const GLOBE_VIEWBOX_WIDTH = 960;
+export const GLOBE_MAX_ZOOM = 18;
+export const GLOBE_MIN_ZOOM = 0.8;
 export const defaultRasterMapStyle: RasterMapStyle = {
   attribution: "\u00a9 OpenStreetMap contributors",
   tiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -212,7 +214,7 @@ export function getGlobeDragCenter(
 }
 
 export function getGlobeZoom(currentZoom: number, deltaY: number) {
-  return clamp(currentZoom - deltaY * 0.0025, 0.8, 8);
+  return clamp(currentZoom - deltaY * 0.0025, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM);
 }
 
 export function createGlobeGraticuleLines(
