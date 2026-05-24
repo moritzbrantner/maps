@@ -7,10 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
 } from "react";
-
-import { Button } from "@moritzbrantner/ui";
 
 import {
   getHeatMapMaxWeight,
@@ -24,6 +21,7 @@ import {
   type GeoJsonOverlayMode,
 } from "./geojson-source";
 import type { GeoJsonLayerProps } from "./geojson-layer";
+import { TemporalPlaybackControls } from "./temporal-controls";
 import {
   createTemporalMapPlaybackIndex,
   snapTemporalMapTime,
@@ -211,13 +209,7 @@ export function TemporalHeatMap<TProperties extends Record<string, unknown> = Re
     });
   });
 
-  const handleSliderChange = useEffectEvent((event: ChangeEvent<HTMLInputElement>) => {
-    const nextTime = Number(event.target.value);
-
-    if (!Number.isFinite(nextTime)) {
-      return;
-    }
-
+  const handleSeek = useEffectEvent((nextTime: number) => {
     setIsPlaying(false);
     commitTime(nextTime);
   });
@@ -295,40 +287,19 @@ export function TemporalHeatMap<TProperties extends Record<string, unknown> = Re
         weightMetric={weightMetric}
       />
       {showPlaybackControls ? (
-        <div className="mb-temporal-map__timeline" aria-label={timelineLabel}>
-          <Button
-            type="button"
-            className="mb-temporal-map__playback-toggle"
-            disabled={!hasPlayableRange}
-            onClick={() => {
-              setIsPlaying((value) => !value);
-            }}
-          >
-            {isPlaying ? "Pause" : "Play"}
-          </Button>
-          <div className="mb-temporal-map__axis">
-            <span className="mb-temporal-map__axis-boundary">
-              {timeRange ? formatTimeLabel(timeRange.start) : "\u2014"}
-            </span>
-            <input
-              aria-label={timelineLabel}
-              className="mb-temporal-map__slider"
-              disabled={!timeRange}
-              max={timeRange?.end ?? 0}
-              min={timeRange?.start ?? 0}
-              onChange={handleSliderChange}
-              step={timeStep}
-              type="range"
-              value={activeTime}
-            />
-            <span className="mb-temporal-map__axis-boundary">
-              {timeRange ? formatTimeLabel(timeRange.end) : "\u2014"}
-            </span>
-          </div>
-          <output className="mb-temporal-map__current-time" aria-live="polite">
-            {timeRange ? formatTimeLabel(activeTime) : "No time data"}
-          </output>
-        </div>
+        <TemporalPlaybackControls
+          activeTime={activeTime}
+          formatTimeLabel={formatTimeLabel}
+          hasPlayableRange={hasPlayableRange}
+          isPlaying={isPlaying}
+          onSeek={handleSeek}
+          onTogglePlayback={() => {
+            setIsPlaying((value) => !value);
+          }}
+          timeRange={timeRange}
+          timeStep={timeStep}
+          timelineLabel={timelineLabel}
+        />
       ) : null}
     </div>
   );

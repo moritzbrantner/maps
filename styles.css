@@ -295,15 +295,36 @@
   }
 
   .mb-temporal-map__timeline {
-    @apply grid items-center gap-4 rounded-[1.25rem] border border-slate-900/8 bg-white/88 px-[1.125rem] py-4 shadow-[0_16px_40px_rgb(15_23_42_/_0.08)] backdrop-blur-[16px];
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    @apply grid gap-3 rounded-lg border border-slate-900/10 bg-white/92 px-4 py-3 shadow-[0_12px_30px_rgb(15_23_42_/_0.10)] backdrop-blur-[14px];
+  }
+
+  .mb-temporal-map__timeline-header {
+    @apply flex min-w-0 items-center justify-between gap-3;
+  }
+
+  .mb-temporal-map__timeline-label {
+    @apply truncate text-[0.78rem] font-bold uppercase tracking-[0.08em] text-slate-600;
+  }
+
+  .mb-temporal-map__controls {
+    @apply grid items-center gap-2;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(7rem, auto) repeat(2, minmax(0, 1fr));
+  }
+
+  .mb-temporal-map__control-button,
+  .mb-temporal-map__playback-toggle {
+    @apply min-h-10 cursor-pointer rounded-md border border-slate-900/10 px-3 py-2 text-sm font-semibold shadow-none disabled:cursor-not-allowed disabled:opacity-45;
+    appearance: none;
+    font: inherit;
+  }
+
+  .mb-temporal-map__control-button {
+    @apply bg-slate-100 text-slate-900 hover:bg-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500;
   }
 
   .mb-temporal-map__playback-toggle {
-    @apply cursor-pointer rounded-full border-0 px-[1.1rem] py-[0.7rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45;
-    appearance: none;
+    @apply border-0 text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700;
     background: linear-gradient(135deg, #0f766e, #0f172a);
-    font: inherit;
   }
 
   .mb-temporal-map__axis {
@@ -318,21 +339,34 @@
   }
 
   .mb-temporal-map__current-time {
-    @apply justify-self-end font-semibold;
+    @apply min-w-0 truncate text-right font-semibold text-slate-950;
   }
 
   .mb-temporal-map__slider {
-    @apply w-full accent-[#0f766e];
+    @apply h-8 w-full cursor-pointer accent-[#0f766e] disabled:cursor-not-allowed;
   }
 }
 
 @media (max-width: 720px) {
-  .mb-temporal-map__timeline,
+  .mb-temporal-map__timeline-header,
   .mb-temporal-map__axis {
     grid-template-columns: 1fr;
   }
 
+  .mb-temporal-map__timeline-header {
+    @apply grid items-start;
+  }
+
+  .mb-temporal-map__controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mb-temporal-map__playback-toggle {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
   .mb-temporal-map__current-time {
-    @apply justify-self-start;
+    @apply text-left;
   }
 }

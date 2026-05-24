@@ -348,5 +348,18 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
     await waitFor(() => {
       expect(onTimeChange).toHaveBeenLastCalledWith(10);
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Next time step" }));
+
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe("20");
+    expect(screen.getAllByText("Minute 20").length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(onTimeChange).toHaveBeenLastCalledWith(20);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to start" }));
+
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe("0");
+    expect(screen.getAllByText("Minute 0").length).toBeGreaterThan(0);
   });
 });
