@@ -40,6 +40,7 @@ import {
   resolveTileLayerOptions,
   toLeafletLatLng,
   type GlobeViewState,
+  type GlobeBasemapMode,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,
@@ -71,6 +72,7 @@ export type PointMapProps<TProperties extends Record<string, unknown> = Record<s
   geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   getPointColor?: (feature: PointMapFeature<TProperties>) => string;
   getPointRadius?: (feature: PointMapFeature<TProperties>) => number;
+  globeBasemapMode?: GlobeBasemapMode;
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -142,6 +144,7 @@ export function PointMap<TProperties extends Record<string, unknown> = Record<st
   className,
   fitBoundsPadding = 56,
   fitToData = true,
+  globeBasemapMode,
   initialViewState,
   mapLabel = "Interactive point map",
   mapStyle = defaultRasterMapStyle,
@@ -184,6 +187,7 @@ export function PointMap<TProperties extends Record<string, unknown> = Record<st
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
+      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
@@ -226,6 +230,7 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
   className,
   fitBoundsPadding = 56,
   fitToData = true,
+  globeBasemapMode,
   initialViewState,
   mapLabel = "Interactive point map",
   mapStyle = defaultRasterMapStyle,
@@ -268,6 +273,7 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
+      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}

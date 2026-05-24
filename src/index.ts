@@ -22,6 +22,7 @@ export {
   ClusteredMap,
   defaultRasterMapStyle,
   type ClusteredMapProps,
+  type GlobeBasemapMode,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,

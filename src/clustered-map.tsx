@@ -54,6 +54,7 @@ import {
   projectGlobeCoordinate,
   resolveTileLayerOptions,
   toLeafletLatLng,
+  type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
   type MapSurfaceController,
@@ -83,6 +84,7 @@ export type ClusteredMapProps<TProperties extends Record<string, unknown> = Reco
   geoJsonOverlay?: GeoJsonOverlayMode;
   geoJsonOverlayCollection?: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
   geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
+  globeBasemapMode?: GlobeBasemapMode;
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -117,6 +119,7 @@ type ClusterAreaFeatureCache = {
 export {
   defaultRasterMapStyle,
   type MapDisplayMode,
+  type GlobeBasemapMode,
   type MapSurfaceController,
   type MapViewState,
   type MapViewStateChangeContext,
@@ -150,6 +153,7 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
     geoJsonOverlay,
     geoJsonOverlayCollection,
     geoJsonOverlayProps,
+    globeBasemapMode,
     showAttributionControl = true,
     style,
     viewState,
@@ -175,6 +179,7 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
+      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}

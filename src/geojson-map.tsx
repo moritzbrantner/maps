@@ -9,6 +9,7 @@ import {
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import {
   defaultRasterMapStyle,
+  type GlobeBasemapMode,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,
@@ -29,6 +30,7 @@ export type GeoJsonMapProps<
     fitBoundsPadding?: number;
     fitToData?: boolean;
     geoJson: GeoJsonMapSource<TProperties>;
+    globeBasemapMode?: GlobeBasemapMode;
     initialViewState?: MapViewState;
     mapDisplay?: MapDisplayMode;
     mapLabel?: string;
@@ -48,6 +50,7 @@ export function GeoJsonMap<
   fitBoundsPadding = 56,
   fitToData = true,
   geoJson,
+  globeBasemapMode,
   initialViewState,
   mapDisplay = "flat",
   mapLabel = "Interactive GeoJSON map",
@@ -78,6 +81,7 @@ export function GeoJsonMap<
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
+      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}

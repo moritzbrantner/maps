@@ -6,6 +6,7 @@ import { getBoundsFromPoints, type MapPoint } from "./aggregation";
 import type { MapCoordinate } from "./measurement";
 
 export type MapDisplayMode = "flat" | "globe";
+export type GlobeBasemapMode = "vector" | "tiles";
 
 export type MapViewState = {
   center: [longitude: number, latitude: number];

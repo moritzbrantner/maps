@@ -44,6 +44,7 @@ import {
   projectGlobeCoordinate,
   resolveTileLayerOptions,
   toLeafletLatLng,
+  type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
   type MapSurfaceController,
@@ -132,6 +133,7 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
     geoJsonOverlay?: GeoJsonOverlayMode;
     geoJsonOverlayCollection?: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
     geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
+    globeBasemapMode?: GlobeBasemapMode;
     heatmapAggregationMaxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
     heatmapAggregationMinZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
     heatmapAggregationRadius?: PointAggregationIndexOptions<TProperties>["radius"];
@@ -166,6 +168,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
   className,
   fitBoundsPadding = 56,
   fitToData = true,
+  globeBasemapMode,
   initialViewState,
   mapLabel = "Interactive heat map",
   mapStyle = defaultRasterMapStyle,
@@ -209,6 +212,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
+      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}

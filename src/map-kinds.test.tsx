@@ -30,9 +30,12 @@ import {
   projectGlobeCoordinate,
 } from "./map-display";
 import {
+  buildGlobeTileUrl,
   createGlobeBasemapPaths,
   createGlobeRenderScheduler,
+  getVisibleGlobeTiles,
   projectGlobeBasemapCoordinate,
+  resolveGlobeTileSource,
 } from "./globe-base";
 
 const leafletMock = vi.hoisted(() => {
@@ -1071,6 +1074,60 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(requestAnimationFrameMock).toHaveBeenCalledTimes(3);
     scheduler.cancel();
     expect(cancelAnimationFrameMock).toHaveBeenCalledWith(3);
+  });
+
+  test("selects capped visible globe tiles from a raster map style", () => {
+    const source = resolveGlobeTileSource({
+      maxZoom: 12,
+      tiles: "https://tiles.example.test/{z}/{x}/{y}.png",
+    });
+
+    expect(source).toBeTruthy();
+
+    const tiles = getVisibleGlobeTiles(
+      {
+        center: [13.405, 52.52],
+        zoom: 6,
+      },
+      source!,
+    );
+
+    expect(tiles.length).toBeGreaterThan(0);
+    expect(tiles.length).toBeLessThanOrEqual(48);
+    expect(buildGlobeTileUrl(source!, tiles[0]!)).toMatch(
+      /^https:\/\/tiles\.example\.test\/\d+\/\d+\/\d+\.png$/,
+    );
+  });
+
+  test("uses tile globe basemap mode without rendering vector land above it", () => {
+    render(
+      <BubbleMap
+        globeBasemapMode="tiles"
+        initialViewState={{ center: [-74, 40], zoom: 5 }}
+        mapDisplay="globe"
+        mapLabel="Tiled demand globe"
+        mapStyle={{ tiles: "https://tiles.example.test/{z}/{x}/{y}.png" }}
+        points={[
+          {
+            id: "a",
+            latitude: 40,
+            longitude: -74,
+            metrics: {
+              demand: 6,
+            },
+          },
+        ]}
+        weightMetric="demand"
+      />,
+    );
+
+    const map = screen.getByLabelText("Tiled demand globe");
+
+    expect(map.getAttribute("data-map-ready")).toBe("true");
+    expect(map.querySelector(".mb-maps__globe-renderer")).toBeTruthy();
+    expect(map.querySelector(".mb-maps__globe-land")).toBeFalsy();
+    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
+    expect(leafletMock.getMaps()).toHaveLength(0);
   });
 
   test("allows a closer globe zoom", () => {

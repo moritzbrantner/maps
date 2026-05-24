@@ -24,6 +24,7 @@ import {
   projectGlobeCoordinate,
   resolveTileLayerOptions,
   toLeafletLatLng,
+  type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
   type MapSurfaceController,
@@ -88,6 +89,7 @@ export type FlowMapProps<TProperties extends Record<string, unknown> = Record<st
   geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
   getWeight?: FlowMapWeightAccessor<TProperties>;
+  globeBasemapMode?: GlobeBasemapMode;
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -111,6 +113,7 @@ export function FlowMap<TProperties extends Record<string, unknown> = Record<str
   className,
   fitBoundsPadding = 56,
   fitToData = true,
+  globeBasemapMode,
   initialViewState,
   mapLabel = "Interactive flow map",
   mapStyle = defaultRasterMapStyle,
@@ -151,6 +154,7 @@ export function FlowMap<TProperties extends Record<string, unknown> = Record<str
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
+      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}

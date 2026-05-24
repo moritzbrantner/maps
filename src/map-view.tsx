@@ -18,7 +18,7 @@ import {
   type ContextMenuOverlayState,
   type FeatureOverlayState,
 } from "./feature-overlays";
-import { GlobeBase, GlobeSvgOverlayBase } from "./globe-base";
+import { GlobeBase, GlobeSvgOverlayBase, GLOBE_TILE_MIN_ZOOM } from "./globe-base";
 import {
   defaultRasterMapStyle,
   getGlobeDragCenter,
@@ -30,6 +30,7 @@ import {
   resolveTileLayerOptions,
   toLeafletLatLng,
   unprojectGlobePoint,
+  type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
   type MapSurfaceController,
@@ -112,6 +113,7 @@ export type MapViewProps = MapViewportProps & {
   dataBounds?: [west: number, south: number, east: number, north: number] | null;
   fitBoundsPadding?: number;
   fitToData?: boolean;
+  globeBasemapMode?: GlobeBasemapMode;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;
@@ -138,6 +140,7 @@ export function MapView({
   defaultViewState,
   fitBoundsPadding = 56,
   fitToData = true,
+  globeBasemapMode = "vector",
   initialViewState,
   mapDisplay = "flat",
   mapLabel = "Interactive map",
@@ -733,7 +736,11 @@ export function MapView({
         {mapDisplay === "flat" ? <div ref={containerRef} className="mb-maps__canvas" /> : null}
         {mapDisplay === "globe" ? (
           <>
-            <GlobeBase viewState={currentViewState as GlobeViewState} />
+            <GlobeBase
+              basemapMode={globeBasemapMode}
+              mapStyle={mapStyle}
+              viewState={currentViewState as GlobeViewState}
+            />
             <svg
               ref={svgRef}
               className="mb-maps__globe"
@@ -810,7 +817,12 @@ export function MapView({
                 );
               }}
             >
-              <GlobeSvgOverlayBase viewState={currentViewState as GlobeViewState} />
+              <GlobeSvgOverlayBase
+                showVectorBasemap={
+                  globeBasemapMode !== "tiles" || currentViewState.zoom < GLOBE_TILE_MIN_ZOOM
+                }
+                viewState={currentViewState as GlobeViewState}
+              />
               <g className="mb-maps__globe-features">{children}</g>
             </svg>
           </>

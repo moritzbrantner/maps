@@ -50,6 +50,20 @@ interactive orthographic globe:
 <ClusteredMap mapDisplay="globe" points={points} style={{ height: 420 }} />
 ```
 
+Globe maps use a lightweight vector basemap by default. Use
+`globeBasemapMode="tiles"` to opt into a tile-backed globe that reuses
+`mapStyle.tiles` for additional detail at closer zooms:
+
+```tsx
+<ClusteredMap
+  globeBasemapMode="tiles"
+  mapDisplay="globe"
+  mapStyle={{ tiles: "https://tiles.example.com/{z}/{x}/{y}.png", maxZoom: 12 }}
+  points={points}
+  style={{ height: 420 }}
+/>
+```
+
 ## Heat maps
 
 Use `HeatMap` when users need density instead of discrete marker interaction.
