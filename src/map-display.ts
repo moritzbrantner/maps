@@ -69,6 +69,7 @@ export const GLOBE_MAX_ZOOM = 18;
 export const GLOBE_MIN_ZOOM = 0.8;
 const GLOBE_BASE_ZOOM = 1.35;
 const GLOBE_BASE_RADIUS_FACTOR = 0.42;
+const THREE_SPHERE_TEXTURE_FRONT_OFFSET = Math.PI / 2;
 export const defaultRasterMapStyle: RasterMapStyle = {
   attribution: "\u00a9 OpenStreetMap contributors",
   tiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -218,6 +219,14 @@ export function getGlobeDragCenter(
 
 export function getGlobeZoom(currentZoom: number, deltaY: number) {
   return clamp(currentZoom - deltaY * 0.0025, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM);
+}
+
+export function getGlobeSphereRotation(viewState: GlobeViewState) {
+  return {
+    x: viewState.center[1] * DEG_TO_RAD,
+    y: -viewState.center[0] * DEG_TO_RAD - THREE_SPHERE_TEXTURE_FRONT_OFFSET,
+    z: 0,
+  };
 }
 
 export function createGlobeGraticuleLines(

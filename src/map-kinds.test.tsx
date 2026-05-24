@@ -22,7 +22,13 @@ import {
   type MapFlow,
   type MapPoint,
 } from ".";
-import { getGlobeRadius, getGlobeZoom, GLOBE_MAX_ZOOM } from "./map-display";
+import {
+  getGlobeRadius,
+  getGlobeSphereRotation,
+  getGlobeZoom,
+  GLOBE_MAX_ZOOM,
+  projectGlobeCoordinate,
+} from "./map-display";
 
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -1021,6 +1027,17 @@ describe("@moritzbrantner/maps additional map kinds", () => {
   test("allows a closer globe zoom", () => {
     expect(getGlobeZoom(GLOBE_MAX_ZOOM - 0.1, -1000)).toBe(GLOBE_MAX_ZOOM);
     expect(getGlobeRadius(18) / getGlobeRadius(17)).toBeCloseTo(2, 5);
+  });
+
+  test("aligns globe basemap rotation with projected point coordinates", () => {
+    const center: [number, number] = [13.405, 52.52];
+    const rotation = getGlobeSphereRotation({ center, zoom: 1.8 });
+    const projected = projectGlobeCoordinate(center, { center, zoom: 1.8 });
+
+    expect(rotation.x).toBeCloseTo((center[1] * Math.PI) / 180);
+    expect(rotation.y).toBeCloseTo(-((center[0] + 90) * Math.PI) / 180);
+    expect(projected.x).toBeCloseTo(480);
+    expect(projected.y).toBeCloseTo(240);
   });
 
   test("renders weighted flat flow lines with endpoints", async () => {

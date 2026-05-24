@@ -9,6 +9,7 @@ import {
   createGlobeGraticuleLines,
   createVisibleSvgPath,
   getGlobeRadius,
+  getGlobeSphereRotation,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
   type GlobeViewState,
@@ -32,7 +33,6 @@ type GeoJsonFeatureCollection = {
   type: "FeatureCollection";
 };
 
-const DEG_TO_RAD = Math.PI / 180;
 const TEXTURE_HEIGHT = 1024;
 const TEXTURE_WIDTH = 2048;
 
@@ -145,7 +145,8 @@ export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
       camera.far = radius * 2 + 2000;
       camera.updateProjectionMatrix();
       sphere.scale.setScalar(radius);
-      sphere.rotation.set(current.center[1] * DEG_TO_RAD, -current.center[0] * DEG_TO_RAD, 0);
+      const rotation = getGlobeSphereRotation(current);
+      sphere.rotation.set(rotation.x, rotation.y, rotation.z);
       renderer.render(scene, camera);
       animationFrame = requestAnimationFrame(render);
     };
