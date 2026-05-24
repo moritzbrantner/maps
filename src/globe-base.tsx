@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { geoOrthographic, geoPath } from "d3-geo";
+import type { GeoPermissibleObjects } from "d3-geo";
 import * as THREE from "three";
-import { feature } from "topojson-client";
-import worldTopology from "world-atlas/countries-50m.json";
+import { feature, mesh } from "topojson-client";
+import worldTopology from "world-atlas/countries-110m.json";
 
 import {
   createGlobeGraticuleLines,
@@ -15,29 +17,21 @@ import {
   type GlobeViewState,
 } from "./map-display";
 
-type GeoJsonPosition = [longitude: number, latitude: number];
-type GeoJsonPolygon = {
-  coordinates: GeoJsonPosition[][];
-  type: "Polygon";
-};
-type GeoJsonMultiPolygon = {
-  coordinates: GeoJsonPosition[][][];
-  type: "MultiPolygon";
-};
-type GeoJsonCountryFeature = {
-  geometry: GeoJsonMultiPolygon | GeoJsonPolygon | null;
-  type: "Feature";
-};
-type GeoJsonFeatureCollection = {
-  features: GeoJsonCountryFeature[];
-  type: "FeatureCollection";
-};
+const globeLand = feature(worldTopology, worldTopology.objects.land) as GeoPermissibleObjects;
+const globeCountryBorders = mesh(
+  worldTopology,
+  worldTopology.objects.countries,
+  (left, right) => left !== right,
+) as GeoPermissibleObjects;
 
-const TEXTURE_HEIGHT = 1024;
-const TEXTURE_WIDTH = 2048;
+export type GlobeBasemapPaths = {
+  countryBorderPath: string;
+  landPath: string;
+};
 
 export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const renderSchedulerRef = useRef<ReturnType<typeof createGlobeRenderScheduler> | null>(null);
   const viewStateRef = useRef(viewState);
 
   viewStateRef.current = viewState;
@@ -53,7 +47,6 @@ export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
       return;
     }
 
-    let animationFrame = 0;
     let renderer: THREE.WebGLRenderer;
 
     try {
@@ -84,17 +77,14 @@ export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
     camera.position.set(0, 0, 1000);
     camera.lookAt(0, 0, 0);
 
-    const texture = new THREE.CanvasTexture(createGlobeMapTextureCanvas());
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      metalness: 0,
+      roughness: 0.72,
+    });
     const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 128, 96),
-      new THREE.MeshStandardMaterial({
-        map: texture,
-        metalness: 0,
-        roughness: 0.72,
-      }),
+      new THREE.SphereGeometry(1, 96, 64),
+      material,
     );
 
     scene.add(sphere);
@@ -129,12 +119,12 @@ export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
       camera.bottom = -frustumHeight / 2;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
+      renderSchedulerRef.current?.scheduleRender();
     };
 
     const resizeObserver = new ResizeObserver(resize);
 
     resizeObserver.observe(container);
-    resize();
 
     const render = () => {
       const current = viewStateRef.current;
@@ -148,36 +138,57 @@ export function GlobeBase({ viewState }: { viewState: GlobeViewState }) {
       const rotation = getGlobeSphereRotation(current);
       sphere.rotation.set(rotation.x, rotation.y, rotation.z);
       renderer.render(scene, camera);
-      animationFrame = requestAnimationFrame(render);
     };
 
-    render();
+    const renderScheduler = createGlobeRenderScheduler(render);
+
+    renderSchedulerRef.current = renderScheduler;
+    resize();
+    renderScheduler.scheduleRender();
 
     return () => {
-      cancelAnimationFrame(animationFrame);
+      renderScheduler.cancel();
+      renderSchedulerRef.current = null;
       resizeObserver.disconnect();
       sphere.geometry.dispose();
-      texture.dispose();
-      (sphere.material as THREE.Material).dispose();
+      material.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
   }, []);
+
+  useEffect(() => {
+    viewStateRef.current = viewState;
+    renderSchedulerRef.current?.scheduleRender();
+  }, [viewState.center[0], viewState.center[1], viewState.zoom]);
 
   return <div aria-hidden="true" className="mb-maps__globe-renderer" ref={containerRef} />;
 }
 
 export function GlobeSvgOverlayBase({ viewState }: { viewState: GlobeViewState }) {
   const radius = getGlobeRadius(viewState.zoom);
+  const basemapPaths = useMemo(
+    () => createGlobeBasemapPaths(viewState),
+    [viewState.center[0], viewState.center[1], viewState.zoom],
+  );
+  const graticulePaths = useMemo(
+    () =>
+      createGlobeGraticuleLines(viewState)
+        .map(createVisibleSvgPath)
+        .filter((path): path is string => Boolean(path)),
+    [viewState.center[0], viewState.center[1], viewState.zoom],
+  );
 
   return (
     <>
+      <g className="mb-maps__globe-land">
+        <path d={basemapPaths.landPath} />
+      </g>
+      <path className="mb-maps__globe-country-borders" d={basemapPaths.countryBorderPath} />
       <g className="mb-maps__globe-graticule">
-        {createGlobeGraticuleLines(viewState).map((line, index) => {
-          const path = createVisibleSvgPath(line);
-
-          return path ? <path d={path} key={index} /> : null;
-        })}
+        {graticulePaths.map((path, index) => (
+          <path d={path} key={index} />
+        ))}
       </g>
       <circle
         className="mb-maps__globe-rim"
@@ -189,114 +200,50 @@ export function GlobeSvgOverlayBase({ viewState }: { viewState: GlobeViewState }
   );
 }
 
-export function createGlobeMapTextureCanvas() {
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
+export function createGlobeRenderScheduler(render: () => void) {
+  let animationFrame = 0;
 
-  canvas.width = TEXTURE_WIDTH;
-  canvas.height = TEXTURE_HEIGHT;
+  return {
+    cancel() {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+      }
+    },
+    scheduleRender() {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+      }
 
-  if (!context) {
-    return canvas;
-  }
-
-  const ocean = context.createLinearGradient(0, 0, 0, TEXTURE_HEIGHT);
-
-  ocean.addColorStop(0, "#dbeafe");
-  ocean.addColorStop(0.52, "#38bdf8");
-  ocean.addColorStop(1, "#0f766e");
-  context.fillStyle = ocean;
-  context.fillRect(0, 0, TEXTURE_WIDTH, TEXTURE_HEIGHT);
-  drawLatitudeBands(context);
-
-  const countries = feature(
-    worldTopology,
-    worldTopology.objects.countries,
-  ) as unknown as GeoJsonFeatureCollection;
-  const land = feature(worldTopology, worldTopology.objects.land) as unknown as GeoJsonFeatureCollection;
-
-  context.fillStyle = "#64a874";
-  context.strokeStyle = "rgba(21, 94, 117, 0.28)";
-  context.lineWidth = 1.2;
-  drawFeatureCollection(context, land, true);
-
-  context.strokeStyle = "rgba(248, 250, 252, 0.42)";
-  context.lineWidth = 0.62;
-  drawFeatureCollection(context, countries, false);
-
-  return canvas;
+      animationFrame = requestAnimationFrame(() => {
+        animationFrame = 0;
+        render();
+      });
+    },
+  };
 }
 
-function drawLatitudeBands(context: CanvasRenderingContext2D) {
-  context.save();
+export function createGlobeBasemapPaths(viewState: GlobeViewState): GlobeBasemapPaths {
+  const path = geoPath(createGlobeBasemapProjection(viewState));
 
-  for (let latitude = -60; latitude <= 60; latitude += 30) {
-    const y = latitudeToTextureY(latitude);
-
-    context.beginPath();
-    context.moveTo(0, y);
-    context.lineTo(TEXTURE_WIDTH, y);
-    context.strokeStyle = "rgba(255, 255, 255, 0.14)";
-    context.lineWidth = latitude === 0 ? 2 : 1;
-    context.stroke();
-  }
-
-  context.restore();
+  return {
+    countryBorderPath: path(globeCountryBorders) ?? "",
+    landPath: path(globeLand) ?? "",
+  };
 }
 
-function drawFeatureCollection(
-  context: CanvasRenderingContext2D,
-  collection: GeoJsonFeatureCollection,
-  fill: boolean,
+export function projectGlobeBasemapCoordinate(
+  coordinate: [longitude: number, latitude: number],
+  viewState: GlobeViewState,
 ) {
-  for (const currentFeature of collection.features) {
-    const geometry = currentFeature.geometry;
-
-    if (!geometry) {
-      continue;
-    }
-
-    if (geometry.type === "Polygon") {
-      drawPolygon(context, geometry.coordinates, fill);
-      continue;
-    }
-
-    for (const polygon of geometry.coordinates) {
-      drawPolygon(context, polygon, fill);
-    }
-  }
+  return createGlobeBasemapProjection(viewState)(coordinate);
 }
 
-function drawPolygon(context: CanvasRenderingContext2D, rings: GeoJsonPosition[][], fill: boolean) {
-  context.beginPath();
-
-  for (const ring of rings) {
-    if (ring.length === 0) {
-      continue;
-    }
-
-    const [first, ...rest] = ring;
-
-    context.moveTo(longitudeToTextureX(first[0]), latitudeToTextureY(first[1]));
-
-    for (const coordinate of rest) {
-      context.lineTo(longitudeToTextureX(coordinate[0]), latitudeToTextureY(coordinate[1]));
-    }
-
-    context.closePath();
-  }
-
-  if (fill) {
-    context.fill();
-  }
-
-  context.stroke();
-}
-
-function longitudeToTextureX(longitude: number) {
-  return ((longitude + 180) / 360) * TEXTURE_WIDTH;
-}
-
-function latitudeToTextureY(latitude: number) {
-  return ((90 - latitude) / 180) * TEXTURE_HEIGHT;
+function createGlobeBasemapProjection(viewState: GlobeViewState) {
+  return geoOrthographic()
+    .scale(getGlobeRadius(viewState.zoom))
+    .translate([GLOBE_VIEWBOX_WIDTH / 2, GLOBE_VIEWBOX_HEIGHT / 2])
+    .rotate([-viewState.center[0], -viewState.center[1]])
+    .clipAngle(90)
+    .precision(0.25);
 }

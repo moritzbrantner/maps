@@ -29,6 +29,11 @@ import {
   GLOBE_MAX_ZOOM,
   projectGlobeCoordinate,
 } from "./map-display";
+import {
+  createGlobeBasemapPaths,
+  createGlobeRenderScheduler,
+  projectGlobeBasemapCoordinate,
+} from "./globe-base";
 
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -209,6 +214,7 @@ vi.mock("leaflet", () => leafletMock);
 
 afterEach(() => {
   leafletMock.reset();
+  vi.unstubAllGlobals();
 });
 
 describe("@moritzbrantner/maps additional map kinds", () => {
@@ -1019,9 +1025,52 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     expect(map.getAttribute("data-map-ready")).toBe("true");
     expect(map.querySelector(".mb-maps__globe-renderer")).toBeTruthy();
+    expect(map.querySelector(".mb-maps__globe-land path")?.getAttribute("d")).not.toBe("");
+    expect(map.querySelector(".mb-maps__globe-country-borders")?.getAttribute("d")).not.toBe("");
     expect(map.querySelector(".mb-maps__globe-rim")).toBeTruthy();
     expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
     expect(leafletMock.getMaps()).toHaveLength(0);
+  });
+
+  test("keeps vector globe basemap non-empty at close zoom", () => {
+    const paths = createGlobeBasemapPaths({
+      center: [13.405, 52.52],
+      zoom: 18,
+    });
+
+    expect(paths.landPath).not.toBe("");
+    expect(paths.countryBorderPath).not.toBe("");
+  });
+
+  test("coalesces globe WebGL rendering into scheduled one-shot frames", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+
+      return callbacks.length;
+    });
+    const cancelAnimationFrameMock = vi.fn((id: number) => {
+      callbacks[id - 1] = () => undefined;
+    });
+    const renderGlobe = vi.fn();
+
+    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
+
+    const scheduler = createGlobeRenderScheduler(renderGlobe);
+
+    scheduler.scheduleRender();
+    scheduler.scheduleRender();
+
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(2);
+    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(1);
+    callbacks[1]?.(0);
+    expect(renderGlobe).toHaveBeenCalledTimes(1);
+
+    scheduler.scheduleRender();
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(3);
+    scheduler.cancel();
+    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(3);
   });
 
   test("allows a closer globe zoom", () => {
@@ -1029,7 +1078,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(getGlobeRadius(18) / getGlobeRadius(17)).toBeCloseTo(2, 5);
   });
 
-  test("aligns globe basemap rotation with projected point coordinates", () => {
+  test("aligns globe sphere rotation with projected point coordinates", () => {
     const center: [number, number] = [13.405, 52.52];
     const rotation = getGlobeSphereRotation({ center, zoom: 1.8 });
     const projected = projectGlobeCoordinate(center, { center, zoom: 1.8 });
@@ -1038,6 +1087,16 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(rotation.y).toBeCloseTo(-((center[0] + 90) * Math.PI) / 180);
     expect(projected.x).toBeCloseTo(480);
     expect(projected.y).toBeCloseTo(240);
+  });
+
+  test("aligns vector globe projection with projected point coordinates", () => {
+    const center: [number, number] = [13.405, 52.52];
+    const viewState = { center, zoom: 1.8 };
+    const projected = projectGlobeCoordinate(center, viewState);
+    const basemapProjected = projectGlobeBasemapCoordinate(center, viewState);
+
+    expect(basemapProjected?.[0]).toBeCloseTo(projected.x);
+    expect(basemapProjected?.[1]).toBeCloseTo(projected.y);
   });
 
   test("renders weighted flat flow lines with endpoints", async () => {

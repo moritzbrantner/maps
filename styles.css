@@ -43,6 +43,23 @@
     @apply block size-full;
   }
 
+  .mb-maps__globe-land,
+  .mb-maps__globe-country-borders {
+    pointer-events: none;
+  }
+
+  .mb-maps__globe-land path {
+    fill: #64a874;
+    stroke: rgb(21 94 117 / 0.28);
+    stroke-width: 1.2;
+  }
+
+  .mb-maps__globe-country-borders {
+    fill: none;
+    stroke: rgb(248 250 252 / 0.42);
+    stroke-width: 0.62;
+  }
+
   .mb-maps__globe-graticule path {
     fill: none;
     stroke: rgb(255 255 255 / 0.32);
