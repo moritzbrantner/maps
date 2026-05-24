@@ -209,6 +209,12 @@ select {
   gap: 6px;
 }
 
+.demo-editor-mode-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .demo-layer-row {
   border-top: 1px solid #e1e7ef;
   padding-top: 10px;

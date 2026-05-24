@@ -47,11 +47,14 @@ import type {
 import type { MapCoordinate } from "./measurement";
 
 export type FlatLayerRender = (context: {
+  interactionMode: MapInteractionMode;
   isMeasuring: boolean;
   layer: LayerGroup;
   leaflet: typeof import("leaflet");
   map: LeafletMap;
 }) => void;
+
+export type MapInteractionMode = "none" | "measurement" | "editing";
 
 export type MapSurfaceContextValue = {
   closeFeaturePopup: () => void;
@@ -97,10 +100,12 @@ export type MapSurfaceContextValue = {
     getFeatureId?: (feature: TFeature) => string,
   ) => boolean;
   isMeasuring: boolean;
+  interactionMode: MapInteractionMode;
   leaflet: typeof import("leaflet") | null;
   leafletMap: LeafletMap | null;
   projectGlobeCoordinate: typeof projectGlobeCoordinate;
   registerFlatLayer: (id: string, render: FlatLayerRender) => () => void;
+  registerInteractionMode: (id: string, mode: Exclude<MapInteractionMode, "none">) => () => void;
   requestRender: () => void;
   setMeasurementActive: (active: boolean) => void;
   setViewState: (next: MapViewState, reason: MapViewStateChangeReason) => void;
@@ -174,7 +179,10 @@ export function MapView({
   const lastFitBoundsKeyRef = useRef<string | null>(null);
   const [isReady, setIsReady] = useState(mapDisplay === "globe");
   const [renderVersion, setRenderVersion] = useState(0);
-  const [isMeasuring, setIsMeasuring] = useState(false);
+  const interactionModesRef = useRef<Map<string, Exclude<MapInteractionMode, "none">>>(new Map());
+  const [interactionMode, setInteractionMode] = useState<MapInteractionMode>("none");
+  const isMeasuring = interactionMode === "measurement";
+  const isEditing = interactionMode === "editing";
   const [hovered, setHovered] = useState<{ feature: unknown; id: string | null } | null>(null);
   const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
   const [popup, setPopup] = useState<FeatureOverlayState | null>(null);
@@ -191,6 +199,43 @@ export function MapView({
   const requestRender = useCallback(() => {
     setRenderVersion((version) => version + 1);
   }, []);
+
+  const syncInteractionMode = useCallback(() => {
+    const modes = Array.from(interactionModesRef.current.values());
+    const nextMode = modes.includes("editing")
+      ? "editing"
+      : modes.includes("measurement")
+        ? "measurement"
+        : "none";
+
+    setInteractionMode(nextMode);
+  }, []);
+
+  const registerInteractionMode = useCallback(
+    (id: string, mode: Exclude<MapInteractionMode, "none">) => {
+      interactionModesRef.current.set(id, mode);
+      syncInteractionMode();
+
+      return () => {
+        interactionModesRef.current.delete(id);
+        syncInteractionMode();
+      };
+    },
+    [syncInteractionMode],
+  );
+
+  const setMeasurementActive = useCallback(
+    (active: boolean) => {
+      if (active) {
+        interactionModesRef.current.set("__measurement", "measurement");
+      } else {
+        interactionModesRef.current.delete("__measurement");
+      }
+
+      syncInteractionMode();
+    },
+    [syncInteractionMode],
+  );
 
   useEffect(() => {
     mapContextMenuOptionsRef.current = {
@@ -213,6 +258,7 @@ export function MapView({
       }
 
       layer.render({
+        interactionMode,
         isMeasuring,
         layer: layer.group,
         leaflet,
@@ -410,7 +456,7 @@ export function MapView({
     }
 
     renderFlatLayers();
-  }, [controlled, currentViewState, isMeasuring, mapDisplay, renderVersion]);
+  }, [controlled, currentViewState, interactionMode, isMeasuring, mapDisplay, renderVersion]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -454,7 +500,7 @@ export function MapView({
       });
 
       if (leaflet && map && group) {
-        render({ isMeasuring, layer: group, leaflet, map });
+        render({ interactionMode, isMeasuring, layer: group, leaflet, map });
       }
 
       return () => {
@@ -490,7 +536,7 @@ export function MapView({
         });
       };
     },
-    [isMeasuring],
+    [interactionMode, isMeasuring],
   );
 
   const getGlobePointerCoordinate = useCallback(
@@ -553,7 +599,7 @@ export function MapView({
         renderMapContextMenu?: (context: MapContextMenuContext) => ReactNode;
       },
     ) => {
-      if (isMeasuring) {
+      if (interactionMode !== "none") {
         return;
       }
 
@@ -684,12 +730,14 @@ export function MapView({
         return getFeatureId(feature, getId as never) === selectedFeatureId;
       },
       isMeasuring,
+      interactionMode,
       leaflet: leafletRef.current,
       leafletMap: mapRef.current,
       projectGlobeCoordinate,
       registerFlatLayer,
+      registerInteractionMode,
       requestRender,
-      setMeasurementActive: setIsMeasuring,
+      setMeasurementActive,
       setViewState,
       viewState: currentViewState,
     }),
@@ -698,11 +746,14 @@ export function MapView({
       getFeatureId,
       getGlobePointerCoordinate,
       hovered,
+      interactionMode,
       isReady,
       isMeasuring,
       mapDisplay,
       registerFlatLayer,
+      registerInteractionMode,
       requestRender,
+      setMeasurementActive,
       setViewState,
     ],
   );
@@ -711,6 +762,7 @@ export function MapView({
     "mb-maps",
     mapDisplay === "globe" && "mb-maps--globe",
     isMeasuring && "mb-maps--measuring",
+    isEditing && "mb-maps--editing",
     className,
   );
 

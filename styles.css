@@ -22,6 +22,10 @@
     cursor: crosshair;
   }
 
+  .mb-maps--editing .leaflet-container {
+    cursor: crosshair;
+  }
+
   .mb-maps--globe {
     @apply bg-slate-950;
   }
@@ -125,6 +129,33 @@
   .mb-maps__flow-line,
   .mb-maps__geojson-feature {
     cursor: pointer;
+  }
+
+  .mb-maps__editor-feature {
+    cursor: pointer;
+  }
+
+  .mb-maps__editor-feature--selected {
+    filter: drop-shadow(0 0 8px rgb(2 132 199 / 0.55));
+  }
+
+  .mb-maps__editor-handle {
+    cursor: grab;
+    filter: drop-shadow(0 2px 6px rgb(15 23 42 / 0.28));
+  }
+
+  .mb-maps__editor-handle:active {
+    cursor: grabbing;
+  }
+
+  .mb-maps__editor-handle--midpoint {
+    cursor: copy;
+  }
+
+  .mb-maps__editor-draft {
+    stroke-dasharray: 6 6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .mb-maps__feature--hovered {

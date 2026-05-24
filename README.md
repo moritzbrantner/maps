@@ -128,6 +128,54 @@ as endpoints and preserving multi-vertex route shapes as overlays. Use
 `geoJsonOverlay="none"` to disable contextual overlays, or `geoJsonOverlay="all"`
 to draw the full GeoJSON source below the native layer.
 
+## GeoJSON editing
+
+Use `EditableGeoJsonMap` when users need to create, move, reshape, or delete
+GeoJSON objects. Editing is controlled: the map emits the next feature
+collection and an operation descriptor, while the consuming app owns toolbar UI,
+persistence, undo, save, and cancel flows.
+
+```tsx
+import { useState } from "react";
+import {
+  EditableGeoJsonMap,
+  type GeoJsonEditMode,
+  type TemporalGeoJsonGeometryFeatureCollection,
+} from "@moritzbrantner/maps";
+
+function GeoJsonEditor({
+  initialGeoJson,
+}: {
+  initialGeoJson: TemporalGeoJsonGeometryFeatureCollection;
+}) {
+  const [geoJson, setGeoJson] = useState(initialGeoJson);
+  const [mode, setMode] = useState<GeoJsonEditMode>("select");
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+
+  return (
+    <>
+      <button type="button" onClick={() => setMode("draw-polygon")}>
+        Draw polygon
+      </button>
+      <button type="button" onClick={() => setMode("reshape")}>
+        Reshape
+      </button>
+      <EditableGeoJsonMap
+        editMode={mode}
+        geoJson={geoJson}
+        selectedFeatureId={selectedFeatureId}
+        onFeatureCollectionChange={(next) => setGeoJson(next)}
+        onSelectionChange={setSelectedFeatureId}
+        style={{ height: 420 }}
+      />
+    </>
+  );
+}
+```
+
+For composed maps, use `GeoJsonEditorLayer` inside `MapView`. The first editor
+version supports flat maps; globe maps remain display/inspection surfaces.
+
 ## Controlled viewport
 
 Every map accepts `viewState`, `defaultViewState`, and

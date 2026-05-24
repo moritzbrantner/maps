@@ -6,6 +6,7 @@ import {
   BubbleLayer,
   ClusterLayer,
   ClusteredMap,
+  EditableGeoJsonMap,
   FlowLayer,
   FlowMap,
   GeoJsonLayer,
@@ -23,6 +24,7 @@ import {
   type MapPoint,
   type PointMapFeature,
   type MapViewState,
+  type GeoJsonEditMode,
   type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalMapTrack,
 } from "@moritzbrantner/maps";
@@ -57,7 +59,8 @@ type DemoView =
   | "composed"
   | "temporal"
   | "globe"
-  | "geojson";
+  | "geojson"
+  | "editor";
 type DemoLayerKind = "clusters" | "points" | "bubbles" | "heat" | "flows";
 
 type DemoLayerConfig = {
@@ -224,6 +227,17 @@ const views: Array<{ id: DemoView; label: string }> = [
   { id: "temporal", label: "Timeline" },
   { id: "globe", label: "Globe" },
   { id: "geojson", label: "GeoJSON" },
+  { id: "editor", label: "Editor" },
+];
+
+const editorModes: Array<{ id: GeoJsonEditMode; label: string }> = [
+  { id: "select", label: "Select" },
+  { id: "draw-point", label: "Point" },
+  { id: "draw-line", label: "Line" },
+  { id: "draw-polygon", label: "Polygon" },
+  { id: "move", label: "Move" },
+  { id: "reshape", label: "Reshape" },
+  { id: "delete", label: "Delete" },
 ];
 
 const layerKinds: Array<{ id: DemoLayerKind; label: string }> = [
@@ -267,6 +281,9 @@ export function App() {
   const [layers, setLayers] = useState<DemoLayerConfig[]>(initialLayers);
   const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
   const [editablePoints, setEditablePoints] = useState<Array<MapPoint<DemoPointProperties>>>(demoPointHubs);
+  const [editableGeoJson, setEditableGeoJson] = useState(demoGeoJsonCollection);
+  const [editMode, setEditMode] = useState<GeoJsonEditMode>("select");
+  const [selectedGeoJsonId, setSelectedGeoJsonId] = useState<string | null>(null);
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewState>({
     center: [13.405, 52.52],
@@ -423,6 +440,12 @@ export function App() {
             setViewport,
             layers,
             editablePointContext,
+            editableGeoJson,
+            setEditableGeoJson,
+            editMode,
+            setEditMode,
+            selectedGeoJsonId,
+            setSelectedGeoJsonId,
           )}
         </div>
         <aside className="demo-inspector" aria-label="Current dataset">
@@ -516,6 +539,40 @@ export function App() {
               </div>
             </div>
           ) : null}
+          {view === "editor" ? (
+            <div className="demo-layer-manager" aria-label="GeoJSON editor controls">
+              <div className="demo-layer-manager__header">
+                <h2>Editor</h2>
+              </div>
+              <div className="demo-editor-mode-grid">
+                {editorModes.map((mode) => (
+                  <button
+                    aria-pressed={editMode === mode.id}
+                    className="demo-button demo-button--compact"
+                    key={mode.id}
+                    type="button"
+                    onClick={() => setEditMode(mode.id)}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+              <dl>
+                <div>
+                  <dt>Mode</dt>
+                  <dd>{editMode}</dd>
+                </div>
+                <div>
+                  <dt>Selected</dt>
+                  <dd>{selectedGeoJsonId ?? "None"}</dd>
+                </div>
+                <div>
+                  <dt>Features</dt>
+                  <dd>{editableGeoJson.features.length}</dd>
+                </div>
+              </dl>
+            </div>
+          ) : null}
         </aside>
       </section>
     </main>
@@ -531,6 +588,12 @@ function renderMap(
   setViewport: Dispatch<SetStateAction<MapViewState>>,
   layers: DemoLayerConfig[],
   editablePoints: EditablePointContext,
+  editableGeoJson: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
+  setEditableGeoJson: Dispatch<SetStateAction<TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>>>,
+  editMode: GeoJsonEditMode,
+  setEditMode: Dispatch<SetStateAction<GeoJsonEditMode>>,
+  selectedGeoJsonId: string | null,
+  setSelectedGeoJsonId: Dispatch<SetStateAction<string | null>>,
 ) {
   const sharedMeasurementProps = {
     measurementMode: isMeasuring ? ("bee-line" as const) : ("none" as const),
@@ -659,6 +722,28 @@ function renderMap(
       );
     case "geojson":
       return <GeoJsonGeometryExample />;
+    case "editor":
+      return (
+        <EditableGeoJsonMap
+          editMode={editMode}
+          fitToData={false}
+          geoJson={editableGeoJson}
+          initialViewState={{ center: [8.4, 50.4], zoom: 4.4 }}
+          onFeatureCollectionChange={(next) => setEditableGeoJson(next)}
+          onSelectionChange={setSelectedGeoJsonId}
+          selectedFeatureId={selectedGeoJsonId}
+          createFeatureProperties={(geometryType) => ({
+            kind: geometryType,
+            label: `New ${geometryType}`,
+            time: 0,
+            trackId: `editor-${Date.now()}`,
+          })}
+          onMapContextMenu={() => {
+            setEditMode("draw-point");
+          }}
+          style={{ minHeight: 620 }}
+        />
+      );
     case "clusters":
     default:
       return (
