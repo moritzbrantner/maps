@@ -1,5 +1,18 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useQuery } from "@tanstack/react-query";
 
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  NativeSelect,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from "@moritzbrantner/ui";
 import {
   BubbleMap,
   BeeLineMeasurementLayer,
@@ -71,6 +84,11 @@ type DemoLayerConfig = {
   name: string;
 };
 
+type DemoDataset = {
+  points: Array<MapPoint<DemoPointProperties>>;
+  regions: string[];
+};
+
 type EditablePointContext = {
   onCreatePoint: (coordinates: [longitude: number, latitude: number]) => void;
   onDeletePoint: (feature: PointMapFeature<DemoPointProperties>) => void;
@@ -83,47 +101,67 @@ type EditablePointContext = {
   selectedPointId: string | null;
 };
 
-const demoPointFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties> = {
-  features: [
-    pointFeature("berlin", "Berlin", "DACH", 52.52, 13.405, 940),
-    pointFeature("hamburg", "Hamburg", "DACH", 53.551, 9.9937, 420),
-    pointFeature("munich", "Munich", "DACH", 48.1351, 11.582, 610),
-    pointFeature("cologne", "Cologne", "DACH", 50.9375, 6.9603, 350),
-    pointFeature("zurich", "Zurich", "DACH", 47.3769, 8.5417, 520),
-    pointFeature("vienna", "Vienna", "DACH", 48.2082, 16.3738, 560),
-    pointFeature("paris", "Paris", "West", 48.8566, 2.3522, 880),
-    pointFeature("london", "London", "West", 51.5072, -0.1276, 910),
-    pointFeature("amsterdam", "Amsterdam", "West", 52.3676, 4.9041, 470),
-    pointFeature("brussels", "Brussels", "West", 50.8503, 4.3517, 300),
-    pointFeature("madrid", "Madrid", "South", 40.4168, -3.7038, 760),
-    pointFeature("barcelona", "Barcelona", "South", 41.3874, 2.1686, 690),
-    pointFeature("milan", "Milan", "South", 45.4642, 9.19, 580),
-    pointFeature("rome", "Rome", "South", 41.9028, 12.4964, 640),
-    pointFeature("warsaw", "Warsaw", "East", 52.2297, 21.0122, 430),
-    pointFeature("prague", "Prague", "East", 50.0755, 14.4378, 390),
-    pointFeature("copenhagen", "Copenhagen", "North", 55.6761, 12.5683, 330),
-    pointFeature("stockholm", "Stockholm", "North", 59.3293, 18.0686, 370),
-    pointFeature("oslo", "Oslo", "North", 59.9139, 10.7522, 280),
-    pointFeature("helsinki", "Helsinki", "North", 60.1699, 24.9384, 260),
-  ],
-  type: "FeatureCollection",
-};
+const demoPointFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties> =
+  {
+    features: [
+      pointFeature("berlin", "Berlin", "DACH", 52.52, 13.405, 940),
+      pointFeature("hamburg", "Hamburg", "DACH", 53.551, 9.9937, 420),
+      pointFeature("munich", "Munich", "DACH", 48.1351, 11.582, 610),
+      pointFeature("cologne", "Cologne", "DACH", 50.9375, 6.9603, 350),
+      pointFeature("zurich", "Zurich", "DACH", 47.3769, 8.5417, 520),
+      pointFeature("vienna", "Vienna", "DACH", 48.2082, 16.3738, 560),
+      pointFeature("paris", "Paris", "West", 48.8566, 2.3522, 880),
+      pointFeature("london", "London", "West", 51.5072, -0.1276, 910),
+      pointFeature("amsterdam", "Amsterdam", "West", 52.3676, 4.9041, 470),
+      pointFeature("brussels", "Brussels", "West", 50.8503, 4.3517, 300),
+      pointFeature("madrid", "Madrid", "South", 40.4168, -3.7038, 760),
+      pointFeature("barcelona", "Barcelona", "South", 41.3874, 2.1686, 690),
+      pointFeature("milan", "Milan", "South", 45.4642, 9.19, 580),
+      pointFeature("rome", "Rome", "South", 41.9028, 12.4964, 640),
+      pointFeature("warsaw", "Warsaw", "East", 52.2297, 21.0122, 430),
+      pointFeature("prague", "Prague", "East", 50.0755, 14.4378, 390),
+      pointFeature("copenhagen", "Copenhagen", "North", 55.6761, 12.5683, 330),
+      pointFeature("stockholm", "Stockholm", "North", 59.3293, 18.0686, 370),
+      pointFeature("oslo", "Oslo", "North", 59.9139, 10.7522, 280),
+      pointFeature("helsinki", "Helsinki", "North", 60.1699, 24.9384, 260),
+    ],
+    type: "FeatureCollection",
+  };
 
 const demoPointHubs = createDemoPointsFromGeoJson(demoPointFeatureCollection);
 const demoPoints = createDenseDemoPoints(demoPointHubs);
 
-const demoFlowFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties> = {
-  features: [
-    flowFeature("berlin-paris", "Berlin to Paris", [13.405, 52.52], [2.3522, 48.8566], 180),
-    flowFeature("berlin-london", "Berlin to London", [13.405, 52.52], [-0.1276, 51.5072], 145),
-    flowFeature("hamburg-stockholm", "Hamburg to Stockholm", [9.9937, 53.551], [18.0686, 59.3293], 82),
-    flowFeature("munich-milan", "Munich to Milan", [11.582, 48.1351], [9.19, 45.4642], 120),
-    flowFeature("vienna-prague", "Vienna to Prague", [16.3738, 48.2082], [14.4378, 50.0755], 96),
-    flowFeature("madrid-barcelona", "Madrid to Barcelona", [-3.7038, 40.4168], [2.1686, 41.3874], 165),
-    flowFeature("amsterdam-brussels", "Amsterdam to Brussels", [4.9041, 52.3676], [4.3517, 50.8503], 74),
-  ],
-  type: "FeatureCollection",
-};
+const demoFlowFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties> =
+  {
+    features: [
+      flowFeature("berlin-paris", "Berlin to Paris", [13.405, 52.52], [2.3522, 48.8566], 180),
+      flowFeature("berlin-london", "Berlin to London", [13.405, 52.52], [-0.1276, 51.5072], 145),
+      flowFeature(
+        "hamburg-stockholm",
+        "Hamburg to Stockholm",
+        [9.9937, 53.551],
+        [18.0686, 59.3293],
+        82,
+      ),
+      flowFeature("munich-milan", "Munich to Milan", [11.582, 48.1351], [9.19, 45.4642], 120),
+      flowFeature("vienna-prague", "Vienna to Prague", [16.3738, 48.2082], [14.4378, 50.0755], 96),
+      flowFeature(
+        "madrid-barcelona",
+        "Madrid to Barcelona",
+        [-3.7038, 40.4168],
+        [2.1686, 41.3874],
+        165,
+      ),
+      flowFeature(
+        "amsterdam-brussels",
+        "Amsterdam to Brussels",
+        [4.9041, 52.3676],
+        [4.3517, 50.8503],
+        74,
+      ),
+    ],
+    type: "FeatureCollection",
+  };
 
 const demoFlows = createDemoFlowsFromGeoJson(demoFlowFeatureCollection);
 
@@ -274,13 +312,22 @@ const initialLayers: DemoLayerConfig[] = [
   },
 ];
 
+const demoRegions = ["DACH", "West", "South", "East", "North"];
+
 export function App() {
+  const datasetQuery = useQuery({
+    initialData: createDemoDataset,
+    queryFn: loadDemoDataset,
+    queryKey: ["maps-demo-dataset"],
+    staleTime: Infinity,
+  });
   const [view, setView] = useState<DemoView>("clusters");
   const [selectedRegion, setSelectedRegion] = useState("all");
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [layers, setLayers] = useState<DemoLayerConfig[]>(initialLayers);
   const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
-  const [editablePoints, setEditablePoints] = useState<Array<MapPoint<DemoPointProperties>>>(demoPointHubs);
+  const [editablePoints, setEditablePoints] =
+    useState<Array<MapPoint<DemoPointProperties>>>(demoPointHubs);
   const [editableGeoJson, setEditableGeoJson] = useState(demoGeoJsonCollection);
   const [editMode, setEditMode] = useState<GeoJsonEditMode>("select");
   const [selectedGeoJsonId, setSelectedGeoJsonId] = useState<string | null>(null);
@@ -289,12 +336,13 @@ export function App() {
     center: [13.405, 52.52],
     zoom: 5,
   });
+  const dataset = datasetQuery.data;
   const visiblePoints = useMemo(
     () =>
       selectedRegion === "all"
-        ? demoPoints
-        : demoPoints.filter((item) => item.properties?.region === selectedRegion),
-    [selectedRegion],
+        ? dataset.points
+        : dataset.points.filter((item) => item.properties?.region === selectedRegion),
+    [dataset.points, selectedRegion],
   );
   const visibleEditablePoints = useMemo(
     () =>
@@ -328,7 +376,10 @@ export function App() {
           ? {
               ...layer,
               ...patch,
-              name: patch.kind && patch.kind !== layer.kind ? getLayerKindLabel(patch.kind) : layer.name,
+              name:
+                patch.kind && patch.kind !== layer.kind
+                  ? getLayerKindLabel(patch.kind)
+                  : layer.name,
             }
           : layer,
       ),
@@ -383,51 +434,57 @@ export function App() {
   };
 
   return (
-    <main className="demo-shell">
-      <header className="demo-toolbar">
+    <main className="mx-auto grid min-h-screen w-full max-w-[1480px] gap-4 p-4 text-foreground md:gap-5 md:p-6">
+      <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="demo-kicker">@moritzbrantner/maps</p>
-          <h1>Interactive map component workbench</h1>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">@moritzbrantner/maps</Badge>
+            <Badge variant={datasetQuery.isFetching ? "outline" : "default"}>
+              {datasetQuery.isFetching ? "Updating" : "Ready"}
+            </Badge>
+          </div>
+          <h1 className="m-0 text-3xl font-semibold tracking-normal text-foreground md:text-4xl">
+            Interactive map component workbench
+          </h1>
         </div>
-        <div className="demo-actions" aria-label="Demo controls">
-          <label className="demo-field">
+        <div className="flex flex-wrap items-end gap-2" aria-label="Demo controls">
+          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
             <span>Region</span>
-            <select value={selectedRegion} onChange={(event) => setSelectedRegion(event.target.value)}>
+            <NativeSelect
+              value={selectedRegion}
+              onChange={(event) => setSelectedRegion(event.target.value)}
+            >
               <option value="all">All regions</option>
-              <option value="DACH">DACH</option>
-              <option value="West">West</option>
-              <option value="South">South</option>
-              <option value="East">East</option>
-              <option value="North">North</option>
-            </select>
+              {dataset.regions.map((region) => (
+                <option key={region} value={region}>
+                  {region}
+                </option>
+              ))}
+            </NativeSelect>
           </label>
-          <button
-            className="demo-button"
+          <Button
+            variant={isMeasuring ? "default" : "outline"}
             type="button"
             aria-pressed={isMeasuring}
             onClick={() => setIsMeasuring((value) => !value)}
           >
             {isMeasuring ? "Measuring" : "Measure"}
-          </button>
-          <button className="demo-button" type="button" onClick={() => setMeasurements([])}>
+          </Button>
+          <Button variant="secondary" type="button" onClick={() => setMeasurements([])}>
             Clear
-          </button>
+          </Button>
         </div>
       </header>
 
-      <nav className="demo-tabs" aria-label="Map examples">
-        {views.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className="demo-tab"
-            aria-current={view === item.id ? "page" : undefined}
-            onClick={() => setView(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+      <Tabs value={view} onValueChange={(value) => setView(value as DemoView)}>
+        <TabsList className="flex h-auto flex-wrap justify-start" aria-label="Map examples">
+          {views.map((item) => (
+            <TabsTrigger key={item.id} value={item.id}>
+              {item.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
       <section className="demo-stage">
         <div className="demo-map-frame">
@@ -448,135 +505,164 @@ export function App() {
             setSelectedGeoJsonId,
           )}
         </div>
-        <aside className="demo-inspector" aria-label="Current dataset">
-          <h2>Dataset</h2>
-          <dl>
-            <div>
-              <dt>Viewport</dt>
-              <dd>
-                {viewport.center[0].toFixed(2)}, {viewport.center[1].toFixed(2)} /{" "}
-                {viewport.zoom.toFixed(1)}
-              </dd>
-            </div>
-            <div>
-              <dt>Points</dt>
-              <dd>{activeInspectorPoints.length}</dd>
-            </div>
-            <div>
-              <dt>Demand</dt>
-              <dd>{activeInspectorPoints.reduce((total, item) => total + (item.metrics?.demand ?? 0), 0)}</dd>
-            </div>
-            <div>
-              <dt>Measurements</dt>
-              <dd>{measurements.length}</dd>
-            </div>
-          </dl>
-          {view === "composed" ? (
-            <div className="demo-layer-manager" aria-label="Layer manager">
-              <div className="demo-layer-manager__header">
-                <h2>Layers</h2>
-                <div className="demo-layer-add">
-                  {layerKinds.map((kind) => (
-                    <button
-                      className="demo-button demo-button--compact"
-                      key={kind.id}
-                      type="button"
-                      onClick={() => addLayer(kind.id)}
-                    >
-                      + {kind.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="demo-layer-list">
-                {layers.map((layer) => (
-                  <div className="demo-layer-row" key={layer.id}>
-                    <label className="demo-layer-toggle">
-                      <input
-                        checked={layer.enabled}
-                        type="checkbox"
-                        onChange={(event) => updateLayer(layer.id, { enabled: event.target.checked })}
-                      />
-                      <span>{layer.name}</span>
-                    </label>
-                    <label className="demo-field">
-                      <span>Type</span>
-                      <select
-                        value={layer.kind}
-                        onChange={(event) =>
-                          updateLayer(layer.id, { kind: event.target.value as DemoLayerKind })
-                        }
-                      >
-                        {layerKinds.map((kind) => (
-                          <option key={kind.id} value={kind.id}>
-                            {kind.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="demo-layer-colors" aria-label={`${layer.name} color`}>
-                      {layerColors.map((color) => (
-                        <button
-                          aria-pressed={layer.color === color}
-                          className="demo-color-swatch"
-                          key={color}
-                          style={{ background: color }}
-                          title={color}
-                          type="button"
-                          onClick={() => updateLayer(layer.id, { color })}
-                        />
-                      ))}
-                    </div>
-                    <button
-                      className="demo-button demo-button--compact"
-                      type="button"
-                      onClick={() => removeLayer(layer.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {view === "editor" ? (
-            <div className="demo-layer-manager" aria-label="GeoJSON editor controls">
-              <div className="demo-layer-manager__header">
-                <h2>Editor</h2>
-              </div>
-              <div className="demo-editor-mode-grid">
-                {editorModes.map((mode) => (
-                  <button
-                    aria-pressed={editMode === mode.id}
-                    className="demo-button demo-button--compact"
-                    key={mode.id}
-                    type="button"
-                    onClick={() => setEditMode(mode.id)}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
-              <dl>
+        <aside aria-label="Current dataset">
+          <Card className="gap-4">
+            <CardHeader>
+              <CardTitle>Dataset</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <dl className="grid gap-3 [&>div]:flex [&>div]:items-baseline [&>div]:justify-between [&>div]:gap-3 [&>div]:border-b [&>div]:border-border [&>div]:pb-3 [&>div:last-child]:border-b-0 [&>div:last-child]:pb-0 [&_dd]:m-0 [&_dd]:font-semibold [&_dd]:tabular-nums [&_dt]:text-sm [&_dt]:font-medium [&_dt]:text-muted-foreground">
                 <div>
-                  <dt>Mode</dt>
-                  <dd>{editMode}</dd>
+                  <dt>Viewport</dt>
+                  <dd>
+                    {viewport.center[0].toFixed(2)}, {viewport.center[1].toFixed(2)} /{" "}
+                    {viewport.zoom.toFixed(1)}
+                  </dd>
                 </div>
                 <div>
-                  <dt>Selected</dt>
-                  <dd>{selectedGeoJsonId ?? "None"}</dd>
+                  <dt>Points</dt>
+                  <dd>{activeInspectorPoints.length}</dd>
                 </div>
                 <div>
-                  <dt>Features</dt>
-                  <dd>{editableGeoJson.features.length}</dd>
+                  <dt>Demand</dt>
+                  <dd>
+                    {activeInspectorPoints.reduce(
+                      (total, item) => total + (item.metrics?.demand ?? 0),
+                      0,
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Measurements</dt>
+                  <dd>{measurements.length}</dd>
                 </div>
               </dl>
-            </div>
-          ) : null}
+              {view === "composed" ? (
+                <div className="demo-layer-manager" aria-label="Layer manager">
+                  <div className="demo-layer-manager__header">
+                    <h2>Layers</h2>
+                    <div className="demo-layer-add">
+                      {layerKinds.map((kind) => (
+                        <Button
+                          className="h-8"
+                          key={kind.id}
+                          size="sm"
+                          variant="secondary"
+                          type="button"
+                          onClick={() => addLayer(kind.id)}
+                        >
+                          + {kind.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="demo-layer-list">
+                    {layers.map((layer) => (
+                      <div className="demo-layer-row" key={layer.id}>
+                        <label className="demo-layer-toggle">
+                          <input
+                            checked={layer.enabled}
+                            type="checkbox"
+                            onChange={(event) =>
+                              updateLayer(layer.id, { enabled: event.target.checked })
+                            }
+                          />
+                          <span>{layer.name}</span>
+                        </label>
+                        <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                          <span>Type</span>
+                          <NativeSelect
+                            size="sm"
+                            value={layer.kind}
+                            onChange={(event) =>
+                              updateLayer(layer.id, { kind: event.target.value as DemoLayerKind })
+                            }
+                          >
+                            {layerKinds.map((kind) => (
+                              <option key={kind.id} value={kind.id}>
+                                {kind.label}
+                              </option>
+                            ))}
+                          </NativeSelect>
+                        </label>
+                        <div className="demo-layer-colors" aria-label={`${layer.name} color`}>
+                          {layerColors.map((color) => (
+                            <button
+                              aria-pressed={layer.color === color}
+                              className="demo-color-swatch"
+                              key={color}
+                              style={{ background: color }}
+                              title={color}
+                              type="button"
+                              onClick={() => updateLayer(layer.id, { color })}
+                            />
+                          ))}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          type="button"
+                          onClick={() => removeLayer(layer.id)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {view === "editor" ? (
+                <div className="demo-layer-manager" aria-label="GeoJSON editor controls">
+                  <div className="demo-layer-manager__header">
+                    <h2>Editor</h2>
+                  </div>
+                  <div className="demo-editor-mode-grid">
+                    {editorModes.map((mode) => (
+                      <Button
+                        aria-pressed={editMode === mode.id}
+                        key={mode.id}
+                        size="sm"
+                        variant={editMode === mode.id ? "default" : "secondary"}
+                        type="button"
+                        onClick={() => setEditMode(mode.id)}
+                      >
+                        {mode.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <dl className="grid gap-3 [&>div]:flex [&>div]:items-baseline [&>div]:justify-between [&>div]:gap-3 [&>div]:border-b [&>div]:border-border [&>div]:pb-3 [&>div:last-child]:border-b-0 [&>div:last-child]:pb-0 [&_dd]:m-0 [&_dd]:font-semibold [&_dd]:tabular-nums [&_dt]:text-sm [&_dt]:font-medium [&_dt]:text-muted-foreground">
+                    <div>
+                      <dt>Mode</dt>
+                      <dd>{editMode}</dd>
+                    </div>
+                    <div>
+                      <dt>Selected</dt>
+                      <dd>{selectedGeoJsonId ?? "None"}</dd>
+                    </div>
+                    <div>
+                      <dt>Features</dt>
+                      <dd>{editableGeoJson.features.length}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
         </aside>
       </section>
     </main>
   );
+}
+
+async function loadDemoDataset(): Promise<DemoDataset> {
+  return createDemoDataset();
+}
+
+function createDemoDataset(): DemoDataset {
+  return {
+    points: demoPoints,
+    regions: demoRegions,
+  };
 }
 
 function renderMap(
@@ -589,7 +675,9 @@ function renderMap(
   layers: DemoLayerConfig[],
   editablePoints: EditablePointContext,
   editableGeoJson: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
-  setEditableGeoJson: Dispatch<SetStateAction<TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>>>,
+  setEditableGeoJson: Dispatch<
+    SetStateAction<TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>>
+  >,
   editMode: GeoJsonEditMode,
   setEditMode: Dispatch<SetStateAction<GeoJsonEditMode>>,
   selectedGeoJsonId: string | null,
@@ -692,7 +780,9 @@ function renderMap(
           onViewStateChange={setViewport}
           style={{ minHeight: 620 }}
         >
-          {layers.filter((layer) => layer.enabled).map((layer) => renderComposedLayer(layer, points))}
+          {layers
+            .filter((layer) => layer.enabled)
+            .map((layer) => renderComposedLayer(layer, points))}
           <BeeLineMeasurementLayer {...sharedMeasurementProps} layerId="composed-measurements" />
         </MapView>
       );
@@ -814,10 +904,7 @@ function GeoJsonGeometryExample() {
   );
 }
 
-function renderComposedLayer(
-  layer: DemoLayerConfig,
-  points: Array<MapPoint<DemoPointProperties>>,
-) {
+function renderComposedLayer(layer: DemoLayerConfig, points: Array<MapPoint<DemoPointProperties>>) {
   switch (layer.kind) {
     case "bubbles":
       return (
