@@ -41,6 +41,7 @@ export type LeafletFeaturePointerEvent = {
 export function createFlatGeometryLayers(
   geometry: TemporalGeoJsonSupportedGeometry,
   options: {
+    bubblingMouseEvents?: boolean;
     className: string;
     interactive: boolean;
     leaflet: typeof import("leaflet");
@@ -48,13 +49,14 @@ export function createFlatGeometryLayers(
     style: Required<GeoJsonLayerStyle>;
   },
 ): FlatGeometryLayer[] {
-  const { className, interactive, leaflet, selected, style } = options;
+  const { bubblingMouseEvents, className, interactive, leaflet, selected, style } = options;
 
   switch (geometry.type) {
     case "Point":
       return [
         leaflet.circleMarker(toLeafletLatLng(geometry.coordinates), {
           className,
+          bubblingMouseEvents,
           color: "#ffffff",
           fillColor: style.pointColor,
           fillOpacity: 0.94,
@@ -68,6 +70,7 @@ export function createFlatGeometryLayers(
       return geometry.coordinates.map((coordinates) =>
         leaflet.circleMarker(toLeafletLatLng(coordinates), {
           className,
+          bubblingMouseEvents,
           color: "#ffffff",
           fillColor: style.pointColor,
           fillOpacity: 0.94,
@@ -78,16 +81,32 @@ export function createFlatGeometryLayers(
         }) as FlatGeometryLayer,
       );
     case "LineString":
-      return [createFlatLineLayer(leaflet, geometry, className, interactive, selected, style)];
+      return [createFlatLineLayer(leaflet, geometry, className, interactive, selected, style, bubblingMouseEvents)];
     case "MultiLineString":
       return geometry.coordinates.map((coordinates) =>
-        createFlatLineLayer(leaflet, { coordinates, type: "LineString" }, className, interactive, selected, style),
+        createFlatLineLayer(
+          leaflet,
+          { coordinates, type: "LineString" },
+          className,
+          interactive,
+          selected,
+          style,
+          bubblingMouseEvents,
+        ),
       );
     case "Polygon":
-      return [createFlatPolygonLayer(leaflet, geometry, className, interactive, selected, style)];
+      return [createFlatPolygonLayer(leaflet, geometry, className, interactive, selected, style, bubblingMouseEvents)];
     case "MultiPolygon":
       return geometry.coordinates.map((coordinates) =>
-        createFlatPolygonLayer(leaflet, { coordinates, type: "Polygon" }, className, interactive, selected, style),
+        createFlatPolygonLayer(
+          leaflet,
+          { coordinates, type: "Polygon" },
+          className,
+          interactive,
+          selected,
+          style,
+          bubblingMouseEvents,
+        ),
       );
   }
 }
@@ -148,8 +167,10 @@ function createFlatLineLayer(
   interactive: boolean,
   selected: boolean,
   style: Required<GeoJsonLayerStyle>,
+  bubblingMouseEvents?: boolean,
 ) {
   return leaflet.polyline(geometry.coordinates.map(toLeafletLatLng), {
+    bubblingMouseEvents,
     className,
     color: style.lineColor,
     interactive,
@@ -165,8 +186,10 @@ function createFlatPolygonLayer(
   interactive: boolean,
   selected: boolean,
   style: Required<GeoJsonLayerStyle>,
+  bubblingMouseEvents?: boolean,
 ) {
   return leaflet.polygon(geometry.coordinates.map((ring) => ring.map(toLeafletLatLng)), {
+    bubblingMouseEvents,
     className,
     color: style.polygonStrokeColor,
     fillColor: style.polygonFillColor,

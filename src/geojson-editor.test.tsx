@@ -370,6 +370,74 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     expect(onFeatureCollectionChange).not.toHaveBeenCalled();
   });
 
+  test("previews a point before creating it", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    render(
+      <EditableGeoJsonMap
+        editMode="draw-point"
+        fitToData={false}
+        geoJson={emptyCollection}
+        mapLabel="Point preview editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Point preview editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = leafletMock.getMaps()[0];
+
+    act(() => {
+      map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 52, lng: 13 } });
+    });
+
+    await waitFor(() => {
+      expect(
+        leafletMock.getLayerGroups()[0]?.layers.some(
+          (layer) => layer.options?.className === "mb-maps__editor-draft mb-maps__editor-draft-point",
+        ),
+      ).toBe(true);
+    });
+    expect(onFeatureCollectionChange).not.toHaveBeenCalled();
+  });
+
+  test("previews the next line segment while drawing", async () => {
+    render(
+      <EditableGeoJsonMap
+        editMode="draw-line"
+        fitToData={false}
+        geoJson={emptyCollection}
+        mapLabel="Line preview editor"
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Line preview editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = leafletMock.getMaps()[0];
+
+    act(() => {
+      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 1, lng: 2 } });
+      map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 3, lng: 4 } });
+    });
+
+    await waitFor(() => {
+      const draftLine = leafletMock.getLayerGroups()[0]?.layers.find(
+        (layer) => layer.options?.className === "mb-maps__editor-draft",
+      );
+
+      expect(draftLine?.latLngs).toEqual([
+        [1, 2],
+        [3, 4],
+      ]);
+    });
+  });
+
   test("selects and deletes a feature", async () => {
     const onSelectionChange = vi.fn();
     const onFeatureCollectionChange = vi.fn();
@@ -399,6 +467,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     expect(onSelectionChange).toHaveBeenCalledWith("line-1");
+    expect(featureLayer?.options?.bubblingMouseEvents).toBe(false);
 
     rerender(
       <EditableGeoJsonMap

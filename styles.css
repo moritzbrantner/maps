@@ -152,10 +152,18 @@
     cursor: copy;
   }
 
+  .mb-maps__editor-handle--selected {
+    filter: drop-shadow(0 0 8px rgb(2 132 199 / 0.6));
+  }
+
   .mb-maps__editor-draft {
     stroke-dasharray: 6 6;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+
+  .mb-maps__editor-draft-point {
+    stroke-dasharray: none;
   }
 
   .mb-maps__feature--hovered {

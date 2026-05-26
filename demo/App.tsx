@@ -38,8 +38,11 @@ import {
   type PointMapFeature,
   type MapViewState,
   type GeoJsonEditMode,
+  type TemporalGeoJsonGeometryFeature,
   type TemporalGeoJsonGeometryFeatureCollection,
+  type TemporalGeoJsonSupportedGeometry,
   type TemporalMapTrack,
+  moveGeoJsonGeometry,
 } from "@moritzbrantner/maps";
 
 type DemoPointProperties = {
@@ -432,6 +435,66 @@ export function App() {
     points: visibleEditablePoints,
     selectedPointId,
   };
+  const selectedGeoJsonFeature = useMemo(
+    () => getDemoGeoJsonFeature(editableGeoJson, selectedGeoJsonId),
+    [editableGeoJson, selectedGeoJsonId],
+  );
+  const selectedGeoJsonLabel = selectedGeoJsonFeature
+    ? getDemoGeoJsonLabel(selectedGeoJsonFeature)
+    : "";
+  const selectedGeoJsonType = selectedGeoJsonFeature?.geometry.type ?? null;
+  const selectedGeoJsonCanReshape = selectedGeoJsonType !== null && selectedGeoJsonType !== "Point";
+  const renameSelectedGeoJsonFeature = (label: string) => {
+    if (!selectedGeoJsonId) {
+      return;
+    }
+
+    setEditableGeoJson((current) =>
+      updateDemoGeoJsonFeature(current, selectedGeoJsonId, (feature) => ({
+        ...feature,
+        properties: {
+          ...feature.properties,
+          label,
+        },
+      })),
+    );
+  };
+  const deleteSelectedGeoJsonFeature = () => {
+    if (!selectedGeoJsonId) {
+      return;
+    }
+
+    setEditableGeoJson((current) => ({
+      ...current,
+      features: current.features.filter(
+        (feature, index) => getDemoFeatureId(feature, index) !== selectedGeoJsonId,
+      ),
+    }));
+    setSelectedGeoJsonId(null);
+    setEditMode("select");
+  };
+  const duplicateSelectedGeoJsonFeature = () => {
+    if (!selectedGeoJsonId) {
+      return;
+    }
+
+    const nextId = `${selectedGeoJsonId}-copy-${Date.now()}`;
+
+    setEditableGeoJson((current) => {
+      const source = getDemoGeoJsonFeature(current, selectedGeoJsonId);
+
+      if (!source) {
+        return current;
+      }
+
+      return {
+        ...current,
+        features: [...current.features, createDemoGeoJsonDuplicate(source, nextId)],
+      };
+    });
+    setSelectedGeoJsonId(nextId);
+    setEditMode("move");
+  };
 
   return (
     <main className="mx-auto grid min-h-screen w-full max-w-[1480px] gap-4 p-4 text-foreground md:gap-5 md:p-6">
@@ -616,34 +679,129 @@ export function App() {
                   <div className="demo-layer-manager__header">
                     <h2>Editor</h2>
                   </div>
-                  <div className="demo-editor-mode-grid">
-                    {editorModes.map((mode) => (
+                  <div className="demo-editor-section" aria-label="Add GeoJSON element">
+                    <div className="demo-editor-section__header">
+                      <h3>Add element</h3>
+                      <Badge variant={editMode.startsWith("draw-") ? "default" : "secondary"}>
+                        {editMode.startsWith("draw-") ? "Preview" : "Idle"}
+                      </Badge>
+                    </div>
+                    <div className="demo-editor-mode-grid">
+                      {editorModes
+                        .filter((mode) => mode.id.startsWith("draw-"))
+                        .map((mode) => (
+                          <Button
+                            aria-pressed={editMode === mode.id}
+                            key={mode.id}
+                            size="sm"
+                            variant={editMode === mode.id ? "default" : "secondary"}
+                            type="button"
+                            onClick={() => setEditMode(mode.id)}
+                          >
+                            {mode.label}
+                          </Button>
+                        ))}
                       <Button
-                        aria-pressed={editMode === mode.id}
-                        key={mode.id}
                         size="sm"
-                        variant={editMode === mode.id ? "default" : "secondary"}
+                        variant="outline"
                         type="button"
-                        onClick={() => setEditMode(mode.id)}
+                        onClick={() => setEditMode("select")}
                       >
-                        {mode.label}
+                        Select
                       </Button>
-                    ))}
+                    </div>
+                    <dl className="demo-editor-facts">
+                      <div>
+                        <dt>Mode</dt>
+                        <dd>{editMode}</dd>
+                      </div>
+                      <div>
+                        <dt>Features</dt>
+                        <dd>{editableGeoJson.features.length}</dd>
+                      </div>
+                    </dl>
                   </div>
-                  <dl className="grid gap-3 [&>div]:flex [&>div]:items-baseline [&>div]:justify-between [&>div]:gap-3 [&>div]:border-b [&>div]:border-border [&>div]:pb-3 [&>div:last-child]:border-b-0 [&>div:last-child]:pb-0 [&_dd]:m-0 [&_dd]:font-semibold [&_dd]:tabular-nums [&_dt]:text-sm [&_dt]:font-medium [&_dt]:text-muted-foreground">
-                    <div>
-                      <dt>Mode</dt>
-                      <dd>{editMode}</dd>
+                  <div className="demo-editor-section" aria-label="Selected GeoJSON element">
+                    <div className="demo-editor-section__header">
+                      <h3>Selected element</h3>
+                      <Badge variant={selectedGeoJsonFeature ? "default" : "outline"}>
+                        {selectedGeoJsonType ?? "None"}
+                      </Badge>
                     </div>
-                    <div>
-                      <dt>Selected</dt>
-                      <dd>{selectedGeoJsonId ?? "None"}</dd>
-                    </div>
-                    <div>
-                      <dt>Features</dt>
-                      <dd>{editableGeoJson.features.length}</dd>
-                    </div>
-                  </dl>
+                    {selectedGeoJsonFeature ? (
+                      <>
+                        <label className="demo-editor-label">
+                          <span>Name</span>
+                          <input
+                            value={selectedGeoJsonLabel}
+                            onChange={(event) => renameSelectedGeoJsonFeature(event.target.value)}
+                          />
+                        </label>
+                        <dl className="demo-editor-facts">
+                          <div>
+                            <dt>ID</dt>
+                            <dd>{selectedGeoJsonId}</dd>
+                          </div>
+                          <div>
+                            <dt>Vertices</dt>
+                            <dd>{countDemoGeometryPositions(selectedGeoJsonFeature.geometry)}</dd>
+                          </div>
+                          <div>
+                            <dt>Parts</dt>
+                            <dd>{countDemoGeometryParts(selectedGeoJsonFeature.geometry)}</dd>
+                          </div>
+                        </dl>
+                        <div className="demo-editor-action-grid">
+                          <Button
+                            size="sm"
+                            variant={editMode === "move" ? "default" : "secondary"}
+                            type="button"
+                            onClick={() => setEditMode("move")}
+                          >
+                            Move
+                          </Button>
+                          {selectedGeoJsonCanReshape ? (
+                            <Button
+                              size="sm"
+                              variant={editMode === "reshape" ? "default" : "secondary"}
+                              type="button"
+                              onClick={() => setEditMode("reshape")}
+                            >
+                              Reshape
+                            </Button>
+                          ) : null}
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            type="button"
+                            onClick={duplicateSelectedGeoJsonFeature}
+                          >
+                            Duplicate
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={editMode === "delete" ? "default" : "outline"}
+                            type="button"
+                            onClick={deleteSelectedGeoJsonFeature}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="demo-editor-empty">
+                        <p>No element selected</p>
+                        <Button
+                          size="sm"
+                          variant={editMode === "select" ? "default" : "secondary"}
+                          type="button"
+                          onClick={() => setEditMode("select")}
+                        >
+                          Select element
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : null}
             </CardContent>
@@ -818,6 +976,7 @@ function renderMap(
           editMode={editMode}
           fitToData={false}
           geoJson={editableGeoJson}
+          getFeatureId={getDemoFeatureId}
           initialViewState={{ center: [8.4, 50.4], zoom: 4.4 }}
           onFeatureCollectionChange={(next) => setEditableGeoJson(next)}
           onSelectionChange={setSelectedGeoJsonId}
@@ -851,6 +1010,95 @@ function renderMap(
           style={{ minHeight: 620 }}
         />
       );
+  }
+}
+
+function getDemoGeoJsonFeature(
+  collection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
+  featureId: string | null,
+) {
+  if (!featureId) {
+    return null;
+  }
+
+  return (
+    collection.features.find((feature, index) => getDemoFeatureId(feature, index) === featureId) ??
+    null
+  );
+}
+
+function getDemoFeatureId(
+  feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
+  index: number,
+) {
+  return String(feature.id ?? `feature-${index}`);
+}
+
+function getDemoGeoJsonLabel(feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>) {
+  return String(feature.properties?.label ?? feature.id ?? feature.geometry.type);
+}
+
+function updateDemoGeoJsonFeature(
+  collection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
+  featureId: string,
+  update: (
+    feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
+  ) => TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
+) {
+  return {
+    ...collection,
+    features: collection.features.map((feature, index) =>
+      getDemoFeatureId(feature, index) === featureId ? update(feature) : feature,
+    ),
+  };
+}
+
+function createDemoGeoJsonDuplicate(
+  feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
+  id: string,
+): TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties> {
+  return {
+    ...feature,
+    geometry: moveGeoJsonGeometry(feature.geometry, 0.45, 0.28),
+    id,
+    properties: {
+      ...feature.properties,
+      label: `${getDemoGeoJsonLabel(feature)} copy`,
+      trackId: id,
+    },
+  };
+}
+
+function countDemoGeometryPositions(geometry: TemporalGeoJsonSupportedGeometry) {
+  switch (geometry.type) {
+    case "Point":
+      return 1;
+    case "MultiPoint":
+    case "LineString":
+      return geometry.coordinates.length;
+    case "MultiLineString":
+    case "Polygon":
+      return geometry.coordinates.reduce((total, line) => total + line.length, 0);
+    case "MultiPolygon":
+      return geometry.coordinates.reduce(
+        (total, polygon) => total + polygon.reduce((ringTotal, ring) => ringTotal + ring.length, 0),
+        0,
+      );
+  }
+}
+
+function countDemoGeometryParts(geometry: TemporalGeoJsonSupportedGeometry) {
+  switch (geometry.type) {
+    case "Point":
+    case "LineString":
+    case "Polygon":
+      return 1;
+    case "MultiPoint":
+      return geometry.coordinates.length;
+    case "MultiLineString":
+      return geometry.coordinates.length;
+    case "MultiPolygon":
+      return geometry.coordinates.length;
   }
 }
 

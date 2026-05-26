@@ -207,6 +207,7 @@ export function GeoJsonEditorLayer<
   const resolvedLayerId = layerId ?? `geojson-editor-layer-${generatedLayerId}`;
   const [draft, setDraft] = useState<GeoJsonPosition[]>([]);
   const draftRef = useRef<GeoJsonPosition[]>([]);
+  const draftPreviewRef = useRef<GeoJsonPosition | null>(null);
   const [selectedHandle, setSelectedHandle] = useState<GeoJsonVertexHandle | null>(null);
   const selectedHandleRef = useRef<GeoJsonVertexHandle | null>(null);
   const createCounterRef = useRef(0);
@@ -279,6 +280,10 @@ export function GeoJsonEditorLayer<
     }
 
     function handleClick(event: LeafletFeaturePointerEvent = {}) {
+      if (event.originalEvent?.defaultPrevented) {
+        return;
+      }
+
       const current = latestRef.current;
       const coordinates = getCoordinate(event);
 
@@ -293,7 +298,7 @@ export function GeoJsonEditorLayer<
         current.mode === "delete"
       ) {
         current.onSelectionChange?.(null);
-        setSelectedHandle(null);
+        updateSelectedHandle(null);
         return;
       }
 
@@ -314,9 +319,27 @@ export function GeoJsonEditorLayer<
       if (current.mode === "draw-line" || current.mode === "draw-polygon") {
         const nextDraft = [...draftRef.current, coordinates];
 
-        draftRef.current = nextDraft;
-        setDraft(nextDraft);
+        updateDraft(nextDraft);
       }
+    }
+
+    function handleMouseMove(event: LeafletFeaturePointerEvent = {}) {
+      const current = latestRef.current;
+
+      if (
+        current.mode !== "draw-point" &&
+        current.mode !== "draw-line" &&
+        current.mode !== "draw-polygon"
+      ) {
+        updateDraftPreview(null);
+        return;
+      }
+
+      updateDraftPreview(getCoordinate(event));
+    }
+
+    function handleMouseOut() {
+      updateDraftPreview(null);
     }
 
     function handleDoubleClick(event: LeafletFeaturePointerEvent = {}) {
@@ -335,16 +358,14 @@ export function GeoJsonEditorLayer<
 
       if (current.mode === "draw-line" || current.mode === "draw-polygon") {
         if (event.key === "Escape") {
-          draftRef.current = [];
-          setDraft([]);
+          updateDraft([]);
           return;
         }
 
         if (event.key === "Backspace") {
           const nextDraft = draftRef.current.slice(0, -1);
 
-          draftRef.current = nextDraft;
-          setDraft(nextDraft);
+          updateDraft(nextDraft);
 
           return;
         }
@@ -366,22 +387,26 @@ export function GeoJsonEditorLayer<
 
     map.on("click", handleClick as never);
     map.on("dblclick", handleDoubleClick as never);
+    map.on("mousemove", handleMouseMove as never);
+    map.on("mouseout", handleMouseOut as never);
     document.addEventListener("keydown", handleKeyDown);
 
     return () => {
       map.off("click", handleClick as never);
       map.off("dblclick", handleDoubleClick as never);
+      map.off("mousemove", handleMouseMove as never);
+      map.off("mouseout", handleMouseOut as never);
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [surface]);
 
   useEffect(() => {
     if (mode !== "draw-line" && mode !== "draw-polygon") {
-      draftRef.current = [];
-      setDraft([]);
+      updateDraft([]);
     }
 
-    setSelectedHandle(null);
+    updateDraftPreview(null);
+    updateSelectedHandle(null);
   }, [mode, selectedFeatureId]);
 
   useEffect(() => {
@@ -405,6 +430,7 @@ export function GeoJsonEditorLayer<
             selected && "mb-maps__editor-feature--selected",
             selected && "mb-maps__feature--selected",
           ),
+          bubblingMouseEvents: false,
           interactive: true,
           leaflet,
           selected,
@@ -432,7 +458,7 @@ export function GeoJsonEditorLayer<
         }
       }
 
-      renderDraft(layer, leaflet, draftRef.current, mode);
+      renderDraft(layer, leaflet, draftRef.current, draftPreviewRef.current, mode);
     });
   }, [
     features,
@@ -458,8 +484,7 @@ export function GeoJsonEditorLayer<
       );
 
       emitOperation(ensureCreatedFeatureId(feature, createCounterRef), "create");
-      draftRef.current = [];
-      setDraft([]);
+      updateDraft([]);
       return;
     }
 
@@ -471,9 +496,29 @@ export function GeoJsonEditorLayer<
       );
 
       emitOperation(ensureCreatedFeatureId(feature, createCounterRef), "create");
-      draftRef.current = [];
-      setDraft([]);
+      updateDraft([]);
     }
+  }
+
+  function updateDraft(nextDraft: GeoJsonPosition[]) {
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    surface?.requestRender();
+  }
+
+  function updateDraftPreview(nextPreview: GeoJsonPosition | null) {
+    if (arePositionsEqual(draftPreviewRef.current, nextPreview)) {
+      return;
+    }
+
+    draftPreviewRef.current = nextPreview ? clonePosition(nextPreview) : null;
+    surface?.requestRender();
+  }
+
+  function updateSelectedHandle(nextHandle: GeoJsonVertexHandle | null) {
+    selectedHandleRef.current = nextHandle;
+    setSelectedHandle(nextHandle);
+    surface?.requestRender();
   }
 
   function emitOperation(
@@ -603,7 +648,7 @@ export function GeoJsonEditorLayer<
 
     event.originalEvent?.preventDefault?.();
     event.originalEvent?.stopPropagation?.();
-    setSelectedHandle(handle);
+    updateSelectedHandle(handle);
     dragRef.current = {
       feature,
       from: coordinate,
@@ -669,7 +714,7 @@ export function GeoJsonEditorLayer<
 
     if (next) {
       updateFeature(feature, next, "remove-vertex");
-      setSelectedHandle(null);
+      updateSelectedHandle(null);
     }
   }
 
@@ -685,19 +730,21 @@ export function GeoJsonEditorLayer<
   ) {
     for (const handle of getGeoJsonVertexHandles(feature.geometry, feature.id)) {
       const isMidpoint = handle.kind === "midpoint";
+      const selected = !isMidpoint && areVertexHandlesEqual(selectedHandleRef.current, handle);
       const marker = options.leaflet.circleMarker(toLeafletLatLng(handle.coordinates), {
         bubblingMouseEvents: false,
         className: joinClassNames(
           "mb-maps__editor-handle",
           isMidpoint && "mb-maps__editor-handle--midpoint",
+          selected && "mb-maps__editor-handle--selected",
         ),
-        color: isMidpoint ? "#0284c7" : "#0f172a",
-        fillColor: isMidpoint ? options.midpointHandleColor : options.handleColor,
+        color: selected ? "#0284c7" : isMidpoint ? "#0284c7" : "#0f172a",
+        fillColor: selected ? "#e0f2fe" : isMidpoint ? options.midpointHandleColor : options.handleColor,
         fillOpacity: 1,
         interactive: true,
         opacity: 1,
-        radius: isMidpoint ? 4 : 5.5,
-        weight: 2,
+        radius: selected ? 7 : isMidpoint ? 4 : 5.5,
+        weight: selected ? 3 : 2,
       }) as FlatGeometryLayer;
 
       marker.on("click", (event: LeafletFeaturePointerEvent = {}) => {
@@ -709,7 +756,7 @@ export function GeoJsonEditorLayer<
           return;
         }
 
-        setSelectedHandle(handle);
+        updateSelectedHandle(handle);
       });
       marker.on("mousedown", (event: LeafletFeaturePointerEvent = {}) => {
         startVertexDrag(feature, handle, event, options.map);
@@ -1053,16 +1100,44 @@ function renderDraft(
   layer: LayerGroup,
   leaflet: typeof import("leaflet"),
   draft: readonly GeoJsonPosition[],
+  preview: GeoJsonPosition | null,
   mode: GeoJsonEditMode,
 ) {
-  if (draft.length === 0 || (mode !== "draw-line" && mode !== "draw-polygon")) {
+  if (mode === "draw-point") {
+    if (!preview) {
+      return;
+    }
+
+    leaflet.circleMarker(toLeafletLatLng(preview), {
+      className: "mb-maps__editor-draft mb-maps__editor-draft-point",
+      color: "#0284c7",
+      fillColor: "#38bdf8",
+      fillOpacity: 0.18,
+      interactive: false,
+      opacity: 0.9,
+      radius: 7,
+      weight: 2,
+    }).addTo(layer);
     return;
   }
 
-  const latLngs = draft.map(toLeafletLatLng);
+  if (mode !== "draw-line" && mode !== "draw-polygon") {
+    return;
+  }
 
-  if (mode === "draw-polygon" && draft.length >= 3) {
-    leaflet.polygon([closeRing(draft).map(toLeafletLatLng)], {
+  const previewDraft =
+    preview && !draft.some((position) => arePositionsEqual(position, preview))
+      ? [...draft, preview]
+      : draft;
+
+  if (previewDraft.length === 0) {
+    return;
+  }
+
+  const latLngs = previewDraft.map(toLeafletLatLng);
+
+  if (mode === "draw-polygon" && previewDraft.length >= 3) {
+    leaflet.polygon([closeRing(previewDraft).map(toLeafletLatLng)], {
       className: "mb-maps__editor-draft",
       color: "#0284c7",
       fillColor: "#38bdf8",
@@ -1186,6 +1261,17 @@ function createMidpointHandle(
     vertexIndex,
     ...metadata,
   };
+}
+
+function areVertexHandlesEqual(left: GeoJsonVertexHandle | null, right: GeoJsonVertexHandle | null) {
+  return (
+    left?.featureId === right?.featureId &&
+    left?.geometryIndex === right?.geometryIndex &&
+    left?.kind === right?.kind &&
+    left?.nextVertexIndex === right?.nextVertexIndex &&
+    left?.ringIndex === right?.ringIndex &&
+    left?.vertexIndex === right?.vertexIndex
+  );
 }
 
 function mutateVertex(
@@ -1391,6 +1477,10 @@ function getAllPositions(geometry: TemporalGeoJsonSupportedGeometry): GeoJsonPos
     case "MultiPolygon":
       return geometry.coordinates.flat(2);
   }
+}
+
+function arePositionsEqual(left: GeoJsonPosition | null | undefined, right: GeoJsonPosition | null | undefined) {
+  return left?.[0] === right?.[0] && left?.[1] === right?.[1];
 }
 
 function resolveEditorStyle(
