@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -205,6 +206,46 @@ const lineCollection: TemporalGeoJsonGeometryFeatureCollection = {
     },
   ],
   type: "FeatureCollection",
+};
+
+const twoLineCollection: TemporalGeoJsonGeometryFeatureCollection = {
+  features: [
+    {
+      geometry: {
+        coordinates: [
+          [0, 0],
+          [10, 0],
+        ],
+        type: "LineString",
+      },
+      id: "line-1",
+      properties: {},
+      type: "Feature",
+    },
+    {
+      geometry: {
+        coordinates: [
+          [20, 1],
+          [30, 1],
+        ],
+        type: "LineString",
+      },
+      id: "line-2",
+      properties: {},
+      type: "Feature",
+    },
+  ],
+  type: "FeatureCollection",
+};
+
+const groupedLineCollection: TemporalGeoJsonGeometryFeatureCollection = {
+  ...twoLineCollection,
+  features: twoLineCollection.features.map((feature) => ({
+    ...feature,
+    properties: {
+      groupId: "group-1",
+    },
+  })),
 };
 
 describe("@moritzbrantner/maps GeoJSON editor", () => {
@@ -500,6 +541,202 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     );
   });
 
+  test("supports shift-click multi-selection and plain-click reset", async () => {
+    const onEditorSelectionChange = vi.fn();
+
+    function SelectionHarness() {
+      const [selection, setSelection] = useState({
+        featureIds: [] as string[],
+        primaryFeatureId: null as string | null,
+      });
+
+      return (
+        <EditableGeoJsonMap
+          editMode="select"
+          fitToData={false}
+          geoJson={twoLineCollection}
+          mapLabel="Multi-selection editor"
+          onEditorSelectionChange={(next) => {
+            onEditorSelectionChange(next);
+            setSelection(next);
+          }}
+          selection={selection}
+          showAttributionControl={false}
+        />
+      );
+    }
+
+    render(<SelectionHarness />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Multi-selection editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const [firstLayer, secondLayer] = leafletMock.getLayerGroups()[0]?.layers ?? [];
+
+    act(() => {
+      firstLayer?.handlers.get("click")?.[0]?.({
+        originalEvent: { preventDefault() {}, shiftKey: true, stopPropagation() {} },
+      });
+    });
+
+    await waitFor(() => {
+      expect(onEditorSelectionChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          featureIds: ["line-1"],
+          primaryFeatureId: "line-1",
+        }),
+      );
+    });
+
+    act(() => {
+      secondLayer?.handlers.get("click")?.[0]?.({
+        originalEvent: { preventDefault() {}, shiftKey: true, stopPropagation() {} },
+      });
+    });
+
+    expect(onEditorSelectionChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        featureIds: ["line-1", "line-2"],
+        primaryFeatureId: "line-1",
+      }),
+    );
+
+    onEditorSelectionChange.mockClear();
+
+    act(() => {
+      secondLayer?.handlers.get("click")?.[0]?.({
+        originalEvent: { preventDefault() {}, stopPropagation() {} },
+      });
+    });
+
+    expect(onEditorSelectionChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        featureIds: ["line-2"],
+        primaryFeatureId: "line-2",
+      }),
+    );
+  });
+
+  test("groups and ungroups selected features with keyboard commands", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    const { rerender } = render(
+      <EditableGeoJsonMap
+        editMode="select"
+        fitToData={false}
+        geoJson={twoLineCollection}
+        mapLabel="Group editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selection={{ featureIds: ["line-1", "line-2"], primaryFeatureId: "line-1" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Group editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { ctrlKey: true, key: "g" }));
+    });
+
+    expect(onFeatureCollectionChange.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        reason: "group-selection",
+        type: "batch",
+      }),
+    );
+    expect(
+      onFeatureCollectionChange.mock.calls[0]?.[0].features.map(
+        (feature: TemporalGeoJsonGeometryFeatureCollection["features"][number]) =>
+          feature.properties?.groupId,
+      ),
+    ).toEqual([expect.stringMatching(/^geojson-group-/), expect.stringMatching(/^geojson-group-/)]);
+
+    onFeatureCollectionChange.mockClear();
+
+    rerender(
+      <EditableGeoJsonMap
+        editMode="select"
+        fitToData={false}
+        geoJson={groupedLineCollection}
+        mapLabel="Group editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selection={{ featureIds: ["line-1"], primaryFeatureId: "line-1" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Group editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { ctrlKey: true, key: "g", shiftKey: true }),
+      );
+    });
+
+    expect(onFeatureCollectionChange.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        reason: "ungroup-selection",
+        type: "batch",
+      }),
+    );
+    expect(
+      onFeatureCollectionChange.mock.calls[0]?.[0].features.map(
+        (feature: TemporalGeoJsonGeometryFeatureCollection["features"][number]) =>
+          feature.properties?.groupId,
+      ),
+    ).toEqual([undefined, undefined]);
+  });
+
+  test("delete hotkey deletes all selected features and ignores text inputs", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    render(
+      <>
+        <input aria-label="Editor text input" />
+        <EditableGeoJsonMap
+          editMode="select"
+          fitToData={false}
+          geoJson={twoLineCollection}
+          mapLabel="Delete selection editor"
+          onFeatureCollectionChange={onFeatureCollectionChange}
+          selection={{ featureIds: ["line-1", "line-2"], primaryFeatureId: "line-1" }}
+          showAttributionControl={false}
+        />
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Delete selection editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    act(() => {
+      screen.getByLabelText("Editor text input").dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }),
+      );
+    });
+
+    expect(onFeatureCollectionChange).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    });
+
+    expect(onFeatureCollectionChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        features: [],
+      }),
+      expect.objectContaining({
+        reason: "delete-selection",
+        type: "batch",
+      }),
+    );
+  });
+
   test("moves a selected feature on mouseup", async () => {
     const onFeatureCollectionChange = vi.fn();
 
@@ -536,6 +773,79 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       [3, 2],
       [13, 2],
     ]);
+  });
+
+  test("moves all selected features together", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    render(
+      <EditableGeoJsonMap
+        editMode="move"
+        fitToData={false}
+        geoJson={twoLineCollection}
+        mapLabel="Move selection editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selection={{ featureIds: ["line-1", "line-2"], primaryFeatureId: "line-1" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Move selection editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = leafletMock.getMaps()[0];
+    const featureLayer = leafletMock.getLayerGroups()[0]?.layers[0];
+
+    act(() => {
+      featureLayer?.handlers.get("mousedown")?.[0]?.({
+        latlng: { lat: 0, lng: 0 },
+        originalEvent: { preventDefault() {}, stopPropagation() {} },
+      });
+      map?.handlers.get("mouseup")?.[0]?.({
+        latlng: { lat: 2, lng: 3 },
+      });
+    });
+
+    expect(onFeatureCollectionChange.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        reason: "move-selection",
+        type: "batch",
+      }),
+    );
+    expect(onFeatureCollectionChange.mock.calls[0]?.[0].features[0].geometry.coordinates).toEqual([
+      [3, 2],
+      [13, 2],
+    ]);
+    expect(onFeatureCollectionChange.mock.calls[0]?.[0].features[1].geometry.coordinates).toEqual([
+      [23, 3],
+      [33, 3],
+    ]);
+  });
+
+  test("renders reshape handles only for the primary selected feature", async () => {
+    render(
+      <EditableGeoJsonMap
+        editMode="reshape"
+        fitToData={false}
+        geoJson={twoLineCollection}
+        mapLabel="Primary reshape editor"
+        selection={{ featureIds: ["line-1", "line-2"], primaryFeatureId: "line-2" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Primary reshape editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(
+      leafletMock
+        .getLayerGroups()[0]
+        ?.layers.filter((layer) =>
+          String(layer.options?.className ?? "").includes("mb-maps__editor-handle"),
+        ),
+    ).toHaveLength(3);
   });
 
   test("inserts a midpoint vertex and prevents invalid vertex removal", async () => {

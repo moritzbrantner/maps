@@ -182,10 +182,11 @@ to draw the full GeoJSON source below the native layer.
 
 ## GeoJSON editing
 
-Use `EditableGeoJsonMap` when users need to create, move, reshape, or delete
-GeoJSON objects. Editing is controlled: the map emits the next feature
+Use `EditableGeoJsonMap` when users need to create, move, reshape, group, or
+delete GeoJSON elements. Editing is controlled: the map emits the next feature
 collection and an operation descriptor, while the consuming app owns toolbar UI,
-persistence, undo, save, and cancel flows.
+persistence, undo, save, and cancel flows. In editor terminology, elements are
+GeoJSON features and nodes are geometry vertices.
 
 ```tsx
 import { useState } from "react";
@@ -223,6 +224,35 @@ function GeoJsonEditor({
     </>
   );
 }
+```
+
+The editor supports multi-selection through `selection` /
+`onEditorSelectionChange`. Plain click selects one element, Shift-click toggles
+an element, and Alt-click or double-click selects the clicked element's metadata
+group. By default groups are stored on `feature.properties.groupId`; pass
+`groupOptions` to read or write a different property.
+
+`EditableGeoJsonMap` enables keyboard shortcuts by default. `V`, `P`, `L`, `G`,
+`M`, and `R` switch select, point, line, polygon, move, and reshape modes when
+`onEditModeChange` is provided. `Delete` removes the selected node in reshape
+mode or the selected elements otherwise. `Ctrl/Cmd+A`, `Ctrl/Cmd+D`,
+`Ctrl/Cmd+G`, and `Ctrl/Cmd+Shift+G` select all, duplicate, group, and ungroup.
+Shortcuts are ignored while typing in inputs.
+
+```tsx
+const [selection, setSelection] = useState<GeoJsonEditorSelection>({
+  featureIds: [],
+  primaryFeatureId: null,
+});
+
+<EditableGeoJsonMap
+  editMode={mode}
+  geoJson={geoJson}
+  selection={selection}
+  onEditModeChange={setMode}
+  onEditorSelectionChange={setSelection}
+  onFeatureCollectionChange={(next) => setGeoJson(next)}
+/>;
 ```
 
 For composed maps, use `GeoJsonEditorLayer` inside `MapView`. The first editor

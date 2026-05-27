@@ -39,6 +39,7 @@ import {
   type PointMapFeature,
   type MapViewState,
   type GeoJsonEditMode,
+  type GeoJsonEditorSelection,
   type TemporalGeoJsonGeometryFeature,
   type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalGeoJsonSupportedGeometry,
@@ -62,6 +63,7 @@ type DemoFlowGeoJsonProperties = {
 };
 
 type DemoGeoJsonProperties = {
+  groupId?: string;
   kind: string;
   label: string;
   time: number;
@@ -388,6 +390,12 @@ const initialLayers: DemoLayerConfig[] = [
 
 const demoRegions = ["DACH", "West", "South", "East", "North"];
 
+const emptyGeoJsonEditorSelection: GeoJsonEditorSelection = {
+  featureIds: [],
+  primaryFeatureId: null,
+  vertexHandle: null,
+};
+
 export function App() {
   const datasetQuery = useQuery({
     initialData: createDemoDataset,
@@ -408,7 +416,10 @@ export function App() {
     useState<Array<MapPoint<DemoPointProperties>>>(demoPointHubs);
   const [editableGeoJson, setEditableGeoJson] = useState(demoGeoJsonCollection);
   const [editMode, setEditMode] = useState<GeoJsonEditMode>("select");
-  const [selectedGeoJsonId, setSelectedGeoJsonId] = useState<string | null>(null);
+  const [geoJsonSelection, setGeoJsonSelection] = useState<GeoJsonEditorSelection>(
+    emptyGeoJsonEditorSelection,
+  );
+  const selectedGeoJsonId = geoJsonSelection.primaryFeatureId;
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewState>({
     center: [13.405, 52.52],
@@ -519,6 +530,19 @@ export function App() {
     : "";
   const selectedGeoJsonType = selectedGeoJsonFeature?.geometry.type ?? null;
   const selectedGeoJsonCanReshape = selectedGeoJsonType !== null && selectedGeoJsonType !== "Point";
+  const selectedGeoJsonFeatures = useMemo(
+    () =>
+      geoJsonSelection.featureIds.flatMap((featureId) => {
+        const feature = getDemoGeoJsonFeature(editableGeoJson, featureId);
+
+        return feature ? [feature] : [];
+      }),
+    [editableGeoJson, geoJsonSelection.featureIds],
+  );
+  const selectedGeoJsonGroupIds = useMemo(
+    () => [...new Set(selectedGeoJsonFeatures.flatMap((feature) => getDemoGroupId(feature) ?? []))],
+    [selectedGeoJsonFeatures],
+  );
   const renameSelectedGeoJsonFeature = (label: string) => {
     if (!selectedGeoJsonId) {
       return;
@@ -534,41 +558,94 @@ export function App() {
       })),
     );
   };
-  const deleteSelectedGeoJsonFeature = () => {
-    if (!selectedGeoJsonId) {
+  const deleteSelectedGeoJsonFeatures = () => {
+    if (geoJsonSelection.featureIds.length === 0) {
       return;
     }
+
+    const selectedIds = new Set(geoJsonSelection.featureIds);
 
     setEditableGeoJson((current) => ({
       ...current,
       features: current.features.filter(
-        (feature, index) => getDemoFeatureId(feature, index) !== selectedGeoJsonId,
+        (feature, index) => !selectedIds.has(getDemoFeatureId(feature, index)),
       ),
     }));
-    setSelectedGeoJsonId(null);
+    setGeoJsonSelection(emptyGeoJsonEditorSelection);
     setEditMode("select");
   };
-  const duplicateSelectedGeoJsonFeature = () => {
-    if (!selectedGeoJsonId) {
+  const duplicateSelectedGeoJsonFeatures = () => {
+    if (geoJsonSelection.featureIds.length === 0) {
       return;
     }
 
-    const nextId = `${selectedGeoJsonId}-copy-${Date.now()}`;
+    const selectedIds = new Set(geoJsonSelection.featureIds);
+    const nextGroupId = geoJsonSelection.featureIds.length > 1 ? `demo-group-${Date.now()}` : null;
+    const nextIds: string[] = [];
 
     setEditableGeoJson((current) => {
-      const source = getDemoGeoJsonFeature(current, selectedGeoJsonId);
+      const duplicates = current.features.flatMap((feature, index) => {
+        const featureId = getDemoFeatureId(feature, index);
 
-      if (!source) {
-        return current;
-      }
+        if (!selectedIds.has(featureId)) {
+          return [];
+        }
+
+        const nextId = `${featureId}-copy-${Date.now()}-${nextIds.length + 1}`;
+
+        nextIds.push(nextId);
+
+        return [createDemoGeoJsonDuplicate(feature, nextId, nextGroupId)];
+      });
 
       return {
         ...current,
-        features: [...current.features, createDemoGeoJsonDuplicate(source, nextId)],
+        features: [...current.features, ...duplicates],
       };
     });
-    setSelectedGeoJsonId(nextId);
+    setGeoJsonSelection({
+      featureIds: nextIds,
+      primaryFeatureId: nextIds[0] ?? null,
+      vertexHandle: null,
+    });
     setEditMode("move");
+  };
+  const groupSelectedDemoGeoJsonFeatures = () => {
+    if (geoJsonSelection.featureIds.length < 2) {
+      return;
+    }
+
+    const selectedIds = new Set(geoJsonSelection.featureIds);
+    const groupId = `demo-group-${Date.now()}`;
+
+    setEditableGeoJson((current) => ({
+      ...current,
+      features: current.features.map((feature, index) =>
+        selectedIds.has(getDemoFeatureId(feature, index))
+          ? setDemoGroupId(feature, groupId)
+          : feature,
+      ),
+    }));
+  };
+  const ungroupSelectedDemoGeoJsonFeatures = () => {
+    if (geoJsonSelection.featureIds.length === 0) {
+      return;
+    }
+
+    const selectedIds = new Set(geoJsonSelection.featureIds);
+    const groupIds = new Set(selectedGeoJsonGroupIds);
+
+    setEditableGeoJson((current) => ({
+      ...current,
+      features: current.features.map((feature, index) => {
+        const featureId = getDemoFeatureId(feature, index);
+        const groupId = getDemoGroupId(feature);
+
+        return selectedIds.has(featureId) || (groupId !== null && groupIds.has(groupId))
+          ? setDemoGroupId(feature, null)
+          : feature;
+      }),
+    }));
   };
 
   return (
@@ -639,8 +716,8 @@ export function App() {
             setEditableGeoJson,
             editMode,
             setEditMode,
-            selectedGeoJsonId,
-            setSelectedGeoJsonId,
+            geoJsonSelection,
+            setGeoJsonSelection,
             heatFieldRenderMode,
             heatFieldContourLineWidth,
             showHeatDataPoints,
@@ -824,28 +901,19 @@ export function App() {
                       </Badge>
                     </div>
                     <div className="demo-editor-mode-grid">
-                      {editorModes
-                        .filter((mode) => mode.id.startsWith("draw-"))
-                        .map((mode) => (
-                          <Button
-                            aria-pressed={editMode === mode.id}
-                            key={mode.id}
-                            size="sm"
-                            variant={editMode === mode.id ? "default" : "secondary"}
-                            type="button"
-                            onClick={() => setEditMode(mode.id)}
-                          >
-                            {mode.label}
-                          </Button>
-                        ))}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        type="button"
-                        onClick={() => setEditMode("select")}
-                      >
-                        Select
-                      </Button>
+                      {editorModes.map((mode) => (
+                        <Button
+                          aria-pressed={editMode === mode.id}
+                          key={mode.id}
+                          size="sm"
+                          title={getEditorModeShortcut(mode.id)}
+                          variant={editMode === mode.id ? "default" : "secondary"}
+                          type="button"
+                          onClick={() => setEditMode(mode.id)}
+                        >
+                          {mode.label}
+                        </Button>
+                      ))}
                     </div>
                     <dl className="demo-editor-facts">
                       <div>
@@ -856,11 +924,27 @@ export function App() {
                         <dt>Features</dt>
                         <dd>{editableGeoJson.features.length}</dd>
                       </div>
+                      <div>
+                        <dt>Selection</dt>
+                        <dd>{geoJsonSelection.featureIds.length}</dd>
+                      </div>
                     </dl>
+                    <div className="demo-editor-shortcuts" aria-label="Editor shortcuts">
+                      <kbd>Shift</kbd>
+                      <span>multi-select</span>
+                      <kbd>Alt</kbd>
+                      <span>select group</span>
+                      <kbd>Del</kbd>
+                      <span>delete</span>
+                    </div>
                   </div>
                   <div className="demo-editor-section" aria-label="Selected GeoJSON element">
                     <div className="demo-editor-section__header">
-                      <h3>Selected element</h3>
+                      <h3>
+                        {geoJsonSelection.featureIds.length > 1
+                          ? `${geoJsonSelection.featureIds.length} selected`
+                          : "Selected element"}
+                      </h3>
                       <Badge variant={selectedGeoJsonFeature ? "default" : "outline"}>
                         {selectedGeoJsonType ?? "None"}
                       </Badge>
@@ -878,6 +962,10 @@ export function App() {
                           <div>
                             <dt>ID</dt>
                             <dd>{selectedGeoJsonId}</dd>
+                          </div>
+                          <div>
+                            <dt>Group</dt>
+                            <dd>{selectedGeoJsonGroupIds.join(", ") || "None"}</dd>
                           </div>
                           <div>
                             <dt>Vertices</dt>
@@ -911,19 +999,58 @@ export function App() {
                             size="sm"
                             variant="secondary"
                             type="button"
-                            onClick={duplicateSelectedGeoJsonFeature}
+                            onClick={duplicateSelectedGeoJsonFeatures}
                           >
                             Duplicate
+                          </Button>
+                          <Button
+                            disabled={geoJsonSelection.featureIds.length < 2}
+                            size="sm"
+                            variant="secondary"
+                            type="button"
+                            onClick={groupSelectedDemoGeoJsonFeatures}
+                          >
+                            Group
+                          </Button>
+                          <Button
+                            disabled={selectedGeoJsonGroupIds.length === 0}
+                            size="sm"
+                            variant="secondary"
+                            type="button"
+                            onClick={ungroupSelectedDemoGeoJsonFeatures}
+                          >
+                            Ungroup
                           </Button>
                           <Button
                             size="sm"
                             variant={editMode === "delete" ? "default" : "outline"}
                             type="button"
-                            onClick={deleteSelectedGeoJsonFeature}
+                            onClick={deleteSelectedGeoJsonFeatures}
                           >
                             Delete
                           </Button>
+                          {editMode === "reshape" && geoJsonSelection.vertexHandle ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              type="button"
+                              onClick={() =>
+                                setGeoJsonSelection({
+                                  ...geoJsonSelection,
+                                  vertexHandle: null,
+                                })
+                              }
+                            >
+                              Clear node
+                            </Button>
+                          ) : null}
                         </div>
+                        {editMode === "reshape" ? (
+                          <p className="demo-editor-hint">
+                            Click midpoint handles to add nodes. Select a node and press Delete to
+                            remove it.
+                          </p>
+                        ) : null}
                       </>
                     ) : (
                       <div className="demo-editor-empty">
@@ -975,8 +1102,8 @@ function renderMap(
   >,
   editMode: GeoJsonEditMode,
   setEditMode: Dispatch<SetStateAction<GeoJsonEditMode>>,
-  selectedGeoJsonId: string | null,
-  setSelectedGeoJsonId: Dispatch<SetStateAction<string | null>>,
+  geoJsonSelection: GeoJsonEditorSelection,
+  setGeoJsonSelection: Dispatch<SetStateAction<GeoJsonEditorSelection>>,
   heatFieldRenderMode: HeatFieldRenderMode,
   heatFieldContourLineWidth: number,
   showHeatDataPoints: boolean,
@@ -1136,9 +1263,10 @@ function renderMap(
           geoJson={editableGeoJson}
           getFeatureId={getDemoFeatureId}
           initialViewState={{ center: [8.4, 50.4], zoom: 4.4 }}
+          onEditModeChange={setEditMode}
+          onEditorSelectionChange={setGeoJsonSelection}
           onFeatureCollectionChange={(next) => setEditableGeoJson(next)}
-          onSelectionChange={setSelectedGeoJsonId}
-          selectedFeatureId={selectedGeoJsonId}
+          selection={geoJsonSelection}
           createFeatureProperties={(geometryType) => ({
             kind: geometryType,
             label: `New ${geometryType}`,
@@ -1196,6 +1324,51 @@ function getDemoGeoJsonLabel(feature: TemporalGeoJsonGeometryFeature<DemoGeoJson
   return String(feature.properties?.label ?? feature.id ?? feature.geometry.type);
 }
 
+function getEditorModeShortcut(mode: GeoJsonEditMode) {
+  switch (mode) {
+    case "select":
+      return "V";
+    case "draw-point":
+      return "P";
+    case "draw-line":
+      return "L";
+    case "draw-polygon":
+      return "G";
+    case "move":
+      return "M";
+    case "reshape":
+      return "R";
+    case "delete":
+      return "Delete";
+    default:
+      return "";
+  }
+}
+
+function getDemoGroupId(feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>) {
+  return feature.properties?.groupId ?? null;
+}
+
+function setDemoGroupId(
+  feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
+  groupId: string | null,
+): TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties> {
+  const properties = {
+    ...feature.properties,
+  };
+
+  if (groupId) {
+    properties.groupId = groupId;
+  } else {
+    delete properties.groupId;
+  }
+
+  return {
+    ...feature,
+    properties,
+  };
+}
+
 function updateDemoGeoJsonFeature(
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
   featureId: string,
@@ -1214,6 +1387,7 @@ function updateDemoGeoJsonFeature(
 function createDemoGeoJsonDuplicate(
   feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
   id: string,
+  groupId: string | null = null,
 ): TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties> {
   return {
     ...feature,
@@ -1221,6 +1395,7 @@ function createDemoGeoJsonDuplicate(
     id,
     properties: {
       ...feature.properties,
+      groupId: groupId ?? undefined,
       label: `${getDemoGeoJsonLabel(feature)} copy`,
       trackId: id,
     },

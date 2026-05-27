@@ -141,6 +141,16 @@
     filter: drop-shadow(0 0 8px rgb(2 132 199 / 0.55));
   }
 
+  .mb-maps__editor-feature--grouped {
+    outline: 1px dashed rgb(15 118 110 / 0.58);
+  }
+
+  .mb-maps__editor-feature--group-selected,
+  .mb-maps__editor-group-outline {
+    filter: drop-shadow(0 0 10px rgb(20 184 166 / 0.5));
+    outline: 2px solid rgb(20 184 166 / 0.72);
+  }
+
   .mb-maps__editor-handle {
     cursor: grab;
     filter: drop-shadow(0 2px 6px rgb(15 23 42 / 0.28));

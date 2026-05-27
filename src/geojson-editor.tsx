@@ -65,7 +65,16 @@ export type GeoJsonEditReason =
   | "move-vertex"
   | "insert-vertex"
   | "remove-vertex"
+  | "group-feature"
+  | "ungroup-feature"
   | "draw-complete";
+
+export type GeoJsonBatchEditReason =
+  | "delete-selection"
+  | "duplicate-selection"
+  | "group-selection"
+  | "ungroup-selection"
+  | "move-selection";
 
 export type GeoJsonEditValidationResult = {
   reason?: string;
@@ -81,6 +90,43 @@ export type GeoJsonVertexHandle = {
   ringIndex?: number;
   vertexIndex: number;
 };
+
+export type GeoJsonEditorSelection = {
+  featureIds: string[];
+  primaryFeatureId: string | null;
+  vertexHandle?: GeoJsonVertexHandle | null;
+};
+
+export type GeoJsonEditorGroupOptions<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = {
+  groupId?: string;
+  getGroupId?: (
+    feature: TemporalGeoJsonGeometryFeature<TProperties>,
+    index: number,
+  ) => string | null | undefined;
+  setGroupId?: (
+    feature: TemporalGeoJsonGeometryFeature<TProperties>,
+    groupId: string | null,
+  ) => TemporalGeoJsonGeometryFeature<TProperties>;
+};
+
+export type GeoJsonEditorCommand =
+  | "select-all"
+  | "clear-selection"
+  | "delete-selection"
+  | "duplicate-selection"
+  | "group-selection"
+  | "ungroup-selection"
+  | "start-select"
+  | "start-draw-point"
+  | "start-draw-line"
+  | "start-draw-polygon"
+  | "start-move"
+  | "start-reshape"
+  | "finish-draft"
+  | "cancel-draft"
+  | "remove-selected-vertex";
 
 export type GeoJsonEditOperation<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
@@ -101,6 +147,11 @@ export type GeoJsonEditOperation<
       featureId: string;
       previousFeature: TemporalGeoJsonGeometryFeature<TProperties>;
       type: "delete";
+    }
+  | {
+      operations: GeoJsonEditOperation<TProperties>[];
+      reason: GeoJsonBatchEditReason;
+      type: "batch";
     };
 
 export type GeoJsonEditorLayerProps<
@@ -108,18 +159,32 @@ export type GeoJsonEditorLayerProps<
 > = {
   canEditFeature?: (feature: TemporalGeoJsonGeometryFeature<TProperties>) => boolean;
   createFeatureProperties?: (geometryType: "Point" | "LineString" | "Polygon") => TProperties;
+  enableKeyboardShortcuts?: boolean;
   featureCollection: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
   getFeatureId?: (feature: TemporalGeoJsonGeometryFeature<TProperties>, index: number) => string;
+  groupOptions?: GeoJsonEditorGroupOptions<TProperties>;
   handleColor?: string;
+  keyboardShortcutScope?: HTMLElement | Document | null;
   layerId?: string;
   midpointHandleColor?: string;
   mode: GeoJsonEditMode;
+  onCommand?: (
+    command: GeoJsonEditorCommand,
+    context: {
+      mode: GeoJsonEditMode;
+      selection: GeoJsonEditorSelection;
+    },
+  ) => boolean | void;
+  onEditModeChange?: (mode: GeoJsonEditMode) => void;
+  onEditorSelectionChange?: (selection: GeoJsonEditorSelection) => void;
   onFeatureCollectionChange?: (
     next: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
     operation: GeoJsonEditOperation<TProperties>,
   ) => void;
   onSelectionChange?: (featureId: string | null) => void;
+  selectedFeatureIds?: readonly string[];
   selectedFeatureId?: string | null;
+  selection?: GeoJsonEditorSelection;
   selectedStyle?: GeoJsonLayerStyle;
   style?: GeoJsonLayerStyle;
   validateEdit?: (
@@ -176,7 +241,7 @@ type EditableFeature<TProperties extends Record<string, unknown>> = {
 
 type DragState<TProperties extends Record<string, unknown>> =
   | {
-      feature: EditableFeature<TProperties>;
+      features: Array<EditableFeature<TProperties>>;
       from: GeoJsonPosition;
       type: "feature";
     }
@@ -209,20 +274,34 @@ const SELECTED_EDITOR_STYLE: GeoJsonLayerStyle = {
   polygonStrokeWidth: 3,
 };
 
+const EMPTY_EDITOR_SELECTION: GeoJsonEditorSelection = {
+  featureIds: [],
+  primaryFeatureId: null,
+  vertexHandle: null,
+};
+
 export function GeoJsonEditorLayer<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 >({
   canEditFeature,
   createFeatureProperties,
+  enableKeyboardShortcuts = false,
   featureCollection,
   getFeatureId,
+  groupOptions,
   handleColor = "#ffffff",
+  keyboardShortcutScope,
   layerId,
   midpointHandleColor = "#bae6fd",
   mode,
+  onCommand,
+  onEditModeChange,
+  onEditorSelectionChange,
   onFeatureCollectionChange,
   onSelectionChange,
+  selectedFeatureIds,
   selectedFeatureId,
+  selection,
   selectedStyle,
   style,
   validateEdit,
@@ -236,21 +315,46 @@ export function GeoJsonEditorLayer<
   const [selectedHandle, setSelectedHandle] = useState<GeoJsonVertexHandle | null>(null);
   const selectedHandleRef = useRef<GeoJsonVertexHandle | null>(null);
   const createCounterRef = useRef(0);
+  const duplicateCounterRef = useRef(0);
+  const groupCounterRef = useRef(0);
   const dragRef = useRef<DragState<TProperties> | null>(null);
   const latestRef = useRef({
     canEditFeature,
     createFeatureProperties,
+    enableKeyboardShortcuts,
     featureCollection,
     getFeatureId,
+    groupOptions,
     mode,
+    onCommand,
+    onEditModeChange,
+    onEditorSelectionChange,
     onFeatureCollectionChange,
     onSelectionChange,
+    resolvedSelection: EMPTY_EDITOR_SELECTION,
     selectedFeatureId,
+    selectedFeatureIds,
+    selection,
     validateEdit,
   });
   const features = useMemo(
     () => createEditableFeatures(featureCollection, getFeatureId, canEditFeature),
     [canEditFeature, featureCollection, getFeatureId],
+  );
+  const resolvedSelection = useMemo(
+    () =>
+      normalizeEditorSelection(
+        features,
+        selection,
+        selectedFeatureIds,
+        selectedFeatureId,
+        selectedHandle,
+      ),
+    [features, selectedFeatureId, selectedFeatureIds, selectedHandle, selection],
+  );
+  const selectedFeatureIdSet = useMemo(
+    () => new Set(resolvedSelection.featureIds),
+    [resolvedSelection.featureIds],
   );
 
   useEffect(() => {
@@ -258,30 +362,46 @@ export function GeoJsonEditorLayer<
   }, [draft]);
 
   useEffect(() => {
-    selectedHandleRef.current = selectedHandle;
-  }, [selectedHandle]);
+    selectedHandleRef.current = resolvedSelection.vertexHandle ?? null;
+  }, [resolvedSelection]);
 
   useEffect(() => {
     latestRef.current = {
       canEditFeature,
       createFeatureProperties,
+      enableKeyboardShortcuts,
       featureCollection,
       getFeatureId,
+      groupOptions,
       mode,
+      onCommand,
+      onEditModeChange,
+      onEditorSelectionChange,
       onFeatureCollectionChange,
       onSelectionChange,
+      resolvedSelection,
       selectedFeatureId,
+      selectedFeatureIds,
+      selection,
       validateEdit,
     };
   }, [
     canEditFeature,
     createFeatureProperties,
+    enableKeyboardShortcuts,
     featureCollection,
     getFeatureId,
+    groupOptions,
     mode,
+    onCommand,
+    onEditModeChange,
+    onEditorSelectionChange,
     onFeatureCollectionChange,
     onSelectionChange,
+    resolvedSelection,
     selectedFeatureId,
+    selectedFeatureIds,
+    selection,
     validateEdit,
   ]);
 
@@ -322,7 +442,7 @@ export function GeoJsonEditorLayer<
         current.mode === "reshape" ||
         current.mode === "delete"
       ) {
-        current.onSelectionChange?.(null);
+        emitEditorSelection(EMPTY_EDITOR_SELECTION);
         updateSelectedHandle(null);
         return;
       }
@@ -375,52 +495,44 @@ export function GeoJsonEditorLayer<
       completeDraft();
     }
 
-    function handleKeyDown(event: KeyboardEvent) {
-      const current = latestRef.current;
-
-      if (current.mode === "draw-line" || current.mode === "draw-polygon") {
-        if (event.key === "Escape") {
-          updateDraft([]);
-          return;
-        }
-
-        if (event.key === "Backspace") {
-          const nextDraft = draftRef.current.slice(0, -1);
-
-          updateDraft(nextDraft);
-
-          return;
-        }
-
-        if (event.key === "Enter") {
-          completeDraft();
-          return;
-        }
-      }
-
-      if (current.mode === "reshape" && (event.key === "Delete" || event.key === "Backspace")) {
-        const handle = selectedHandleRef.current;
-
-        if (handle?.kind === "vertex") {
-          removeSelectedVertex(handle);
-        }
-      }
-    }
-
     map.on("click", handleClick as never);
     map.on("dblclick", handleDoubleClick as never);
     map.on("mousemove", handleMouseMove as never);
     map.on("mouseout", handleMouseOut as never);
-    document.addEventListener("keydown", handleKeyDown);
 
     return () => {
       map.off("click", handleClick as never);
       map.off("dblclick", handleDoubleClick as never);
       map.off("mousemove", handleMouseMove as never);
       map.off("mouseout", handleMouseOut as never);
-      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [surface]);
+
+  useEffect(() => {
+    if (!enableKeyboardShortcuts || !surface || surface.display !== "flat") {
+      return;
+    }
+
+    const scope = keyboardShortcutScope ?? document;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      const command = getGeoJsonEditorKeyboardCommand(event);
+
+      if (!command || isKeyboardShortcutTargetEditable(event.target)) {
+        return;
+      }
+
+      if (runGeoJsonEditorCommand(command)) {
+        event.preventDefault();
+      }
+    }
+
+    scope.addEventListener("keydown", handleKeyDown as EventListener);
+
+    return () => {
+      scope.removeEventListener("keydown", handleKeyDown as EventListener);
+    };
+  });
 
   useEffect(() => {
     if (mode !== "draw-line" && mode !== "draw-polygon") {
@@ -444,7 +556,18 @@ export function GeoJsonEditorLayer<
       }
 
       for (const feature of features) {
-        const selected = feature.id === selectedFeatureId;
+        const selected = selectedFeatureIdSet.has(feature.id);
+        const primarySelected = feature.id === resolvedSelection.primaryFeatureId;
+        const groupId = getFeatureGroupId(feature, groupOptions);
+        const groupSelected =
+          selected &&
+          groupId !== null &&
+          features.some(
+            (candidate) =>
+              candidate.id !== feature.id &&
+              selectedFeatureIdSet.has(candidate.id) &&
+              getFeatureGroupId(candidate, groupOptions) === groupId,
+          );
         const resolvedStyle = resolveEditorStyle(
           style,
           selected ? selectedStyle : undefined,
@@ -453,7 +576,9 @@ export function GeoJsonEditorLayer<
         const layers = createFlatGeometryLayers(feature.geometry, {
           className: joinClassNames(
             "mb-maps__editor-feature",
+            Boolean(groupId) && "mb-maps__editor-feature--grouped",
             selected && "mb-maps__editor-feature--selected",
+            groupSelected && "mb-maps__editor-feature--group-selected",
             selected && "mb-maps__feature--selected",
           ),
           bubblingMouseEvents: false,
@@ -468,12 +593,13 @@ export function GeoJsonEditorLayer<
             feature,
             map,
             onDragStart: (event) => startFeatureDrag(feature, event, map),
-            onSelect: () => selectFeature(feature.id),
+            onGroupSelect: () => selectFeatureGroup(feature.id),
+            onSelect: (event) => selectFeature(feature.id, event),
           });
           geometryLayer.addTo(layer);
         }
 
-        if (mode === "reshape" && selected && feature.editable) {
+        if (mode === "reshape" && primarySelected && feature.editable) {
           renderVertexHandles(feature, {
             handleColor,
             layer,
@@ -488,11 +614,13 @@ export function GeoJsonEditorLayer<
     });
   }, [
     features,
+    groupOptions,
     handleColor,
     midpointHandleColor,
     mode,
     resolvedLayerId,
-    selectedFeatureId,
+    resolvedSelection,
+    selectedFeatureIdSet,
     selectedStyle,
     style,
     surface,
@@ -544,6 +672,10 @@ export function GeoJsonEditorLayer<
   function updateSelectedHandle(nextHandle: GeoJsonVertexHandle | null) {
     selectedHandleRef.current = nextHandle;
     setSelectedHandle(nextHandle);
+    emitEditorSelection({
+      ...latestRef.current.resolvedSelection,
+      vertexHandle: nextHandle,
+    });
     surface?.requestRender();
   }
 
@@ -552,6 +684,7 @@ export function GeoJsonEditorLayer<
       | GeoJsonEditOperation<TProperties>
       | TemporalGeoJsonGeometryFeature<TProperties>,
     operationType?: "create",
+    nextSelection?: GeoJsonEditorSelection,
   ) {
     const current = latestRef.current;
     const operation =
@@ -565,12 +698,10 @@ export function GeoJsonEditorLayer<
           } satisfies GeoJsonEditOperation<TProperties>)
         : (operationOrFeature as GeoJsonEditOperation<TProperties>);
 
-    if (operation.type === "create" || operation.type === "update") {
-      const validation = validateOperation(operation, current.validateEdit);
+    const validation = validateEditOperation(operation, current.validateEdit);
 
-      if (!validation.valid) {
-        return;
-      }
+    if (!validation.valid) {
+      return;
     }
 
     const next = applyGeoJsonEditOperationWithResolver(
@@ -581,24 +712,89 @@ export function GeoJsonEditorLayer<
 
     current.onFeatureCollectionChange?.(next, operation);
 
-    if (operation.type === "delete") {
-      current.onSelectionChange?.(null);
-    } else {
-      current.onSelectionChange?.(operation.featureId);
+    if (nextSelection) {
+      emitEditorSelection(nextSelection);
+      return;
+    }
+
+    if (operation.type === "create" || operation.type === "update") {
+      emitEditorSelection(createEditorSelection([operation.featureId], operation.featureId));
+    } else if (operation.type === "delete") {
+      emitEditorSelection(EMPTY_EDITOR_SELECTION);
     }
   }
 
-  function selectFeature(featureId: string) {
+  function emitEditorSelection(nextSelection: GeoJsonEditorSelection) {
+    const normalized = normalizeEditorSelection(features, nextSelection);
+
+    latestRef.current.onEditorSelectionChange?.(normalized);
+    latestRef.current.onSelectionChange?.(normalized.primaryFeatureId);
+  }
+
+  function selectFeature(featureId: string, event: LeafletFeaturePointerEvent = {}) {
     if (mode === "delete") {
       const feature = features.find((candidate) => candidate.id === featureId);
 
       if (feature?.editable) {
-        deleteFeature(feature);
+        const selectedFeatures = getSelectedEditableFeatures();
+        const featuresToDelete = selectedFeatures.some((candidate) => candidate.id === featureId)
+          ? selectedFeatures
+          : [feature];
+
+        deleteFeatures(featuresToDelete, "delete-selection");
       }
       return;
     }
 
-    onSelectionChange?.(featureId);
+    const originalEvent = event.originalEvent as
+      | (MouseEvent & { altKey?: boolean; shiftKey?: boolean })
+      | undefined;
+
+    if (originalEvent?.altKey) {
+      selectFeatureGroup(featureId);
+      return;
+    }
+
+    if (originalEvent?.shiftKey) {
+      toggleFeatureSelection(featureId);
+      return;
+    }
+
+    emitEditorSelection(createEditorSelection([featureId], featureId));
+  }
+
+  function toggleFeatureSelection(featureId: string) {
+    const current = latestRef.current.resolvedSelection;
+    const selected = new Set(current.featureIds);
+
+    if (selected.has(featureId)) {
+      selected.delete(featureId);
+    } else {
+      selected.add(featureId);
+    }
+
+    const featureIds = [...selected];
+    const primaryFeatureId = selected.has(current.primaryFeatureId ?? "")
+      ? current.primaryFeatureId
+      : featureIds[0] ?? null;
+
+    emitEditorSelection(createEditorSelection(featureIds, primaryFeatureId));
+  }
+
+  function selectFeatureGroup(featureId: string) {
+    const feature = features.find((candidate) => candidate.id === featureId);
+    const groupId = feature ? getFeatureGroupId(feature, latestRef.current.groupOptions) : null;
+
+    if (!groupId) {
+      emitEditorSelection(createEditorSelection([featureId], featureId));
+      return;
+    }
+
+    const featureIds = features
+      .filter((candidate) => getFeatureGroupId(candidate, latestRef.current.groupOptions) === groupId)
+      .map((candidate) => candidate.id);
+
+    emitEditorSelection(createEditorSelection(featureIds, featureId));
   }
 
   function deleteFeature(feature: EditableFeature<TProperties>) {
@@ -611,6 +807,261 @@ export function GeoJsonEditorLayer<
       previousFeature: cloneFeature(feature.feature),
       type: "delete",
     });
+  }
+
+  function deleteFeatures(
+    targetFeatures: Array<EditableFeature<TProperties>>,
+    reason: GeoJsonBatchEditReason,
+  ) {
+    const editableFeatures = targetFeatures.filter((feature) => feature.editable);
+
+    if (editableFeatures.length === 0) {
+      return false;
+    }
+
+    if (editableFeatures.length === 1) {
+      deleteFeature(editableFeatures[0]!);
+      return true;
+    }
+
+    emitOperation(
+      {
+        operations: editableFeatures.map((feature) => ({
+          featureId: feature.id,
+          previousFeature: cloneFeature(feature.feature),
+          type: "delete" as const,
+        })),
+        reason,
+        type: "batch",
+      },
+      undefined,
+      EMPTY_EDITOR_SELECTION,
+    );
+
+    return true;
+  }
+
+  function getSelectedEditableFeatures() {
+    const selectedIds = new Set(latestRef.current.resolvedSelection.featureIds);
+
+    return features.filter((feature) => feature.editable && selectedIds.has(feature.id));
+  }
+
+  function runGeoJsonEditorCommand(command: GeoJsonEditorCommand) {
+    const current = latestRef.current;
+    const intercepted = current.onCommand?.(command, {
+      mode: current.mode,
+      selection: current.resolvedSelection,
+    });
+
+    if (intercepted === false) {
+      return false;
+    }
+
+    if (command === "select-all") {
+      const featureIds = features.filter((feature) => feature.editable).map((feature) => feature.id);
+
+      emitEditorSelection(createEditorSelection(featureIds, featureIds[0] ?? null));
+      return featureIds.length > 0;
+    }
+
+    if (command === "clear-selection") {
+      if (draftRef.current.length > 0) {
+        updateDraft([]);
+        return true;
+      }
+
+      if (current.resolvedSelection.vertexHandle) {
+        updateSelectedHandle(null);
+        return true;
+      }
+
+      emitEditorSelection(EMPTY_EDITOR_SELECTION);
+      return current.resolvedSelection.featureIds.length > 0;
+    }
+
+    if (command === "finish-draft") {
+      completeDraft();
+      return current.mode === "draw-line" || current.mode === "draw-polygon";
+    }
+
+    if (command === "cancel-draft") {
+      updateDraft([]);
+      return true;
+    }
+
+    if (command === "remove-selected-vertex") {
+      const handle = selectedHandleRef.current;
+
+      if (current.mode === "reshape" && handle?.kind === "vertex") {
+        removeSelectedVertex(handle);
+        return true;
+      }
+
+      return false;
+    }
+
+    if (command === "delete-selection") {
+      if (current.mode === "draw-line" || current.mode === "draw-polygon") {
+        updateDraft(draftRef.current.slice(0, -1));
+        return draftRef.current.length > 0;
+      }
+
+      const handle = selectedHandleRef.current;
+
+      if (current.mode === "reshape" && handle?.kind === "vertex") {
+        removeSelectedVertex(handle);
+        return true;
+      }
+
+      return deleteFeatures(getSelectedEditableFeatures(), "delete-selection");
+    }
+
+    if (command === "duplicate-selection") {
+      return duplicateSelectedFeatures();
+    }
+
+    if (command === "group-selection") {
+      return groupSelectedFeatures();
+    }
+
+    if (command === "ungroup-selection") {
+      return ungroupSelectedFeatures();
+    }
+
+    const nextMode = getCommandEditMode(command);
+
+    if (nextMode) {
+      current.onEditModeChange?.(nextMode);
+      return Boolean(current.onEditModeChange || current.onCommand);
+    }
+
+    return Boolean(current.onCommand);
+  }
+
+  function duplicateSelectedFeatures() {
+    const selectedFeatures = getSelectedEditableFeatures();
+
+    if (selectedFeatures.length === 0) {
+      return false;
+    }
+
+    const duplicateGroupId =
+      selectedFeatures.length > 1 ? createGeoJsonGroupId(groupCounterRef, latestRef.current.groupOptions) : null;
+    const operations = selectedFeatures.map((feature) => {
+      duplicateCounterRef.current += 1;
+
+      const duplicateId = `${feature.id}-copy-${Date.now()}-${duplicateCounterRef.current}`;
+      const duplicate = {
+        ...cloneFeature(feature.feature),
+        geometry: moveGeoJsonGeometry(feature.geometry, 0.45, 0.28),
+        id: duplicateId,
+        properties: {
+          ...(feature.feature.properties ?? ({} as TProperties)),
+          groupId: duplicateGroupId ?? undefined,
+        } as TProperties,
+      };
+
+      return {
+        feature: duplicate,
+        featureId: duplicateId,
+        type: "create" as const,
+      };
+    });
+    const duplicateIds = operations.map((operation) => operation.featureId);
+
+    emitOperation(
+      {
+        operations,
+        reason: "duplicate-selection",
+        type: "batch",
+      },
+      undefined,
+      createEditorSelection(duplicateIds, duplicateIds[0] ?? null),
+    );
+
+    return true;
+  }
+
+  function groupSelectedFeatures() {
+    const selectedFeatures = getSelectedEditableFeatures();
+
+    if (selectedFeatures.length < 2) {
+      return false;
+    }
+
+    const groupId = createGeoJsonGroupId(groupCounterRef, latestRef.current.groupOptions);
+
+    emitOperation(
+      {
+        operations: selectedFeatures.map((feature) => ({
+          feature: setFeatureGroupId(feature, groupId, latestRef.current.groupOptions),
+          featureId: feature.id,
+          previousFeature: cloneFeature(feature.feature),
+          reason: "group-feature" as const,
+          type: "update" as const,
+        })),
+        reason: "group-selection",
+        type: "batch",
+      },
+      undefined,
+      currentSelectionWithoutVertex(),
+    );
+
+    return true;
+  }
+
+  function ungroupSelectedFeatures() {
+    const selectedIds = new Set(latestRef.current.resolvedSelection.featureIds);
+    const selectedGroupIds = new Set(
+      features.flatMap((feature) => {
+        if (!selectedIds.has(feature.id)) {
+          return [];
+        }
+
+        const groupId = getFeatureGroupId(feature, latestRef.current.groupOptions);
+
+        return groupId ? [groupId] : [];
+      }),
+    );
+    const targetFeatures = features.filter((feature) => {
+      if (!feature.editable) {
+        return false;
+      }
+
+      const groupId = getFeatureGroupId(feature, latestRef.current.groupOptions);
+
+      return selectedIds.has(feature.id) || (groupId !== null && selectedGroupIds.has(groupId));
+    });
+
+    if (targetFeatures.length === 0) {
+      return false;
+    }
+
+    emitOperation(
+      {
+        operations: targetFeatures.map((feature) => ({
+          feature: setFeatureGroupId(feature, null, latestRef.current.groupOptions),
+          featureId: feature.id,
+          previousFeature: cloneFeature(feature.feature),
+          reason: "ungroup-feature" as const,
+          type: "update" as const,
+        })),
+        reason: "ungroup-selection",
+        type: "batch",
+      },
+      undefined,
+      currentSelectionWithoutVertex(),
+    );
+
+    return true;
+  }
+
+  function currentSelectionWithoutVertex() {
+    return {
+      ...latestRef.current.resolvedSelection,
+      vertexHandle: null,
+    };
   }
 
   function updateFeature(
@@ -639,7 +1090,7 @@ export function GeoJsonEditorLayer<
     event: LeafletFeaturePointerEvent,
     map: LeafletMap,
   ) {
-    if (mode !== "move" || !feature.editable || selectedFeatureId !== feature.id) {
+    if (mode !== "move" || !feature.editable || !selectedFeatureIdSet.has(feature.id)) {
       return;
     }
 
@@ -651,8 +1102,9 @@ export function GeoJsonEditorLayer<
 
     event.originalEvent?.preventDefault?.();
     event.originalEvent?.stopPropagation?.();
+    const selectedFeatures = getSelectedEditableFeatures();
     dragRef.current = {
-      feature,
+      features: selectedFeatures.length > 0 ? selectedFeatures : [feature],
       from: coordinate,
       type: "feature",
     };
@@ -708,13 +1160,35 @@ export function GeoJsonEditorLayer<
     }
 
     if (drag.type === "feature") {
-      const next = moveGeoJsonGeometry(
-        drag.feature.geometry,
-        to[0] - drag.from[0],
-        to[1] - drag.from[1],
-      );
+      const deltaLongitude = to[0] - drag.from[0];
+      const deltaLatitude = to[1] - drag.from[1];
 
-      updateFeature(drag.feature, next, "move-feature");
+      if (drag.features.length === 1) {
+        const feature = drag.features[0]!;
+        const next = moveGeoJsonGeometry(feature.geometry, deltaLongitude, deltaLatitude);
+
+        updateFeature(feature, next, "move-feature");
+        return;
+      }
+
+      emitOperation(
+        {
+          operations: drag.features.map((feature) => ({
+            feature: {
+              ...cloneFeature(feature.feature),
+              geometry: moveGeoJsonGeometry(feature.geometry, deltaLongitude, deltaLatitude),
+            },
+            featureId: feature.id,
+            previousFeature: cloneFeature(feature.feature),
+            reason: "move-feature" as const,
+            type: "update" as const,
+          })),
+          reason: "move-selection",
+          type: "batch",
+        },
+        undefined,
+        latestRef.current.resolvedSelection,
+      );
       return;
     }
 
@@ -812,6 +1286,7 @@ export function EditableGeoJsonMap<
   className,
   editMode,
   editorStyle,
+  enableKeyboardShortcuts = true,
   fitBoundsPadding = 56,
   fitToData = true,
   geoJson,
@@ -908,8 +1383,9 @@ export function EditableGeoJsonMap<
       <GeoJsonEditorLayer
         {...(editorProps as Omit<
           GeoJsonEditorLayerProps<TProperties>,
-          "featureCollection" | "mode" | "style"
+          "enableKeyboardShortcuts" | "featureCollection" | "mode" | "style"
         >)}
+        enableKeyboardShortcuts={enableKeyboardShortcuts}
         featureCollection={transformedGeoJson}
         mode={editMode}
         style={editorStyle}
@@ -976,6 +1452,14 @@ function applyGeoJsonEditOperationWithResolver<
       ...collection,
       features: [...collection.features.map(cloneFeature), cloneFeature(operation.feature)],
     };
+  }
+
+  if (operation.type === "batch") {
+    return operation.operations.reduce(
+      (current, childOperation) =>
+        applyGeoJsonEditOperationWithResolver(current, childOperation, getFeatureId),
+      collection,
+    );
   }
 
   if (operation.type === "delete") {
@@ -1217,13 +1701,19 @@ function bindFeatureLayer<TProperties extends Record<string, unknown>>(
     feature: EditableFeature<TProperties>;
     map: LeafletMap;
     onDragStart: (event: LeafletFeaturePointerEvent) => void;
-    onSelect: () => void;
+    onGroupSelect: () => void;
+    onSelect: (event: LeafletFeaturePointerEvent) => void;
   },
 ) {
   layer.on("click", (event: LeafletFeaturePointerEvent = {}) => {
     event.originalEvent?.preventDefault?.();
     event.originalEvent?.stopPropagation?.();
-    options.onSelect();
+    options.onSelect(event);
+  });
+  layer.on("dblclick", (event: LeafletFeaturePointerEvent = {}) => {
+    event.originalEvent?.preventDefault?.();
+    event.originalEvent?.stopPropagation?.();
+    options.onGroupSelect();
   });
   layer.on("mousedown", (event: LeafletFeaturePointerEvent = {}) => {
     options.onDragStart(event);
@@ -1537,10 +2027,26 @@ function mapGeometryPositions(
   }
 }
 
-function validateOperation<TProperties extends Record<string, unknown>>(
-  operation: Extract<GeoJsonEditOperation<TProperties>, { type: "create" | "update" }>,
+function validateEditOperation<TProperties extends Record<string, unknown>>(
+  operation: GeoJsonEditOperation<TProperties>,
   validateEdit: GeoJsonEditorLayerProps<TProperties>["validateEdit"],
-) {
+): GeoJsonEditValidationResult {
+  if (operation.type === "delete") {
+    return { valid: true };
+  }
+
+  if (operation.type === "batch") {
+    for (const childOperation of operation.operations) {
+      const validation = validateEditOperation(childOperation, validateEdit);
+
+      if (!validation.valid) {
+        return validation;
+      }
+    }
+
+    return { valid: true };
+  }
+
   const baseValidation = validateGeoJsonEditableGeometry(operation.feature.geometry);
 
   if (!baseValidation.valid) {
@@ -1646,6 +2152,197 @@ function arePositionsEqual(
   right: GeoJsonPosition | null | undefined,
 ) {
   return left?.[0] === right?.[0] && left?.[1] === right?.[1];
+}
+
+function normalizeEditorSelection<TProperties extends Record<string, unknown>>(
+  features: Array<EditableFeature<TProperties>>,
+  selection?: GeoJsonEditorSelection | null,
+  selectedFeatureIds?: readonly string[] | null,
+  selectedFeatureId?: string | null,
+  selectedHandle?: GeoJsonVertexHandle | null,
+): GeoJsonEditorSelection {
+  const availableIds = new Set(features.map((feature) => feature.id));
+  const sourceIds =
+    selection?.featureIds ??
+    selectedFeatureIds ??
+    (selectedFeatureId ? [selectedFeatureId] : EMPTY_EDITOR_SELECTION.featureIds);
+  const featureIds = dedupeStrings(sourceIds).filter((featureId) => availableIds.has(featureId));
+  const requestedPrimary =
+    selection?.primaryFeatureId ??
+    (selectedFeatureIds ? selectedFeatureId : null) ??
+    selectedFeatureId ??
+    featureIds[0] ??
+    null;
+  const primaryFeatureId =
+    requestedPrimary && featureIds.includes(requestedPrimary)
+      ? requestedPrimary
+      : featureIds[0] ?? null;
+  const vertexHandle = selection?.vertexHandle ?? selectedHandle ?? null;
+
+  return {
+    featureIds,
+    primaryFeatureId,
+    vertexHandle:
+      vertexHandle && featureIds.includes(vertexHandle.featureId) ? vertexHandle : null,
+  };
+}
+
+function createEditorSelection(
+  featureIds: readonly string[],
+  primaryFeatureId: string | null,
+  vertexHandle: GeoJsonVertexHandle | null = null,
+): GeoJsonEditorSelection {
+  const dedupedIds = dedupeStrings(featureIds);
+
+  return {
+    featureIds: dedupedIds,
+    primaryFeatureId:
+      primaryFeatureId && dedupedIds.includes(primaryFeatureId)
+        ? primaryFeatureId
+        : dedupedIds[0] ?? null,
+    vertexHandle,
+  };
+}
+
+function dedupeStrings(values: readonly string[]) {
+  return [...new Set(values.filter((value) => value.length > 0))];
+}
+
+function getFeatureGroupId<TProperties extends Record<string, unknown>>(
+  feature: EditableFeature<TProperties>,
+  groupOptions: GeoJsonEditorGroupOptions<TProperties> | undefined,
+) {
+  const customGroupId = groupOptions?.getGroupId?.(feature.feature, feature.index);
+
+  if (customGroupId !== undefined && customGroupId !== null && customGroupId !== "") {
+    return String(customGroupId);
+  }
+
+  const groupId = feature.feature.properties?.groupId;
+
+  return typeof groupId === "string" && groupId.length > 0 ? groupId : null;
+}
+
+function setFeatureGroupId<TProperties extends Record<string, unknown>>(
+  feature: EditableFeature<TProperties>,
+  groupId: string | null,
+  groupOptions: GeoJsonEditorGroupOptions<TProperties> | undefined,
+) {
+  if (groupOptions?.setGroupId) {
+    return groupOptions.setGroupId(cloneFeature(feature.feature), groupId);
+  }
+
+  const properties = {
+    ...(feature.feature.properties ?? ({} as TProperties)),
+  } as TProperties & { groupId?: string };
+
+  if (groupId) {
+    properties.groupId = groupId;
+  } else {
+    delete properties.groupId;
+  }
+
+  return {
+    ...cloneFeature(feature.feature),
+    properties: properties as TProperties,
+  };
+}
+
+function createGeoJsonGroupId<TProperties extends Record<string, unknown>>(
+  counterRef: { current: number },
+  groupOptions: GeoJsonEditorGroupOptions<TProperties> | undefined,
+) {
+  if (groupOptions?.groupId) {
+    return groupOptions.groupId;
+  }
+
+  counterRef.current += 1;
+
+  return `geojson-group-${Date.now()}-${counterRef.current}`;
+}
+
+function getGeoJsonEditorKeyboardCommand(event: KeyboardEvent): GeoJsonEditorCommand | null {
+  const key = event.key.toLowerCase();
+  const primaryModifier = event.ctrlKey || event.metaKey;
+
+  if (primaryModifier && key === "a") {
+    return "select-all";
+  }
+
+  if (primaryModifier && key === "d") {
+    return "duplicate-selection";
+  }
+
+  if (primaryModifier && key === "g") {
+    return event.shiftKey ? "ungroup-selection" : "group-selection";
+  }
+
+  if (primaryModifier || event.altKey) {
+    return null;
+  }
+
+  if (key === "escape") {
+    return "clear-selection";
+  }
+
+  if (key === "enter") {
+    return "finish-draft";
+  }
+
+  if (key === "delete" || key === "backspace") {
+    return "delete-selection";
+  }
+
+  switch (key) {
+    case "v":
+      return "start-select";
+    case "p":
+      return "start-draw-point";
+    case "l":
+      return "start-draw-line";
+    case "g":
+      return "start-draw-polygon";
+    case "m":
+      return "start-move";
+    case "r":
+      return "start-reshape";
+    default:
+      return null;
+  }
+}
+
+function getCommandEditMode(command: GeoJsonEditorCommand): GeoJsonEditMode | null {
+  switch (command) {
+    case "start-select":
+      return "select";
+    case "start-draw-point":
+      return "draw-point";
+    case "start-draw-line":
+      return "draw-line";
+    case "start-draw-polygon":
+      return "draw-polygon";
+    case "start-move":
+      return "move";
+    case "start-reshape":
+      return "reshape";
+    default:
+      return null;
+  }
+}
+
+function isKeyboardShortcutTargetEditable(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+
+  return (
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select" ||
+    target.isContentEditable
+  );
 }
 
 function resolveEditorStyle(
