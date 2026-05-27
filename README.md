@@ -76,6 +76,11 @@ Use `heatmapSurfaceMode="field"` for a continuous scalar interpolation surface,
 such as temperature across Europe. Field mode uses inverse distance weighting
 (IDW) over a fixed geographic domain and renders a georeferenced image overlay,
 so panning and zooming do not change the computed value at a longitude/latitude.
+Set `fieldRenderMode="contours"` to draw vector level lines instead of a color
+raster, and `showDataPoints` to show the original measurement points above the
+surface. Contour lines and data points expose their values in hover tooltips.
+Use `createHeatFieldContourFeatureCollection(...)` when you need the contour
+lines as GeoJSON `MultiLineString` features for custom rendering.
 IDW is not kriging or weather model output; for production weather maps, prefer
 already-gridded model data when available. This implementation is intended for
 interpolating scattered measurements.
@@ -116,8 +121,10 @@ export function TemperatureField() {
       domainBounds={[-11, 35, 31, 62]}
       fieldColumns={320}
       fieldRows={220}
+      fieldRenderMode="contours"
       fieldValueDomain={[-10, 35]}
       points={stations}
+      showDataPoints
       valueMetric="temperature"
       style={{ height: 420 }}
     />

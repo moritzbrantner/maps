@@ -52,7 +52,7 @@ import {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
-import { HeatLayer, type HeatLayerSurfaceMode } from "./heat-layer";
+import { HeatLayer, type HeatFieldRenderMode, type HeatLayerSurfaceMode } from "./heat-layer";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
@@ -60,11 +60,16 @@ import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 import {
   createScalarFieldGrid,
+  normalizeScalarFieldValue,
+  resolveScalarFieldValuePoints,
   type HeatFieldMaskGeoJson,
   type HeatFieldOptions,
 } from "./scalar-field";
 import {
+  createHeatFieldContourFeatureCollection,
   createHeatFieldImage,
+  type HeatFieldContourOptions,
+  type HeatFieldContourFeatureCollection,
   type HeatFieldColorStop,
   type HeatFieldImage,
 } from "./scalar-field-render";
@@ -144,9 +149,15 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
     domainBounds?: HeatFieldOptions<TProperties>["domainBounds"];
     domainPaddingRatio?: HeatFieldOptions<TProperties>["domainPaddingRatio"];
     fieldCellSizeMeters?: HeatFieldOptions<TProperties>["fieldCellSizeMeters"];
+    fieldContourColor?: HeatFieldContourOptions["lineColor"];
+    fieldContourLevels?: HeatFieldContourOptions["levels"];
+    fieldContourLineWidth?: HeatFieldContourOptions["lineWidth"];
+    fieldContourOpacity?: HeatFieldContourOptions["opacity"];
+    fieldContourValueFormat?: HeatFieldContourOptions["valueFormat"];
     fieldColorRamp?: readonly HeatFieldColorStop[];
     fieldColumns?: HeatFieldOptions<TProperties>["fieldColumns"];
     fieldOpacity?: HeatFieldOptions<TProperties>["opacity"];
+    fieldRenderMode?: HeatFieldRenderMode;
     fieldRows?: HeatFieldOptions<TProperties>["fieldRows"];
     fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
     fitBoundsPadding?: number;
@@ -181,6 +192,13 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
     onMapReady?: (map: LeafletMap) => void;
     points?: readonly MapPoint<TProperties>[];
     showAttributionControl?: boolean;
+    showDataPoints?: boolean;
+    dataPointColor?: string;
+    dataPointOpacity?: number;
+    dataPointRadius?: number;
+    dataPointStrokeColor?: string;
+    dataPointStrokeWidth?: number;
+    dataPointValueFormat?: (value: number) => string;
     style?: React.CSSProperties;
     valueMetric?: string;
   } & MapViewportProps;
@@ -292,9 +310,15 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   domainBounds,
   domainPaddingRatio,
   fieldCellSizeMeters,
+  fieldContourColor,
+  fieldContourLevels,
+  fieldContourLineWidth,
+  fieldContourOpacity,
+  fieldContourValueFormat,
   fieldColorRamp,
   fieldColumns,
   fieldOpacity,
+  fieldRenderMode = "raster",
   fieldRows,
   fieldValueDomain,
   filterPoint,
@@ -334,6 +358,13 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   onMeasurementDraftChange,
   onMeasurementSelect,
   points = [],
+  showDataPoints = false,
+  dataPointColor = "#0f172a",
+  dataPointOpacity = 0.94,
+  dataPointRadius = 4,
+  dataPointStrokeColor = "#ffffff",
+  dataPointStrokeWidth = 1.5,
+  dataPointValueFormat,
   showAttributionControl = true,
   style,
   valueMetric,
@@ -366,6 +397,37 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
       heatmapAggregationRadius,
       heatmapMaxZoom,
       maxWeight,
+      weightMetric,
+    ],
+  );
+  const dataPointCollection = useMemo(
+    () =>
+      createHeatMapFeatureCollection(deferredPoints, {
+        filterPoint,
+        getWeight,
+        maxWeight,
+        weightMetric,
+      }),
+    [deferredPoints, filterPoint, getWeight, maxWeight, weightMetric],
+  );
+  const fieldDataPointCollection = useMemo(
+    () =>
+      heatmapSurfaceMode === "field"
+        ? createHeatMapValueFeatureCollection(deferredPoints, {
+            filterPoint,
+            getValue: getValue ?? getWeight,
+            valueDomain: fieldValueDomain,
+            valueMetric: valueMetric ?? weightMetric,
+          })
+        : null,
+    [
+      deferredPoints,
+      fieldValueDomain,
+      filterPoint,
+      getValue,
+      getWeight,
+      heatmapSurfaceMode,
+      valueMetric,
       weightMetric,
     ],
   );
@@ -414,14 +476,38 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   );
   const fieldImage = useMemo(
     () =>
-      fieldGrid
+      fieldGrid && fieldRenderMode === "raster"
         ? createHeatFieldImage(fieldGrid, {
-            colorRamp: fieldColorRamp,
-            opacity: fieldOpacity ?? heatmapOpacity,
+              colorRamp: fieldColorRamp,
+              opacity: fieldOpacity ?? heatmapOpacity,
+              valueDomain: fieldValueDomain,
+            })
+        : null,
+    [
+      fieldColorRamp,
+      fieldGrid,
+      fieldOpacity,
+      fieldRenderMode,
+      fieldValueDomain,
+      heatmapOpacity,
+    ],
+  );
+  const fieldContourCollection = useMemo(
+    () =>
+      fieldGrid && fieldRenderMode === "contours"
+        ? createHeatFieldContourFeatureCollection(fieldGrid, {
+            levels: fieldContourLevels,
             valueDomain: fieldValueDomain,
+            valueFormat: fieldContourValueFormat,
           })
         : null,
-    [fieldColorRamp, fieldGrid, fieldOpacity, fieldValueDomain, heatmapOpacity],
+    [
+      fieldContourLevels,
+      fieldContourValueFormat,
+      fieldGrid,
+      fieldRenderMode,
+      fieldValueDomain,
+    ],
   );
   const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
     layerRef: measurementLayerRef,
@@ -447,22 +533,51 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
     }
 
     if (heatmapSurfaceMode === "field") {
-      renderHeatMapFieldOverlay({
-        image: fieldImage,
-        layer: heatLayer,
-        leaflet,
-        map,
-        maxZoom: heatmapMaxZoom,
-        opacity: fieldOpacity ?? heatmapOpacity,
-      });
+      if (fieldRenderMode === "contours") {
+        renderHeatMapFieldContours({
+          collection: fieldContourCollection,
+          isMeasuring,
+          layer: heatLayer,
+          leaflet,
+          map,
+          maxZoom: heatmapMaxZoom,
+          lineColor: fieldContourColor,
+          lineOpacity: fieldContourOpacity ?? fieldOpacity ?? heatmapOpacity,
+          lineWidth: fieldContourLineWidth,
+        });
+      } else {
+        renderHeatMapFieldOverlay({
+          image: fieldImage,
+          layer: heatLayer,
+          leaflet,
+          map,
+          maxZoom: heatmapMaxZoom,
+          opacity: fieldOpacity ?? heatmapOpacity,
+        });
+      }
+
+      if (showDataPoints && map.getZoom() <= heatmapMaxZoom) {
+        renderHeatMapDataPoints({
+          color: dataPointColor,
+          data: getHeatMapFeatureCollectionInBounds(
+            fieldDataPointCollection ?? dataPointCollection,
+            getHeatMapViewportQuery(map).bounds,
+          ),
+          formatValue: dataPointValueFormat,
+          isMeasuring,
+          layer: heatLayer,
+          leaflet,
+          opacity: dataPointOpacity,
+          radius: dataPointRadius,
+          strokeColor: dataPointStrokeColor,
+          strokeWidth: dataPointStrokeWidth,
+        });
+      }
+
       return;
     }
 
-    const bounds = map.getBounds();
-    const query: ViewportAggregationQuery = {
-      bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
-      zoom: map.getZoom(),
-    };
+    const query = getHeatMapViewportQuery(map);
 
     renderHeatOverlay({
       colorRamp: heatmapColorRamp,
@@ -476,6 +591,21 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
       opacity: heatmapOpacity,
       radius: heatmapRadius,
     });
+
+    if (showDataPoints && map.getZoom() <= heatmapMaxZoom) {
+      renderHeatMapDataPoints({
+        color: dataPointColor,
+        data: getHeatMapFeatureCollectionInBounds(dataPointCollection, query.bounds),
+        formatValue: dataPointValueFormat,
+        isMeasuring,
+        layer: heatLayer,
+        leaflet,
+        opacity: dataPointOpacity,
+        radius: dataPointRadius,
+        strokeColor: dataPointStrokeColor,
+        strokeWidth: dataPointStrokeWidth,
+      });
+    }
   });
 
   const handleMapReady = useEffectEvent((map: LeafletMap) => {
@@ -573,16 +703,30 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
 
     syncSource();
   }, [
+    dataPointCollection,
+    dataPointColor,
+    dataPointOpacity,
+    dataPointRadius,
+    dataPointStrokeColor,
+    dataPointStrokeWidth,
+    dataPointValueFormat,
     deferredPoints,
     densityIndex,
+    fieldContourCollection,
+    fieldContourColor,
+    fieldContourLineWidth,
+    fieldContourOpacity,
+    fieldDataPointCollection,
     fieldImage,
     fieldOpacity,
+    fieldRenderMode,
     fitBoundsPadding,
     fitToData,
     heatmapOpacity,
     heatmapSurfaceMode,
     initialViewState,
     isMeasuring,
+    showDataPoints,
     syncSource,
   ]);
 
@@ -614,6 +758,12 @@ export function FlatHeatFieldMap<
 
 export function GlobeHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
+  dataPointColor = "#0f172a",
+  dataPointOpacity = 0.94,
+  dataPointRadius = 4,
+  dataPointStrokeColor = "#ffffff",
+  dataPointStrokeWidth = 1.5,
+  dataPointValueFormat,
   filterPoint,
   fitToData = true,
   getWeight,
@@ -639,6 +789,7 @@ export function GlobeHeatMap<TProperties extends Record<string, unknown> = Recor
   onMeasurementDraftChange: _onMeasurementDraftChange,
   onMeasurementSelect: _onMeasurementSelect,
   points = [],
+  showDataPoints = false,
   style,
   weightMetric,
 }: HeatMapProps<TProperties>) {
@@ -681,6 +832,16 @@ export function GlobeHeatMap<TProperties extends Record<string, unknown> = Recor
   );
   const query = useMemo(() => createGlobalViewportQuery(viewState.zoom), [viewState.zoom]);
   const data = useMemo(() => densityIndex.getFeatureCollection(query), [densityIndex, query]);
+  const dataPointCollection = useMemo(
+    () =>
+      createHeatMapFeatureCollection(deferredPoints, {
+        filterPoint,
+        getWeight,
+        maxWeight,
+        weightMetric,
+      }),
+    [deferredPoints, filterPoint, getWeight, maxWeight, weightMetric],
+  );
 
   useEffect(() => {
     if (initialViewState || !fitToData) {
@@ -755,6 +916,21 @@ export function GlobeHeatMap<TProperties extends Record<string, unknown> = Recor
                   key={feature.properties.pointId}
                   opacity={heatmapOpacity}
                   radius={heatmapRadius}
+                  viewState={viewState}
+                />
+              ))
+            : null}
+          {showDataPoints && viewState.zoom <= heatmapMaxZoom
+            ? dataPointCollection.features.map((feature) => (
+                <GlobeHeatDataPoint
+                  color={dataPointColor}
+                  feature={feature}
+                  key={`data-point-${feature.properties.pointId}`}
+                  opacity={dataPointOpacity}
+                  radius={dataPointRadius}
+                  strokeColor={dataPointStrokeColor}
+                  strokeWidth={dataPointStrokeWidth}
+                  valueFormat={dataPointValueFormat}
                   viewState={viewState}
                 />
               ))
@@ -840,6 +1016,47 @@ function GlobeHeatFeature({
       style={{ opacity: 0.34 + projected.scale * 0.66 }}
     >
       <title>{feature.properties.label}</title>
+    </circle>
+  );
+}
+
+function GlobeHeatDataPoint({
+  color,
+  feature,
+  opacity,
+  radius,
+  strokeColor,
+  strokeWidth,
+  valueFormat,
+  viewState,
+}: {
+  color: string;
+  feature: HeatMapFeature;
+  opacity: number;
+  radius: number;
+  strokeColor: string;
+  strokeWidth: number;
+  valueFormat?: (value: number) => string;
+  viewState: GlobeViewState;
+}) {
+  const projected = projectGlobeCoordinate(feature.geometry.coordinates, viewState);
+
+  if (!projected.visible) {
+    return null;
+  }
+
+  return (
+    <circle
+      className="mb-maps__globe-heat-data-point"
+      cx={projected.x}
+      cy={projected.y}
+      fill={color}
+      fillOpacity={clamp(opacity, 0, 1)}
+      r={Math.max(0, radius) * (0.72 + projected.scale * 0.28)}
+      stroke={strokeColor}
+      strokeWidth={Math.max(0, strokeWidth)}
+    >
+      <title>{formatHeatMapFeatureValue(feature, valueFormat)}</title>
     </circle>
   );
 }
@@ -962,6 +1179,55 @@ export function resolveHeatMapPointWeight<TProperties extends Record<string, unk
   return Math.max(0, rawWeight);
 }
 
+function createHeatMapValueFeatureCollection<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>(
+  points: readonly MapPoint<TProperties>[],
+  options: {
+    filterPoint?: MapPointFilter<TProperties>;
+    getValue?: HeatFieldOptions<TProperties>["getValue"];
+    valueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
+    valueMetric?: string;
+  },
+): HeatMapFeatureCollection {
+  const valuePoints = resolveScalarFieldValuePoints(points, options);
+  const valueDomain = options.valueDomain ?? getHeatMapValueDomain(valuePoints.map((entry) => entry.value));
+
+  return {
+    features: valuePoints.map((entry) => {
+      const normalizedValue = normalizeScalarFieldValue(entry.value, valueDomain) ?? 1;
+
+      return {
+        geometry: {
+          coordinates: [entry.point.longitude, entry.point.latitude] as [number, number],
+          type: "Point" as const,
+        },
+        properties: {
+          ...entry.point.metrics,
+          kind: "heat-point" as const,
+          label: entry.point.label,
+          pointCount: 1,
+          pointId: entry.point.id,
+          rawWeight: entry.value,
+          weight: normalizedValue,
+        },
+        type: "Feature" as const,
+      };
+    }),
+    type: "FeatureCollection",
+  };
+}
+
+function getHeatMapValueDomain(values: readonly number[]): [min: number, max: number] | null {
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+
+  if (finiteValues.length === 0) {
+    return null;
+  }
+
+  return [Math.min(...finiteValues), Math.max(...finiteValues)];
+}
+
 function renderHeatMapFieldOverlay({
   image,
   layer,
@@ -999,6 +1265,68 @@ function renderHeatMapFieldOverlay({
       },
     )
     .addTo(layer);
+}
+
+function renderHeatMapFieldContours({
+  collection,
+  isMeasuring,
+  layer,
+  leaflet,
+  lineColor,
+  lineOpacity,
+  lineWidth,
+  map,
+  maxZoom,
+}: {
+  collection: HeatFieldContourFeatureCollection | null;
+  isMeasuring: boolean;
+  layer: LayerGroup;
+  leaflet: typeof import("leaflet");
+  lineColor?: string;
+  lineOpacity: number;
+  lineWidth?: number;
+  map: LeafletMap;
+  maxZoom: number;
+}) {
+  layer.clearLayers();
+
+  if (!collection || map.getZoom() > maxZoom) {
+    return;
+  }
+
+  const safeOpacity = clamp(lineOpacity, 0, 1);
+  const safeLineWidth = Math.max(0.25, lineWidth ?? 1);
+
+  for (const feature of collection.features) {
+    const geometry = feature.geometry;
+
+    if (geometry?.type !== "MultiLineString") {
+      continue;
+    }
+
+    const lines = (geometry.coordinates as Array<Array<[number, number]>>).filter(
+      (line) => line.length >= 2,
+    );
+
+    if (lines.length === 0) {
+      continue;
+    }
+
+    const polyline = leaflet.polyline(
+      lines.map((line) => line.map(toLeafletLatLng)),
+      {
+        bubblingMouseEvents: false,
+        className: "mb-maps__heat-contour",
+        color: lineColor ?? "#111827",
+        interactive: !isMeasuring,
+        opacity: safeOpacity,
+        weight: safeLineWidth,
+      },
+    );
+
+    bindHeatMapTooltip(polyline, feature.properties?.valueLabel ?? String(feature.properties?.value ?? ""));
+    polyline.addTo(layer);
+  }
 }
 
 function renderHeatOverlay({
@@ -1054,6 +1382,96 @@ function renderHeatOverlay({
       })
       .addTo(layer);
   }
+}
+
+function renderHeatMapDataPoints({
+  color,
+  data,
+  formatValue,
+  isMeasuring,
+  layer,
+  leaflet,
+  opacity,
+  radius,
+  strokeColor,
+  strokeWidth,
+}: {
+  color: string;
+  data: HeatMapFeatureCollection;
+  formatValue?: (value: number) => string;
+  isMeasuring: boolean;
+  layer: LayerGroup;
+  leaflet: typeof import("leaflet");
+  opacity: number;
+  radius: number;
+  strokeColor: string;
+  strokeWidth: number;
+}) {
+  for (const feature of data.features) {
+    const [longitude, latitude] = feature.geometry.coordinates;
+    const marker = leaflet.circleMarker([latitude, longitude], {
+      bubblingMouseEvents: false,
+      className: "mb-maps__heat-data-point",
+      color: strokeColor,
+      fillColor: color,
+      fillOpacity: clamp(opacity, 0, 1),
+      interactive: !isMeasuring,
+      opacity: clamp(opacity, 0, 1),
+      radius: Math.max(0, radius),
+      weight: Math.max(0, strokeWidth),
+    });
+
+    bindHeatMapTooltip(marker, formatHeatMapFeatureValue(feature, formatValue));
+    marker.addTo(layer);
+  }
+}
+
+function bindHeatMapTooltip(layer: unknown, content: string) {
+  const target = layer as {
+    bindTooltip?: (content: string, options?: Record<string, unknown>) => unknown;
+  };
+
+  if (!content || typeof target.bindTooltip !== "function") {
+    return;
+  }
+
+  target.bindTooltip(content, {
+    className: "mb-maps__heat-tooltip",
+    direction: "top",
+    sticky: true,
+  });
+}
+
+function formatHeatMapFeatureValue(
+  feature: HeatMapFeature,
+  formatValue: ((value: number) => string) | undefined,
+) {
+  const value = feature.properties.rawWeight;
+  const valueLabel = formatValue?.(value) ?? formatHeatMapValue(value);
+
+  return feature.properties.label ? `${feature.properties.label}: ${valueLabel}` : valueLabel;
+}
+
+function formatHeatMapValue(value: number) {
+  if (!Number.isFinite(value)) {
+    return "";
+  }
+
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+
+  const absoluteValue = Math.abs(value);
+
+  if (absoluteValue >= 100) {
+    return value.toFixed(0);
+  }
+
+  if (absoluteValue >= 10) {
+    return value.toFixed(1);
+  }
+
+  return value.toFixed(2);
 }
 
 function createHeatMapFeatureCollectionFromAggregates<TProperties>(
@@ -1178,6 +1596,29 @@ function resolveHeatMapDisplayRadius(radius: Exclude<HeatMapRadius, { meters: nu
   const progress = clamp((zoom - minZoom) / (maxZoom - minZoom), 0, 1);
 
   return Math.max(0, radius.min + (radius.max - radius.min) * progress);
+}
+
+function getHeatMapViewportQuery(map: LeafletMap): ViewportAggregationQuery {
+  const bounds = map.getBounds();
+
+  return {
+    bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
+    zoom: map.getZoom(),
+  };
+}
+
+function getHeatMapFeatureCollectionInBounds(
+  data: HeatMapFeatureCollection,
+  [west, south, east, north]: ViewportAggregationQuery["bounds"],
+): HeatMapFeatureCollection {
+  return {
+    features: data.features.filter((feature) => {
+      const [longitude, latitude] = feature.geometry.coordinates;
+
+      return longitude >= west && longitude <= east && latitude >= south && latitude <= north;
+    }),
+    type: "FeatureCollection",
+  };
 }
 
 function resolveHeatMapColor(colorRamp: readonly HeatMapColorStop[], weight: number) {

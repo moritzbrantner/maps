@@ -53,4 +53,5 @@ export {
   type HeatMapWeightAccessor,
   type HeatMapWeightOptions,
 } from "../heat-map";
+export { type HeatFieldRenderMode } from "../heat-layer";
 export { FlatGeoJsonMap, type FlatGeoJsonMapProps } from "../flat-geojson-map";

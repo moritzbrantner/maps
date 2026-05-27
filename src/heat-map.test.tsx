@@ -4,8 +4,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   HeatMap,
   TemporalHeatMap,
+  createHeatFieldContourFeatureCollection,
   createHeatMapDensityIndex,
   createHeatMapFeatureCollection,
+  createScalarFieldGrid,
   getTemporalHeatMapMaxWeight,
   type MapPoint,
   type TemporalMapTrack,
@@ -16,7 +18,12 @@ const leafletMock = vi.hoisted(() => {
   type Layer = {
     bounds?: [[number, number], [number, number]];
     latLng?: [number, number];
+    latLngs?: unknown;
     options?: Record<string, unknown>;
+    tooltip?: {
+      content: string;
+      options?: Record<string, unknown>;
+    };
     type: string;
     url?: string;
   };
@@ -131,12 +138,20 @@ const leafletMock = vi.hoisted(() => {
   function createLayer(type: string, latLng?: [number, number], options?: Record<string, unknown>) {
     const layer: Layer & {
       addTo: (group: MockLayerGroup) => typeof layer;
+      bindTooltip: (content: string, options?: Record<string, unknown>) => typeof layer;
     } = {
       latLng,
       options,
       type,
       addTo(group: MockLayerGroup) {
         group.addLayer(this);
+        return this;
+      },
+      bindTooltip(content: string, options?: Record<string, unknown>) {
+        this.tooltip = {
+          content,
+          options,
+        };
         return this;
       },
     };
@@ -160,6 +175,10 @@ const leafletMock = vi.hoisted(() => {
     }),
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
+    polyline: (latLngs: unknown, options: Record<string, unknown>) => ({
+      ...createLayer("polyline", undefined, options),
+      latLngs,
+    }),
     rectangle: (
       bounds: [[number, number], [number, number]],
       options: Record<string, unknown>,
@@ -608,6 +627,184 @@ describe("@moritzbrantner/maps heat maps", () => {
 
     expect(changedSurface?.url).toBe(initialUrl);
     expect(changedSurface?.bounds).toEqual(surface?.bounds);
+  });
+
+  test("creates field contours as GeoJSON MultiLineString features", () => {
+    const grid = createScalarFieldGrid(
+      [
+        {
+          id: "cold",
+          latitude: 52,
+          longitude: 4,
+          metrics: {
+            temperature: 14,
+          },
+        },
+        {
+          id: "warm",
+          latitude: 42,
+          longitude: 18,
+          metrics: {
+            temperature: 30,
+          },
+        },
+      ],
+      {
+        domainBounds: [0, 40, 20, 54],
+        fieldColumns: 12,
+        fieldRows: 8,
+        valueDomain: [10, 34],
+        valueMetric: "temperature",
+      },
+    );
+    const contours = createHeatFieldContourFeatureCollection(grid, {
+      levels: [18, 24, 30],
+      valueFormat: (value) => `${value.toFixed(0)} C`,
+    });
+
+    expect(contours.type).toBe("FeatureCollection");
+    expect(contours.features.length).toBeGreaterThan(0);
+    expect(contours.features[0]).toMatchObject({
+      geometry: {
+        type: "MultiLineString",
+      },
+      properties: {
+        kind: "heat-field-contour",
+        valueLabel: expect.stringContaining("C"),
+      },
+      type: "Feature",
+    });
+  });
+
+  test("renders field mode as vector contour level lines", async () => {
+    render(
+      <HeatMap
+        domainBounds={[-11, 35, 31, 62]}
+        fieldColumns={18}
+        fieldContourColor="#111827"
+        fieldContourLevels={8}
+        fieldContourLineWidth={0.75}
+        fieldRenderMode="contours"
+        fieldContourValueFormat={(value) => `${value.toFixed(1)} C`}
+        fieldRows={12}
+        fieldValueDomain={[12, 34]}
+        heatmapSurfaceMode="field"
+        mapLabel="Temperature contour map"
+        points={[
+          {
+            id: "reykjavik",
+            latitude: 64.1466,
+            longitude: -21.9426,
+            metrics: {
+              temperature: 14.3,
+            },
+          },
+          {
+            id: "paris",
+            latitude: 48.8566,
+            longitude: 2.3522,
+            metrics: {
+              temperature: 24.1,
+            },
+          },
+          {
+            id: "madrid",
+            latitude: 40.4168,
+            longitude: -3.7038,
+            metrics: {
+              temperature: 30.4,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        valueMetric="temperature"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Temperature contour map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const contourLines = leafletMock
+      .getLayerGroups()[0]
+      ?.layers.filter((layer) => layer.options?.className === "mb-maps__heat-contour");
+
+    expect(contourLines?.length).toBeGreaterThan(0);
+    expect(contourLines?.[0]).toMatchObject({
+      options: {
+        color: "#111827",
+        interactive: true,
+        weight: 0.75,
+      },
+      tooltip: {
+        content: expect.stringContaining("C"),
+        options: {
+          sticky: true,
+        },
+      },
+      type: "polyline",
+    });
+    expect(
+      leafletMock.getLayerGroups()[0]?.layers.some((layer) => layer.type === "imageOverlay"),
+    ).toBe(false);
+  });
+
+  test("can overlay original data points on a field heat map", async () => {
+    render(
+      <HeatMap
+        domainBounds={[-11, 35, 31, 62]}
+        fieldColumns={12}
+        fieldRows={8}
+        heatmapSurfaceMode="field"
+        mapLabel="Temperature points map"
+        points={[
+          {
+            id: "berlin",
+            latitude: 52.52,
+            longitude: 13.405,
+            metrics: {
+              temperature: 21.5,
+            },
+          },
+          {
+            id: "paris",
+            latitude: 48.8566,
+            longitude: 2.3522,
+            metrics: {
+              temperature: 24.1,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        showDataPoints
+        dataPointValueFormat={(value) => `${value.toFixed(1)} C`}
+        valueMetric="temperature"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Temperature points map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const markers = leafletMock
+      .getLayerGroups()[0]
+      ?.layers.filter((layer) => layer.options?.className === "mb-maps__heat-data-point");
+
+    expect(markers).toHaveLength(2);
+    expect(markers?.[0]).toMatchObject({
+      options: {
+        fillColor: "#0f172a",
+        interactive: true,
+      },
+      tooltip: {
+        content: expect.stringContaining("21.5 C"),
+      },
+      type: "circleMarker",
+    });
   });
 
   test("projects a data-space heat radius when zoom changes", async () => {

@@ -75,9 +75,14 @@ export {
   type ScalarFieldValuePoint,
 } from "../scalar-field";
 export {
+  createHeatFieldContourFeatureCollection,
+  createHeatFieldContourImage,
   createHeatFieldImage,
   parseHeatFieldColor,
   resolveHeatFieldColor,
+  type HeatFieldContourFeatureCollection,
+  type HeatFieldContourFeatureProperties,
+  type HeatFieldContourOptions,
   type HeatFieldColorStop,
   type HeatFieldImage,
   type HeatFieldImageOptions,

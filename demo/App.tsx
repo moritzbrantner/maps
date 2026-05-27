@@ -35,6 +35,7 @@ import {
   type MapBeeLineMeasurementResult,
   type MapFlow,
   type MapPoint,
+  type HeatFieldRenderMode,
   type PointMapFeature,
   type MapViewState,
   type GeoJsonEditMode,
@@ -397,6 +398,8 @@ export function App() {
   const [view, setView] = useState<DemoView>("clusters");
   const [selectedRegion, setSelectedRegion] = useState("all");
   const [isMeasuring, setIsMeasuring] = useState(false);
+  const [heatFieldRenderMode, setHeatFieldRenderMode] = useState<HeatFieldRenderMode>("raster");
+  const [showHeatDataPoints, setShowHeatDataPoints] = useState(false);
   const [layers, setLayers] = useState<DemoLayerConfig[]>(initialLayers);
   const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
   const [editablePoints, setEditablePoints] =
@@ -636,6 +639,8 @@ export function App() {
             setEditMode,
             selectedGeoJsonId,
             setSelectedGeoJsonId,
+            heatFieldRenderMode,
+            showHeatDataPoints,
           )}
         </div>
         <aside aria-label="Current dataset">
@@ -742,6 +747,41 @@ export function App() {
                       </div>
                     ))}
                   </div>
+                </div>
+              ) : null}
+              {view === "heat" ? (
+                <div className="demo-layer-manager" aria-label="Heat map controls">
+                  <div className="demo-layer-manager__header">
+                    <h2>Heat map</h2>
+                  </div>
+                  <div className="demo-editor-mode-grid" aria-label="Heat map render mode">
+                    <Button
+                      aria-pressed={heatFieldRenderMode === "raster"}
+                      size="sm"
+                      variant={heatFieldRenderMode === "raster" ? "default" : "secondary"}
+                      type="button"
+                      onClick={() => setHeatFieldRenderMode("raster")}
+                    >
+                      Colors
+                    </Button>
+                    <Button
+                      aria-pressed={heatFieldRenderMode === "contours"}
+                      size="sm"
+                      variant={heatFieldRenderMode === "contours" ? "default" : "secondary"}
+                      type="button"
+                      onClick={() => setHeatFieldRenderMode("contours")}
+                    >
+                      Level lines
+                    </Button>
+                  </div>
+                  <label className="demo-layer-toggle">
+                    <input
+                      checked={showHeatDataPoints}
+                      type="checkbox"
+                      onChange={(event) => setShowHeatDataPoints(event.target.checked)}
+                    />
+                    <span>Show data points</span>
+                  </label>
                 </div>
               ) : null}
               {view === "editor" ? (
@@ -910,6 +950,8 @@ function renderMap(
   setEditMode: Dispatch<SetStateAction<GeoJsonEditMode>>,
   selectedGeoJsonId: string | null,
   setSelectedGeoJsonId: Dispatch<SetStateAction<string | null>>,
+  heatFieldRenderMode: HeatFieldRenderMode,
+  showHeatDataPoints: boolean,
 ) {
   const sharedMeasurementProps = {
     measurementMode: isMeasuring ? ("bee-line" as const) : ("none" as const),
@@ -986,13 +1028,22 @@ function renderMap(
           fieldColumns={420}
           fieldColorRamp={getTemperatureFieldColorRamp()}
           fieldRows={260}
+          fieldRenderMode={heatFieldRenderMode}
           fieldValueDomain={[12, 34]}
+          fieldContourColor="#111827"
+          fieldContourLevels={11}
+          fieldContourLineWidth={1}
+          fieldContourValueFormat={formatTemperatureValue}
           heatmapSurfaceMode="field"
           interpolationK={10}
           interpolationPower={2}
           mapLabel="Europe temperature surface"
           onViewStateChange={setViewport}
           points={demoTemperaturePoints}
+          showDataPoints={showHeatDataPoints}
+          dataPointColor="#111827"
+          dataPointRadius={4}
+          dataPointValueFormat={formatTemperatureValue}
           style={{ minHeight: 620 }}
           valueMetric="temperature"
         />
@@ -1315,6 +1366,10 @@ function getTemperatureFieldColorRamp() {
     [0.8, "#fb923c"],
     [1, "#dc2626"],
   ] as const;
+}
+
+function formatTemperatureValue(value: number) {
+  return `${value.toFixed(1)} C`;
 }
 
 function getGeoJsonFeatureStyle(geometryType: string) {

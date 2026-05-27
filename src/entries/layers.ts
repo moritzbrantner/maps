@@ -13,6 +13,7 @@ export {
 export {
   HeatFieldLayer,
   HeatLayer,
+  type HeatFieldRenderMode,
   type HeatFieldLayerProps,
   type HeatLayerProps,
   type HeatLayerSurfaceMode,
