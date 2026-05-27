@@ -31,21 +31,14 @@ export {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./clustered-map";
-export {
-  MapView,
-  type MapViewProps,
-  type FlatLayerRender,
-} from "./map-view";
+export { MapView, type MapViewProps, type FlatLayerRender } from "./map-view";
 export {
   type MapContextMenuContext,
   type MapFeatureContextMenuContext,
   type MapFeatureInteractionProps,
   type MapFeatureInteractionState,
 } from "./map-interaction";
-export {
-  ClusterLayer,
-  type ClusterLayerProps,
-} from "./cluster-layer";
+export { ClusterLayer, type ClusterLayerProps } from "./cluster-layer";
 export {
   BubbleLayer,
   PointLayer,
@@ -54,11 +47,7 @@ export {
   type PointLayerFeature as PointMapLayerFeature,
   type PointLayerProps,
 } from "./point-layer";
-export {
-  HeatLayer,
-  type HeatLayerProps,
-  type HeatLayerSurfaceMode,
-} from "./heat-layer";
+export { HeatLayer, type HeatLayerProps, type HeatLayerSurfaceMode } from "./heat-layer";
 export {
   FlowLayer,
   type FlowLayerFeature as FlowMapLayerFeature,
@@ -83,10 +72,7 @@ export {
   type GeoJsonOverlayTarget,
   type GeoJsonSourceOptions,
 } from "./geojson-source";
-export {
-  GeoJsonMap,
-  type GeoJsonMapProps,
-} from "./geojson-map";
+export { GeoJsonMap, type GeoJsonMapProps } from "./geojson-map";
 export {
   EditableGeoJsonMap,
   GeoJsonEditorLayer,
@@ -105,6 +91,22 @@ export {
   type GeoJsonEditorLayerProps,
   type GeoJsonVertexHandle,
 } from "./geojson-editor";
+export {
+  GeoJsonTimelineEditor,
+  applyGeoJsonTimelineTransform,
+  createGeoJsonTimelineDocument,
+  getGeoJsonTimelineFeatureCollectionAtTime,
+  getGeoJsonTimelineItemId,
+  getGeoJsonTimelineTrackId,
+  setGeoJsonTimelineFeatureTransform,
+  type GeoJsonTimelineApplyOptions,
+  type GeoJsonTimelineDocument,
+  type GeoJsonTimelineEditorProps,
+  type GeoJsonTimelineItemData,
+  type GeoJsonTimelineOptions,
+  type GeoJsonTimelineTrackData,
+  type GeoJsonTimelineTransformValues,
+} from "./geojson-timeline";
 export {
   BeeLineMeasurementLayer,
   type BeeLineMeasurementLayerProps,

@@ -3,6 +3,8 @@
 
 @source "./dist/**/*.{js,mjs}";
 @source "./src/**/*.{ts,tsx}";
+@source "./node_modules/@moritzbrantner/timeline-editor/dist/**/*.{js,mjs}";
+@source "../timeline-editor/src/**/*.{ts,tsx}";
 
 @layer components {
   .mb-maps {
@@ -352,6 +354,31 @@
 
   .mb-temporal-map__slider {
     @apply h-8 w-full cursor-pointer accent-[#0f766e] disabled:cursor-not-allowed;
+  }
+
+  .mb-geojson-editor {
+    @apply grid min-h-[480px] gap-4;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .mb-geojson-editor__map {
+    @apply min-h-0;
+  }
+
+  .mb-geojson-editor__map > .mb-maps {
+    @apply h-full min-h-[420px];
+  }
+
+  .mb-geojson-timeline {
+    @apply min-w-0 overflow-hidden rounded-lg border border-slate-900/10 bg-white/94 shadow-[0_12px_30px_rgb(15_23_42_/_0.10)] backdrop-blur-[14px];
+  }
+
+  .mb-geojson-timeline__editor {
+    @apply max-h-[18rem] min-h-[10rem] overflow-auto bg-white text-slate-950;
+  }
+
+  .mb-geojson-timeline__item-label {
+    @apply min-w-0 truncate text-[0.75rem] font-bold leading-none text-white;
   }
 }
 

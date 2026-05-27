@@ -38,6 +38,17 @@ import type {
   TemporalGeoJsonSupportedGeometry,
 } from "./temporal-geojson-types";
 import { MapView } from "./map-view";
+import {
+  GeoJsonTimelineEditor,
+  createGeoJsonTimelineDocument,
+  getGeoJsonTimelineFeatureCollectionAtTime,
+  type GeoJsonTimelineDocument,
+} from "./geojson-timeline";
+import type {
+  TimelineEditorSelection,
+  TimelineEditorSnapOptions,
+  TimelineEditorViewport,
+} from "@moritzbrantner/timeline-editor";
 
 export type GeoJsonEditMode =
   | "none"
@@ -139,6 +150,20 @@ export type EditableGeoJsonMapProps<
     renderMapContextMenu?: (context: MapContextMenuContext) => React.ReactNode;
     showAttributionControl?: boolean;
     style?: React.CSSProperties;
+    showTimelineEditor?: boolean;
+    timelineActiveTimeMs?: number;
+    timelineClassName?: string;
+    timelineDocument?: GeoJsonTimelineDocument<TProperties>;
+    timelineDurationMs?: number;
+    timelineFrameRate?: number;
+    timelineReadOnly?: boolean;
+    timelineSelection?: TimelineEditorSelection;
+    timelineSnap?: Partial<TimelineEditorSnapOptions>;
+    timelineViewport?: TimelineEditorViewport;
+    onTimelineActiveTimeChange?: (timeMs: number) => void;
+    onTimelineDocumentChange?: (document: GeoJsonTimelineDocument<TProperties>) => void;
+    onTimelineSelectionChange?: (selection: TimelineEditorSelection) => void;
+    onTimelineViewportChange?: (viewport: TimelineEditorViewport) => void;
   };
 
 type EditableFeature<TProperties extends Record<string, unknown>> = {
@@ -309,10 +334,7 @@ export function GeoJsonEditorLayer<
           current.createFeatureProperties?.("Point") ?? ({} as TProperties),
         );
 
-        emitOperation(
-          ensureCreatedFeatureId(feature, createCounterRef),
-          "create",
-        );
+        emitOperation(ensureCreatedFeatureId(feature, createCounterRef), "create");
         return;
       }
 
@@ -423,7 +445,11 @@ export function GeoJsonEditorLayer<
 
       for (const feature of features) {
         const selected = feature.id === selectedFeatureId;
-        const resolvedStyle = resolveEditorStyle(style, selected ? selectedStyle : undefined, selected);
+        const resolvedStyle = resolveEditorStyle(
+          style,
+          selected ? selectedStyle : undefined,
+          selected,
+        );
         const layers = createFlatGeometryLayers(feature.geometry, {
           className: joinClassNames(
             "mb-maps__editor-feature",
@@ -522,7 +548,9 @@ export function GeoJsonEditorLayer<
   }
 
   function emitOperation(
-    operationOrFeature: GeoJsonEditOperation<TProperties> | TemporalGeoJsonGeometryFeature<TProperties>,
+    operationOrFeature:
+      | GeoJsonEditOperation<TProperties>
+      | TemporalGeoJsonGeometryFeature<TProperties>,
     operationType?: "create",
   ) {
     const current = latestRef.current;
@@ -530,7 +558,9 @@ export function GeoJsonEditorLayer<
       operationType === "create"
         ? ({
             feature: operationOrFeature as TemporalGeoJsonGeometryFeature<TProperties>,
-            featureId: getCreatedFeatureId(operationOrFeature as TemporalGeoJsonGeometryFeature<TProperties>),
+            featureId: getCreatedFeatureId(
+              operationOrFeature as TemporalGeoJsonGeometryFeature<TProperties>,
+            ),
             type: "create",
           } satisfies GeoJsonEditOperation<TProperties>)
         : (operationOrFeature as GeoJsonEditOperation<TProperties>);
@@ -739,7 +769,11 @@ export function GeoJsonEditorLayer<
           selected && "mb-maps__editor-handle--selected",
         ),
         color: selected ? "#0284c7" : isMidpoint ? "#0284c7" : "#0f172a",
-        fillColor: selected ? "#e0f2fe" : isMidpoint ? options.midpointHandleColor : options.handleColor,
+        fillColor: selected
+          ? "#e0f2fe"
+          : isMidpoint
+            ? options.midpointHandleColor
+            : options.handleColor,
         fillOpacity: 1,
         interactive: true,
         opacity: 1,
@@ -800,15 +834,60 @@ export function EditableGeoJsonMap<
   onViewStateChange,
   renderMapContextMenu,
   showAttributionControl = true,
+  showTimelineEditor = false,
   style,
+  timelineActiveTimeMs,
+  timelineClassName,
+  timelineDocument,
+  timelineDurationMs,
+  timelineFrameRate,
+  timelineReadOnly,
+  timelineSelection,
+  timelineSnap,
+  timelineViewport,
+  onTimelineActiveTimeChange,
+  onTimelineDocumentChange,
+  onTimelineSelectionChange,
+  onTimelineViewportChange,
   viewState,
   defaultViewState,
   ...editorProps
 }: EditableGeoJsonMapProps<TProperties>) {
-  return (
+  const generatedTimelineDocument = useMemo(
+    () =>
+      createGeoJsonTimelineDocument(geoJson, {
+        durationMs: timelineDurationMs,
+        getFeatureId: editorProps.getFeatureId,
+      }),
+    [editorProps.getFeatureId, geoJson, timelineDurationMs],
+  );
+  const [uncontrolledTimelineDocument, setUncontrolledTimelineDocument] =
+    useState(generatedTimelineDocument);
+  const resolvedTimelineDocument = timelineDocument ?? uncontrolledTimelineDocument;
+  const resolvedTimelineTime = timelineActiveTimeMs ?? resolvedTimelineDocument.currentTimeMs ?? 0;
+  const transformedGeoJson =
+    timelineDocument || showTimelineEditor
+      ? getGeoJsonTimelineFeatureCollectionAtTime(
+          geoJson,
+          resolvedTimelineDocument,
+          resolvedTimelineTime,
+          {
+            getFeatureId: editorProps.getFeatureId,
+            outsideItemBehavior: "hold",
+          },
+        )
+      : geoJson;
+
+  useEffect(() => {
+    if (!timelineDocument) {
+      setUncontrolledTimelineDocument(generatedTimelineDocument);
+    }
+  }, [generatedTimelineDocument, timelineDocument]);
+
+  const map = (
     <MapView
-      className={className}
-      dataBounds={getBoundsFromGeoJson(geoJson)}
+      className={showTimelineEditor || timelineDocument ? undefined : className}
+      dataBounds={getBoundsFromGeoJson(transformedGeoJson)}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
@@ -823,12 +902,15 @@ export function EditableGeoJsonMap<
       onViewStateChange={onViewStateChange}
       renderMapContextMenu={renderMapContextMenu}
       showAttributionControl={showAttributionControl}
-      style={style}
+      style={showTimelineEditor || timelineDocument ? undefined : style}
       viewState={viewState}
     >
       <GeoJsonEditorLayer
-        {...(editorProps as Omit<GeoJsonEditorLayerProps<TProperties>, "featureCollection" | "mode" | "style">)}
-        featureCollection={geoJson}
+        {...(editorProps as Omit<
+          GeoJsonEditorLayerProps<TProperties>,
+          "featureCollection" | "mode" | "style"
+        >)}
+        featureCollection={transformedGeoJson}
         mode={editMode}
         style={editorStyle}
       />
@@ -843,6 +925,33 @@ export function EditableGeoJsonMap<
         onMeasurementSelect={onMeasurementSelect}
       />
     </MapView>
+  );
+
+  if (!showTimelineEditor && !timelineDocument) {
+    return map;
+  }
+
+  return (
+    <div className={joinClassNames("mb-geojson-editor", className)} style={style}>
+      <div className="mb-geojson-editor__map">{map}</div>
+      <GeoJsonTimelineEditor
+        className={timelineClassName}
+        document={resolvedTimelineDocument}
+        frameRate={timelineFrameRate}
+        readOnly={timelineReadOnly}
+        selectedFeatureId={editorProps.selectedFeatureId}
+        selection={timelineSelection}
+        snap={timelineSnap}
+        viewport={timelineViewport}
+        onCurrentTimeChange={onTimelineActiveTimeChange}
+        onDocumentChange={(next) => {
+          setUncontrolledTimelineDocument(next);
+          onTimelineDocumentChange?.(next);
+        }}
+        onSelectionChange={onTimelineSelectionChange}
+        onViewportChange={onTimelineViewportChange}
+      />
+    </div>
   );
 }
 
@@ -874,7 +983,10 @@ function applyGeoJsonEditOperationWithResolver<
       ...collection,
       features: collection.features
         .map(cloneFeature)
-        .filter((feature, index) => resolveFeatureIdWithGetter(feature, index, getFeatureId) !== operation.featureId),
+        .filter(
+          (feature, index) =>
+            resolveFeatureIdWithGetter(feature, index, getFeatureId) !== operation.featureId,
+        ),
     };
   }
 
@@ -905,7 +1017,10 @@ export function createGeoJsonEditFeature<TProperties extends Record<string, unkn
 ): TemporalGeoJsonGeometryFeature<TProperties>;
 export function createGeoJsonEditFeature<TProperties extends Record<string, unknown>>(
   geometryType: "Point" | "LineString" | "Polygon",
-  coordinates: GeoJsonPosition | readonly GeoJsonPosition[] | readonly (readonly GeoJsonPosition[])[],
+  coordinates:
+    | GeoJsonPosition
+    | readonly GeoJsonPosition[]
+    | readonly (readonly GeoJsonPosition[])[],
   properties: TProperties,
 ): TemporalGeoJsonGeometryFeature<TProperties> {
   if (geometryType === "Point") {
@@ -932,7 +1047,9 @@ export function createGeoJsonEditFeature<TProperties extends Record<string, unkn
 
   return {
     geometry: {
-      coordinates: (coordinates as readonly (readonly GeoJsonPosition[])[]).map((ring) => closeRing(ring)),
+      coordinates: (coordinates as readonly (readonly GeoJsonPosition[])[]).map((ring) =>
+        closeRing(ring),
+      ),
       type: "Polygon",
     },
     properties: cloneProperties(properties),
@@ -998,13 +1115,29 @@ export function insertGeoJsonVertex(
   const next = cloneGeometry(geometry);
 
   if (next.type === "LineString") {
-    next.coordinates.splice(handle.nextVertexIndex ?? handle.vertexIndex + 1, 0, clonePosition(coordinates));
+    next.coordinates.splice(
+      handle.nextVertexIndex ?? handle.vertexIndex + 1,
+      0,
+      clonePosition(coordinates),
+    );
   } else if (next.type === "MultiLineString" && handle.geometryIndex !== undefined) {
-    next.coordinates[handle.geometryIndex]?.splice(handle.nextVertexIndex ?? handle.vertexIndex + 1, 0, clonePosition(coordinates));
+    next.coordinates[handle.geometryIndex]?.splice(
+      handle.nextVertexIndex ?? handle.vertexIndex + 1,
+      0,
+      clonePosition(coordinates),
+    );
   } else if (next.type === "Polygon" && handle.ringIndex !== undefined) {
     insertRingPosition(next.coordinates[handle.ringIndex], handle, coordinates);
-  } else if (next.type === "MultiPolygon" && handle.geometryIndex !== undefined && handle.ringIndex !== undefined) {
-    insertRingPosition(next.coordinates[handle.geometryIndex]?.[handle.ringIndex], handle, coordinates);
+  } else if (
+    next.type === "MultiPolygon" &&
+    handle.geometryIndex !== undefined &&
+    handle.ringIndex !== undefined
+  ) {
+    insertRingPosition(
+      next.coordinates[handle.geometryIndex]?.[handle.ringIndex],
+      handle,
+      coordinates,
+    );
   } else {
     return null;
   }
@@ -1034,8 +1167,15 @@ export function removeGeoJsonVertex(
     next.coordinates[handle.geometryIndex]?.splice(handle.vertexIndex, 1);
   } else if (next.type === "Polygon" && handle.ringIndex !== undefined) {
     removeRingPosition(next.coordinates[handle.ringIndex], handle.vertexIndex);
-  } else if (next.type === "MultiPolygon" && handle.geometryIndex !== undefined && handle.ringIndex !== undefined) {
-    removeRingPosition(next.coordinates[handle.geometryIndex]?.[handle.ringIndex], handle.vertexIndex);
+  } else if (
+    next.type === "MultiPolygon" &&
+    handle.geometryIndex !== undefined &&
+    handle.ringIndex !== undefined
+  ) {
+    removeRingPosition(
+      next.coordinates[handle.geometryIndex]?.[handle.ringIndex],
+      handle.vertexIndex,
+    );
   } else {
     return null;
   }
@@ -1108,16 +1248,18 @@ function renderDraft(
       return;
     }
 
-    leaflet.circleMarker(toLeafletLatLng(preview), {
-      className: "mb-maps__editor-draft mb-maps__editor-draft-point",
-      color: "#0284c7",
-      fillColor: "#38bdf8",
-      fillOpacity: 0.18,
-      interactive: false,
-      opacity: 0.9,
-      radius: 7,
-      weight: 2,
-    }).addTo(layer);
+    leaflet
+      .circleMarker(toLeafletLatLng(preview), {
+        className: "mb-maps__editor-draft mb-maps__editor-draft-point",
+        color: "#0284c7",
+        fillColor: "#38bdf8",
+        fillOpacity: 0.18,
+        interactive: false,
+        opacity: 0.9,
+        radius: 7,
+        weight: 2,
+      })
+      .addTo(layer);
     return;
   }
 
@@ -1137,25 +1279,29 @@ function renderDraft(
   const latLngs = previewDraft.map(toLeafletLatLng);
 
   if (mode === "draw-polygon" && previewDraft.length >= 3) {
-    leaflet.polygon([closeRing(previewDraft).map(toLeafletLatLng)], {
-      className: "mb-maps__editor-draft",
-      color: "#0284c7",
-      fillColor: "#38bdf8",
-      fillOpacity: 0.16,
-      interactive: false,
-      opacity: 0.9,
-      weight: 2,
-    }).addTo(layer);
+    leaflet
+      .polygon([closeRing(previewDraft).map(toLeafletLatLng)], {
+        className: "mb-maps__editor-draft",
+        color: "#0284c7",
+        fillColor: "#38bdf8",
+        fillOpacity: 0.16,
+        interactive: false,
+        opacity: 0.9,
+        weight: 2,
+      })
+      .addTo(layer);
     return;
   }
 
-  leaflet.polyline(latLngs, {
-    className: "mb-maps__editor-draft",
-    color: "#0284c7",
-    interactive: false,
-    opacity: 0.9,
-    weight: 2,
-  }).addTo(layer);
+  leaflet
+    .polyline(latLngs, {
+      className: "mb-maps__editor-draft",
+      color: "#0284c7",
+      interactive: false,
+      opacity: 0.9,
+      weight: 2,
+    })
+    .addTo(layer);
 }
 
 function getGeoJsonVertexHandles(
@@ -1201,10 +1347,12 @@ function pushLineHandles(
     handles.push(createVertexHandle(featureId, coordinates, vertexIndex, metadata));
 
     if (vertexIndex < line.length - 1) {
-      handles.push(createMidpointHandle(featureId, coordinates, line[vertexIndex + 1]!, vertexIndex, {
-        ...metadata,
-        nextVertexIndex: vertexIndex + 1,
-      }));
+      handles.push(
+        createMidpointHandle(featureId, coordinates, line[vertexIndex + 1]!, vertexIndex, {
+          ...metadata,
+          nextVertexIndex: vertexIndex + 1,
+        }),
+      );
     }
   });
 }
@@ -1219,16 +1367,18 @@ function pushRingHandles(
 
   openRing.forEach((coordinates, vertexIndex) => {
     handles.push(createVertexHandle(featureId, coordinates, vertexIndex, metadata));
-    handles.push(createMidpointHandle(
-      featureId,
-      coordinates,
-      openRing[(vertexIndex + 1) % openRing.length]!,
-      vertexIndex,
-      {
-        ...metadata,
-        nextVertexIndex: vertexIndex + 1,
-      },
-    ));
+    handles.push(
+      createMidpointHandle(
+        featureId,
+        coordinates,
+        openRing[(vertexIndex + 1) % openRing.length]!,
+        vertexIndex,
+        {
+          ...metadata,
+          nextVertexIndex: vertexIndex + 1,
+        },
+      ),
+    );
   });
 }
 
@@ -1263,7 +1413,10 @@ function createMidpointHandle(
   };
 }
 
-function areVertexHandlesEqual(left: GeoJsonVertexHandle | null, right: GeoJsonVertexHandle | null) {
+function areVertexHandlesEqual(
+  left: GeoJsonVertexHandle | null,
+  right: GeoJsonVertexHandle | null,
+) {
   return (
     left?.featureId === right?.featureId &&
     left?.geometryIndex === right?.geometryIndex &&
@@ -1289,8 +1442,16 @@ function mutateVertex(
     geometry.coordinates[handle.geometryIndex]![handle.vertexIndex] = clonePosition(coordinates);
   } else if (geometry.type === "Polygon" && handle.ringIndex !== undefined) {
     setRingPosition(geometry.coordinates[handle.ringIndex], handle.vertexIndex, coordinates);
-  } else if (geometry.type === "MultiPolygon" && handle.geometryIndex !== undefined && handle.ringIndex !== undefined) {
-    setRingPosition(geometry.coordinates[handle.geometryIndex]?.[handle.ringIndex], handle.vertexIndex, coordinates);
+  } else if (
+    geometry.type === "MultiPolygon" &&
+    handle.geometryIndex !== undefined &&
+    handle.ringIndex !== undefined
+  ) {
+    setRingPosition(
+      geometry.coordinates[handle.geometryIndex]?.[handle.ringIndex],
+      handle.vertexIndex,
+      coordinates,
+    );
   }
 }
 
@@ -1413,7 +1574,8 @@ function validateSupportedGeometry(
         ? { valid: true }
         : { reason: "LineString must contain at least two coordinates.", valid: false };
     case "MultiLineString":
-      return geometry.coordinates.length > 0 && geometry.coordinates.every((line) => line.length >= 2)
+      return geometry.coordinates.length > 0 &&
+        geometry.coordinates.every((line) => line.length >= 2)
         ? { valid: true }
         : { reason: "MultiLineString lines must contain at least two coordinates.", valid: false };
     case "Polygon":
@@ -1479,7 +1641,10 @@ function getAllPositions(geometry: TemporalGeoJsonSupportedGeometry): GeoJsonPos
   }
 }
 
-function arePositionsEqual(left: GeoJsonPosition | null | undefined, right: GeoJsonPosition | null | undefined) {
+function arePositionsEqual(
+  left: GeoJsonPosition | null | undefined,
+  right: GeoJsonPosition | null | undefined,
+) {
   return left?.[0] === right?.[0] && left?.[1] === right?.[1];
 }
 
@@ -1524,7 +1689,9 @@ function resolveFeatureId<TProperties extends Record<string, unknown>>(
   feature: TemporalGeoJsonGeometryFeature<TProperties>,
   index: number,
 ) {
-  return String(feature.id ?? feature.properties?.id ?? feature.properties?.trackId ?? `feature-${index}`);
+  return String(
+    feature.id ?? feature.properties?.id ?? feature.properties?.trackId ?? `feature-${index}`,
+  );
 }
 
 function resolveFeatureIdWithGetter<TProperties extends Record<string, unknown>>(
@@ -1547,7 +1714,9 @@ function cloneFeature<TProperties extends Record<string, unknown>>(
   };
 }
 
-function cloneProperties<TProperties extends Record<string, unknown>>(properties: TProperties): TProperties {
+function cloneProperties<TProperties extends Record<string, unknown>>(
+  properties: TProperties,
+): TProperties {
   return { ...properties };
 }
 
