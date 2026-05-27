@@ -381,6 +381,127 @@ describe("@moritzbrantner/maps heat maps", () => {
     ).toBe(false);
   });
 
+  test("fills the whole viewport while keeping source hotspots stronger", async () => {
+    render(
+      <HeatMap
+        heatmapRadius={{ meters: 100_000 }}
+        mapLabel="Normalized heat map"
+        points={[
+          {
+            id: "a",
+            latitude: 40,
+            longitude: -74,
+            metrics: {
+              demand: 6,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Normalized heat map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const surface = leafletMock
+      .getLayerGroups()[0]
+      ?.layers.find(
+        (layer) =>
+          layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+      );
+    const sourcePoint = leafletMock.getMaps()[0]?.latLngToContainerPoint([40, -74]);
+    const sourceCell = getNearestSvgCircle(surface?.url ?? "", sourcePoint!);
+    const northWestCell = getNearestSvgCircle(surface?.url ?? "", { x: 0, y: 0 });
+    const southEastCell = getNearestSvgCircle(surface?.url ?? "", { x: 960, y: 640 });
+
+    expect(northWestCell?.opacity).toBeGreaterThan(0.3);
+    expect(southEastCell?.opacity).toBeGreaterThan(0.3);
+    expect(sourceCell?.opacity).toBeGreaterThan(northWestCell?.opacity ?? 0);
+    expect(sourceCell?.opacity).toBeGreaterThan(southEastCell?.opacity ?? 0);
+  });
+
+  test("keeps interpolated heat color independent of unrelated viewport hotspots", async () => {
+    const points: MapPoint[] = [
+      {
+        id: "weak",
+        latitude: 0,
+        longitude: 0,
+        metrics: {
+          demand: 5,
+        },
+      },
+      {
+        id: "strong-a",
+        latitude: 0,
+        longitude: 100,
+        metrics: {
+          demand: 10,
+        },
+      },
+      {
+        id: "strong-b",
+        latitude: 0,
+        longitude: 100,
+        metrics: {
+          demand: 10,
+        },
+      },
+    ];
+
+    const { rerender } = render(
+      <HeatMap
+        heatmapRadius={{ meters: 500_000 }}
+        mapLabel="Stable absolute heat map"
+        maxWeight={10}
+        points={points}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Stable absolute heat map").getAttribute("data-map-ready"),
+      ).toBe("true");
+    });
+
+    const map = leafletMock.getMaps()[0]!;
+    const weakPoint = map.latLngToContainerPoint([0, 0]);
+    const initialSurface = leafletMock
+      .getLayerGroups()[0]
+      ?.layers.find(
+        (layer) =>
+          layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+      );
+    const initialWeakCell = getNearestSvgCircle(initialSurface?.url ?? "", weakPoint);
+
+    rerender(
+      <HeatMap
+        heatmapRadius={{ meters: 500_000 }}
+        mapLabel="Stable absolute heat map"
+        maxWeight={10}
+        points={points.filter((point) => point.id === "weak")}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    const changedSurface = leafletMock
+      .getLayerGroups()[0]
+      ?.layers.find(
+        (layer) =>
+          layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+      );
+    const changedWeakCell = getNearestSvgCircle(changedSurface?.url ?? "", weakPoint);
+
+    expect(changedWeakCell?.fill).toBe(initialWeakCell?.fill);
+    expect(changedWeakCell?.opacity).toBeCloseTo(initialWeakCell?.opacity ?? 0, 3);
+  });
+
   test("supports a data-anchored heat surface mode", async () => {
     render(
       <HeatMap

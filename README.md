@@ -72,8 +72,9 @@ temperature-map style surface. Use `heatmapSurfaceMode="data"` when the surface
 should stay anchored to the underlying data locations.
 By default, the heat radius is a fixed data-space radius in meters, so zooming
 changes only how that same geographic footprint projects onto the screen.
-Interpolated heat intensity is normalized to the data weights, not to the
-currently visible projection.
+Interpolated heat is sampled across the full viewport, uses an absolute
+data-density scale, and keeps empty cells at the lowest visible color so the
+field covers the whole visible map.
 
 ```tsx
 import { HeatMap } from "@moritzbrantner/maps";

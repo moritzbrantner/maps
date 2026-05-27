@@ -18,6 +18,8 @@ import { MapSurfaceContext } from "./map-view";
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
 const DEFAULT_HEAT_LAYER_RADIUS_METERS = 50_000;
 const METERS_PER_DEGREE_AT_EQUATOR = 111_320;
+const INTERPOLATED_HEAT_DENSITY_GAMMA = 0.7;
+const INTERPOLATED_HEAT_MIN_DENSITY = 0.08;
 
 export type HeatLayerWeightAccessor<TProperties = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
@@ -502,20 +504,30 @@ function createHeatLayerInterpolatedSurfaceSvg({
       const centerY = y + cellSize / 2;
       const density = getHeatLayerCellDensity(sources, centerX, centerY);
 
-      if (density > 0) {
-        cells.push({ density, x: centerX, y: centerY });
-      }
+      cells.push({ density, x: centerX, y: centerY });
     }
+  }
+  for (const source of sources) {
+    if (
+      source.point.x < -maxInfluenceRadius ||
+      source.point.x > width + maxInfluenceRadius ||
+      source.point.y < -maxInfluenceRadius ||
+      source.point.y > height + maxInfluenceRadius
+    ) {
+      continue;
+    }
+
+    cells.push({
+      density: getHeatLayerCellDensity(sources, source.point.x, source.point.y),
+      x: source.point.x,
+      y: source.point.y,
+    });
   }
 
   const sampleRadius = cellSize * 1.15;
   const circles = cells
     .map((cell) => {
-      const normalizedDensity = clamp(cell.density, 0, 1);
-
-      if (normalizedDensity < 0.015) {
-        return "";
-      }
+      const normalizedDensity = resolveHeatLayerAbsoluteDensity(cell.density);
 
       return `<circle cx="${roundSvgNumber(cell.x)}" cy="${roundSvgNumber(cell.y)}" r="${roundSvgNumber(
         sampleRadius,
@@ -548,60 +560,51 @@ function createHeatLayerMetricInterpolatedSurfaceSvg({
   sources: readonly MetricHeatLayerSurfaceSource[];
   width: number;
 }) {
-  const maxDataInfluenceRadius = Math.max(
-    0,
-    ...sources.map((source) => source.dataInfluenceRadius),
-  );
-  const metricCellSize = Math.max(1, maxDataInfluenceRadius / 7);
-  const cells = new Map<string, { x: number; y: number }>();
+  const cellSize = resolveHeatLayerSampleSize(width, height, maxInfluenceRadius);
+  const cells: HeatLayerSurfaceCell[] = [];
+  const startX = -cellSize;
+  const startY = -cellSize;
+  const endX = width + cellSize;
+  const endY = height + cellSize;
 
-  for (const source of sources) {
-    const minX = Math.floor((source.metricPoint.x - source.dataInfluenceRadius) / metricCellSize);
-    const maxX = Math.ceil((source.metricPoint.x + source.dataInfluenceRadius) / metricCellSize);
-    const minY = Math.floor((source.metricPoint.y - source.dataInfluenceRadius) / metricCellSize);
-    const maxY = Math.ceil((source.metricPoint.y + source.dataInfluenceRadius) / metricCellSize);
+  for (let y = startY; y < endY; y += cellSize) {
+    for (let x = startX; x < endX; x += cellSize) {
+      const centerX = x + cellSize / 2;
+      const centerY = y + cellSize / 2;
+      const coordinate = map.containerPointToLatLng([centerX, centerY]);
+      const metricPoint = coordinateToHeatLayerMetricPoint([coordinate.lng, coordinate.lat]);
+      const density = getHeatLayerMetricCellDensity(
+        sources,
+        metricPoint.x,
+        metricPoint.y,
+      );
 
-    for (let y = minY; y <= maxY; y += 1) {
-      for (let x = minX; x <= maxX; x += 1) {
-        const key = `${x},${y}`;
-
-        if (cells.has(key)) {
-          continue;
-        }
-
-        cells.set(key, {
-          x: x * metricCellSize + metricCellSize / 2,
-          y: y * metricCellSize + metricCellSize / 2,
-        });
-      }
+      cells.push({ density, x: centerX, y: centerY });
     }
   }
+  for (const source of sources) {
+    if (
+      source.point.x < -maxInfluenceRadius ||
+      source.point.x > width + maxInfluenceRadius ||
+      source.point.y < -maxInfluenceRadius ||
+      source.point.y > height + maxInfluenceRadius
+    ) {
+      continue;
+    }
 
-  const circles = [...cells.values()]
+    cells.push({
+      density: getHeatLayerMetricCellDensity(sources, source.metricPoint.x, source.metricPoint.y),
+      x: source.point.x,
+      y: source.point.y,
+    });
+  }
+
+  const sampleRadius = cellSize * 1.15;
+  const circles = cells
     .map((cell) => {
-      const density = getHeatLayerMetricCellDensity(sources, cell.x, cell.y);
-      const normalizedDensity = clamp(density, 0, 1);
+      const normalizedDensity = resolveHeatLayerAbsoluteDensity(cell.density);
 
-      if (normalizedDensity < 0.015) {
-        return "";
-      }
-
-      const coordinate = heatLayerMetricPointToCoordinate(cell);
-      const point = map.latLngToContainerPoint(toLeafletLatLng(coordinate));
-
-      if (
-        point.x < -maxInfluenceRadius ||
-        point.x > width + maxInfluenceRadius ||
-        point.y < -maxInfluenceRadius ||
-        point.y > height + maxInfluenceRadius
-      ) {
-        return "";
-      }
-
-      const sampleRadius =
-        getHeatLayerProjectedMetricRadius(map, coordinate, metricCellSize) * 1.15;
-
-      return `<circle cx="${roundSvgNumber(point.x)}" cy="${roundSvgNumber(point.y)}" r="${roundSvgNumber(
+      return `<circle cx="${roundSvgNumber(cell.x)}" cy="${roundSvgNumber(cell.y)}" r="${roundSvgNumber(
         sampleRadius,
       )}" fill="${escapeSvgAttribute(
         resolveHeatLayerInterpolatedColor(colorRamp, normalizedDensity),
@@ -633,6 +636,16 @@ function resolveHeatLayerSampleSize(width: number, height: number, influenceRadi
   );
 }
 
+function resolveHeatLayerAbsoluteDensity(density: number) {
+  return clamp(
+    INTERPOLATED_HEAT_MIN_DENSITY +
+      Math.pow(Math.max(0, density), INTERPOLATED_HEAT_DENSITY_GAMMA) *
+        (1 - INTERPOLATED_HEAT_MIN_DENSITY),
+    0,
+    1,
+  );
+}
+
 type HeatLayerSurfaceSource = {
   coordinate: [longitude: number, latitude: number];
   dataInfluenceRadius: number | null;
@@ -660,21 +673,22 @@ function isMetricHeatLayerSurfaceSource(
   return source.dataInfluenceRadius !== null && source.dataInfluenceRadius > 0;
 }
 
-function getHeatLayerCellDensity(sources: readonly HeatLayerSurfaceSource[], x: number, y: number) {
+function getHeatLayerCellDensity(
+  sources: readonly HeatLayerSurfaceSource[],
+  x: number,
+  y: number,
+) {
   let density = 0;
 
   for (const source of sources) {
-    const radiusSquared = source.influenceRadius * source.influenceRadius;
     const dx = source.point.x - x;
     const dy = source.point.y - y;
     const distanceSquared = dx * dx + dy * dy;
+    const localRadiusSquared = source.influenceRadius * source.influenceRadius;
 
-    if (distanceSquared > radiusSquared) {
-      continue;
+    if (localRadiusSquared > 0 && distanceSquared <= localRadiusSquared) {
+      density += source.weight * Math.exp((-3 * distanceSquared) / localRadiusSquared);
     }
-
-    const falloff = Math.exp((-3 * distanceSquared) / radiusSquared);
-    density += source.weight * falloff;
   }
 
   return density;
@@ -688,17 +702,14 @@ function getHeatLayerMetricCellDensity(
   let density = 0;
 
   for (const source of sources) {
-    const radiusSquared = source.dataInfluenceRadius * source.dataInfluenceRadius;
     const dx = source.metricPoint.x - x;
     const dy = source.metricPoint.y - y;
     const distanceSquared = dx * dx + dy * dy;
+    const localRadiusSquared = source.dataInfluenceRadius * source.dataInfluenceRadius;
 
-    if (distanceSquared > radiusSquared) {
-      continue;
+    if (localRadiusSquared > 0 && distanceSquared <= localRadiusSquared) {
+      density += source.weight * Math.exp((-3 * distanceSquared) / localRadiusSquared);
     }
-
-    const falloff = Math.exp((-3 * distanceSquared) / radiusSquared);
-    density += source.weight * falloff;
   }
 
   return density;
@@ -1007,33 +1018,6 @@ function coordinateToHeatLayerMetricPoint([longitude, latitude]: [
         (METERS_PER_DEGREE_AT_EQUATOR * 180)) /
       Math.PI,
   };
-}
-
-function heatLayerMetricPointToCoordinate({
-  x,
-  y,
-}: HeatLayerMetricPoint): [longitude: number, latitude: number] {
-  const earthRadius = (METERS_PER_DEGREE_AT_EQUATOR * 180) / Math.PI;
-  const longitude = x / METERS_PER_DEGREE_AT_EQUATOR;
-  const latitude = (Math.atan(Math.exp(y / earthRadius)) * 2 - Math.PI / 2) * (180 / Math.PI);
-
-  return [longitude, latitude];
-}
-
-function getHeatLayerProjectedMetricRadius(
-  map: import("leaflet").Map,
-  coordinate: [longitude: number, latitude: number],
-  radiusMeters: number,
-) {
-  const center = coordinateToHeatLayerMetricPoint(coordinate);
-  const edgeCoordinate = heatLayerMetricPointToCoordinate({
-    x: center.x + radiusMeters,
-    y: center.y,
-  });
-  const centerPoint = map.latLngToContainerPoint(toLeafletLatLng(coordinate));
-  const edgePoint = map.latLngToContainerPoint(toLeafletLatLng(edgeCoordinate));
-
-  return Math.max(1, Math.hypot(edgePoint.x - centerPoint.x, edgePoint.y - centerPoint.y));
 }
 
 function resolveHeatLayerDisplayRadius(
