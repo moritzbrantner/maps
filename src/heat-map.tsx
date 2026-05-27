@@ -305,6 +305,14 @@ export function HeatFieldMap<TProperties extends Record<string, unknown> = Recor
   return <HeatMap {...props} heatmapSurfaceMode="field" />;
 }
 
+function isHeatFieldRasterVisible(renderMode: HeatFieldRenderMode) {
+  return renderMode === "raster" || renderMode === "raster-contours";
+}
+
+function isHeatFieldContoursVisible(renderMode: HeatFieldRenderMode) {
+  return renderMode === "contours" || renderMode === "raster-contours";
+}
+
 export function FlatHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   domainBounds,
@@ -476,7 +484,7 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   );
   const fieldImage = useMemo(
     () =>
-      fieldGrid && fieldRenderMode === "raster"
+      fieldGrid && isHeatFieldRasterVisible(fieldRenderMode)
         ? createHeatFieldImage(fieldGrid, {
               colorRamp: fieldColorRamp,
               opacity: fieldOpacity ?? heatmapOpacity,
@@ -494,7 +502,7 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   );
   const fieldContourCollection = useMemo(
     () =>
-      fieldGrid && fieldRenderMode === "contours"
+      fieldGrid && isHeatFieldContoursVisible(fieldRenderMode)
         ? createHeatFieldContourFeatureCollection(fieldGrid, {
             levels: fieldContourLevels,
             valueDomain: fieldValueDomain,
@@ -533,8 +541,27 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
     }
 
     if (heatmapSurfaceMode === "field") {
-      if (fieldRenderMode === "contours") {
+      heatLayer.clearLayers();
+
+      if (map.getZoom() > heatmapMaxZoom) {
+        return;
+      }
+
+      if (isHeatFieldRasterVisible(fieldRenderMode)) {
+        renderHeatMapFieldOverlay({
+          clearLayer: false,
+          image: fieldImage,
+          layer: heatLayer,
+          leaflet,
+          map,
+          maxZoom: heatmapMaxZoom,
+          opacity: fieldOpacity ?? heatmapOpacity,
+        });
+      }
+
+      if (isHeatFieldContoursVisible(fieldRenderMode)) {
         renderHeatMapFieldContours({
+          clearLayer: false,
           collection: fieldContourCollection,
           isMeasuring,
           layer: heatLayer,
@@ -544,15 +571,6 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
           lineColor: fieldContourColor,
           lineOpacity: fieldContourOpacity ?? fieldOpacity ?? heatmapOpacity,
           lineWidth: fieldContourLineWidth,
-        });
-      } else {
-        renderHeatMapFieldOverlay({
-          image: fieldImage,
-          layer: heatLayer,
-          leaflet,
-          map,
-          maxZoom: heatmapMaxZoom,
-          opacity: fieldOpacity ?? heatmapOpacity,
         });
       }
 
@@ -1229,6 +1247,7 @@ function getHeatMapValueDomain(values: readonly number[]): [min: number, max: nu
 }
 
 function renderHeatMapFieldOverlay({
+  clearLayer = true,
   image,
   layer,
   leaflet,
@@ -1236,6 +1255,7 @@ function renderHeatMapFieldOverlay({
   maxZoom,
   opacity,
 }: {
+  clearLayer?: boolean;
   image: HeatFieldImage | null;
   layer: LayerGroup;
   leaflet: typeof import("leaflet");
@@ -1243,7 +1263,9 @@ function renderHeatMapFieldOverlay({
   maxZoom: number;
   opacity: number;
 }) {
-  layer.clearLayers();
+  if (clearLayer) {
+    layer.clearLayers();
+  }
 
   if (!image || map.getZoom() > maxZoom) {
     return;
@@ -1268,6 +1290,7 @@ function renderHeatMapFieldOverlay({
 }
 
 function renderHeatMapFieldContours({
+  clearLayer = true,
   collection,
   isMeasuring,
   layer,
@@ -1278,6 +1301,7 @@ function renderHeatMapFieldContours({
   map,
   maxZoom,
 }: {
+  clearLayer?: boolean;
   collection: HeatFieldContourFeatureCollection | null;
   isMeasuring: boolean;
   layer: LayerGroup;
@@ -1288,7 +1312,9 @@ function renderHeatMapFieldContours({
   map: LeafletMap;
   maxZoom: number;
 }) {
-  layer.clearLayers();
+  if (clearLayer) {
+    layer.clearLayers();
+  }
 
   if (!collection || map.getZoom() > maxZoom) {
     return;

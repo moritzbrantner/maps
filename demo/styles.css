@@ -333,6 +333,29 @@ select {
   accent-color: #0f766e;
 }
 
+.demo-layer-slider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+  color: #101827;
+  font-size: 0.86rem;
+  font-weight: 760;
+}
+
+.demo-layer-slider input {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: #0f766e;
+}
+
+.demo-layer-slider output {
+  color: #526170;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .demo-layer-colors {
   display: flex;
   flex-wrap: wrap;

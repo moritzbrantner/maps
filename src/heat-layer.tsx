@@ -50,7 +50,7 @@ export type HeatLayerWeightAccessor<TProperties = Record<string, unknown>> = (
 
 export type HeatLayerColorStop = readonly [density: number, color: string];
 
-export type HeatFieldRenderMode = "raster" | "contours";
+export type HeatFieldRenderMode = "raster" | "contours" | "raster-contours";
 
 export type HeatLayerSurfaceMode = "data" | "interpolated" | "field";
 
@@ -278,7 +278,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   );
   const fieldImage = useMemo(
     () =>
-      fieldGrid && fieldRenderMode === "raster"
+      fieldGrid && isHeatFieldRasterVisible(fieldRenderMode)
         ? createHeatFieldImage(fieldGrid, {
               colorRamp: fieldColorRamp,
               opacity: fieldOpacity ?? heatmapOpacity,
@@ -296,7 +296,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   );
   const fieldContourCollection = useMemo(
     () =>
-      fieldGrid && fieldRenderMode === "contours"
+      fieldGrid && isHeatFieldContoursVisible(fieldRenderMode)
         ? createHeatFieldContourFeatureCollection(fieldGrid, {
             levels: fieldContourLevels,
             valueDomain: fieldValueDomain,
@@ -351,8 +351,19 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       }
 
       if (heatmapSurfaceMode === "field") {
-        if (fieldRenderMode === "contours") {
+        if (isHeatFieldRasterVisible(fieldRenderMode)) {
+          renderHeatLayerFieldSurface({
+            image: fieldImage,
+            layer,
+            leaflet,
+            opacity: fieldOpacity ?? heatmapOpacity,
+            state: flatRenderState,
+          });
+        } else {
           removeHeatLayerSurfaceLayer(layer, flatRenderState);
+        }
+
+        if (isHeatFieldContoursVisible(fieldRenderMode)) {
           renderHeatLayerContourSurface({
             collection: fieldContourCollection,
             isMeasuring,
@@ -361,14 +372,6 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
             lineColor: fieldContourColor,
             lineOpacity: fieldContourOpacity ?? fieldOpacity ?? heatmapOpacity,
             lineWidth: fieldContourLineWidth,
-            state: flatRenderState,
-          });
-        } else {
-          renderHeatLayerFieldSurface({
-            image: fieldImage,
-            layer,
-            leaflet,
-            opacity: fieldOpacity ?? heatmapOpacity,
             state: flatRenderState,
           });
         }
@@ -551,6 +554,14 @@ export function HeatFieldLayer<TProperties = Record<string, unknown>>(
   props: HeatFieldLayerProps<TProperties>,
 ) {
   return <HeatLayer {...props} heatmapSurfaceMode="field" />;
+}
+
+function isHeatFieldRasterVisible(renderMode: HeatFieldRenderMode) {
+  return renderMode === "raster" || renderMode === "raster-contours";
+}
+
+function isHeatFieldContoursVisible(renderMode: HeatFieldRenderMode) {
+  return renderMode === "contours" || renderMode === "raster-contours";
 }
 
 export function createHeatLayerDensityIndex<TProperties = Record<string, unknown>>(

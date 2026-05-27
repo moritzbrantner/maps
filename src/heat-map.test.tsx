@@ -751,6 +751,88 @@ describe("@moritzbrantner/maps heat maps", () => {
     ).toBe(false);
   });
 
+  test("renders field colors and hoverable level lines together", async () => {
+    render(
+      <HeatMap
+        domainBounds={[-11, 35, 31, 62]}
+        fieldColumns={18}
+        fieldContourColor="#0f172a"
+        fieldContourLevels={8}
+        fieldContourLineWidth={2.25}
+        fieldContourValueFormat={(value) => `${value.toFixed(1)} C`}
+        fieldRenderMode="raster-contours"
+        fieldRows={12}
+        fieldValueDomain={[12, 34]}
+        heatmapSurfaceMode="field"
+        mapLabel="Temperature color contour map"
+        points={[
+          {
+            id: "reykjavik",
+            latitude: 64.1466,
+            longitude: -21.9426,
+            metrics: {
+              temperature: 14.3,
+            },
+          },
+          {
+            id: "paris",
+            latitude: 48.8566,
+            longitude: 2.3522,
+            metrics: {
+              temperature: 24.1,
+            },
+          },
+          {
+            id: "madrid",
+            latitude: 40.4168,
+            longitude: -3.7038,
+            metrics: {
+              temperature: 30.4,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        valueMetric="temperature"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Temperature color contour map").getAttribute("data-map-ready"),
+      ).toBe("true");
+    });
+
+    const layerGroup = leafletMock.getLayerGroups()[0];
+    const surface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
+    );
+    const contourLines = layerGroup?.layers.filter(
+      (layer) => layer.options?.className === "mb-maps__heat-contour",
+    );
+
+    expect(surface).toMatchObject({
+      options: {
+        interactive: false,
+      },
+      type: "imageOverlay",
+    });
+    expect(contourLines?.length).toBeGreaterThan(0);
+    expect(contourLines?.[0]).toMatchObject({
+      options: {
+        color: "#0f172a",
+        interactive: true,
+        weight: 2.25,
+      },
+      tooltip: {
+        content: expect.stringContaining("C"),
+        options: {
+          sticky: true,
+        },
+      },
+      type: "polyline",
+    });
+  });
+
   test("can overlay original data points on a field heat map", async () => {
     render(
       <HeatMap

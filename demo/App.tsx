@@ -398,7 +398,9 @@ export function App() {
   const [view, setView] = useState<DemoView>("clusters");
   const [selectedRegion, setSelectedRegion] = useState("all");
   const [isMeasuring, setIsMeasuring] = useState(false);
-  const [heatFieldRenderMode, setHeatFieldRenderMode] = useState<HeatFieldRenderMode>("raster");
+  const [heatFieldRenderMode, setHeatFieldRenderMode] =
+    useState<HeatFieldRenderMode>("raster-contours");
+  const [heatFieldContourLineWidth, setHeatFieldContourLineWidth] = useState(1.25);
   const [showHeatDataPoints, setShowHeatDataPoints] = useState(false);
   const [layers, setLayers] = useState<DemoLayerConfig[]>(initialLayers);
   const [measurements, setMeasurements] = useState<MapBeeLineMeasurement[]>([]);
@@ -640,6 +642,7 @@ export function App() {
             selectedGeoJsonId,
             setSelectedGeoJsonId,
             heatFieldRenderMode,
+            heatFieldContourLineWidth,
             showHeatDataPoints,
           )}
         </div>
@@ -765,6 +768,15 @@ export function App() {
                       Colors
                     </Button>
                     <Button
+                      aria-pressed={heatFieldRenderMode === "raster-contours"}
+                      size="sm"
+                      variant={heatFieldRenderMode === "raster-contours" ? "default" : "secondary"}
+                      type="button"
+                      onClick={() => setHeatFieldRenderMode("raster-contours")}
+                    >
+                      Both
+                    </Button>
+                    <Button
                       aria-pressed={heatFieldRenderMode === "contours"}
                       size="sm"
                       variant={heatFieldRenderMode === "contours" ? "default" : "secondary"}
@@ -774,6 +786,21 @@ export function App() {
                       Level lines
                     </Button>
                   </div>
+                  <label className="demo-layer-slider">
+                    <span>Line thickness</span>
+                    <output>{heatFieldContourLineWidth.toFixed(2)} px</output>
+                    <input
+                      aria-label="Level line thickness"
+                      max="4"
+                      min="0.5"
+                      step="0.25"
+                      type="range"
+                      value={heatFieldContourLineWidth}
+                      onChange={(event) =>
+                        setHeatFieldContourLineWidth(Number(event.currentTarget.value))
+                      }
+                    />
+                  </label>
                   <label className="demo-layer-toggle">
                     <input
                       checked={showHeatDataPoints}
@@ -951,6 +978,7 @@ function renderMap(
   selectedGeoJsonId: string | null,
   setSelectedGeoJsonId: Dispatch<SetStateAction<string | null>>,
   heatFieldRenderMode: HeatFieldRenderMode,
+  heatFieldContourLineWidth: number,
   showHeatDataPoints: boolean,
 ) {
   const sharedMeasurementProps = {
@@ -1032,7 +1060,7 @@ function renderMap(
           fieldValueDomain={[12, 34]}
           fieldContourColor="#111827"
           fieldContourLevels={11}
-          fieldContourLineWidth={1}
+          fieldContourLineWidth={heatFieldContourLineWidth}
           fieldContourValueFormat={formatTemperatureValue}
           heatmapSurfaceMode="field"
           interpolationK={10}
