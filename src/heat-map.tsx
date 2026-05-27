@@ -245,7 +245,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
   );
 }
 
-function FlatHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function FlatHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitBoundsPadding = 56,
@@ -466,7 +466,7 @@ function FlatHeatMap<TProperties extends Record<string, unknown> = Record<string
   );
 }
 
-function GlobeHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function GlobeHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitToData = true,

@@ -31,6 +31,9 @@ jobs:
         env:
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+
       - name: Verify release contract
         run: bun run verify:release
 

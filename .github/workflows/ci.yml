@@ -31,5 +31,18 @@ jobs:
         env:
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+
       - name: Verify release contract
         run: bun run verify:release
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore

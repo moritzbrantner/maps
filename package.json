@@ -23,6 +23,30 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./layers": {
+      "types": "./dist/layers.d.ts",
+      "import": "./dist/layers.js"
+    },
+    "./flat": {
+      "types": "./dist/flat.d.ts",
+      "import": "./dist/flat.js"
+    },
+    "./globe": {
+      "types": "./dist/globe.d.ts",
+      "import": "./dist/globe.js"
+    },
+    "./editor": {
+      "types": "./dist/editor.d.ts",
+      "import": "./dist/editor.js"
+    },
+    "./timeline": {
+      "types": "./dist/timeline.d.ts",
+      "import": "./dist/timeline.js"
+    },
     "./styles.css": "./styles.css"
   },
   "publishConfig": {
@@ -30,7 +54,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean --out-dir dist",
+    "build": "tsup --config tsup.config.ts",
     "bench:performance": "bun run ./scripts/benchmark-performance.mjs",
     "bench:temporal-geojson": "bun run ./scripts/benchmark-temporal-geojson.mjs",
     "dev": "vite --host 0.0.0.0",
@@ -40,14 +64,16 @@
     "prepack": "bun run build",
     "check-types": "tsc --noEmit",
     "test": "vitest run",
+    "test:browser": "playwright test",
+    "test:browser:update": "playwright test --update-snapshots",
+    "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
-    "verify:release": "bun run check-types && bun run lint && bun run test && bun run build && bun run bench:temporal-geojson && bun run bench:performance && bun run pack:dry"
+    "verify:release": "bun run check-types && bun run lint && bun run test && bun run build && bun run verify:entry-bundles && bun run test:browser && bun run bench:temporal-geojson && bun run bench:performance && bun run pack:dry"
   },
   "dependencies": {
     "@moritzbrantner/data-density": "^0.1.1",
     "@moritzbrantner/timeline-editor": "file:../timeline-editor",
     "@moritzbrantner/ui": "https://registry.npmjs.org/@moritzbrantner/ui/-/ui-0.8.0.tgz",
-    "@tanstack/react-query": "^5.100.14",
     "@turf/boolean-clockwise": "^7.3.5",
     "@turf/centroid": "^7.3.5",
     "@turf/helpers": "^7.3.5",
@@ -60,7 +86,9 @@
     "world-atlas": "^2.0.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
     "@tailwindcss/vite": "^4.3.0",
+    "@tanstack/react-query": "^5.100.14",
     "@testing-library/react": "^16.3.0",
     "@types/d3-delaunay": "^6.0.4",
     "@types/d3-geo": "^3.1.0",

@@ -223,7 +223,7 @@ export function createFlowMapFeatures<TProperties extends Record<string, unknown
   });
 }
 
-function FlatFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function FlatFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   fitBoundsPadding = 56,
   fitToData = true,
@@ -422,7 +422,7 @@ function FlatFlowMap<TProperties extends Record<string, unknown> = Record<string
   );
 }
 
-function GlobeFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function GlobeFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   fitToData = true,
   flowColor = "#0f766e",

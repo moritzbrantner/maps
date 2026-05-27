@@ -212,7 +212,7 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
   );
 }
 
-function FlatClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function FlatClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   clusterRadius,
   filterPoint,
@@ -435,7 +435,7 @@ function FlatClusteredMap<TProperties extends Record<string, unknown> = Record<s
   );
 }
 
-function GlobeClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function GlobeClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   clusterRadius,
   filterPoint,

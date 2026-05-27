@@ -308,6 +308,12 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
   );
 }
 
+export function FlatBubbleMap<TProperties extends Record<string, unknown> = Record<string, unknown>>(
+  props: BubbleMapProps<TProperties>,
+) {
+  return <FlatPointMap {...useBubbleMapPointProps({ ...props, mapDisplay: "flat" })} />;
+}
+
 export function createPointMapFeatures<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: {
@@ -361,7 +367,7 @@ export function createBubbleMapFeatures<TProperties extends Record<string, unkno
   });
 }
 
-function FlatPointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function FlatPointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitBoundsPadding = 56,
@@ -551,7 +557,7 @@ function FlatPointMap<TProperties extends Record<string, unknown> = Record<strin
   );
 }
 
-function GlobePointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function GlobePointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
   filterPoint,
   fitToData = true,
