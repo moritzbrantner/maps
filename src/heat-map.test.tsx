@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -45,6 +45,8 @@ const leafletMock = vi.hoisted(() => {
   }
 
   class MockMap {
+    centerLatitude = 0;
+    centerLongitude = 0;
     handlers = new Map<string, Handler[]>();
     removed = false;
     zoom = 2;
@@ -64,11 +66,17 @@ const leafletMock = vi.hoisted(() => {
     fitBounds() {}
 
     getBounds() {
+      const northWest = this.containerPointToLatLng([0, 0]);
+      const southEast = this.containerPointToLatLng([
+        this.container.clientWidth,
+        this.container.clientHeight,
+      ]);
+
       return {
-        getEast: () => 180,
-        getNorth: () => 85,
-        getSouth: () => -85,
-        getWest: () => -180,
+        getEast: () => southEast.lng,
+        getNorth: () => northWest.lat,
+        getSouth: () => southEast.lat,
+        getWest: () => northWest.lng,
       };
     }
 
@@ -81,16 +89,28 @@ const leafletMock = vi.hoisted(() => {
     }
 
     latLngToContainerPoint([latitude, longitude]: [number, number]) {
+      const scale = 2 ** (this.zoom - 2);
+
       return {
-        x: ((longitude + 180) / 360) * this.container.clientWidth,
-        y: ((85 - latitude) / 170) * this.container.clientHeight,
+        x:
+          this.container.clientWidth / 2 +
+          ((longitude - this.centerLongitude) / 360) * this.container.clientWidth * scale,
+        y:
+          this.container.clientHeight / 2 -
+          ((latitude - this.centerLatitude) / 170) * this.container.clientHeight * scale,
       };
     }
 
     containerPointToLatLng([x, y]: [number, number]) {
+      const scale = 2 ** (this.zoom - 2);
+
       return {
-        lat: 85 - (y / this.container.clientHeight) * 170,
-        lng: -180 + (x / this.container.clientWidth) * 360,
+        lat:
+          this.centerLatitude -
+          ((y - this.container.clientHeight / 2) / (this.container.clientHeight * scale)) * 170,
+        lng:
+          this.centerLongitude +
+          ((x - this.container.clientWidth / 2) / (this.container.clientWidth * scale)) * 360,
       };
     }
 
@@ -339,7 +359,10 @@ describe("@moritzbrantner/maps heat maps", () => {
 
     const surface = leafletMock
       .getLayerGroups()[0]
-      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated");
+      ?.layers.find(
+        (layer) =>
+          layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+      );
 
     expect(surface).toMatchObject({
       options: {
@@ -384,12 +407,174 @@ describe("@moritzbrantner/maps heat maps", () => {
 
     const surface = leafletMock
       .getLayerGroups()[0]
-      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data");
+      ?.layers.find(
+        (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
+      );
 
     expect(surface).toMatchObject({
       type: "imageOverlay",
     });
     expect(decodeURIComponent(surface?.url ?? "")).toContain("<circle");
+  });
+
+  test("projects a data-space heat radius when zoom changes", async () => {
+    render(
+      <HeatMap
+        heatmapRadius={{ meters: 100_000 }}
+        heatmapSurfaceMode="data"
+        mapLabel="Data-radius heat map"
+        points={[
+          {
+            id: "a",
+            latitude: 0,
+            longitude: 0,
+            metrics: {
+              demand: 6,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Data-radius heat map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const layerGroup = leafletMock.getLayerGroups()[0];
+    const map = leafletMock.getMaps()[0];
+    map!.zoom = 4;
+    await act(async () => {
+      map!.handlers.get("moveend")?.[0]?.();
+    });
+
+    const farZoomSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
+    );
+    const farZoomRadius = getFirstSvgCircleRadius(farZoomSurface?.url ?? "");
+
+    expect(farZoomRadius).toBeGreaterThan(0);
+
+    map!.zoom = 5;
+    await act(async () => {
+      map!.handlers.get("moveend")?.[0]?.();
+    });
+
+    const zoomedSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
+    );
+    const zoomedRadius = getFirstSvgCircleRadius(zoomedSurface?.url ?? "");
+
+    expect(zoomedRadius / farZoomRadius).toBeCloseTo(2, 1);
+  });
+
+  test("keeps interpolated heat intensity absolute to data weights", async () => {
+    render(
+      <HeatMap
+        heatmapRadius={{ meters: 500_000 }}
+        mapLabel="Absolute-intensity heat map"
+        points={[
+          {
+            id: "weak",
+            latitude: 0,
+            longitude: 0,
+            metrics: {
+              demand: 5,
+            },
+          },
+          {
+            id: "strong-a",
+            latitude: 0,
+            longitude: 100,
+            metrics: {
+              demand: 10,
+            },
+          },
+          {
+            id: "strong-b",
+            latitude: 0,
+            longitude: 100,
+            metrics: {
+              demand: 10,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Absolute-intensity heat map").getAttribute("data-map-ready"),
+      ).toBe("true");
+    });
+
+    const surface = leafletMock
+      .getLayerGroups()[0]
+      ?.layers.find(
+        (layer) =>
+          layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+      );
+    const weakPoint = leafletMock.getMaps()[0]?.latLngToContainerPoint([0, 0]);
+    const weakCell = getNearestSvgCircle(surface?.url ?? "", weakPoint!);
+
+    expect(weakCell?.opacity).toBeGreaterThan(0.55);
+  });
+
+  test("keeps interpolated heat color stable across pan and zoom", async () => {
+    render(
+      <HeatMap
+        heatmapRadius={{ meters: 300_000 }}
+        mapLabel="Viewport-independent heat map"
+        points={[
+          {
+            id: "a",
+            latitude: 0,
+            longitude: 0,
+            metrics: {
+              demand: 5,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Viewport-independent heat map").getAttribute("data-map-ready"),
+      ).toBe("true");
+    });
+
+    const layerGroup = leafletMock.getLayerGroups()[0];
+    const map = leafletMock.getMaps()[0]!;
+    const initialSurface = layerGroup?.layers.find(
+      (layer) =>
+        layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+    );
+    const initialPoint = map.latLngToContainerPoint([0, 0]);
+    const initialCell = getNearestSvgCircle(initialSurface?.url ?? "", initialPoint);
+
+    map.centerLongitude = 12;
+    map.zoom = 3;
+    await act(async () => {
+      map.handlers.get("moveend")?.[0]?.();
+    });
+
+    const changedSurface = layerGroup?.layers.find(
+      (layer) =>
+        layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+    );
+    const changedPoint = map.latLngToContainerPoint([0, 0]);
+    const changedCell = getNearestSvgCircle(changedSurface?.url ?? "", changedPoint);
+
+    expect(changedCell?.fill).toBe(initialCell?.fill);
+    expect(changedCell?.opacity).toBeCloseTo(initialCell?.opacity ?? 0, 3);
   });
 
   test("renders heat markers on the globe display", () => {
@@ -476,10 +661,50 @@ describe("@moritzbrantner/maps heat maps", () => {
 
     const surface = leafletMock
       .getLayerGroups()[0]
-      ?.layers.find((layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated");
+      ?.layers.find(
+        (layer) =>
+          layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+      );
 
     expect(surface).toMatchObject({
       type: "imageOverlay",
     });
   });
 });
+
+function getFirstSvgCircleRadius(url: string) {
+  const radiusMatch = /<circle[^>]*\sr="([^"]+)"/.exec(decodeURIComponent(url));
+
+  return radiusMatch ? Number(radiusMatch[1]) : 0;
+}
+
+function getNearestSvgCircle(
+  url: string,
+  point: {
+    x: number;
+    y: number;
+  },
+) {
+  const circles = [...decodeURIComponent(url).matchAll(/<circle\s+([^>]+)>/g)].map((match) => {
+    const attributes = match[1] ?? "";
+
+    return {
+      cx: Number(getSvgAttribute(attributes, "cx")),
+      cy: Number(getSvgAttribute(attributes, "cy")),
+      fill: getSvgAttribute(attributes, "fill"),
+      opacity: Number(getSvgAttribute(attributes, "opacity")),
+    };
+  });
+
+  return circles
+    .filter((circle) => Number.isFinite(circle.cx) && Number.isFinite(circle.cy))
+    .sort(
+      (left, right) =>
+        Math.hypot(left.cx - point.x, left.cy - point.y) -
+        Math.hypot(right.cx - point.x, right.cy - point.y),
+    )[0];
+}
+
+function getSvgAttribute(attributes: string, name: string) {
+  return new RegExp(`${name}="([^"]+)"`).exec(attributes)?.[1] ?? "";
+}

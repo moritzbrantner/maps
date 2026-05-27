@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - Added controlled bee-line measurement props for flat Leaflet maps.
+- Made default heat-map radius and interpolated intensity data-space based.
 
 ## 0.1.3
 

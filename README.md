@@ -70,6 +70,10 @@ Use `HeatMap` when users need density instead of discrete marker interaction.
 Flat heat maps default to `heatmapSurfaceMode="interpolated"` for a smooth
 temperature-map style surface. Use `heatmapSurfaceMode="data"` when the surface
 should stay anchored to the underlying data locations.
+By default, the heat radius is a fixed data-space radius in meters, so zooming
+changes only how that same geographic footprint projects onto the screen.
+Interpolated heat intensity is normalized to the data weights, not to the
+currently visible projection.
 
 ```tsx
 import { HeatMap } from "@moritzbrantner/maps";
@@ -274,10 +278,7 @@ function OperationsMap() {
       <HeatLayer points={points} weightMetric="demand" />
       <FlowLayer flows={flows} weightMetric="trips" />
       <GeoJsonLayer featureCollection={geoJsonFeatureCollection} />
-      <PointLayer
-        points={points}
-        renderFeatureTooltip={(feature) => feature.point.label}
-      />
+      <PointLayer points={points} renderFeatureTooltip={(feature) => feature.point.label} />
       <BeeLineMeasurementLayer
         measurementMode={isMeasuring ? "bee-line" : "none"}
         measurements={measurements}

@@ -61,6 +61,8 @@ import type { MapMeasurementProps } from "./measurement";
 import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
+const DEFAULT_HEAT_MAP_RADIUS_METERS = 50_000;
+const METERS_PER_DEGREE_AT_EQUATOR = 111_320;
 
 export type HeatMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
@@ -72,6 +74,9 @@ export type HeatMapSurfaceMode = HeatLayerSurfaceMode;
 
 export type HeatMapRadius =
   | number
+  | {
+      meters: number;
+    }
   | {
       max: number;
       maxZoom?: number;
@@ -259,8 +264,7 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   heatmapMaxZoom = 16,
   heatmapOpacity = 0.84,
   heatmapRadius = {
-    max: 42,
-    min: 12,
+    meters: DEFAULT_HEAT_MAP_RADIUS_METERS,
   },
   initialViewState,
   mapDisplay: _mapDisplay,
@@ -479,8 +483,7 @@ export function GlobeHeatMap<TProperties extends Record<string, unknown> = Recor
   heatmapMaxZoom = 16,
   heatmapOpacity = 0.84,
   heatmapRadius = {
-    max: 42,
-    min: 12,
+    meters: DEFAULT_HEAT_MAP_RADIUS_METERS,
   },
   initialViewState,
   mapLabel = "Interactive heat map",
@@ -678,7 +681,7 @@ function GlobeHeatFeature({
 
   const normalizedWeight = clamp(feature.properties.weight, 0, 1);
   const markerRadius =
-    resolveHeatMapRadius(radius, viewState.zoom) *
+    resolveHeatMapGlobeRadius(radius, feature.geometry.coordinates, viewState) *
     Math.max(0.35, Math.sqrt(normalizedWeight)) *
     Math.max(0, intensity) *
     (0.62 + projected.scale * 0.38);
@@ -853,7 +856,7 @@ function renderHeatOverlay({
     const weight = clamp(feature.properties.weight, 0, Number.POSITIVE_INFINITY);
     const normalizedWeight = clamp(weight, 0, 1);
     const markerRadius =
-      resolveHeatMapRadius(radius, map.getZoom()) *
+      resolveHeatMapProjectedRadius(radius, feature.geometry.coordinates, map) *
       Math.max(0.35, Math.sqrt(normalizedWeight)) *
       Math.max(0, intensity);
 
@@ -933,7 +936,53 @@ function getRawHeatMapPointWeight<TProperties extends Record<string, unknown>>(
   return point.metrics.weight ?? 1;
 }
 
-function resolveHeatMapRadius(radius: HeatMapRadius, zoom: number) {
+function resolveHeatMapProjectedRadius(
+  radius: HeatMapRadius,
+  coordinate: [longitude: number, latitude: number],
+  map: LeafletMap,
+) {
+  if (typeof radius === "object" && "meters" in radius) {
+    return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
+      map.latLngToContainerPoint(toLeafletLatLng(nextCoordinate)),
+    );
+  }
+
+  return resolveHeatMapDisplayRadius(radius, map.getZoom());
+}
+
+function resolveHeatMapGlobeRadius(
+  radius: HeatMapRadius,
+  coordinate: [longitude: number, latitude: number],
+  viewState: GlobeViewState,
+) {
+  if (typeof radius === "object" && "meters" in radius) {
+    return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
+      projectGlobeCoordinate(nextCoordinate, viewState),
+    );
+  }
+
+  return resolveHeatMapDisplayRadius(radius, viewState.zoom);
+}
+
+function getProjectedMetersRadius(
+  meters: number,
+  [longitude, latitude]: [longitude: number, latitude: number],
+  projectCoordinate: (coordinate: [longitude: number, latitude: number]) => { x: number; y: number },
+) {
+  if (!Number.isFinite(meters) || meters <= 0) {
+    return 0;
+  }
+
+  const center = projectCoordinate([longitude, latitude]);
+  const latitudeRadians = (latitude * Math.PI) / 180;
+  const longitudeScale = Math.max(0.000001, Math.abs(Math.cos(latitudeRadians)));
+  const longitudeOffset = meters / (METERS_PER_DEGREE_AT_EQUATOR * longitudeScale);
+  const edge = projectCoordinate([longitude + longitudeOffset, latitude]);
+
+  return Math.hypot(edge.x - center.x, edge.y - center.y);
+}
+
+function resolveHeatMapDisplayRadius(radius: Exclude<HeatMapRadius, { meters: number }>, zoom: number) {
   if (typeof radius === "number") {
     return Math.max(0, radius);
   }

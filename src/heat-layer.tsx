@@ -16,6 +16,8 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
+const DEFAULT_HEAT_LAYER_RADIUS_METERS = 50_000;
+const METERS_PER_DEGREE_AT_EQUATOR = 111_320;
 
 export type HeatLayerWeightAccessor<TProperties = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
@@ -27,6 +29,9 @@ export type HeatLayerSurfaceMode = "data" | "interpolated";
 
 export type HeatLayerRadius =
   | number
+  | {
+      meters: number;
+    }
   | {
       max: number;
       maxZoom?: number;
@@ -96,8 +101,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   heatmapMaxZoom = 16,
   heatmapOpacity = 0.84,
   heatmapRadius = {
-    max: 42,
-    min: 12,
+    meters: DEFAULT_HEAT_LAYER_RADIUS_METERS,
   },
   heatmapSurfaceMode = "interpolated",
   layerId,
@@ -109,29 +113,18 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `heat-layer-${generatedLayerId}`;
   const deferredPoints = useDeferredValue(points);
-  const densityIndex = useMemo(
+  const heatIndex = useMemo(
     () =>
-      createHeatLayerDensityIndex(deferredPoints, {
+      createHeatLayerSourceIndex(deferredPoints, {
         filterPoint,
         getWeight,
         maxWeight,
-        maxZoom: heatmapAggregationMaxZoom ?? heatmapMaxZoom,
-        minZoom: heatmapAggregationMinZoom,
-        radius: heatmapAggregationRadius,
         weightMetric,
       }),
-    [
-      deferredPoints,
-      filterPoint,
-      getWeight,
-      heatmapAggregationMaxZoom,
-      heatmapAggregationMinZoom,
-      heatmapAggregationRadius,
-      heatmapMaxZoom,
-      maxWeight,
-      weightMetric,
-    ],
+    [deferredPoints, filterPoint, getWeight, maxWeight, weightMetric],
   );
+  const renderVersion =
+    heatmapAggregationMaxZoom ?? heatmapAggregationMinZoom ?? heatmapAggregationRadius ?? null;
 
   useEffect(() => {
     if (!surface || surface.display !== "flat") {
@@ -145,11 +138,9 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         return;
       }
 
-      const bounds = map.getBounds();
-      const data = densityIndex.getFeatureCollection({
-        bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
-        zoom: map.getZoom(),
-      });
+      const data = heatIndex.getFeatureCollection(
+        getHeatLayerPaddedBounds(map, heatmapRadius, heatmapIntensity),
+      );
 
       renderHeatLayerSurface({
         colorRamp: heatmapColorRamp,
@@ -164,13 +155,14 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       });
     });
   }, [
-    densityIndex,
+    heatIndex,
     heatmapColorRamp,
     heatmapIntensity,
     heatmapMaxZoom,
     heatmapOpacity,
     heatmapRadius,
     heatmapSurfaceMode,
+    renderVersion,
     resolvedLayerId,
     surface,
   ]);
@@ -179,10 +171,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     return null;
   }
 
-  const data = densityIndex.getFeatureCollection({
-    bounds: [-180, -90, 180, 90],
-    zoom: surface.viewState.zoom,
-  });
+  const data = heatIndex.getFeatureCollection([-180, -90, 180, 90]);
 
   return (
     <>
@@ -198,8 +187,14 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
             }
 
             const normalizedWeight = clamp(feature.properties.weight, 0, 1);
+            const projectedRadius = resolveHeatLayerGlobeRadius(
+              heatmapRadius,
+              feature.geometry.coordinates,
+              surface.viewState,
+              surface.projectGlobeCoordinate,
+            );
             const markerRadius =
-              resolveHeatLayerRadius(heatmapRadius, surface.viewState.zoom) *
+              projectedRadius *
               Math.max(0.35, Math.sqrt(normalizedWeight)) *
               Math.max(0, heatmapIntensity) *
               (0.62 + projected.scale * 0.38);
@@ -281,6 +276,69 @@ export function createHeatLayerDensityIndex<TProperties = Record<string, unknown
   };
 }
 
+function createHeatLayerSourceIndex<TProperties = Record<string, unknown>>(
+  points: readonly MapPoint<TProperties>[],
+  options: {
+    filterPoint?: MapPointFilter<TProperties>;
+    getWeight?: HeatLayerWeightAccessor<TProperties>;
+    maxWeight?: number;
+    weightMetric?: string;
+  } = {},
+) {
+  const weightedPoints = points
+    .map(toIndexedMapPoint)
+    .filter(isValidHeatLayerPoint)
+    .filter((point) => options.filterPoint?.(point) ?? true)
+    .map((point) => ({
+      point,
+      rawWeight: resolveHeatLayerPointWeight(point, options),
+    }))
+    .filter((entry) => entry.rawWeight > 0);
+  const effectiveMaxWeight =
+    Number.isFinite(options.maxWeight) && (options.maxWeight ?? 0) > 0
+      ? options.maxWeight!
+      : Math.max(1, ...weightedPoints.map((entry) => entry.rawWeight));
+  const features = weightedPoints.map(({ point, rawWeight }): HeatLayerFeature => {
+    const properties: HeatLayerFeatureProperties = {
+      ...Object.fromEntries(
+        Object.entries(point.metrics).filter(([metricKey]) => metricKey !== HEAT_MAP_WEIGHT_METRIC),
+      ),
+      kind: "heat-point",
+      label: point.label,
+      pointCount: 1,
+      pointId: point.id,
+      rawWeight,
+      weight: Math.max(0, rawWeight / effectiveMaxWeight),
+    };
+
+    return {
+      geometry: {
+        coordinates: [point.longitude, point.latitude],
+        type: "Point",
+      },
+      properties,
+      type: "Feature",
+    };
+  });
+
+  return {
+    getFeatureCollection(bounds: [west: number, south: number, east: number, north: number]) {
+      const [west, south, east, north] = bounds;
+
+      return {
+        features: features.filter((feature) => {
+          const [longitude, latitude] = feature.geometry.coordinates;
+
+          return longitude >= west && longitude <= east && latitude >= south && latitude <= north;
+        }),
+        type: "FeatureCollection" as const,
+      };
+    },
+    maxWeight: effectiveMaxWeight,
+    pointCount: weightedPoints.length,
+  };
+}
+
 function renderHeatLayerSurface({
   colorRamp,
   data,
@@ -305,22 +363,30 @@ function renderHeatLayerSurface({
   const viewport = map.getContainer();
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;
-  const baseRadius = resolveHeatLayerRadius(radius, map.getZoom()) * Math.max(0, intensity);
-  const influenceRadius = Math.max(24, baseRadius * 2.6);
   const safeOpacity = clamp(opacity, 0, 1);
   const sources = data.features
     .map((feature) => {
       const [longitude, latitude] = feature.geometry.coordinates;
       const point = map.latLngToContainerPoint(toLeafletLatLng([longitude, latitude]));
+      const baseRadius =
+        resolveHeatLayerProjectedRadius(radius, feature.geometry.coordinates, map) *
+        Math.max(0, intensity);
+      const metricPoint = coordinateToHeatLayerMetricPoint(feature.geometry.coordinates);
+      const dataInfluenceRadius = getHeatLayerDataInfluenceRadius(radius, intensity);
 
       return {
+        coordinate: feature.geometry.coordinates,
+        dataInfluenceRadius,
+        influenceRadius: baseRadius * 2.6,
+        metricPoint,
         point,
         weight: clamp(feature.properties.weight, 0, Number.POSITIVE_INFINITY),
       };
     })
-    .filter((source) => source.weight > 0);
+    .filter((source) => source.weight > 0 && source.influenceRadius > 0);
+  const maxInfluenceRadius = Math.max(0, ...sources.map((source) => source.influenceRadius));
 
-  if (width <= 0 || height <= 0 || sources.length === 0 || influenceRadius <= 0) {
+  if (width <= 0 || height <= 0 || sources.length === 0 || maxInfluenceRadius <= 0) {
     return;
   }
 
@@ -331,14 +397,14 @@ function renderHeatLayerSurface({
       ? createHeatLayerDataSurfaceSvg({
           colorRamp,
           height,
-          influenceRadius,
           sources,
           width,
         })
       : createHeatLayerInterpolatedSurfaceSvg({
           colorRamp,
           height,
-          influenceRadius,
+          maxInfluenceRadius,
+          map,
           sources,
           width,
         });
@@ -368,21 +434,20 @@ type HeatLayerSurfaceCell = {
 function createHeatLayerDataSurfaceSvg({
   colorRamp,
   height,
-  influenceRadius,
   sources,
   width,
 }: {
   colorRamp: readonly HeatLayerColorStop[];
   height: number;
-  influenceRadius: number;
   sources: readonly HeatLayerSurfaceSource[];
   width: number;
 }) {
-  const blur = Math.max(6, influenceRadius * 0.16);
+  const maxInfluenceRadius = Math.max(0, ...sources.map((source) => source.influenceRadius));
+  const blur = Math.max(1, maxInfluenceRadius * 0.16);
   const circles = sources
     .map((source) => {
       const normalizedWeight = clamp(source.weight, 0, 1);
-      const radius = influenceRadius * (0.42 + Math.sqrt(normalizedWeight) * 0.5);
+      const radius = source.influenceRadius * (0.42 + Math.sqrt(normalizedWeight) * 0.5);
       const opacity = Math.min(1, 0.22 + normalizedWeight * 0.78);
 
       return `<circle cx="${roundSvgNumber(source.point.x)}" cy="${roundSvgNumber(
@@ -399,17 +464,32 @@ function createHeatLayerDataSurfaceSvg({
 function createHeatLayerInterpolatedSurfaceSvg({
   colorRamp,
   height,
-  influenceRadius,
+  map,
+  maxInfluenceRadius,
   sources,
   width,
 }: {
   colorRamp: readonly HeatLayerColorStop[];
   height: number;
-  influenceRadius: number;
+  map: import("leaflet").Map;
+  maxInfluenceRadius: number;
   sources: readonly HeatLayerSurfaceSource[];
   width: number;
 }) {
-  const cellSize = resolveHeatLayerSampleSize(width, height, influenceRadius);
+  const metricSources = sources.filter(isMetricHeatLayerSurfaceSource);
+
+  if (metricSources.length === sources.length) {
+    return createHeatLayerMetricInterpolatedSurfaceSvg({
+      colorRamp,
+      height,
+      map,
+      maxInfluenceRadius,
+      sources: metricSources,
+      width,
+    });
+  }
+
+  const cellSize = resolveHeatLayerSampleSize(width, height, maxInfluenceRadius);
   const cells: HeatLayerSurfaceCell[] = [];
   const startX = -cellSize;
   const startY = -cellSize;
@@ -420,7 +500,7 @@ function createHeatLayerInterpolatedSurfaceSvg({
     for (let x = startX; x < endX; x += cellSize) {
       const centerX = x + cellSize / 2;
       const centerY = y + cellSize / 2;
-      const density = getHeatLayerCellDensity(sources, centerX, centerY, influenceRadius);
+      const density = getHeatLayerCellDensity(sources, centerX, centerY);
 
       if (density > 0) {
         cells.push({ density, x: centerX, y: centerY });
@@ -428,11 +508,10 @@ function createHeatLayerInterpolatedSurfaceSvg({
     }
   }
 
-  const maxDensity = Math.max(1, ...cells.map((cell) => cell.density));
   const sampleRadius = cellSize * 1.15;
   const circles = cells
     .map((cell) => {
-      const normalizedDensity = clamp(cell.density / maxDensity, 0, 1);
+      const normalizedDensity = clamp(cell.density, 0, 1);
 
       if (normalizedDensity < 0.015) {
         return "";
@@ -448,6 +527,90 @@ function createHeatLayerInterpolatedSurfaceSvg({
 
   return createHeatLayerSvg({
     blur: Math.max(5, cellSize * 0.75),
+    content: circles,
+    height,
+    width,
+  });
+}
+
+function createHeatLayerMetricInterpolatedSurfaceSvg({
+  colorRamp,
+  height,
+  map,
+  maxInfluenceRadius,
+  sources,
+  width,
+}: {
+  colorRamp: readonly HeatLayerColorStop[];
+  height: number;
+  map: import("leaflet").Map;
+  maxInfluenceRadius: number;
+  sources: readonly MetricHeatLayerSurfaceSource[];
+  width: number;
+}) {
+  const maxDataInfluenceRadius = Math.max(
+    0,
+    ...sources.map((source) => source.dataInfluenceRadius),
+  );
+  const metricCellSize = Math.max(1, maxDataInfluenceRadius / 7);
+  const cells = new Map<string, { x: number; y: number }>();
+
+  for (const source of sources) {
+    const minX = Math.floor((source.metricPoint.x - source.dataInfluenceRadius) / metricCellSize);
+    const maxX = Math.ceil((source.metricPoint.x + source.dataInfluenceRadius) / metricCellSize);
+    const minY = Math.floor((source.metricPoint.y - source.dataInfluenceRadius) / metricCellSize);
+    const maxY = Math.ceil((source.metricPoint.y + source.dataInfluenceRadius) / metricCellSize);
+
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        const key = `${x},${y}`;
+
+        if (cells.has(key)) {
+          continue;
+        }
+
+        cells.set(key, {
+          x: x * metricCellSize + metricCellSize / 2,
+          y: y * metricCellSize + metricCellSize / 2,
+        });
+      }
+    }
+  }
+
+  const circles = [...cells.values()]
+    .map((cell) => {
+      const density = getHeatLayerMetricCellDensity(sources, cell.x, cell.y);
+      const normalizedDensity = clamp(density, 0, 1);
+
+      if (normalizedDensity < 0.015) {
+        return "";
+      }
+
+      const coordinate = heatLayerMetricPointToCoordinate(cell);
+      const point = map.latLngToContainerPoint(toLeafletLatLng(coordinate));
+
+      if (
+        point.x < -maxInfluenceRadius ||
+        point.x > width + maxInfluenceRadius ||
+        point.y < -maxInfluenceRadius ||
+        point.y > height + maxInfluenceRadius
+      ) {
+        return "";
+      }
+
+      const sampleRadius =
+        getHeatLayerProjectedMetricRadius(map, coordinate, metricCellSize) * 1.15;
+
+      return `<circle cx="${roundSvgNumber(point.x)}" cy="${roundSvgNumber(point.y)}" r="${roundSvgNumber(
+        sampleRadius,
+      )}" fill="${escapeSvgAttribute(
+        resolveHeatLayerInterpolatedColor(colorRamp, normalizedDensity),
+      )}" opacity="${roundSvgNumber(Math.min(1, 0.28 + normalizedDensity * 0.72))}" />`;
+    })
+    .join("");
+
+  return createHeatLayerSvg({
+    blur: Math.max(1, maxInfluenceRadius * 0.04),
     content: circles,
     height,
     width,
@@ -471,6 +634,10 @@ function resolveHeatLayerSampleSize(width: number, height: number, influenceRadi
 }
 
 type HeatLayerSurfaceSource = {
+  coordinate: [longitude: number, latitude: number];
+  dataInfluenceRadius: number | null;
+  influenceRadius: number;
+  metricPoint: HeatLayerMetricPoint;
   point: {
     x: number;
     y: number;
@@ -478,18 +645,52 @@ type HeatLayerSurfaceSource = {
   weight: number;
 };
 
-function getHeatLayerCellDensity(
-  sources: readonly HeatLayerSurfaceSource[],
-  x: number,
-  y: number,
-  influenceRadius: number,
-) {
-  const radiusSquared = influenceRadius * influenceRadius;
+type MetricHeatLayerSurfaceSource = HeatLayerSurfaceSource & {
+  dataInfluenceRadius: number;
+};
+
+type HeatLayerMetricPoint = {
+  x: number;
+  y: number;
+};
+
+function isMetricHeatLayerSurfaceSource(
+  source: HeatLayerSurfaceSource,
+): source is MetricHeatLayerSurfaceSource {
+  return source.dataInfluenceRadius !== null && source.dataInfluenceRadius > 0;
+}
+
+function getHeatLayerCellDensity(sources: readonly HeatLayerSurfaceSource[], x: number, y: number) {
   let density = 0;
 
   for (const source of sources) {
+    const radiusSquared = source.influenceRadius * source.influenceRadius;
     const dx = source.point.x - x;
     const dy = source.point.y - y;
+    const distanceSquared = dx * dx + dy * dy;
+
+    if (distanceSquared > radiusSquared) {
+      continue;
+    }
+
+    const falloff = Math.exp((-3 * distanceSquared) / radiusSquared);
+    density += source.weight * falloff;
+  }
+
+  return density;
+}
+
+function getHeatLayerMetricCellDensity(
+  sources: readonly MetricHeatLayerSurfaceSource[],
+  x: number,
+  y: number,
+) {
+  let density = 0;
+
+  for (const source of sources) {
+    const radiusSquared = source.dataInfluenceRadius * source.dataInfluenceRadius;
+    const dx = source.metricPoint.x - x;
+    const dy = source.metricPoint.y - y;
     const distanceSquared = dx * dx + dy * dy;
 
     if (distanceSquared > radiusSquared) {
@@ -559,7 +760,9 @@ function resolveHeatLayerInterpolatedColor(
     }
 
     const progress =
-      next[0] <= previous[0] ? 1 : clamp((normalizedWeight - previous[0]) / (next[0] - previous[0]), 0, 1);
+      next[0] <= previous[0]
+        ? 1
+        : clamp((normalizedWeight - previous[0]) / (next[0] - previous[0]), 0, 1);
 
     return formatHeatLayerColor({
       alpha: previousColor.alpha + (nextColor.alpha - previousColor.alpha) * progress,
@@ -675,7 +878,9 @@ function createHeatLayerFeatureFromAggregate<TProperties>(
     },
     properties: {
       ...Object.fromEntries(
-        Object.entries(feature.metrics).filter(([metricKey]) => metricKey !== HEAT_MAP_WEIGHT_METRIC),
+        Object.entries(feature.metrics).filter(
+          ([metricKey]) => metricKey !== HEAT_MAP_WEIGHT_METRIC,
+        ),
       ),
       kind: feature.kind === "cluster" ? "heat-cluster" : "heat-point",
       label: feature.kind === "cluster" ? feature.pointCountAbbreviated : feature.point.label,
@@ -698,13 +903,143 @@ function resolveHeatLayerPointWeight<TProperties>(
   const rawWeight = options.getWeight
     ? options.getWeight(point)
     : options.weightMetric
-      ? point.metrics[options.weightMetric] ?? 0
-      : point.metrics.weight ?? 1;
+      ? (point.metrics[options.weightMetric] ?? 0)
+      : (point.metrics.weight ?? 1);
 
   return Number.isFinite(rawWeight) ? Math.max(0, rawWeight) : 0;
 }
 
-function resolveHeatLayerRadius(radius: HeatLayerRadius, zoom: number) {
+function resolveHeatLayerProjectedRadius(
+  radius: HeatLayerRadius,
+  coordinate: [longitude: number, latitude: number],
+  map: import("leaflet").Map,
+) {
+  if (typeof radius === "object" && "meters" in radius) {
+    return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
+      map.latLngToContainerPoint(toLeafletLatLng(nextCoordinate)),
+    );
+  }
+
+  return resolveHeatLayerDisplayRadius(radius, map.getZoom());
+}
+
+function getHeatLayerDataInfluenceRadius(radius: HeatLayerRadius, intensity: number) {
+  if (typeof radius === "object" && "meters" in radius) {
+    return Math.max(0, radius.meters * 2.6 * Math.max(0, intensity));
+  }
+
+  return null;
+}
+
+function getHeatLayerPaddedBounds(
+  map: import("leaflet").Map,
+  radius: HeatLayerRadius,
+  intensity: number,
+): [west: number, south: number, east: number, north: number] {
+  const viewport = map.getContainer();
+  const width = viewport.clientWidth;
+  const height = viewport.clientHeight;
+  const center = map.containerPointToLatLng([width / 2, height / 2]);
+  const centerCoordinate: [number, number] = [center.lng, center.lat];
+  const padding =
+    resolveHeatLayerProjectedRadius(radius, centerCoordinate, map) * 2.6 * Math.max(0, intensity);
+  const northWest = map.containerPointToLatLng([-padding, -padding]);
+  const southEast = map.containerPointToLatLng([width + padding, height + padding]);
+
+  return [
+    clamp(Math.min(northWest.lng, southEast.lng), -180, 180),
+    clamp(Math.min(northWest.lat, southEast.lat), -90, 90),
+    clamp(Math.max(northWest.lng, southEast.lng), -180, 180),
+    clamp(Math.max(northWest.lat, southEast.lat), -90, 90),
+  ];
+}
+
+function resolveHeatLayerGlobeRadius(
+  radius: HeatLayerRadius,
+  coordinate: [longitude: number, latitude: number],
+  viewState: { center: [number, number]; zoom: number },
+  projectCoordinate: (
+    coordinate: [longitude: number, latitude: number],
+    viewState: { center: [number, number]; zoom: number },
+  ) => { visible: boolean; x: number; y: number },
+) {
+  if (typeof radius === "object" && "meters" in radius) {
+    return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
+      projectCoordinate(nextCoordinate, viewState),
+    );
+  }
+
+  return resolveHeatLayerDisplayRadius(radius, viewState.zoom);
+}
+
+function getProjectedMetersRadius(
+  meters: number,
+  [longitude, latitude]: [longitude: number, latitude: number],
+  projectCoordinate: (coordinate: [longitude: number, latitude: number]) => {
+    x: number;
+    y: number;
+  },
+) {
+  if (!Number.isFinite(meters) || meters <= 0) {
+    return 0;
+  }
+
+  const center = projectCoordinate([longitude, latitude]);
+  const latitudeRadians = (latitude * Math.PI) / 180;
+  const longitudeScale = Math.max(0.000001, Math.abs(Math.cos(latitudeRadians)));
+  const longitudeOffset = meters / (METERS_PER_DEGREE_AT_EQUATOR * longitudeScale);
+  const edge = projectCoordinate([longitude + longitudeOffset, latitude]);
+
+  return Math.hypot(edge.x - center.x, edge.y - center.y);
+}
+
+function coordinateToHeatLayerMetricPoint([longitude, latitude]: [
+  longitude: number,
+  latitude: number,
+]): HeatLayerMetricPoint {
+  const clampedLatitude = clamp(latitude, -85.05112878, 85.05112878);
+  const latitudeRadians = (clampedLatitude * Math.PI) / 180;
+
+  return {
+    x: longitude * METERS_PER_DEGREE_AT_EQUATOR,
+    y:
+      (Math.log(Math.tan(Math.PI / 4 + latitudeRadians / 2)) *
+        (METERS_PER_DEGREE_AT_EQUATOR * 180)) /
+      Math.PI,
+  };
+}
+
+function heatLayerMetricPointToCoordinate({
+  x,
+  y,
+}: HeatLayerMetricPoint): [longitude: number, latitude: number] {
+  const earthRadius = (METERS_PER_DEGREE_AT_EQUATOR * 180) / Math.PI;
+  const longitude = x / METERS_PER_DEGREE_AT_EQUATOR;
+  const latitude = (Math.atan(Math.exp(y / earthRadius)) * 2 - Math.PI / 2) * (180 / Math.PI);
+
+  return [longitude, latitude];
+}
+
+function getHeatLayerProjectedMetricRadius(
+  map: import("leaflet").Map,
+  coordinate: [longitude: number, latitude: number],
+  radiusMeters: number,
+) {
+  const center = coordinateToHeatLayerMetricPoint(coordinate);
+  const edgeCoordinate = heatLayerMetricPointToCoordinate({
+    x: center.x + radiusMeters,
+    y: center.y,
+  });
+  const centerPoint = map.latLngToContainerPoint(toLeafletLatLng(coordinate));
+  const edgePoint = map.latLngToContainerPoint(toLeafletLatLng(edgeCoordinate));
+
+  return Math.max(1, Math.hypot(edgePoint.x - centerPoint.x, edgePoint.y - centerPoint.y));
+}
+
+function resolveHeatLayerDisplayRadius(
+  radius: Exclude<HeatLayerRadius, { meters: number }>,
+  zoom: number,
+) {
   if (typeof radius === "number") {
     return Math.max(0, radius);
   }
