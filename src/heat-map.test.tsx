@@ -538,6 +538,78 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(decodeURIComponent(surface?.url ?? "")).toContain("<circle");
   });
 
+  test("renders field mode as a domain-anchored scalar raster", async () => {
+    render(
+      <HeatMap
+        domainBounds={[-11, 35, 31, 62]}
+        fieldColumns={12}
+        fieldRows={8}
+        heatmapSurfaceMode="field"
+        mapLabel="Temperature field map"
+        points={[
+          {
+            id: "berlin",
+            latitude: 52.52,
+            longitude: 13.405,
+            metrics: {
+              temperature: 21.5,
+            },
+          },
+          {
+            id: "paris",
+            latitude: 48.8566,
+            longitude: 2.3522,
+            metrics: {
+              temperature: 24.1,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        valueMetric="temperature"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Temperature field map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const layerGroup = leafletMock.getLayerGroups()[0];
+    const surface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
+    );
+
+    expect(surface).toMatchObject({
+      bounds: [
+        [35, -11],
+        [62, 31],
+      ],
+      options: {
+        interactive: false,
+        opacity: 0.84,
+      },
+      type: "imageOverlay",
+    });
+    expect(surface?.url).toContain("data:image/");
+
+    const map = leafletMock.getMaps()[0]!;
+    const initialUrl = surface?.url;
+
+    map.centerLongitude = 12;
+    map.zoom = 5;
+    await act(async () => {
+      map.handlers.get("moveend")?.[0]?.();
+    });
+
+    const changedSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
+    );
+
+    expect(changedSurface?.url).toBe(initialUrl);
+    expect(changedSurface?.bounds).toEqual(surface?.bounds);
+  });
+
   test("projects a data-space heat radius when zoom changes", async () => {
     render(
       <HeatMap

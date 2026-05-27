@@ -62,6 +62,28 @@ export {
   resolveHeatMapPointWeight,
 } from "../heat-core";
 export {
+  createIdwInterpolator,
+  createScalarFieldGrid,
+  getScalarFieldValueAtCoordinate,
+  normalizeScalarFieldValue,
+  resolveScalarFieldValuePoints,
+  type HeatFieldInterpolation,
+  type HeatFieldMaskGeoJson,
+  type HeatFieldOptions,
+  type ScalarFieldGrid,
+  type ScalarFieldInterpolator,
+  type ScalarFieldValuePoint,
+} from "../scalar-field";
+export {
+  createHeatFieldImage,
+  parseHeatFieldColor,
+  resolveHeatFieldColor,
+  type HeatFieldColorStop,
+  type HeatFieldImage,
+  type HeatFieldImageOptions,
+  type HeatFieldParsedColor,
+} from "../scalar-field-render";
+export {
   type HeatMapColorStop,
   type HeatMapDensityIndex,
   type HeatMapDensityIndexOptions,

@@ -10,7 +10,13 @@ export {
   type PointLayerFeature as PointMapLayerFeature,
   type PointLayerProps,
 } from "../point-layer";
-export { HeatLayer, type HeatLayerProps, type HeatLayerSurfaceMode } from "../heat-layer";
+export {
+  HeatFieldLayer,
+  HeatLayer,
+  type HeatFieldLayerProps,
+  type HeatLayerProps,
+  type HeatLayerSurfaceMode,
+} from "../heat-layer";
 export {
   FlowLayer,
   type FlowLayerFeature as FlowMapLayerFeature,

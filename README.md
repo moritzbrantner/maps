@@ -66,10 +66,20 @@ Globe maps use a lightweight vector basemap by default. Use
 
 ## Heat maps
 
-Use `HeatMap` when users need density instead of discrete marker interaction.
-Flat heat maps default to `heatmapSurfaceMode="interpolated"` for a smooth
-temperature-map style surface. Use `heatmapSurfaceMode="data"` when the surface
-should stay anchored to the underlying data locations.
+Use `HeatMap` when users need a colored surface instead of discrete marker
+interaction. The legacy `heatmapSurfaceMode="data"` and
+`heatmapSurfaceMode="interpolated"` modes are point-density style renderers:
+they draw influence around points and are useful for demand, activity, or
+hotspot maps.
+
+Use `heatmapSurfaceMode="field"` for a continuous scalar interpolation surface,
+such as temperature across Europe. Field mode uses inverse distance weighting
+(IDW) over a fixed geographic domain and renders a georeferenced image overlay,
+so panning and zooming do not change the computed value at a longitude/latitude.
+IDW is not kriging or weather model output; for production weather maps, prefer
+already-gridded model data when available. This implementation is intended for
+interpolating scattered measurements.
+
 By default, the heat radius is a fixed data-space radius in meters, so zooming
 changes only how that same geographic footprint projects onto the screen.
 Interpolated heat is sampled across the full viewport, uses an absolute
@@ -91,6 +101,33 @@ export function DemandHeatMap() {
   );
 }
 ```
+
+```tsx
+import { HeatFieldMap, type MapPoint } from "@moritzbrantner/maps";
+
+const stations: MapPoint[] = [
+  { id: "berlin", latitude: 52.52, longitude: 13.405, metrics: { temperature: 21.5 } },
+  { id: "paris", latitude: 48.8566, longitude: 2.3522, metrics: { temperature: 24.1 } },
+];
+
+export function TemperatureField() {
+  return (
+    <HeatFieldMap
+      domainBounds={[-11, 35, 31, 62]}
+      fieldColumns={320}
+      fieldRows={220}
+      fieldValueDomain={[-10, 35]}
+      points={stations}
+      valueMetric="temperature"
+      style={{ height: 420 }}
+    />
+  );
+}
+```
+
+Higher `fieldColumns`/`fieldRows` or smaller `fieldCellSizeMeters` values make
+the field smoother, but increase CPU and memory cost. The default grid is capped
+to a moderate size for interactive use.
 
 ## GeoJSON-first maps
 

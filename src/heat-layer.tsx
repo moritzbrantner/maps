@@ -14,6 +14,16 @@ import {
 import { toLeafletLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
+import {
+  createScalarFieldGrid,
+  type HeatFieldMaskGeoJson,
+  type HeatFieldOptions,
+} from "./scalar-field";
+import {
+  createHeatFieldImage,
+  type HeatFieldColorStop,
+  type HeatFieldImage,
+} from "./scalar-field-render";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
 const DEFAULT_HEAT_LAYER_RADIUS_METERS = 50_000;
@@ -27,7 +37,7 @@ export type HeatLayerWeightAccessor<TProperties = Record<string, unknown>> = (
 
 export type HeatLayerColorStop = readonly [density: number, color: string];
 
-export type HeatLayerSurfaceMode = "data" | "interpolated";
+export type HeatLayerSurfaceMode = "data" | "interpolated" | "field";
 
 export type HeatLayerRadius =
   | number
@@ -66,7 +76,16 @@ export type HeatLayerFeatureCollection = {
 
 export type HeatLayerProps<TProperties = Record<string, unknown>> =
   MapFeatureInteractionProps<HeatLayerFeature> & {
+    domainBounds?: HeatFieldOptions<TProperties>["domainBounds"];
+    domainPaddingRatio?: HeatFieldOptions<TProperties>["domainPaddingRatio"];
+    fieldCellSizeMeters?: HeatFieldOptions<TProperties>["fieldCellSizeMeters"];
+    fieldColorRamp?: readonly HeatFieldColorStop[];
+    fieldColumns?: HeatFieldOptions<TProperties>["fieldColumns"];
+    fieldOpacity?: HeatFieldOptions<TProperties>["opacity"];
+    fieldRows?: HeatFieldOptions<TProperties>["fieldRows"];
+    fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
     filterPoint?: MapPointFilter<TProperties>;
+    getValue?: HeatFieldOptions<TProperties>["getValue"];
     getWeight?: HeatLayerWeightAccessor<TProperties>;
     heatmapAggregationMaxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
     heatmapAggregationMinZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
@@ -77,9 +96,16 @@ export type HeatLayerProps<TProperties = Record<string, unknown>> =
     heatmapSurfaceMode?: HeatLayerSurfaceMode;
     heatmapOpacity?: number;
     heatmapRadius?: HeatLayerRadius;
+    interpolationEpsilonMeters?: HeatFieldOptions<TProperties>["interpolationEpsilonMeters"];
+    interpolationExtrapolate?: HeatFieldOptions<TProperties>["interpolationExtrapolate"];
+    interpolationK?: HeatFieldOptions<TProperties>["interpolationK"];
+    interpolationMaxDistanceMeters?: HeatFieldOptions<TProperties>["interpolationMaxDistanceMeters"];
+    interpolationPower?: HeatFieldOptions<TProperties>["interpolationPower"];
     layerId?: string;
+    maskGeoJson?: HeatFieldMaskGeoJson | null;
     maxWeight?: number;
     points: readonly MapPoint<TProperties>[];
+    valueMetric?: string;
     weightMetric?: string;
   };
 
@@ -93,7 +119,16 @@ const defaultHeatLayerColorRamp = [
 ] as const satisfies readonly HeatLayerColorStop[];
 
 export function HeatLayer<TProperties = Record<string, unknown>>({
+  domainBounds,
+  domainPaddingRatio,
+  fieldCellSizeMeters,
+  fieldColorRamp,
+  fieldColumns,
+  fieldOpacity,
+  fieldRows,
+  fieldValueDomain,
   filterPoint,
+  getValue,
   getWeight,
   heatmapAggregationMaxZoom,
   heatmapAggregationMinZoom,
@@ -106,9 +141,16 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     meters: DEFAULT_HEAT_LAYER_RADIUS_METERS,
   },
   heatmapSurfaceMode = "interpolated",
+  interpolationEpsilonMeters,
+  interpolationExtrapolate,
+  interpolationK,
+  interpolationMaxDistanceMeters,
+  interpolationPower,
   layerId,
+  maskGeoJson,
   maxWeight,
   points,
+  valueMetric,
   weightMetric,
 }: HeatLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
@@ -125,6 +167,60 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       }),
     [deferredPoints, filterPoint, getWeight, maxWeight, weightMetric],
   );
+  const fieldGrid = useMemo(
+    () =>
+      heatmapSurfaceMode === "field"
+        ? createScalarFieldGrid(deferredPoints, {
+            domainBounds,
+            domainPaddingRatio,
+            fieldCellSizeMeters,
+            fieldColumns,
+            fieldRows,
+            filterPoint,
+            getValue: getValue ?? getWeight,
+            interpolationEpsilonMeters,
+            interpolationExtrapolate,
+            interpolationK,
+            interpolationMaxDistanceMeters,
+            interpolationPower,
+            maskGeoJson,
+            valueDomain: fieldValueDomain,
+            valueMetric: valueMetric ?? weightMetric,
+          })
+        : null,
+    [
+      deferredPoints,
+      domainBounds,
+      domainPaddingRatio,
+      fieldCellSizeMeters,
+      fieldColumns,
+      fieldRows,
+      fieldValueDomain,
+      filterPoint,
+      getValue,
+      getWeight,
+      heatmapSurfaceMode,
+      interpolationEpsilonMeters,
+      interpolationExtrapolate,
+      interpolationK,
+      interpolationMaxDistanceMeters,
+      interpolationPower,
+      maskGeoJson,
+      valueMetric,
+      weightMetric,
+    ],
+  );
+  const fieldImage = useMemo(
+    () =>
+      fieldGrid
+        ? createHeatFieldImage(fieldGrid, {
+            colorRamp: fieldColorRamp,
+            opacity: fieldOpacity ?? heatmapOpacity,
+            valueDomain: fieldValueDomain,
+          })
+        : null,
+    [fieldColorRamp, fieldGrid, fieldOpacity, fieldValueDomain, heatmapOpacity],
+  );
   const renderVersion =
     heatmapAggregationMaxZoom ?? heatmapAggregationMinZoom ?? heatmapAggregationRadius ?? null;
 
@@ -137,6 +233,16 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       layer.clearLayers();
 
       if (map.getZoom() > heatmapMaxZoom) {
+        return;
+      }
+
+      if (heatmapSurfaceMode === "field") {
+        renderHeatLayerFieldSurface({
+          image: fieldImage,
+          layer,
+          leaflet,
+          opacity: fieldOpacity ?? heatmapOpacity,
+        });
         return;
       }
 
@@ -157,6 +263,8 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       });
     });
   }, [
+    fieldImage,
+    fieldOpacity,
     heatIndex,
     heatmapColorRamp,
     heatmapIntensity,
@@ -220,6 +328,17 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         : null}
     </>
   );
+}
+
+export type HeatFieldLayerProps<TProperties = Record<string, unknown>> = Omit<
+  HeatLayerProps<TProperties>,
+  "heatmapSurfaceMode"
+>;
+
+export function HeatFieldLayer<TProperties = Record<string, unknown>>(
+  props: HeatFieldLayerProps<TProperties>,
+) {
+  return <HeatLayer {...props} heatmapSurfaceMode="field" />;
 }
 
 export function createHeatLayerDensityIndex<TProperties = Record<string, unknown>>(
@@ -339,6 +458,39 @@ function createHeatLayerSourceIndex<TProperties = Record<string, unknown>>(
     maxWeight: effectiveMaxWeight,
     pointCount: weightedPoints.length,
   };
+}
+
+function renderHeatLayerFieldSurface({
+  image,
+  layer,
+  leaflet,
+  opacity,
+}: {
+  image: HeatFieldImage | null;
+  layer: import("leaflet").LayerGroup;
+  leaflet: typeof import("leaflet");
+  opacity: number;
+}) {
+  if (!image) {
+    return;
+  }
+
+  const [west, south, east, north] = image.bounds;
+
+  leaflet
+    .imageOverlay(
+      image.url,
+      [
+        [south, west],
+        [north, east],
+      ],
+      {
+        className: "mb-maps__heat-surface mb-maps__heat-surface--field",
+        interactive: false,
+        opacity: clamp(opacity, 0, 1),
+      },
+    )
+    .addTo(layer);
 }
 
 function renderHeatLayerSurface({

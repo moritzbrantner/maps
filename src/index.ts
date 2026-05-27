@@ -47,7 +47,35 @@ export {
   type PointLayerFeature as PointMapLayerFeature,
   type PointLayerProps,
 } from "./point-layer";
-export { HeatLayer, type HeatLayerProps, type HeatLayerSurfaceMode } from "./heat-layer";
+export {
+  HeatFieldLayer,
+  HeatLayer,
+  type HeatFieldLayerProps,
+  type HeatLayerProps,
+  type HeatLayerSurfaceMode,
+} from "./heat-layer";
+export {
+  createIdwInterpolator,
+  createScalarFieldGrid,
+  getScalarFieldValueAtCoordinate,
+  normalizeScalarFieldValue,
+  resolveScalarFieldValuePoints,
+  type HeatFieldInterpolation,
+  type HeatFieldMaskGeoJson,
+  type HeatFieldOptions,
+  type ScalarFieldGrid,
+  type ScalarFieldInterpolator,
+  type ScalarFieldValuePoint,
+} from "./scalar-field";
+export {
+  createHeatFieldImage,
+  parseHeatFieldColor,
+  resolveHeatFieldColor,
+  type HeatFieldColorStop,
+  type HeatFieldImage,
+  type HeatFieldImageOptions,
+  type HeatFieldParsedColor,
+} from "./scalar-field-render";
 export {
   FlowLayer,
   type FlowLayerFeature as FlowMapLayerFeature,
@@ -112,7 +140,9 @@ export {
   type BeeLineMeasurementLayerProps,
 } from "./measurement-map-layer";
 export {
+  HeatFieldMap,
   HeatMap,
+  FlatHeatFieldMap,
   createHeatMapDensityIndex,
   createHeatMapFeatureCollection,
   getHeatMapMaxWeight,
@@ -123,6 +153,8 @@ export {
   type HeatMapFeature,
   type HeatMapFeatureCollection,
   type HeatMapFeatureProperties,
+  type FlatHeatFieldMapProps,
+  type HeatFieldMapProps,
   type HeatMapProps,
   type HeatMapRadius,
   type HeatMapSurfaceMode,

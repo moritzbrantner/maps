@@ -34,6 +34,7 @@ export {
   type MapFlow,
 } from "../flow-map";
 export {
+  FlatHeatFieldMap,
   FlatHeatMap,
   createHeatMapDensityIndex,
   createHeatMapFeatureCollection,
@@ -45,6 +46,7 @@ export {
   type HeatMapFeature,
   type HeatMapFeatureCollection,
   type HeatMapFeatureProperties,
+  type FlatHeatFieldMapProps,
   type HeatMapProps,
   type HeatMapRadius,
   type HeatMapSurfaceMode,

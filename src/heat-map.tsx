@@ -58,6 +58,16 @@ import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
+import {
+  createScalarFieldGrid,
+  type HeatFieldMaskGeoJson,
+  type HeatFieldOptions,
+} from "./scalar-field";
+import {
+  createHeatFieldImage,
+  type HeatFieldColorStop,
+  type HeatFieldImage,
+} from "./scalar-field-render";
 import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
@@ -131,6 +141,14 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
   HeatMapWeightOptions<TProperties> &
     MapMeasurementProps & {
     className?: string;
+    domainBounds?: HeatFieldOptions<TProperties>["domainBounds"];
+    domainPaddingRatio?: HeatFieldOptions<TProperties>["domainPaddingRatio"];
+    fieldCellSizeMeters?: HeatFieldOptions<TProperties>["fieldCellSizeMeters"];
+    fieldColorRamp?: readonly HeatFieldColorStop[];
+    fieldColumns?: HeatFieldOptions<TProperties>["fieldColumns"];
+    fieldOpacity?: HeatFieldOptions<TProperties>["opacity"];
+    fieldRows?: HeatFieldOptions<TProperties>["fieldRows"];
+    fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
     fitBoundsPadding?: number;
     fitToData?: boolean;
     geoJson?: GeoJsonMapSource<TProperties>;
@@ -148,15 +166,23 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
     heatmapOpacity?: number;
     heatmapRadius?: HeatMapRadius;
     heatmapSurfaceMode?: HeatMapSurfaceMode;
+    getValue?: HeatFieldOptions<TProperties>["getValue"];
     initialViewState?: MapViewState;
+    interpolationEpsilonMeters?: HeatFieldOptions<TProperties>["interpolationEpsilonMeters"];
+    interpolationExtrapolate?: HeatFieldOptions<TProperties>["interpolationExtrapolate"];
+    interpolationK?: HeatFieldOptions<TProperties>["interpolationK"];
+    interpolationMaxDistanceMeters?: HeatFieldOptions<TProperties>["interpolationMaxDistanceMeters"];
+    interpolationPower?: HeatFieldOptions<TProperties>["interpolationPower"];
     mapDisplay?: MapDisplayMode;
     mapLabel?: string;
     mapStyle?: string | RasterMapStyle;
+    maskGeoJson?: HeatFieldMaskGeoJson | null;
     onMapControllerReady?: (controller: MapSurfaceController) => void;
     onMapReady?: (map: LeafletMap) => void;
     points?: readonly MapPoint<TProperties>[];
     showAttributionControl?: boolean;
     style?: React.CSSProperties;
+    valueMetric?: string;
   } & MapViewportProps;
 
 const defaultHeatMapColorRamp = [
@@ -250,14 +276,34 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
   );
 }
 
+export type HeatFieldMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = Omit<
+  HeatMapProps<TProperties>,
+  "heatmapSurfaceMode"
+>;
+
+export function HeatFieldMap<TProperties extends Record<string, unknown> = Record<string, unknown>>(
+  props: HeatFieldMapProps<TProperties>,
+) {
+  return <HeatMap {...props} heatmapSurfaceMode="field" />;
+}
+
 export function FlatHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
+  domainBounds,
+  domainPaddingRatio,
+  fieldCellSizeMeters,
+  fieldColorRamp,
+  fieldColumns,
+  fieldOpacity,
+  fieldRows,
+  fieldValueDomain,
   filterPoint,
   fitBoundsPadding = 56,
   fitToData = true,
   heatmapAggregationMaxZoom,
   heatmapAggregationMinZoom,
   heatmapAggregationRadius = 56,
+  getValue,
   getWeight,
   heatmapColorRamp = defaultHeatMapColorRamp,
   heatmapIntensity = 1,
@@ -266,10 +312,17 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   heatmapRadius = {
     meters: DEFAULT_HEAT_MAP_RADIUS_METERS,
   },
+  heatmapSurfaceMode = "interpolated",
   initialViewState,
+  interpolationEpsilonMeters,
+  interpolationExtrapolate,
+  interpolationK,
+  interpolationMaxDistanceMeters,
+  interpolationPower,
   mapDisplay: _mapDisplay,
   mapLabel = "Interactive heat map",
   mapStyle = defaultRasterMapStyle,
+  maskGeoJson,
   measurementDistanceFormat,
   measurementDraftLineColor,
   measurementLineColor,
@@ -283,6 +336,7 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
   points = [],
   showAttributionControl = true,
   style,
+  valueMetric,
   weightMetric,
 }: HeatMapProps<TProperties>) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -315,6 +369,60 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
       weightMetric,
     ],
   );
+  const fieldGrid = useMemo(
+    () =>
+      heatmapSurfaceMode === "field"
+        ? createScalarFieldGrid(deferredPoints, {
+            domainBounds,
+            domainPaddingRatio,
+            fieldCellSizeMeters,
+            fieldColumns,
+            fieldRows,
+            filterPoint,
+            getValue: getValue ?? getWeight,
+            interpolationEpsilonMeters,
+            interpolationExtrapolate,
+            interpolationK,
+            interpolationMaxDistanceMeters,
+            interpolationPower,
+            maskGeoJson,
+            valueDomain: fieldValueDomain,
+            valueMetric: valueMetric ?? weightMetric,
+          })
+        : null,
+    [
+      deferredPoints,
+      domainBounds,
+      domainPaddingRatio,
+      fieldCellSizeMeters,
+      fieldColumns,
+      fieldRows,
+      fieldValueDomain,
+      filterPoint,
+      getValue,
+      getWeight,
+      heatmapSurfaceMode,
+      interpolationEpsilonMeters,
+      interpolationExtrapolate,
+      interpolationK,
+      interpolationMaxDistanceMeters,
+      interpolationPower,
+      maskGeoJson,
+      valueMetric,
+      weightMetric,
+    ],
+  );
+  const fieldImage = useMemo(
+    () =>
+      fieldGrid
+        ? createHeatFieldImage(fieldGrid, {
+            colorRamp: fieldColorRamp,
+            opacity: fieldOpacity ?? heatmapOpacity,
+            valueDomain: fieldValueDomain,
+          })
+        : null,
+    [fieldColorRamp, fieldGrid, fieldOpacity, fieldValueDomain, heatmapOpacity],
+  );
   const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
     layerRef: measurementLayerRef,
     leafletRef,
@@ -335,6 +443,18 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
     const leaflet = leafletRef.current;
 
     if (!map || !heatLayer || !leaflet) {
+      return;
+    }
+
+    if (heatmapSurfaceMode === "field") {
+      renderHeatMapFieldOverlay({
+        image: fieldImage,
+        layer: heatLayer,
+        leaflet,
+        map,
+        maxZoom: heatmapMaxZoom,
+        opacity: fieldOpacity ?? heatmapOpacity,
+      });
       return;
     }
 
@@ -452,7 +572,19 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
     }
 
     syncSource();
-  }, [deferredPoints, densityIndex, fitBoundsPadding, fitToData, initialViewState, isMeasuring, syncSource]);
+  }, [
+    deferredPoints,
+    densityIndex,
+    fieldImage,
+    fieldOpacity,
+    fitBoundsPadding,
+    fitToData,
+    heatmapOpacity,
+    heatmapSurfaceMode,
+    initialViewState,
+    isMeasuring,
+    syncSource,
+  ]);
 
   return (
     <div
@@ -468,6 +600,16 @@ export function FlatHeatMap<TProperties extends Record<string, unknown> = Record
       <div ref={containerRef} className="mb-maps__canvas" />
     </div>
   );
+}
+
+export type FlatHeatFieldMapProps<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = Omit<HeatMapProps<TProperties>, "heatmapSurfaceMode" | "mapDisplay">;
+
+export function FlatHeatFieldMap<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>(props: FlatHeatFieldMapProps<TProperties>) {
+  return <FlatHeatMap {...props} heatmapSurfaceMode="field" />;
 }
 
 export function GlobeHeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
@@ -818,6 +960,45 @@ export function resolveHeatMapPointWeight<TProperties extends Record<string, unk
   }
 
   return Math.max(0, rawWeight);
+}
+
+function renderHeatMapFieldOverlay({
+  image,
+  layer,
+  leaflet,
+  map,
+  maxZoom,
+  opacity,
+}: {
+  image: HeatFieldImage | null;
+  layer: LayerGroup;
+  leaflet: typeof import("leaflet");
+  map: LeafletMap;
+  maxZoom: number;
+  opacity: number;
+}) {
+  layer.clearLayers();
+
+  if (!image || map.getZoom() > maxZoom) {
+    return;
+  }
+
+  const [west, south, east, north] = image.bounds;
+
+  leaflet
+    .imageOverlay(
+      image.url,
+      [
+        [south, west],
+        [north, east],
+      ],
+      {
+        className: "mb-maps__heat-surface mb-maps__heat-surface--field",
+        interactive: false,
+        opacity: clamp(opacity, 0, 1),
+      },
+    )
+    .addTo(layer);
 }
 
 function renderHeatOverlay({
