@@ -73,6 +73,7 @@ for (const view of [
   "Heat",
   "Flows",
   "Composed",
+  "Interpolation",
   "GeoJSON",
   "Editor",
 ] as const) {
@@ -108,6 +109,21 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
 
   expect(await viewportValue.textContent()).toBe(initialViewport);
   await expect(page.locator(".demo-stage")).toHaveScreenshot("timeline-desktop.png");
+});
+
+test("Interpolation view exposes algorithm and keyframe controls", async ({ page }) => {
+  await openView(page, "Interpolation");
+
+  await expect(page.getByLabel("GeoJSON interpolation preview")).toBeVisible();
+  await page.getByLabel("Algorithm").selectOption("centroid-radial");
+  await expect(page.getByText("Samples polygon rings radially")).toBeVisible();
+
+  await page.getByRole("button", { name: "End" }).click();
+  await page.getByLabel("Coordinate handle").selectOption("1");
+  await page.getByLabel("Longitude").fill("-2.1");
+  await expect(page.getByLabel("Longitude")).toHaveValue("-2.1");
+  await page.getByLabel("Interpolation progress").fill("74");
+  await expect(page.getByText("74%")).toBeVisible();
 });
 
 test("Flows view exposes direction, volume legend, and hover context", async ({ page }) => {

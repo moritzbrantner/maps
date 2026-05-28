@@ -499,14 +499,183 @@ select {
   box-shadow: 0 10px 28px rgb(15 23 42 / 0.14);
 }
 
+.demo-interpolation-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  overflow: hidden;
+  min-height: 620px;
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.demo-interpolation-workbench__map {
+  position: relative;
+  min-width: 0;
+}
+
+.demo-interpolation-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  border-left: 1px solid #d5dde7;
+  background: #f8fafc;
+  padding: 16px;
+}
+
+.demo-interpolation-note {
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  color: #526170;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.demo-interpolation-range {
+  display: grid;
+  gap: 10px;
+}
+
+.demo-interpolation-range span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: #101827;
+  font-size: 0.9rem;
+}
+
+.demo-interpolation-range em {
+  color: #526170;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.demo-interpolation-range input {
+  width: 100%;
+  accent-color: #be123c;
+}
+
+.demo-interpolation-keyframes,
+.demo-coordinate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.demo-coordinate-grid label {
+  display: grid;
+  gap: 6px;
+  color: #526170;
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.demo-coordinate-grid input {
+  width: 100%;
+  border: 1px solid #c7d2df;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 9px;
+  color: #101827;
+  font: inherit;
+}
+
+.demo-interpolation-facts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.demo-interpolation-facts div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e4eaf1;
+}
+
+.demo-interpolation-facts div:last-child {
+  border-bottom: 0;
+}
+
+.demo-interpolation-facts dt {
+  color: #526170;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.demo-interpolation-facts dd {
+  margin: 0;
+  color: #101827;
+  font-weight: 800;
+}
+
+.demo-interpolation-legend {
+  position: absolute;
+  z-index: 600;
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.demo-interpolation-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #d5dde7;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.94);
+  padding: 7px 10px;
+  color: #101827;
+  font-size: 0.78rem;
+  font-weight: 760;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 0.14);
+}
+
+.demo-interpolation-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.demo-interpolation-legend__start {
+  background: #475569;
+}
+
+.demo-interpolation-legend__preview {
+  background: #be123c;
+}
+
+.demo-interpolation-legend__end {
+  background: #d97706;
+}
+
 @media (max-width: 960px) {
   .demo-shell {
     padding: 16px;
   }
 
   .demo-toolbar,
-  .demo-stage {
+  .demo-stage,
+  .demo-interpolation-workbench {
     grid-template-columns: 1fr;
+  }
+
+  .demo-interpolation-panel {
+    border-top: 1px solid #d5dde7;
+    border-left: 0;
   }
 
   .demo-toolbar {
