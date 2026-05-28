@@ -59,7 +59,8 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ page }) => {
   const consoleErrors = await page.evaluate(async () => {
-    const getter = (window as unknown as { __getConsoleErrors?: () => string[] }).__getConsoleErrors;
+    const getter = (window as unknown as { __getConsoleErrors?: () => string[] })
+      .__getConsoleErrors;
 
     return getter?.() ?? [];
   });
@@ -88,7 +89,10 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
   await page.getByRole("button", { name: "Pause" }).click();
   await expect(page.getByLabel("European logistics timeline")).toBeVisible();
 
-  const viewportValue = page.locator("aside dl > div").filter({ hasText: "Viewport" }).locator("dd");
+  const viewportValue = page
+    .locator("aside dl > div")
+    .filter({ hasText: "Viewport" })
+    .locator("dd");
   const initialViewport = await viewportValue.textContent();
   const slider = page.getByRole("slider", { name: "Shipment timeline" });
 
@@ -114,16 +118,22 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
 test("Interpolation view exposes algorithm and keyframe controls", async ({ page }) => {
   await openView(page, "Interpolation");
 
+  const interpolationPanel = page.locator(".demo-interpolation-panel");
+
   await expect(page.getByLabel("GeoJSON interpolation preview")).toBeVisible();
-  await page.getByLabel("Algorithm").selectOption("centroid-radial");
+  await interpolationPanel.getByLabel("Example").selectOption("multipolygon-added-part");
+  await expect(page.getByText("polygon count is incompatible")).toBeVisible();
+  await interpolationPanel.getByLabel("Algorithm").selectOption("centroid-radial");
   await expect(page.getByText("Samples polygon rings radially")).toBeVisible();
 
   await page.getByRole("button", { name: "End" }).click();
-  await page.getByLabel("Coordinate handle").selectOption("1");
-  await page.getByLabel("Longitude").fill("-2.1");
-  await expect(page.getByLabel("Longitude")).toHaveValue("-2.1");
-  await page.getByLabel("Interpolation progress").fill("74");
+  await interpolationPanel.getByLabel("Coordinate handle").selectOption("1");
+  await interpolationPanel.getByLabel("Longitude").fill("-2.1");
+  await expect(interpolationPanel.getByLabel("Longitude")).toHaveValue("-2.1");
+  await interpolationPanel.getByLabel("Interpolation progress").fill("74");
   await expect(page.getByText("74%")).toBeVisible();
+  await interpolationPanel.getByLabel("Example").selectOption("type-change-fallback");
+  await expect(interpolationPanel.getByText("The geometry type changes")).toBeVisible();
 });
 
 test("Flows view exposes direction, volume legend, and hover context", async ({ page }) => {
@@ -204,7 +214,9 @@ test("Measurement mode creates a visible measurement", async ({ page }) => {
 test("Editor mode controls update without visual breakage", async ({ page }) => {
   await openView(page, "Editor");
   await page.getByRole("button", { name: "Polygon" }).click();
-  await expect(page.locator(".demo-editor-facts").filter({ hasText: "draw-polygon" })).toBeVisible();
+  await expect(
+    page.locator(".demo-editor-facts").filter({ hasText: "draw-polygon" }),
+  ).toBeVisible();
   await expect(page.locator(".demo-stage")).toHaveScreenshot("editor-draw-polygon-desktop.png");
 });
 
@@ -338,11 +350,12 @@ function decodePngRgba(png: Buffer) {
 
     for (let x = 0; x < sourceStride; x += 1) {
       const raw = inflated[sourceOffset + x] ?? 0;
-      const left = x >= sourceBytesPerPixel ? sourceData[rowStart + x - sourceBytesPerPixel] ?? 0 : 0;
-      const up = y > 0 ? sourceData[previousRowStart + x] ?? 0 : 0;
+      const left =
+        x >= sourceBytesPerPixel ? (sourceData[rowStart + x - sourceBytesPerPixel] ?? 0) : 0;
+      const up = y > 0 ? (sourceData[previousRowStart + x] ?? 0) : 0;
       const upLeft =
         y > 0 && x >= sourceBytesPerPixel
-          ? sourceData[previousRowStart + x - sourceBytesPerPixel] ?? 0
+          ? (sourceData[previousRowStart + x - sourceBytesPerPixel] ?? 0)
           : 0;
 
       sourceData[rowStart + x] = unfilterByte(filter, raw, left, up, upLeft);
@@ -358,7 +371,7 @@ function decodePngRgba(png: Buffer) {
     data[targetIndex] = sourceData[sourceIndex] ?? 0;
     data[targetIndex + 1] = sourceData[sourceIndex + 1] ?? 0;
     data[targetIndex + 2] = sourceData[sourceIndex + 2] ?? 0;
-    data[targetIndex + 3] = colorType === 6 ? sourceData[sourceIndex + 3] ?? 0 : 255;
+    data[targetIndex + 3] = colorType === 6 ? (sourceData[sourceIndex + 3] ?? 0) : 255;
   }
 
   return { data, height, width };

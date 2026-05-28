@@ -108,10 +108,14 @@ type DemoInterpolationGeometryPair = Record<
   DemoInterpolationKeyframeId,
   TemporalGeoJsonSupportedGeometry
 >;
-type DemoInterpolationGeometrySet = Record<
-  DemoInterpolationGeometryType,
-  DemoInterpolationGeometryPair
->;
+type DemoInterpolationExample = {
+  defaultStrategy: TemporalGeoJsonInterpolationStrategy;
+  description: string;
+  geometryType: DemoInterpolationGeometryType;
+  id: string;
+  label: string;
+  pair: DemoInterpolationGeometryPair;
+};
 type DemoInterpolationHandle = {
   label: string;
   path: number[];
@@ -677,17 +681,7 @@ const demoInterpolationStrategies: Array<{
   },
 ];
 
-const demoInterpolationGeometryTypes: Array<{
-  id: DemoInterpolationGeometryType;
-  label: string;
-}> = [
-  { id: "MultiPolygon", label: "MultiPolygon" },
-  { id: "Polygon", label: "Polygon" },
-  { id: "MultiLineString", label: "MultiLineString" },
-  { id: "LineString", label: "LineString" },
-  { id: "MultiPoint", label: "MultiPoint" },
-  { id: "Point", label: "Point" },
-];
+const demoInterpolationExamples = createDemoInterpolationExamples();
 
 const editorModes: Array<{ id: GeoJsonEditMode; label: string }> = [
   { id: "select", label: "Select" },
@@ -1951,16 +1945,22 @@ function findPreviousDemoTimelineFrameIndex(frames: Array<{ time: number }>, act
 }
 
 function GeoJsonInterpolationWorkbench() {
-  const [geometryType, setGeometryType] = useState<DemoInterpolationGeometryType>("MultiPolygon");
-  const [strategy, setStrategy] = useState<TemporalGeoJsonInterpolationStrategy>("vertex-union");
+  const [exampleId, setExampleId] = useState(demoInterpolationExamples[0]!.id);
+  const example =
+    demoInterpolationExamples.find((item) => item.id === exampleId) ??
+    demoInterpolationExamples[0]!;
+  const geometryType = example.geometryType;
+  const [strategy, setStrategy] = useState<TemporalGeoJsonInterpolationStrategy>(
+    demoInterpolationExamples[0]!.defaultStrategy,
+  );
   const [progress, setProgress] = useState(50);
   const [selectedKeyframe, setSelectedKeyframe] = useState<DemoInterpolationKeyframeId>("end");
   const [selectedHandleIndex, setSelectedHandleIndex] = useState(0);
-  const [geometries, setGeometries] = useState<DemoInterpolationGeometrySet>(() =>
-    createDemoInterpolationGeometries(),
+  const [geometries, setGeometries] = useState<Record<string, DemoInterpolationGeometryPair>>(() =>
+    createDemoInterpolationGeometryExamples(),
   );
-  const geometryPair = geometries[geometryType];
-  const handles = getDemoInterpolationHandles(geometryType);
+  const geometryPair = geometries[example.id] ?? example.pair;
+  const handles = getDemoInterpolationHandles(geometryPair[selectedKeyframe]);
   const selectedHandle = handles[Math.min(selectedHandleIndex, handles.length - 1)]!;
   const selectedPosition = getDemoInterpolationPosition(
     geometryPair[selectedKeyframe],
@@ -2016,9 +2016,13 @@ function GeoJsonInterpolationWorkbench() {
     type: "FeatureCollection",
   });
   const strategyDetails = demoInterpolationStrategies.find((item) => item.id === strategy);
-  const setGeometryTypeFromControl = (nextType: DemoInterpolationGeometryType) => {
-    setGeometryType(nextType);
-    setStrategy(getDefaultDemoInterpolationStrategy(nextType));
+  const setExampleFromControl = (nextExampleId: string) => {
+    const nextExample =
+      demoInterpolationExamples.find((item) => item.id === nextExampleId) ??
+      demoInterpolationExamples[0]!;
+
+    setExampleId(nextExample.id);
+    setStrategy(nextExample.defaultStrategy);
     setSelectedHandleIndex(0);
   };
   const updateSelectedPosition = (axis: 0 | 1, value: number) => {
@@ -2031,10 +2035,10 @@ function GeoJsonInterpolationWorkbench() {
 
     setGeometries((current) => ({
       ...current,
-      [geometryType]: {
-        ...current[geometryType],
+      [example.id]: {
+        ...current[example.id],
         [selectedKeyframe]: setDemoInterpolationPosition(
-          current[geometryType][selectedKeyframe],
+          current[example.id]![selectedKeyframe],
           selectedHandle.path,
           nextPosition,
         ),
@@ -2044,9 +2048,9 @@ function GeoJsonInterpolationWorkbench() {
   const resetCurrentGeometry = () => {
     setGeometries((current) => ({
       ...current,
-      [geometryType]: createDemoInterpolationGeometryPair(geometryType),
+      [example.id]: example.pair,
     }));
-    setStrategy(getDefaultDemoInterpolationStrategy(geometryType));
+    setStrategy(example.defaultStrategy);
     setProgress(50);
     setSelectedHandleIndex(0);
   };
@@ -2110,14 +2114,12 @@ function GeoJsonInterpolationWorkbench() {
         </div>
 
         <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-          <span>GeoJSON object</span>
+          <span>Example</span>
           <NativeSelect
-            value={geometryType}
-            onChange={(event) =>
-              setGeometryTypeFromControl(event.target.value as DemoInterpolationGeometryType)
-            }
+            value={example.id}
+            onChange={(event) => setExampleFromControl(event.target.value)}
           >
-            {demoInterpolationGeometryTypes.map((item) => (
+            {demoInterpolationExamples.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.label}
               </option>
@@ -2142,7 +2144,12 @@ function GeoJsonInterpolationWorkbench() {
         </label>
 
         <div className="demo-interpolation-note">
-          {strategyDetails?.description ?? "Uses the selected temporal GeoJSON interpolation mode."}
+          <strong>{geometryType}</strong>
+          <span>{example.description}</span>
+          <span>
+            {strategyDetails?.description ??
+              "Uses the selected temporal GeoJSON interpolation mode."}
+          </span>
         </div>
 
         <label className="demo-interpolation-range">
@@ -2221,12 +2228,24 @@ function GeoJsonInterpolationWorkbench() {
             <dd>{previewGeometry.type}</dd>
           </div>
           <div>
-            <dt>Coordinates</dt>
+            <dt>Preview coordinates</dt>
             <dd>{countDemoGeometryPositions(previewGeometry)}</dd>
           </div>
           <div>
             <dt>Parts</dt>
             <dd>{countDemoGeometryParts(previewGeometry)}</dd>
+          </div>
+          <div>
+            <dt>Start</dt>
+            <dd>
+              {geometryPair.start.type} / {countDemoGeometryPositions(geometryPair.start)}
+            </dd>
+          </div>
+          <div>
+            <dt>End</dt>
+            <dd>
+              {geometryPair.end.type} / {countDemoGeometryPositions(geometryPair.end)}
+            </dd>
           </div>
         </dl>
       </div>
@@ -2287,15 +2306,122 @@ function getDemoInterpolationLayerStyle(
   };
 }
 
-function createDemoInterpolationGeometries(): DemoInterpolationGeometrySet {
-  return {
-    LineString: createDemoInterpolationGeometryPair("LineString"),
-    MultiLineString: createDemoInterpolationGeometryPair("MultiLineString"),
-    MultiPoint: createDemoInterpolationGeometryPair("MultiPoint"),
-    MultiPolygon: createDemoInterpolationGeometryPair("MultiPolygon"),
-    Point: createDemoInterpolationGeometryPair("Point"),
-    Polygon: createDemoInterpolationGeometryPair("Polygon"),
-  };
+function createDemoInterpolationGeometryExamples() {
+  return Object.fromEntries(
+    demoInterpolationExamples.map((example) => [example.id, example.pair]),
+  ) as Record<string, DemoInterpolationGeometryPair>;
+}
+
+function createDemoInterpolationExamples(): DemoInterpolationExample[] {
+  return [
+    {
+      defaultStrategy: "vertex-union",
+      description: "Two service areas both move and skew while keeping matching polygon counts.",
+      geometryType: "MultiPolygon",
+      id: "multipolygon-two-islands",
+      label: "MultiPolygon: two moving areas",
+      pair: createDemoInterpolationGeometryPair("MultiPolygon"),
+    },
+    {
+      defaultStrategy: "vertex-union",
+      description:
+        "The next keyframe adds a second polygon. Algorithms fall back to holding the previous MultiPolygon because the polygon count is incompatible.",
+      geometryType: "MultiPolygon",
+      id: "multipolygon-added-part",
+      label: "MultiPolygon: added part fallback",
+      pair: {
+        end: createDemoInterpolationGeometryPair("MultiPolygon").end,
+        start: {
+          coordinates: [
+            [
+              [
+                [-9.6, 37.4],
+                [-3.0, 37.7],
+                [-3.3, 41.2],
+                [-9.4, 41.0],
+                [-9.6, 37.4],
+              ],
+            ],
+          ],
+          type: "MultiPolygon",
+        },
+      },
+    },
+    {
+      defaultStrategy: "vertex-union",
+      description:
+        "The west polygon has an interior ring in both keyframes, so the hole interpolates with the shell.",
+      geometryType: "MultiPolygon",
+      id: "multipolygon-hole",
+      label: "MultiPolygon: hole",
+      pair: createDemoMultiPolygonHolePair(),
+    },
+    {
+      defaultStrategy: "centroid-radial",
+      description:
+        "A polygon changes from a simple square into a concave outline with extra vertices.",
+      geometryType: "Polygon",
+      id: "polygon-concave-extra-vertices",
+      label: "Polygon: concave extra vertices",
+      pair: createDemoConcavePolygonPair(),
+    },
+    {
+      defaultStrategy: "resample",
+      description:
+        "A route changes point density between keyframes; resample creates matching intermediate points.",
+      geometryType: "LineString",
+      id: "line-density-change",
+      label: "LineString: density change",
+      pair: createDemoLineDensityPair(),
+    },
+    {
+      defaultStrategy: "resample",
+      description: "Two branch lines stay as two parts, but each branch bends and changes length.",
+      geometryType: "MultiLineString",
+      id: "multiline-branches",
+      label: "MultiLineString: branches",
+      pair: createDemoInterpolationGeometryPair("MultiLineString"),
+    },
+    {
+      defaultStrategy: "compatible",
+      description:
+        "Three points move one-for-one. Compatible interpolation is enough when counts match.",
+      geometryType: "MultiPoint",
+      id: "multipoint-compatible",
+      label: "MultiPoint: compatible",
+      pair: createDemoInterpolationGeometryPair("MultiPoint"),
+    },
+    {
+      defaultStrategy: "compatible",
+      description:
+        "The next MultiPoint has fewer points, so compatible mode demonstrates the hold fallback.",
+      geometryType: "MultiPoint",
+      id: "multipoint-count-mismatch",
+      label: "MultiPoint: count mismatch",
+      pair: createDemoMultiPointMismatchPair(),
+    },
+    {
+      defaultStrategy: "resample",
+      description:
+        "A point follows the simplest possible geometry interpolation path between two coordinates.",
+      geometryType: "Point",
+      id: "point-simple",
+      label: "Point: simple",
+      pair: createDemoInterpolationGeometryPair("Point"),
+    },
+    {
+      defaultStrategy: "hold",
+      description:
+        "The geometry type changes from Polygon to MultiPolygon, so interpolation falls back to holding the previous keyframe.",
+      geometryType: "Polygon",
+      id: "type-change-fallback",
+      label: "Type change: Polygon to MultiPolygon",
+      pair: {
+        end: createDemoInterpolationGeometryPair("MultiPolygon").end,
+        start: createDemoInterpolationGeometryPair("Polygon").start,
+      },
+    },
+  ];
 }
 
 function createDemoInterpolationGeometryPair(
@@ -2459,53 +2585,176 @@ function createDemoInterpolationGeometryPair(
   }
 }
 
-function getDefaultDemoInterpolationStrategy(
-  geometryType: DemoInterpolationGeometryType,
-): TemporalGeoJsonInterpolationStrategy {
-  return geometryType === "Polygon" || geometryType === "MultiPolygon"
-    ? "vertex-union"
-    : "resample";
+function createDemoMultiPolygonHolePair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [
+          [
+            [-9.0, 37.1],
+            [-2.4, 37.9],
+            [-2.8, 41.8],
+            [-8.8, 41.0],
+            [-9.0, 37.1],
+          ],
+          [
+            [-6.8, 38.7],
+            [-5.3, 38.9],
+            [-5.4, 39.8],
+            [-6.7, 39.6],
+            [-6.8, 38.7],
+          ],
+        ],
+        [
+          [
+            [0.1, 40.0],
+            [3.7, 40.4],
+            [3.3, 43.3],
+            [0.0, 42.8],
+            [0.1, 40.0],
+          ],
+        ],
+      ],
+      type: "MultiPolygon",
+    },
+    start: {
+      coordinates: [
+        [
+          [
+            [-9.6, 37.4],
+            [-3.0, 37.6],
+            [-3.3, 41.3],
+            [-9.4, 41.0],
+            [-9.6, 37.4],
+          ],
+          [
+            [-7.2, 38.4],
+            [-5.9, 38.6],
+            [-6.0, 39.5],
+            [-7.0, 39.3],
+            [-7.2, 38.4],
+          ],
+        ],
+        [
+          [
+            [-1.2, 40.1],
+            [3.0, 40.1],
+            [2.7, 42.8],
+            [-0.8, 42.6],
+            [-1.2, 40.1],
+          ],
+        ],
+      ],
+      type: "MultiPolygon",
+    },
+  };
+}
+
+function createDemoConcavePolygonPair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [
+          [5.6, 45.3],
+          [9.2, 45.7],
+          [12.8, 45.4],
+          [11.1, 47.2],
+          [13.0, 49.2],
+          [9.0, 48.4],
+          [6.0, 49.1],
+          [7.1, 47.0],
+          [5.6, 45.3],
+        ],
+      ],
+      type: "Polygon",
+    },
+    start: createDemoInterpolationGeometryPair("Polygon").start,
+  };
+}
+
+function createDemoLineDensityPair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [2.35, 48.85],
+        [3.75, 49.35],
+        [6.96, 50.93],
+        [9.99, 53.55],
+        [12.56, 55.67],
+        [18.06, 59.32],
+      ],
+      type: "LineString",
+    },
+    start: {
+      coordinates: [
+        [-3.7, 40.41],
+        [2.16, 41.38],
+        [7.58, 47.55],
+      ],
+      type: "LineString",
+    },
+  };
+}
+
+function createDemoMultiPointMismatchPair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [4.9, 52.36],
+        [12.56, 55.67],
+      ],
+      type: "MultiPoint",
+    },
+    start: createDemoInterpolationGeometryPair("MultiPoint").start,
+  };
 }
 
 function getDemoInterpolationHandles(
-  geometryType: DemoInterpolationGeometryType,
+  geometry: TemporalGeoJsonSupportedGeometry,
 ): DemoInterpolationHandle[] {
-  switch (geometryType) {
+  switch (geometry.type) {
     case "Point":
       return [{ label: "Point", path: [] }];
     case "MultiPoint":
-      return [
-        { label: "Point 1", path: [0] },
-        { label: "Point 2", path: [1] },
-        { label: "Point 3", path: [2] },
-      ];
+      return geometry.coordinates.map((_coordinate, index) => ({
+        label: `Point ${index + 1}`,
+        path: [index],
+      }));
     case "LineString":
-      return [
-        { label: "Start", path: [0] },
-        { label: "Middle", path: [1] },
-        { label: "End", path: [3] },
-      ];
+      return geometry.coordinates.map((_coordinate, index) => ({
+        label:
+          index === 0
+            ? "Start"
+            : index === geometry.coordinates.length - 1
+              ? "End"
+              : `Point ${index + 1}`,
+        path: [index],
+      }));
     case "MultiLineString":
-      return [
-        { label: "Line 1 start", path: [0, 0] },
-        { label: "Line 1 end", path: [0, 2] },
-        { label: "Line 2 start", path: [1, 0] },
-        { label: "Line 2 end", path: [1, 2] },
-      ];
+      return geometry.coordinates.flatMap((line, lineIndex) =>
+        line.map((_coordinate, coordinateIndex) => ({
+          label: `Line ${lineIndex + 1} point ${coordinateIndex + 1}`,
+          path: [lineIndex, coordinateIndex],
+        })),
+      );
     case "Polygon":
-      return [
-        { label: "South west", path: [0, 0] },
-        { label: "South east", path: [0, 1] },
-        { label: "North east", path: [0, 2] },
-        { label: "North west", path: [0, 3] },
-      ];
+      return geometry.coordinates.flatMap((ring, ringIndex) =>
+        ring.slice(0, -1).map((_coordinate, coordinateIndex) => ({
+          label: `${ringIndex === 0 ? "Outer" : `Hole ${ringIndex}`} point ${coordinateIndex + 1}`,
+          path: [ringIndex, coordinateIndex],
+        })),
+      );
     case "MultiPolygon":
-      return [
-        { label: "West area south west", path: [0, 0, 0] },
-        { label: "West area north east", path: [0, 0, 2] },
-        { label: "East area south west", path: [1, 0, 0] },
-        { label: "East area north east", path: [1, 0, 2] },
-      ];
+      return geometry.coordinates.flatMap((polygon, polygonIndex) =>
+        polygon.flatMap((ring, ringIndex) =>
+          ring.slice(0, -1).map((_coordinate, coordinateIndex) => ({
+            label: `Area ${polygonIndex + 1} ${
+              ringIndex === 0 ? "outer" : `hole ${ringIndex}`
+            } point ${coordinateIndex + 1}`,
+            path: [polygonIndex, ringIndex, coordinateIndex],
+          })),
+        ),
+      );
   }
 }
 

@@ -524,6 +524,8 @@ select {
 }
 
 .demo-interpolation-note {
+  display: grid;
+  gap: 6px;
   border: 1px solid #d5dde7;
   border-radius: 8px;
   background: #ffffff;
@@ -531,6 +533,11 @@ select {
   color: #526170;
   font-size: 0.84rem;
   line-height: 1.45;
+}
+
+.demo-interpolation-note strong {
+  color: #101827;
+  font-size: 0.88rem;
 }
 
 .demo-interpolation-range {
