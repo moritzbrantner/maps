@@ -2,11 +2,7 @@
 
 import { useContext, useDeferredValue, useEffect, useId, useMemo, type ReactNode } from "react";
 
-import {
-  createVisibleSvgPath,
-  joinClassNames,
-  toLeafletLatLng,
-} from "./map-display";
+import { createVisibleSvgPath, joinClassNames, toLeafletLatLng } from "./map-display";
 import {
   createFlatGeometryLayers,
   getGeometryCenter,
@@ -47,16 +43,19 @@ export type GeoJsonLayerStyle = {
   polygonStrokeWidth?: number;
 };
 
-export type GeoJsonLayerProps<TProperties extends Record<string, unknown> = Record<string, unknown>> =
-  MapFeatureInteractionProps<GeoJsonLayerFeature<TProperties>> &
-    GeoJsonLayerStyle & {
-      featureCollection: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
-      getFeatureStyle?: (feature: GeoJsonLayerFeature<TProperties>) => GeoJsonLayerStyle;
-      layerId?: string;
-      onFeatureSelect?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
-    };
+export type GeoJsonLayerProps<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = MapFeatureInteractionProps<GeoJsonLayerFeature<TProperties>> &
+  GeoJsonLayerStyle & {
+    featureCollection: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
+    getFeatureStyle?: (feature: GeoJsonLayerFeature<TProperties>) => GeoJsonLayerStyle;
+    layerId?: string;
+    onFeatureSelect?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
+  };
 
-export function GeoJsonLayer<TProperties extends Record<string, unknown> = Record<string, unknown>>({
+export function GeoJsonLayer<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>({
   featureCollection,
   getFeatureId,
   getFeatureStyle,
@@ -84,46 +83,50 @@ export function GeoJsonLayer<TProperties extends Record<string, unknown> = Recor
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ interactionMode, layer, leaflet, map }) => {
-      layer.clearLayers();
+    return surface.registerFlatLayer(
+      resolvedLayerId,
+      ({ interactionMode, layer, leaflet, map }) => {
+        layer.clearLayers();
 
-      for (const feature of features) {
-        const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
-        const className = joinClassNames(
-          "mb-maps__geojson-feature",
-          hovered && "mb-maps__feature--hovered",
-          selected && "mb-maps__feature--selected",
-        );
-        const layers = createFlatGeometryLayers(feature.geometry, {
-          className,
-          interactive: interactionMode === "none",
-          leaflet,
-          selected,
-          style,
-        });
+        for (const feature of features) {
+          const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
+          const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+          const hovered = surface.isFeatureHovered(feature, getFeatureId);
+          const className = joinClassNames(
+            "mb-maps__geojson-feature",
+            hovered && "mb-maps__feature--hovered",
+            selected && "mb-maps__feature--selected",
+          );
+          const layers = createFlatGeometryLayers(feature.geometry, {
+            bubblingMouseEvents: false,
+            className,
+            interactive: interactionMode === "none",
+            leaflet,
+            selected,
+            style,
+          });
 
-        for (const geometryLayer of layers) {
-          if (interactionMode === "none") {
-            bindFlatLayerInteraction(geometryLayer, {
-              feature,
-              getPosition: (event) => getFlatFeaturePosition(map, feature.geometry, event),
-              map,
-              onFeatureContextMenu,
-              onFeatureHover,
-              onFeatureSelect,
-              renderFeatureContextMenu,
-              renderFeaturePopup,
-              renderFeatureTooltip,
-              surface,
-            });
+          for (const geometryLayer of layers) {
+            if (interactionMode === "none") {
+              bindFlatLayerInteraction(geometryLayer, {
+                feature,
+                getPosition: (event) => getFlatFeaturePosition(map, feature.geometry, event),
+                map,
+                onFeatureContextMenu,
+                onFeatureHover,
+                onFeatureSelect,
+                renderFeatureContextMenu,
+                renderFeaturePopup,
+                renderFeatureTooltip,
+                surface,
+              });
+            }
+
+            geometryLayer.addTo(layer);
           }
-
-          geometryLayer.addTo(layer);
         }
-      }
-    });
+      },
+    );
   }, [
     featureCollection,
     features,
@@ -214,11 +217,15 @@ export function createGeoJsonLayerFeatures<
     const geometries = normalizeGeometryCollection(feature.geometry);
 
     return geometries.map((geometry, geometryIndex) => ({
-        geometry: cloneGeometry(geometry),
-        id: createGeoJsonLayerFeatureId(feature, index, geometries.length > 1 ? geometryIndex : undefined),
-        properties: feature.properties ?? ({} as TProperties),
-        sourceIndex: index,
-      }));
+      geometry: cloneGeometry(geometry),
+      id: createGeoJsonLayerFeatureId(
+        feature,
+        index,
+        geometries.length > 1 ? geometryIndex : undefined,
+      ),
+      properties: feature.properties ?? ({} as TProperties),
+      sourceIndex: index,
+    }));
   });
 }
 
@@ -238,7 +245,12 @@ function renderGlobeGeometry(
       return (
         <>
           {geometry.coordinates.map((coordinates, index) => (
-            <GlobeLine geometry={{ coordinates, type: "LineString" }} key={index} selected={selected} style={style} />
+            <GlobeLine
+              geometry={{ coordinates, type: "LineString" }}
+              key={index}
+              selected={selected}
+              style={style}
+            />
           ))}
         </>
       );
@@ -248,7 +260,12 @@ function renderGlobeGeometry(
       return (
         <>
           {geometry.coordinates.map((coordinates, index) => (
-            <GlobePolygon geometry={{ coordinates, type: "Polygon" }} key={index} selected={selected} style={style} />
+            <GlobePolygon
+              geometry={{ coordinates, type: "Polygon" }}
+              key={index}
+              selected={selected}
+              style={style}
+            />
           ))}
         </>
       );
@@ -317,7 +334,11 @@ function GlobeLine({
 }) {
   const surface = useContext(MapSurfaceContext);
   const path = surface
-    ? createVisibleSvgPath(geometry.coordinates.map((coordinate) => surface.projectGlobeCoordinate(coordinate, surface.viewState)))
+    ? createVisibleSvgPath(
+        geometry.coordinates.map((coordinate) =>
+          surface.projectGlobeCoordinate(coordinate, surface.viewState),
+        ),
+      )
     : "";
 
   return path ? (
@@ -349,7 +370,11 @@ function GlobePolygon({
   }
 
   const path = geometry.coordinates
-    .map((ring) => createVisibleSvgPath(ring.map((coordinate) => surface.projectGlobeCoordinate(coordinate, surface.viewState))))
+    .map((ring) =>
+      createVisibleSvgPath(
+        ring.map((coordinate) => surface.projectGlobeCoordinate(coordinate, surface.viewState)),
+      ),
+    )
     .filter(Boolean)
     .map((ringPath) => `${ringPath}Z`)
     .join("");
@@ -377,7 +402,9 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
     onFeatureSelect?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
     renderFeatureContextMenu?: (
       feature: GeoJsonLayerFeature<TProperties>,
-      context: import("./map-interaction").MapFeatureContextMenuContext<GeoJsonLayerFeature<TProperties>>,
+      context: import("./map-interaction").MapFeatureContextMenuContext<
+        GeoJsonLayerFeature<TProperties>
+      >,
     ) => ReactNode;
     renderFeaturePopup?: (feature: GeoJsonLayerFeature<TProperties>) => ReactNode;
     renderFeatureTooltip?: (feature: GeoJsonLayerFeature<TProperties>) => ReactNode;
@@ -431,7 +458,9 @@ function getFlatFeaturePosition(
     return event.containerPoint;
   }
 
-  return map.latLngToContainerPoint?.(toLeafletLatLng(getGeometryCenter(geometry))) ?? { x: 0, y: 0 };
+  return (
+    map.latLngToContainerPoint?.(toLeafletLatLng(getGeometryCenter(geometry))) ?? { x: 0, y: 0 }
+  );
 }
 
 function createGeoJsonLayerFeatureId<TProperties extends Record<string, unknown>>(
@@ -439,7 +468,8 @@ function createGeoJsonLayerFeatureId<TProperties extends Record<string, unknown>
   index: number,
   partIndex?: number,
 ) {
-  const baseId = feature.id ?? feature.properties?.id ?? feature.properties?.trackId ?? `feature-${index}`;
+  const baseId =
+    feature.id ?? feature.properties?.id ?? feature.properties?.trackId ?? `feature-${index}`;
 
   return partIndex === undefined ? String(baseId) : `${String(baseId)}:part-${partIndex}`;
 }

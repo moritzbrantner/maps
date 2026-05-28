@@ -101,6 +101,10 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
   }
 
   await expect(page.locator(".mb-temporal-map__current-time")).toHaveText("09:10");
+  await page.locator(".mb-maps__geojson-feature").first().click();
+  await expect(
+    page.locator(".mb-maps__feature-popup").getByText(/interpolation|keyframe/),
+  ).toBeVisible();
 
   expect(await viewportValue.textContent()).toBe(initialViewport);
   await expect(page.locator(".demo-stage")).toHaveScreenshot("timeline-desktop.png");

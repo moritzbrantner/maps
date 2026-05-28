@@ -613,6 +613,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       "polyline",
       "polygon",
     ]);
+    expect(
+      leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.options?.bubblingMouseEvents),
+    ).toEqual([false, false, false]);
   });
 
   test("renders MultiPoint and GeometryCollection GeoJSON layers", async () => {

@@ -22,6 +22,7 @@ import {
   EditableGeoJsonMap,
   FlowLayer,
   FlowMap,
+  type GeoJsonLayerFeature,
   GeoJsonLayer,
   HeatLayer,
   HeatMap,
@@ -301,139 +302,246 @@ const demoTracks: Array<TemporalMapTrack<DemoTimelineProperties>> = [
   ]),
 ];
 
-const demoTimelineKeyframeCount = demoTracks.reduce(
-  (total, item) => total + item.frames.length,
-  0,
-);
+const demoTimelineKeyframeCount = demoTracks.reduce((total, item) => total + item.frames.length, 0);
 
-const demoTimelineGeoJsonCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> = {
-  features: [
-    timelineGeoJsonFeature("timeline-alpine-zone", "zone", "Alpine service zone", 0, {
-      coordinates: [
-        [
-          [6.4, 45.6],
-          [12.2, 45.6],
-          [12.2, 48.6],
-          [6.4, 48.6],
-          [6.4, 45.6],
-        ],
-      ],
-      type: "Polygon",
-    }),
-    timelineGeoJsonFeature("timeline-alpine-zone", "zone", "Alpine service zone", 60, {
-      coordinates: [
-        [
-          [5.8, 45.4],
-          [13.0, 45.7],
-          [12.5, 49.0],
-          [6.1, 48.8],
-          [5.8, 45.4],
-        ],
-      ],
-      type: "Polygon",
-    }),
-    timelineGeoJsonFeature("timeline-alpine-zone", "zone", "Alpine service zone", 120, {
-      coordinates: [
-        [
-          [7.2, 45.2],
-          [14.4, 45.4],
-          [14.0, 48.9],
-          [7.7, 49.0],
-          [7.2, 45.2],
-        ],
-      ],
-      type: "Polygon",
-    }),
-    timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 30, {
-      coordinates: [
-        [4.9041, 52.3676],
-        [9.9937, 53.551],
-        [12.5683, 55.6761],
-        [18.0686, 59.3293],
-      ],
-      type: "LineString",
-    }),
-    timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 90, {
-      coordinates: [
-        [9.9937, 53.551],
-        [12.5683, 55.6761],
-        [18.0686, 59.3293],
-        [24.9384, 60.1699],
-      ],
-      type: "LineString",
-    }),
-    timelineGeoJsonFeature("timeline-iberia-window", "operating-area", "Iberian operating window", 0, {
-      coordinates: [
-        [
+const demoTimelineGeoJsonCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> =
+  {
+    features: [
+      timelineGeoJsonFeature("timeline-alpine-zone", "zone", "Alpine service zone", 0, {
+        coordinates: [
           [
-            [-9.6, 37.4],
-            [-3.0, 37.7],
-            [-3.3, 41.2],
-            [-9.4, 41.0],
-            [-9.6, 37.4],
+            [6.4, 45.6],
+            [12.2, 45.6],
+            [12.2, 48.6],
+            [6.4, 48.6],
+            [6.4, 45.6],
           ],
         ],
-        [
+        type: "Polygon",
+      }),
+      timelineGeoJsonFeature("timeline-alpine-zone", "zone", "Alpine service zone", 60, {
+        coordinates: [
           [
-            [-1.2, 40.1],
-            [3.0, 40.1],
-            [2.7, 42.8],
-            [-0.8, 42.6],
-            [-1.2, 40.1],
+            [5.8, 45.4],
+            [13.0, 45.7],
+            [12.5, 49.0],
+            [6.1, 48.8],
+            [5.8, 45.4],
           ],
         ],
-      ],
-      type: "MultiPolygon",
-    }),
-    timelineGeoJsonFeature("timeline-iberia-window", "operating-area", "Iberian operating window", 70, {
-      coordinates: [
-        [
+        type: "Polygon",
+      }),
+      timelineGeoJsonFeature("timeline-alpine-zone", "zone", "Alpine service zone", 120, {
+        coordinates: [
           [
-            [-8.8, 37.2],
-            [-2.5, 38.1],
-            [-2.8, 41.6],
-            [-8.7, 40.9],
-            [-8.8, 37.2],
+            [7.2, 45.2],
+            [14.4, 45.4],
+            [14.0, 48.9],
+            [7.7, 49.0],
+            [7.2, 45.2],
           ],
         ],
-        [
-          [
-            [0.0, 40.0],
-            [3.6, 40.5],
-            [3.3, 43.2],
-            [0.2, 42.7],
-            [0.0, 40.0],
-          ],
+        type: "Polygon",
+      }),
+      timelineGeoJsonFeature("timeline-checkpoint", "checkpoint", "Moving checkpoint", 0, {
+        coordinates: [2.3522, 48.8566],
+        type: "Point",
+      }),
+      timelineGeoJsonFeature("timeline-checkpoint", "checkpoint", "Moving checkpoint", 60, {
+        coordinates: [4.3517, 50.8503],
+        type: "Point",
+      }),
+      timelineGeoJsonFeature("timeline-checkpoint", "checkpoint", "Moving checkpoint", 120, {
+        coordinates: [4.9041, 52.3676],
+        type: "Point",
+      }),
+      timelineGeoJsonFeature("timeline-relay-pair", "relay-pair", "Atlantic relay pair", 0, {
+        coordinates: [
+          [-9.1393, 38.7223],
+          [-3.7038, 40.4168],
         ],
-      ],
-      type: "MultiPolygon",
-    }),
-    timelineGeoJsonFeature("timeline-iberia-window", "operating-area", "Iberian operating window", 100, {
-      coordinates: [
-        [
-          [
-            [-8.8, 37.2],
-            [-2.5, 38.1],
-            [-2.8, 41.6],
-            [-8.7, 40.9],
-            [-8.8, 37.2],
-          ],
+        type: "MultiPoint",
+      }),
+      timelineGeoJsonFeature("timeline-relay-pair", "relay-pair", "Atlantic relay pair", 60, {
+        coordinates: [
+          [-8.6291, 41.1579],
+          [2.1686, 41.3874],
         ],
-        [
-          [
-            [0.0, 40.0],
-            [3.6, 40.5],
-            [3.3, 43.2],
-            [0.2, 42.7],
-            [0.0, 40.0],
-          ],
+        type: "MultiPoint",
+      }),
+      timelineGeoJsonFeature("timeline-relay-pair", "relay-pair", "Atlantic relay pair", 120, {
+        coordinates: [
+          [-1.5536, 47.2184],
+          [2.3522, 48.8566],
         ],
-      ],
-      type: "MultiPolygon",
-    }, false),
-  ],
-  type: "FeatureCollection",
-};
+        type: "MultiPoint",
+      }),
+      timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 30, {
+        coordinates: [
+          [4.9041, 52.3676],
+          [9.9937, 53.551],
+          [12.5683, 55.6761],
+          [18.0686, 59.3293],
+        ],
+        type: "LineString",
+      }),
+      timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 90, {
+        coordinates: [
+          [9.9937, 53.551],
+          [12.5683, 55.6761],
+          [18.0686, 59.3293],
+          [24.9384, 60.1699],
+        ],
+        type: "LineString",
+      }),
+      timelineGeoJsonFeature(
+        "timeline-baltic-branches",
+        "branch-corridors",
+        "Baltic branch corridors",
+        0,
+        {
+          coordinates: [
+            [
+              [14.4378, 50.0755],
+              [21.0122, 52.2297],
+            ],
+            [
+              [16.3738, 48.2082],
+              [19.0402, 47.4979],
+            ],
+          ],
+          type: "MultiLineString",
+        },
+      ),
+      timelineGeoJsonFeature(
+        "timeline-baltic-branches",
+        "branch-corridors",
+        "Baltic branch corridors",
+        60,
+        {
+          coordinates: [
+            [
+              [21.0122, 52.2297],
+              [25.2797, 54.6872],
+            ],
+            [
+              [19.0402, 47.4979],
+              [24.1052, 56.9496],
+            ],
+          ],
+          type: "MultiLineString",
+        },
+      ),
+      timelineGeoJsonFeature(
+        "timeline-baltic-branches",
+        "branch-corridors",
+        "Baltic branch corridors",
+        120,
+        {
+          coordinates: [
+            [
+              [25.2797, 54.6872],
+              [24.9384, 60.1699],
+            ],
+            [
+              [24.1052, 56.9496],
+              [18.0686, 59.3293],
+            ],
+          ],
+          type: "MultiLineString",
+        },
+      ),
+      timelineGeoJsonFeature(
+        "timeline-iberia-window",
+        "operating-area",
+        "Iberian operating window",
+        0,
+        {
+          coordinates: [
+            [
+              [
+                [-9.6, 37.4],
+                [-3.0, 37.7],
+                [-3.3, 41.2],
+                [-9.4, 41.0],
+                [-9.6, 37.4],
+              ],
+            ],
+            [
+              [
+                [-1.2, 40.1],
+                [3.0, 40.1],
+                [2.7, 42.8],
+                [-0.8, 42.6],
+                [-1.2, 40.1],
+              ],
+            ],
+          ],
+          type: "MultiPolygon",
+        },
+      ),
+      timelineGeoJsonFeature(
+        "timeline-iberia-window",
+        "operating-area",
+        "Iberian operating window",
+        70,
+        {
+          coordinates: [
+            [
+              [
+                [-8.8, 37.2],
+                [-2.5, 38.1],
+                [-2.8, 41.6],
+                [-8.7, 40.9],
+                [-8.8, 37.2],
+              ],
+            ],
+            [
+              [
+                [0.0, 40.0],
+                [3.6, 40.5],
+                [3.3, 43.2],
+                [0.2, 42.7],
+                [0.0, 40.0],
+              ],
+            ],
+          ],
+          type: "MultiPolygon",
+        },
+      ),
+      timelineGeoJsonFeature(
+        "timeline-iberia-window",
+        "operating-area",
+        "Iberian operating window",
+        100,
+        {
+          coordinates: [
+            [
+              [
+                [-8.8, 37.2],
+                [-2.5, 38.1],
+                [-2.8, 41.6],
+                [-8.7, 40.9],
+                [-8.8, 37.2],
+              ],
+            ],
+            [
+              [
+                [0.0, 40.0],
+                [3.6, 40.5],
+                [3.3, 43.2],
+                [0.2, 42.7],
+                [0.0, 40.0],
+              ],
+            ],
+          ],
+          type: "MultiPolygon",
+        },
+        false,
+      ),
+    ],
+    type: "FeatureCollection",
+  };
 const demoTimelineGeographyCount = new Set(
   demoTimelineGeoJsonCollection.features.map((feature) => feature.properties?.trackId),
 ).size;
@@ -595,6 +703,7 @@ export function App() {
   const selectedGeoJsonId = geoJsonSelection.primaryFeatureId;
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
+  const [temporalTime, setTemporalTime] = useState(0);
   const [viewport, setViewport] = useState<MapViewState>({
     center: [13.405, 52.52],
     zoom: 5,
@@ -897,6 +1006,8 @@ export function App() {
             showHeatDataPoints,
             selectedFlowId,
             setSelectedFlowId,
+            temporalTime,
+            setTemporalTime,
           )}
         </div>
         <aside aria-label="Current dataset">
@@ -1311,6 +1422,8 @@ function renderMap(
   showHeatDataPoints: boolean,
   selectedFlowId: string | null,
   setSelectedFlowId: Dispatch<SetStateAction<string | null>>,
+  temporalTime: number,
+  setTemporalTime: Dispatch<SetStateAction<number>>,
 ) {
   const sharedMeasurementProps = {
     measurementMode: isMeasuring ? ("bee-line" as const) : ("none" as const),
@@ -1446,12 +1559,16 @@ function renderMap(
           fitToData={false}
           formatTimeLabel={formatDemoTimelineTime}
           geoJson={demoTimelineGeoJsonCollection}
+          geoJsonOverlay="all"
           geoJsonOverlayProps={{
             getFeatureStyle: getDemoTimelineGeographyStyle,
+            renderFeaturePopup: (feature) => renderDemoTimelineGeoJsonPopup(feature, temporalTime),
+            renderFeatureTooltip: renderDemoTimelineGeoJsonTooltip,
           }}
           initialViewState={demoTimelineViewState}
           loopPlayback
           mapLabel="European logistics timeline"
+          onTimeChange={setTemporalTime}
           onViewStateChange={setViewport}
           playbackRate={6}
           timelineLabel="Shipment timeline"
@@ -1653,6 +1770,118 @@ function countDemoGeometryParts(geometry: TemporalGeoJsonSupportedGeometry) {
     case "MultiPolygon":
       return geometry.coordinates.length;
   }
+}
+
+function renderDemoTimelineGeoJsonTooltip(feature: GeoJsonLayerFeature<DemoGeoJsonProperties>) {
+  const properties = readDemoTimelineOutputProperties(feature);
+
+  return `${properties.label} (${feature.geometry.type})`;
+}
+
+function renderDemoTimelineGeoJsonPopup(
+  feature: GeoJsonLayerFeature<DemoGeoJsonProperties>,
+  activeTime: number,
+) {
+  const properties = readDemoTimelineOutputProperties(feature);
+  const interpolation = getDemoTimelineInterpolationInfo(properties.trackId, activeTime);
+
+  return (
+    <div className="demo-popup">
+      <strong>{properties.label}</strong>
+      <span>{feature.geometry.type}</span>
+      <span>
+        {countDemoGeometryPositions(feature.geometry)} coordinates across{" "}
+        {countDemoGeometryParts(feature.geometry)} part
+        {countDemoGeometryParts(feature.geometry) === 1 ? "" : "s"}
+      </span>
+      <span>{interpolation.segment}</span>
+      <span>{interpolation.method}</span>
+    </div>
+  );
+}
+
+function readDemoTimelineOutputProperties(feature: GeoJsonLayerFeature<DemoGeoJsonProperties>) {
+  const properties = feature.properties as DemoGeoJsonProperties & {
+    temporalLabel?: unknown;
+    temporalTrackId?: unknown;
+  };
+
+  return {
+    label: String(properties.temporalLabel ?? properties.label ?? feature.id),
+    trackId: String(properties.temporalTrackId ?? properties.trackId ?? feature.id),
+  };
+}
+
+function getDemoTimelineInterpolationInfo(trackId: string, activeTime: number) {
+  const frames = demoTimelineGeoJsonCollection.features
+    .flatMap((feature) => {
+      if (feature.properties?.trackId !== trackId || !feature.geometry) {
+        return [];
+      }
+
+      return [
+        {
+          geometryType: feature.geometry.type,
+          time: feature.properties.time,
+          visible: feature.properties.visible !== false,
+        },
+      ];
+    })
+    .sort((left, right) => left.time - right.time);
+
+  if (frames.length === 0) {
+    return {
+      method: "No source keyframes found",
+      segment: `Sampled at ${formatDemoTimelineTime(activeTime)}`,
+    };
+  }
+
+  const previousIndex = findPreviousDemoTimelineFrameIndex(frames, activeTime);
+  const nextIndex = frames.findIndex((frame) => frame.time > activeTime);
+
+  if (previousIndex < 0) {
+    return {
+      method: "Waiting for first keyframe",
+      segment: `Starts at ${formatDemoTimelineTime(frames[0]!.time)}`,
+    };
+  }
+
+  if (nextIndex < 0) {
+    const frame = frames[previousIndex]!;
+
+    return {
+      method: frame.visible ? "Holding final keyframe" : "Hidden after final keyframe",
+      segment: `Last keyframe ${formatDemoTimelineTime(frame.time)}`,
+    };
+  }
+
+  const previous = frames[previousIndex]!;
+  const next = frames[nextIndex]!;
+  const progress =
+    next.time === previous.time
+      ? 1
+      : Math.min(Math.max((activeTime - previous.time) / (next.time - previous.time), 0), 1);
+  const method =
+    previous.geometryType === next.geometryType
+      ? `Compatible ${previous.geometryType} interpolation`
+      : `Hold fallback from ${previous.geometryType} to ${next.geometryType}`;
+
+  return {
+    method,
+    segment: `${formatDemoTimelineTime(previous.time)} to ${formatDemoTimelineTime(next.time)} (${Math.round(
+      progress * 100,
+    )}%)`,
+  };
+}
+
+function findPreviousDemoTimelineFrameIndex(frames: Array<{ time: number }>, activeTime: number) {
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    if (frames[index]!.time <= activeTime) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function GeoJsonGeometryExample() {
@@ -1868,6 +2097,7 @@ function formatTemperatureValue(value: number) {
 function getGeoJsonFeatureStyle(geometryType: string) {
   switch (geometryType) {
     case "Point":
+    case "MultiPoint":
       return {
         pointColor: "#be123c",
         pointRadius: 8,
@@ -2074,15 +2304,29 @@ function timelineGeoJsonFeature(
   };
 }
 
-function getDemoTimelineGeographyStyle(feature: {
-  properties: Partial<DemoGeoJsonProperties>;
-}) {
+function getDemoTimelineGeographyStyle(feature: { properties: Partial<DemoGeoJsonProperties> }) {
   switch (feature.properties.kind) {
+    case "checkpoint":
+      return {
+        pointColor: "#be123c",
+        pointRadius: 8,
+      };
+    case "relay-pair":
+      return {
+        pointColor: "#7c3aed",
+        pointRadius: 6,
+      };
     case "corridor":
       return {
         lineColor: "#0e7490",
         lineOpacity: 0.8,
         lineWidth: 4,
+      };
+    case "branch-corridors":
+      return {
+        lineColor: "#4f46e5",
+        lineOpacity: 0.72,
+        lineWidth: 3,
       };
     case "operating-area":
       return {

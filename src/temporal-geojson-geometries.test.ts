@@ -7,6 +7,7 @@ import {
   getTemporalGeoJsonTimeRange,
   interpolateTemporalGeoJsonGeometry,
   type TemporalGeoJsonGeometryFeatureCollection,
+  type TemporalGeoJsonSupportedGeometry,
   type TemporalGeoJsonTrack,
 } from ".";
 
@@ -120,6 +121,123 @@ describe("@moritzbrantner/maps temporal GeoJSON geometries", () => {
       ],
       type: "Polygon",
     });
+  });
+
+  test("plays every supported GeoJSON geometry type on temporal tracks", () => {
+    const collection: TemporalGeoJsonGeometryFeatureCollection = {
+      features: [
+        temporalGeometryFeature("point", "Point", 0, { coordinates: [0, 0], type: "Point" }),
+        temporalGeometryFeature("point", "Point", 10, { coordinates: [10, 10], type: "Point" }),
+        temporalGeometryFeature("multipoint", "MultiPoint", 0, {
+          coordinates: [
+            [0, 0],
+            [1, 1],
+          ],
+          type: "MultiPoint",
+        }),
+        temporalGeometryFeature("multipoint", "MultiPoint", 10, {
+          coordinates: [
+            [10, 10],
+            [11, 11],
+          ],
+          type: "MultiPoint",
+        }),
+        temporalGeometryFeature("line", "LineString", 0, {
+          coordinates: [
+            [0, 0],
+            [1, 1],
+          ],
+          type: "LineString",
+        }),
+        temporalGeometryFeature("line", "LineString", 10, {
+          coordinates: [
+            [10, 10],
+            [11, 11],
+          ],
+          type: "LineString",
+        }),
+        temporalGeometryFeature("multiline", "MultiLineString", 0, {
+          coordinates: [
+            [
+              [0, 0],
+              [1, 1],
+            ],
+          ],
+          type: "MultiLineString",
+        }),
+        temporalGeometryFeature("multiline", "MultiLineString", 10, {
+          coordinates: [
+            [
+              [10, 10],
+              [11, 11],
+            ],
+          ],
+          type: "MultiLineString",
+        }),
+        temporalGeometryFeature("polygon", "Polygon", 0, {
+          coordinates: [
+            [
+              [0, 0],
+              [2, 0],
+              [2, 2],
+              [0, 0],
+            ],
+          ],
+          type: "Polygon",
+        }),
+        temporalGeometryFeature("polygon", "Polygon", 10, {
+          coordinates: [
+            [
+              [10, 10],
+              [12, 10],
+              [12, 12],
+              [10, 10],
+            ],
+          ],
+          type: "Polygon",
+        }),
+        temporalGeometryFeature("multipolygon", "MultiPolygon", 0, {
+          coordinates: [
+            [
+              [
+                [0, 0],
+                [2, 0],
+                [2, 2],
+                [0, 0],
+              ],
+            ],
+          ],
+          type: "MultiPolygon",
+        }),
+        temporalGeometryFeature("multipolygon", "MultiPolygon", 10, {
+          coordinates: [
+            [
+              [
+                [10, 10],
+                [12, 10],
+                [12, 12],
+                [10, 10],
+              ],
+            ],
+          ],
+          type: "MultiPolygon",
+        }),
+      ],
+      type: "FeatureCollection",
+    };
+
+    const frame = createTemporalGeoJsonPlaybackIndex(
+      createTemporalGeoJsonTracksFromGeoJson(collection),
+    ).getFeatureCollectionAtTime(5);
+
+    expect(frame.features.map((feature) => feature.geometry.type).sort()).toEqual([
+      "LineString",
+      "MultiLineString",
+      "MultiPoint",
+      "MultiPolygon",
+      "Point",
+      "Polygon",
+    ]);
   });
 
   test("preserves custom mappers, numeric strings, ISO timestamps, visibility, and properties", () => {
@@ -1112,6 +1230,23 @@ describe("@moritzbrantner/maps temporal GeoJSON geometries", () => {
     );
   });
 });
+
+function temporalGeometryFeature(
+  trackId: string,
+  label: string,
+  time: number,
+  geometry: TemporalGeoJsonSupportedGeometry,
+): TemporalGeoJsonGeometryFeatureCollection["features"][number] {
+  return {
+    geometry,
+    properties: {
+      label,
+      time,
+      trackId,
+    },
+    type: "Feature",
+  };
+}
 
 function createDenseRing(pointCount: number, radius: number, offsetX: number, offsetY: number) {
   const coordinates: Array<[number, number]> = [];
