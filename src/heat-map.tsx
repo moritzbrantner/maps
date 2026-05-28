@@ -1157,13 +1157,24 @@ export function createHeatMapDensityIndex<TProperties extends Record<string, unk
       radius: options.radius,
     },
   );
+  let cachedQueryKey: string | null = null;
+  let cachedFeatureCollection: HeatMapFeatureCollection | null = null;
 
   return {
     getFeatureCollection(query) {
-      return createHeatMapFeatureCollectionFromAggregates(
+      const queryKey = getHeatMapViewportQueryCacheKey(query);
+
+      if (cachedQueryKey === queryKey && cachedFeatureCollection) {
+        return cachedFeatureCollection;
+      }
+
+      cachedQueryKey = queryKey;
+      cachedFeatureCollection = createHeatMapFeatureCollectionFromAggregates(
         index.getViewportAggregation(query).features,
         effectiveMaxWeight,
       );
+
+      return cachedFeatureCollection;
     },
     maxWeight: effectiveMaxWeight,
     pointCount: weightedPoints.length,
@@ -1631,6 +1642,14 @@ function getHeatMapViewportQuery(map: LeafletMap): ViewportAggregationQuery {
     bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
     zoom: map.getZoom(),
   };
+}
+
+function getHeatMapViewportQueryCacheKey(query: ViewportAggregationQuery) {
+  return `${roundHeatMapCacheNumber(query.zoom)}:${query.bounds.map(roundHeatMapCacheNumber).join(",")}`;
+}
+
+function roundHeatMapCacheNumber(value: number) {
+  return Number.isFinite(value) ? value.toFixed(3) : "0";
 }
 
 function getHeatMapFeatureCollectionInBounds(

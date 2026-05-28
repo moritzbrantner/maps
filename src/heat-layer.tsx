@@ -30,9 +30,8 @@ import {
   type HeatFieldImage,
 } from "./scalar-field-render";
 import {
-  createHeatLayerDataSurfaceSvg,
-  createHeatLayerInterpolatedSurfaceSvg,
-  createSvgDataUrl,
+  createHeatLayerDataSurfaceDataUrl,
+  createHeatLayerInterpolatedSurfaceDataUrl,
   prepareHeatLayerColorRamp,
   resolveHeatLayerColor,
   type HeatLayerMetricPoint,
@@ -162,8 +161,14 @@ type HeatLayerImageOverlay = HeatLayerManagedLayer & {
 type HeatLayerFlatRenderState = {
   contourLayers: HeatLayerManagedLayer[];
   dataLayers: HeatLayerManagedLayer[];
+  surfaceCache: HeatLayerSurfaceCache | null;
   surfaceClassName: string | null;
   surfaceLayer: HeatLayerImageOverlay | null;
+};
+
+type HeatLayerSurfaceCache = {
+  key: string;
+  url: string;
 };
 
 export function HeatLayer<TProperties = Record<string, unknown>>({
@@ -607,13 +612,24 @@ export function createHeatLayerDensityIndex<TProperties = Record<string, unknown
       radius: options.radius,
     },
   );
+  let cachedQueryKey: string | null = null;
+  let cachedFeatureCollection: HeatLayerFeatureCollection | null = null;
 
   return {
     getFeatureCollection(query: ViewportAggregationQuery) {
-      return createHeatLayerFeatureCollectionFromAggregates(
+      const queryKey = getHeatLayerViewportQueryCacheKey(query);
+
+      if (cachedQueryKey === queryKey && cachedFeatureCollection) {
+        return cachedFeatureCollection;
+      }
+
+      cachedQueryKey = queryKey;
+      cachedFeatureCollection = createHeatLayerFeatureCollectionFromAggregates(
         index.getViewportAggregation(query).features,
         effectiveMaxWeight,
       );
+
+      return cachedFeatureCollection;
     },
     maxWeight: effectiveMaxWeight,
     pointCount: weightedPoints.length,
@@ -664,12 +680,21 @@ function createHeatLayerSourceIndex<TProperties = Record<string, unknown>>(
       type: "Feature",
     };
   });
+  let cachedBoundsKey: string | null = null;
+  let cachedFeatureCollection: HeatLayerFeatureCollection | null = null;
 
   return {
     getFeatureCollection(bounds: [west: number, south: number, east: number, north: number]) {
+      const boundsKey = getHeatLayerBoundsCacheKey(bounds);
+
+      if (cachedBoundsKey === boundsKey && cachedFeatureCollection) {
+        return cachedFeatureCollection;
+      }
+
       const [west, south, east, north] = bounds;
 
-      return {
+      cachedBoundsKey = boundsKey;
+      cachedFeatureCollection = {
         features: features.filter((feature) => {
           const [longitude, latitude] = feature.geometry.coordinates;
 
@@ -677,6 +702,8 @@ function createHeatLayerSourceIndex<TProperties = Record<string, unknown>>(
         }),
         type: "FeatureCollection" as const,
       };
+
+      return cachedFeatureCollection;
     },
     maxWeight: effectiveMaxWeight,
     pointCount: weightedPoints.length,
@@ -972,15 +999,25 @@ function renderHeatLayerSurface({
 
   const northWest = map.containerPointToLatLng([0, 0]);
   const southEast = map.containerPointToLatLng([width, height]);
-  const svg =
-    mode === "data"
-      ? createHeatLayerDataSurfaceSvg({
+  const surfaceCacheKey = createHeatLayerSurfaceCacheKey({
+    colorRamp,
+    height,
+    maxInfluenceRadius,
+    mode,
+    sources,
+    width,
+  });
+  const cachedUrl = state.surfaceCache?.key === surfaceCacheKey ? state.surfaceCache.url : null;
+  const url =
+    cachedUrl ??
+    (mode === "data"
+      ? createHeatLayerDataSurfaceDataUrl({
           colorRamp,
           height,
           sources,
           width,
         })
-      : createHeatLayerInterpolatedSurfaceSvg({
+      : createHeatLayerInterpolatedSurfaceDataUrl({
           colorRamp,
           height,
           maxInfluenceRadius,
@@ -1003,7 +1040,12 @@ function renderHeatLayerSurface({
           },
           sources,
           width,
-        });
+        }));
+
+  state.surfaceCache = {
+    key: surfaceCacheKey,
+    url,
+  };
 
   renderOrUpdateHeatLayerImageOverlay({
     bounds: [
@@ -1015,14 +1057,57 @@ function renderHeatLayerSurface({
     leaflet,
     opacity: safeOpacity,
     state,
-    url: createSvgDataUrl(svg),
+    url,
   });
+}
+
+function createHeatLayerSurfaceCacheKey({
+  colorRamp,
+  height,
+  maxInfluenceRadius,
+  mode,
+  sources,
+  width,
+}: {
+  colorRamp: PreparedHeatLayerColorRamp;
+  height: number;
+  maxInfluenceRadius: number;
+  mode: HeatLayerSurfaceMode;
+  sources: readonly HeatLayerSurfaceSource[];
+  width: number;
+}) {
+  return [
+    mode,
+    roundHeatLayerCacheNumber(width),
+    roundHeatLayerCacheNumber(height),
+    roundHeatLayerCacheNumber(maxInfluenceRadius),
+    colorRamp.stops
+      .map((stop) => `${roundHeatLayerCacheNumber(stop.density)}:${stop.color}`)
+      .join(","),
+    ...sources.map(
+      (source) =>
+        [
+          roundHeatLayerCacheNumber(source.point.x),
+          roundHeatLayerCacheNumber(source.point.y),
+          roundHeatLayerCacheNumber(source.metricPoint.x),
+          roundHeatLayerCacheNumber(source.metricPoint.y),
+          roundHeatLayerCacheNumber(source.influenceRadius),
+          roundHeatLayerCacheNumber(source.dataInfluenceRadius ?? -1),
+          roundHeatLayerCacheNumber(source.weight),
+        ].join(","),
+    ),
+  ].join("|");
+}
+
+function roundHeatLayerCacheNumber(value: number) {
+  return Number.isFinite(value) ? value.toFixed(3) : "0";
 }
 
 function createHeatLayerFlatRenderState(): HeatLayerFlatRenderState {
   return {
     contourLayers: [],
     dataLayers: [],
+    surfaceCache: null,
     surfaceClassName: null,
     surfaceLayer: null,
   };
@@ -1031,6 +1116,7 @@ function createHeatLayerFlatRenderState(): HeatLayerFlatRenderState {
 function resetHeatLayerFlatRenderState(state: HeatLayerFlatRenderState) {
   state.contourLayers = [];
   state.dataLayers = [];
+  state.surfaceCache = null;
   state.surfaceClassName = null;
   state.surfaceLayer = null;
 }
@@ -1288,6 +1374,14 @@ function getHeatLayerFeatureCollectionInBounds(
     }),
     type: "FeatureCollection",
   };
+}
+
+function getHeatLayerViewportQueryCacheKey(query: ViewportAggregationQuery) {
+  return `${roundHeatLayerCacheNumber(query.zoom)}:${getHeatLayerBoundsCacheKey(query.bounds)}`;
+}
+
+function getHeatLayerBoundsCacheKey(bounds: readonly number[]) {
+  return bounds.map(roundHeatLayerCacheNumber).join(",");
 }
 
 function resolveHeatLayerGlobeRadius(
