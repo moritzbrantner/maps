@@ -470,6 +470,68 @@ export function PlaybackMap() {
 }
 ```
 
+## GeoJSON Timeline Transitions
+
+`getGeoJsonTimelineFeatureCollectionAtTime(...)` remains the transform-only
+sampler: it applies timeline keyframes to each feature without interpreting
+adjacent items as scene states.
+
+```ts
+import {
+  createGeoJsonTimelineDocument,
+  getGeoJsonTimelineFeatureCollectionAtTime,
+} from "@moritzbrantner/maps";
+
+const document = createGeoJsonTimelineDocument(collection, { durationMs: 4_000 });
+const transformed = getGeoJsonTimelineFeatureCollectionAtTime(collection, document, 2_000);
+```
+
+Use `getGeoJsonTimelineSceneAtTime(...)` when items on one timeline track are
+successive GeoJSON states and the end of one item should transition into the
+next. `getTimelineTrackId` groups features into those sequenced tracks.
+
+```ts
+import {
+  createGeoJsonTimelineDocument,
+  getGeoJsonTimelineSceneAtTime,
+} from "@moritzbrantner/maps";
+
+const document = createGeoJsonTimelineDocument(collection, {
+  getItemStartMs: (feature) => Number(feature.properties?.startMs),
+  getTimelineTrackId: () => "district-boundary",
+  itemDurationMs: 1_000,
+});
+
+const frame = getGeoJsonTimelineSceneAtTime(collection, document, 750, {
+  defaultTransition: {
+    algorithm: "vertex-union",
+    durationMs: 500,
+    fallback: "hold",
+  },
+});
+```
+
+The transition engine also works without a timeline:
+
+```ts
+import {
+  createGeoJsonTransitionPlan,
+  interpolateGeoJsonTransitionPlan,
+} from "@moritzbrantner/maps";
+
+const plan = createGeoJsonTransitionPlan(previousCollection, nextCollection, {
+  algorithm: "topology-plan",
+});
+
+const halfway = interpolateGeoJsonTransitionPlan(plan, 0.5);
+```
+
+Supported algorithms are `hold`, `compatible`, `resample`, `vertex-union`,
+`centroid-radial`, and collection-level `topology-plan`. `vertex-union` is the
+default polygon transition because it keeps source and target ring vertices
+represented and collapses appearing or disappearing holes to the corresponding
+ring centroid.
+
 ## Dense Temporal GeoJSON
 
 Use `createTemporalGeoJsonPlaybackIndex(...)` when the same temporal GeoJSON tracks are queried many times during playback. The index precomputes sampling and ring preparation so dense polygons and multipolygons do not pay that setup cost on every frame.

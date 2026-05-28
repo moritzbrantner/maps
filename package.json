@@ -58,6 +58,7 @@
     "bench:heat-map": "bun run ./scripts/benchmark-heat-map.mjs",
     "bench:heat-layer": "bun run ./scripts/benchmark-heat-layer.mjs",
     "bench:performance": "bun run ./scripts/benchmark-performance.mjs",
+    "bench:geojson-transition": "bun run ./scripts/benchmark-geojson-transition.mjs",
     "bench:temporal-geojson": "bun run ./scripts/benchmark-temporal-geojson.mjs",
     "dev": "vite --host 0.0.0.0",
     "format": "oxfmt --write demo package.json .oxfmtrc.json",

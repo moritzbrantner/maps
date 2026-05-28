@@ -200,6 +200,7 @@ function prepareLineInterpolator(
 
   if (
     options.strategy !== "resample" &&
+    options.strategy !== "vertex-union" &&
     options.strategy !== "centroid-radial" &&
     !(options.strategy === "compatible" && shouldForceResample)
   ) {
@@ -223,6 +224,17 @@ function preparePolygonInterpolators(
   nextCoordinates: readonly GeoJsonPosition[][],
   options: ResolvedPlaybackIndexOptions,
 ): PreparedFlatCoordinates[] | null {
+  if (options.strategy === "vertex-union") {
+    const ringCount = Math.max(previousCoordinates.length, nextCoordinates.length);
+    const rings = Array.from({ length: ringCount }, (_, index) => {
+      const pair = getComparableRingPair(previousCoordinates[index], nextCoordinates[index]);
+
+      return pair ? preparePolygonRingInterpolator(pair[0], pair[1], options) : null;
+    });
+
+    return rings.some((ring) => ring === null) ? null : (rings as PreparedFlatCoordinates[]);
+  }
+
   if (previousCoordinates.length !== nextCoordinates.length) {
     return null;
   }
@@ -271,6 +283,12 @@ function preparePolygonRingInterpolator(
     );
   }
 
+  if (options.strategy === "vertex-union") {
+    return createPreparedFlatCoordinates(
+      ...prepareVertexUnionRingPair(previousOpenRing, nextOpenRing, options),
+    );
+  }
+
   if (options.strategy === "centroid-radial") {
     const coordinateCount = clampInteger(
       Math.max(previousOpenRing.length, nextOpenRing.length, options.minResampleCoordinates, 3),
@@ -303,6 +321,34 @@ function prepareResampledRingPair(
   return [
     resampleRing(previousOpenRing, coordinateCount),
     resampleRing(alignedNextRing, coordinateCount),
+  ];
+}
+
+function prepareVertexUnionRingPair(
+  previousOpenRing: readonly GeoJsonPosition[],
+  nextOpenRing: readonly GeoJsonPosition[],
+  options: Pick<
+    ResolvedInterpolationOptions,
+    "maxCoordinatesPerRing" | "minResampleCoordinates"
+  >,
+): [GeoJsonPosition[], GeoJsonPosition[]] {
+  const orientedNextRing = orientRingLike(nextOpenRing, previousOpenRing);
+  const alignedNextRing = alignRingStart(orientedNextRing, previousOpenRing[0]!);
+  const minimumPointCount = clampInteger(
+    Math.max(previousOpenRing.length, alignedNextRing.length, options.minResampleCoordinates, 3),
+    3,
+    options.maxCoordinatesPerRing,
+  );
+  const fractions = createCompatibleRingFractions(
+    previousOpenRing,
+    alignedNextRing,
+    minimumPointCount,
+    options.maxCoordinatesPerRing,
+  );
+
+  return [
+    sampleRingAtFractions(previousOpenRing, fractions),
+    sampleRingAtFractions(alignedNextRing, fractions),
   ];
 }
 
@@ -549,7 +595,11 @@ function interpolateLineCoordinates(
     );
   }
 
-  if (options.strategy !== "resample" && options.strategy !== "centroid-radial") {
+  if (
+    options.strategy !== "resample" &&
+    options.strategy !== "vertex-union" &&
+    options.strategy !== "centroid-radial"
+  ) {
     return null;
   }
 
@@ -572,6 +622,21 @@ function interpolatePolygonCoordinates(
   progress: number,
   options: ResolvedInterpolationOptions,
 ): GeoJsonPosition[][] | null {
+  if (options.strategy === "vertex-union") {
+    const ringCount = Math.max(previousCoordinates.length, nextCoordinates.length);
+    const rings = Array.from({ length: ringCount }, (_, index) => {
+      const pair = getComparableRingPair(previousCoordinates[index], nextCoordinates[index]);
+
+      return pair ? interpolateVertexUnionRing(pair[0], pair[1], progress, options) : null;
+    });
+
+    if (rings.some((ring) => ring === null)) {
+      return null;
+    }
+
+    return rings as GeoJsonPosition[][];
+  }
+
   if (previousCoordinates.length !== nextCoordinates.length) {
     return null;
   }
@@ -585,6 +650,10 @@ function interpolatePolygonCoordinates(
 
     if (options.strategy === "resample") {
       return interpolateResampledRing(ring, nextRing, progress, options);
+    }
+
+    if (options.strategy === "vertex-union") {
+      return interpolateVertexUnionRing(ring, nextRing, progress, options);
     }
 
     if (options.strategy === "centroid-radial") {
@@ -652,6 +721,78 @@ function interpolateResampledRing(
       interpolatePosition(position, nextSamples[index]!, progress),
     ),
   );
+}
+
+function interpolateVertexUnionRing(
+  previousRing: GeoJsonPosition[],
+  nextRing: GeoJsonPosition[],
+  progress: number,
+  options: ResolvedInterpolationOptions,
+): GeoJsonPosition[] | null {
+  const previousOpenRing = getOpenRing(previousRing);
+  const nextOpenRing = getOpenRing(nextRing);
+
+  if (!previousOpenRing || !nextOpenRing) {
+    return null;
+  }
+
+  const [previousSamples, nextSamples] = prepareVertexUnionRingPair(
+    previousOpenRing,
+    nextOpenRing,
+    options,
+  );
+
+  return closeRing(
+    previousSamples.map((position, index) =>
+      interpolatePosition(position, nextSamples[index]!, progress),
+    ),
+  );
+}
+
+function getComparableRingPair(
+  previousRing: readonly GeoJsonPosition[] | undefined,
+  nextRing: readonly GeoJsonPosition[] | undefined,
+): [GeoJsonPosition[], GeoJsonPosition[]] | null {
+  if (!previousRing && !nextRing) {
+    return null;
+  }
+
+  if (previousRing && nextRing) {
+    return [previousRing.map(clonePosition), nextRing.map(clonePosition)];
+  }
+
+  if (previousRing) {
+    const previousOpenRing = getOpenRing(previousRing);
+
+    if (!previousOpenRing) {
+      return null;
+    }
+
+    return [
+      previousRing.map(clonePosition),
+      collapseRingToPoint(getRingCentroid(previousOpenRing)),
+    ];
+  }
+
+  const nextOpenRing = getOpenRing(nextRing!);
+
+  if (!nextOpenRing) {
+    return null;
+  }
+
+  return [
+    collapseRingToPoint(getRingCentroid(nextOpenRing)),
+    nextRing!.map(clonePosition),
+  ];
+}
+
+function collapseRingToPoint(point: GeoJsonPosition): GeoJsonPosition[] {
+  return [
+    clonePosition(point),
+    clonePosition(point),
+    clonePosition(point),
+    clonePosition(point),
+  ];
 }
 
 function interpolateCentroidRadialRing(
@@ -813,6 +954,121 @@ function sampleRingByAngle(
   });
 }
 
+function createCompatibleRingFractions(
+  previousOpenRing: readonly GeoJsonPosition[],
+  nextOpenRing: readonly GeoJsonPosition[],
+  minimumPointCount: number,
+  maximumPointCount: number,
+) {
+  const fractions = dedupeSortedFractions([
+    ...getRingVertexFractions(previousOpenRing),
+    ...getRingVertexFractions(nextOpenRing),
+    ...createEvenFractions(minimumPointCount),
+  ]);
+
+  if (fractions.length <= maximumPointCount) {
+    return fractions;
+  }
+
+  return createEvenFractions(maximumPointCount);
+}
+
+function getRingVertexFractions(openRing: readonly GeoJsonPosition[]) {
+  const segmentLengths = getRingSegmentLengths(openRing);
+  const totalLength = segmentLengths.reduce((sum, length) => sum + length, 0);
+
+  if (totalLength === 0) {
+    return [0];
+  }
+
+  const fractions: number[] = [];
+  let traversed = 0;
+
+  for (let index = 0; index < openRing.length; index += 1) {
+    fractions.push(traversed / totalLength);
+    traversed += segmentLengths[index]!;
+  }
+
+  return fractions;
+}
+
+function createEvenFractions(coordinateCount: number) {
+  return Array.from({ length: coordinateCount }, (_, index) => index / coordinateCount);
+}
+
+function dedupeSortedFractions(values: number[]) {
+  const sorted = values
+    .map(normalizeFraction)
+    .sort((left, right) => left - right);
+  const deduped: number[] = [];
+
+  for (const value of sorted) {
+    const previous = deduped.at(-1);
+
+    if (previous === undefined || Math.abs(previous - value) > 1e-9) {
+      deduped.push(value);
+    }
+  }
+
+  return deduped.length > 0 ? deduped : [0];
+}
+
+function sampleRingAtFractions(
+  openRing: readonly GeoJsonPosition[],
+  fractions: readonly number[],
+) {
+  const segmentLengths = getRingSegmentLengths(openRing);
+  const totalLength = segmentLengths.reduce((sum, length) => sum + length, 0);
+
+  if (totalLength === 0) {
+    return fractions.map(() => clonePosition(openRing[0]!));
+  }
+
+  return fractions.map((fraction) =>
+    sampleRingAtDistance(openRing, segmentLengths, normalizeFraction(fraction) * totalLength),
+  );
+}
+
+function getRingSegmentLengths(openRing: readonly GeoJsonPosition[]) {
+  return openRing.map((position, index) =>
+    distance(position, openRing[(index + 1) % openRing.length]!),
+  );
+}
+
+function sampleRingAtDistance(
+  openRing: readonly GeoJsonPosition[],
+  segmentLengths: readonly number[],
+  targetDistance: number,
+): GeoJsonPosition {
+  const epsilon = 1e-9;
+  let traversed = 0;
+
+  for (let index = 0; index < openRing.length; index += 1) {
+    const segmentLength = segmentLengths[index]!;
+    const nextTraversed = traversed + segmentLength;
+    const start = openRing[index]!;
+    const end = openRing[(index + 1) % openRing.length]!;
+
+    if (Math.abs(targetDistance - traversed) <= epsilon) {
+      return clonePosition(start);
+    }
+
+    if (Math.abs(targetDistance - nextTraversed) <= epsilon) {
+      return clonePosition(end);
+    }
+
+    if (targetDistance <= nextTraversed || index === openRing.length - 1) {
+      const progress = segmentLength === 0 ? 0 : (targetDistance - traversed) / segmentLength;
+
+      return interpolatePosition(start, end, progress);
+    }
+
+    traversed = nextTraversed;
+  }
+
+  return clonePosition(openRing.at(-1)!);
+}
+
 function getRingCentroid(openRing: readonly GeoJsonPosition[]): GeoJsonPosition {
   try {
     const ring = closeRing(openRing);
@@ -899,6 +1155,16 @@ function normalizeAngle(value: number) {
   }
 
   return angle;
+}
+
+function normalizeFraction(value: number) {
+  const remainder = value % 1;
+
+  return remainder < 0 ? remainder + 1 : remainder;
+}
+
+function distance(left: GeoJsonPosition, right: GeoJsonPosition) {
+  return Math.hypot(right[0] - left[0], right[1] - left[1]);
 }
 
 export function clampProgress(value: number) {

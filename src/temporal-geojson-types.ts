@@ -88,6 +88,7 @@ export type TemporalGeoJsonInterpolationStrategy =
   | "hold"
   | "compatible"
   | "resample"
+  | "vertex-union"
   | "centroid-radial";
 
 export type TemporalGeoJsonInterpolationOptions = {
