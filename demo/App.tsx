@@ -44,6 +44,8 @@ import {
   type MapViewState,
   type GeoJsonEditMode,
   type GeoJsonEditorSelection,
+  createGeoJsonTransitionPlan,
+  interpolateGeoJsonTransitionPlan,
   type TemporalGeoJsonGeometryFeature,
   type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalGeoJsonInterpolationStrategy,
@@ -108,14 +110,25 @@ type DemoInterpolationGeometryPair = Record<
   DemoInterpolationKeyframeId,
   TemporalGeoJsonSupportedGeometry
 >;
-type DemoInterpolationExample = {
+type DemoGeometryInterpolationExample = {
   defaultStrategy: TemporalGeoJsonInterpolationStrategy;
   description: string;
   geometryType: DemoInterpolationGeometryType;
   id: string;
+  kind?: "geometry";
   label: string;
   pair: DemoInterpolationGeometryPair;
 };
+type DemoTopologyInterpolationExample = {
+  description: string;
+  endCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>;
+  geometryType: "Polygon";
+  id: string;
+  kind: "topology";
+  label: string;
+  startCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>;
+};
+type DemoInterpolationExample = DemoGeometryInterpolationExample | DemoTopologyInterpolationExample;
 type DemoInterpolationHandle = {
   label: string;
   path: number[];
@@ -1949,9 +1962,10 @@ function GeoJsonInterpolationWorkbench() {
   const example =
     demoInterpolationExamples.find((item) => item.id === exampleId) ??
     demoInterpolationExamples[0]!;
+  const isTopologyExample = example.kind === "topology";
   const geometryType = example.geometryType;
   const [strategy, setStrategy] = useState<TemporalGeoJsonInterpolationStrategy>(
-    demoInterpolationExamples[0]!.defaultStrategy,
+    getDemoInterpolationDefaultStrategy(demoInterpolationExamples[0]!),
   );
   const [progress, setProgress] = useState(50);
   const [selectedKeyframe, setSelectedKeyframe] = useState<DemoInterpolationKeyframeId>("end");
@@ -1959,28 +1973,51 @@ function GeoJsonInterpolationWorkbench() {
   const [geometries, setGeometries] = useState<Record<string, DemoInterpolationGeometryPair>>(() =>
     createDemoInterpolationGeometryExamples(),
   );
-  const geometryPair = geometries[example.id] ?? example.pair;
-  const handles = getDemoInterpolationHandles(geometryPair[selectedKeyframe]);
-  const selectedHandle = handles[Math.min(selectedHandleIndex, handles.length - 1)]!;
-  const selectedPosition = getDemoInterpolationPosition(
-    geometryPair[selectedKeyframe],
-    selectedHandle.path,
-  );
+  const geometryPair = isTopologyExample ? null : geometries[example.id] ?? example.pair;
+  const topologyPair = isTopologyExample
+    ? {
+        end: example.endCollection,
+        start: example.startCollection,
+      }
+    : null;
+  const handles = geometryPair ? getDemoInterpolationHandles(geometryPair[selectedKeyframe]) : [];
+  const selectedHandle = handles[Math.min(selectedHandleIndex, handles.length - 1)] ?? null;
+  const selectedPosition =
+    geometryPair && selectedHandle
+      ? getDemoInterpolationPosition(geometryPair[selectedKeyframe], selectedHandle.path)
+      : ([0, 0] as [number, number]);
   const progressTime = progress / 100;
   const interpolatedCollection = useMemo(
-    () =>
-      getTemporalGeoJsonFeatureCollectionAtTime(
+    () => {
+      if (topologyPair) {
+        if (progressTime <= 0) {
+          return topologyPair.start;
+        }
+
+        if (progressTime >= 1) {
+          return topologyPair.end;
+        }
+
+        return interpolateGeoJsonTransitionPlan(
+          createGeoJsonTransitionPlan(topologyPair.start, topologyPair.end, {
+            algorithm: "topology-plan",
+          }),
+          progressTime,
+        );
+      }
+
+      return getTemporalGeoJsonFeatureCollectionAtTime(
         [
           {
             id: "interpolation-preview",
             label: `${geometryType} preview`,
             frames: [
               {
-                geometry: geometryPair.start,
+                geometry: geometryPair!.start,
                 time: 0,
               },
               {
-                geometry: geometryPair.end,
+                geometry: geometryPair!.end,
                 time: 1,
               },
             ],
@@ -1992,21 +2029,22 @@ function GeoJsonInterpolationWorkbench() {
           minResampleCoordinates: 24,
           strategy,
         },
-      ),
-    [geometryPair, geometryType, progressTime, strategy],
+      );
+    },
+    [geometryPair, geometryType, progressTime, strategy, topologyPair],
   );
-  const startCollection = createDemoInterpolationFeatureCollection(
-    "start",
-    "Start keyframe",
-    geometryPair.start,
-  );
-  const endCollection = createDemoInterpolationFeatureCollection(
-    "end",
-    "End keyframe",
-    geometryPair.end,
-  );
+  const startCollection = topologyPair
+    ? topologyPair.start
+    : createDemoInterpolationFeatureCollection("start", "Start keyframe", geometryPair!.start);
+  const endCollection = topologyPair
+    ? topologyPair.end
+    : createDemoInterpolationFeatureCollection("end", "End keyframe", geometryPair!.end);
   const previewFeature = interpolatedCollection.features[0] ?? null;
-  const previewGeometry = previewFeature?.geometry ?? geometryPair.start;
+  const previewGeometry =
+    previewFeature?.geometry ??
+    geometryPair?.start ??
+    topologyPair?.start.features[0]?.geometry ??
+    ({ coordinates: [0, 0], type: "Point" } as const);
   const bounds = getBoundsFromGeoJson({
     features: [
       ...startCollection.features,
@@ -2022,11 +2060,11 @@ function GeoJsonInterpolationWorkbench() {
       demoInterpolationExamples[0]!;
 
     setExampleId(nextExample.id);
-    setStrategy(nextExample.defaultStrategy);
+    setStrategy(getDemoInterpolationDefaultStrategy(nextExample));
     setSelectedHandleIndex(0);
   };
   const updateSelectedPosition = (axis: 0 | 1, value: number) => {
-    if (!Number.isFinite(value)) {
+    if (!geometryPair || !selectedHandle || !Number.isFinite(value)) {
       return;
     }
 
@@ -2034,11 +2072,11 @@ function GeoJsonInterpolationWorkbench() {
       axis === 0 ? [value, selectedPosition[1]] : [selectedPosition[0], value];
 
     setGeometries((current) => ({
-      ...current,
-      [example.id]: {
-        ...current[example.id],
-        [selectedKeyframe]: setDemoInterpolationPosition(
-          current[example.id]![selectedKeyframe],
+        ...current,
+        [example.id]: {
+          ...current[example.id],
+          [selectedKeyframe]: setDemoInterpolationPosition(
+            current[example.id]![selectedKeyframe],
           selectedHandle.path,
           nextPosition,
         ),
@@ -2046,14 +2084,29 @@ function GeoJsonInterpolationWorkbench() {
     }));
   };
   const resetCurrentGeometry = () => {
+    if (isTopologyExample) {
+      setProgress(50);
+      setSelectedHandleIndex(0);
+      return;
+    }
+
     setGeometries((current) => ({
       ...current,
       [example.id]: example.pair,
     }));
-    setStrategy(example.defaultStrategy);
+    setStrategy(getDemoInterpolationDefaultStrategy(example));
     setProgress(50);
     setSelectedHandleIndex(0);
   };
+  const transitionKinds = [
+    ...new Set(
+      interpolatedCollection.features.flatMap((feature) => {
+        const kind = readDemoTransitionKind(feature.properties);
+
+        return typeof kind === "string" ? [kind] : [];
+      }),
+    ),
+  ];
 
   return (
     <section className="demo-interpolation-workbench" aria-label="GeoJSON interpolation workbench">
@@ -2079,12 +2132,12 @@ function GeoJsonInterpolationWorkbench() {
           />
           <GeoJsonLayer
             featureCollection={interpolatedCollection}
-            getFeatureStyle={() => getDemoInterpolationLayerStyle("preview", geometryType)}
+            getFeatureStyle={(feature) => getDemoInterpolationPreviewLayerStyle(feature, geometryType)}
             layerId="interpolation-preview"
             renderFeaturePopup={(feature) => (
               <div className="demo-popup">
                 <strong>{feature.geometry.type} interpolation</strong>
-                <span>{strategyDetails?.label ?? strategy}</span>
+                <span>{isTopologyExample ? "Topology plan" : strategyDetails?.label ?? strategy}</span>
                 <span>{progress}% between keyframes</span>
                 <span>{countDemoGeometryPositions(feature.geometry)} coordinates</span>
               </div>
@@ -2127,28 +2180,37 @@ function GeoJsonInterpolationWorkbench() {
           </NativeSelect>
         </label>
 
-        <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-          <span>Algorithm</span>
-          <NativeSelect
-            value={strategy}
-            onChange={(event) =>
-              setStrategy(event.target.value as TemporalGeoJsonInterpolationStrategy)
-            }
-          >
-            {demoInterpolationStrategies.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.label}
-              </option>
-            ))}
-          </NativeSelect>
-        </label>
+        {isTopologyExample ? (
+          <div className="demo-interpolation-note">
+            <strong>Topology plan</strong>
+            <span>Collection-level split and merge fragments.</span>
+          </div>
+        ) : (
+          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+            <span>Algorithm</span>
+            <NativeSelect
+              value={strategy}
+              onChange={(event) =>
+                setStrategy(event.target.value as TemporalGeoJsonInterpolationStrategy)
+              }
+            >
+              {demoInterpolationStrategies.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
+        )}
 
         <div className="demo-interpolation-note">
           <strong>{geometryType}</strong>
           <span>{example.description}</span>
           <span>
-            {strategyDetails?.description ??
-              "Uses the selected temporal GeoJSON interpolation mode."}
+            {isTopologyExample
+              ? "Uses collection-level topology planning across all scene features."
+              : strategyDetails?.description ??
+                "Uses the selected temporal GeoJSON interpolation mode."}
           </span>
         </div>
 
@@ -2168,59 +2230,63 @@ function GeoJsonInterpolationWorkbench() {
           />
         </label>
 
-        <div className="demo-interpolation-keyframes" aria-label="Keyframe selector">
-          <Button
-            size="sm"
-            variant={selectedKeyframe === "start" ? "default" : "secondary"}
-            type="button"
-            onClick={() => setSelectedKeyframe("start")}
-          >
-            Start
-          </Button>
-          <Button
-            size="sm"
-            variant={selectedKeyframe === "end" ? "default" : "secondary"}
-            type="button"
-            onClick={() => setSelectedKeyframe("end")}
-          >
-            End
-          </Button>
-        </div>
+        {!isTopologyExample ? (
+          <>
+            <div className="demo-interpolation-keyframes" aria-label="Keyframe selector">
+              <Button
+                size="sm"
+                variant={selectedKeyframe === "start" ? "default" : "secondary"}
+                type="button"
+                onClick={() => setSelectedKeyframe("start")}
+              >
+                Start
+              </Button>
+              <Button
+                size="sm"
+                variant={selectedKeyframe === "end" ? "default" : "secondary"}
+                type="button"
+                onClick={() => setSelectedKeyframe("end")}
+              >
+                End
+              </Button>
+            </div>
 
-        <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-          <span>Coordinate handle</span>
-          <NativeSelect
-            value={String(Math.min(selectedHandleIndex, handles.length - 1))}
-            onChange={(event) => setSelectedHandleIndex(Number(event.target.value))}
-          >
-            {handles.map((handle, index) => (
-              <option key={handle.label} value={index}>
-                {handle.label}
-              </option>
-            ))}
-          </NativeSelect>
-        </label>
+            <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+              <span>Coordinate handle</span>
+              <NativeSelect
+                value={String(Math.min(selectedHandleIndex, handles.length - 1))}
+                onChange={(event) => setSelectedHandleIndex(Number(event.target.value))}
+              >
+                {handles.map((handle, index) => (
+                  <option key={handle.label} value={index}>
+                    {handle.label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </label>
 
-        <div className="demo-coordinate-grid">
-          <label>
-            <span>Longitude</span>
-            <input
-              step={0.1}
-              type="number"
-              value={Number(selectedPosition[0].toFixed(4))}
-              onChange={(event) => updateSelectedPosition(0, Number(event.target.value))}
-            />
-          </label>
-          <label>
-            <span>Latitude</span>
-            <input
-              step={0.1}
-              type="number"
-              value={Number(selectedPosition[1].toFixed(4))}
-              onChange={(event) => updateSelectedPosition(1, Number(event.target.value))}
-            />
-          </label>
-        </div>
+            <div className="demo-coordinate-grid">
+              <label>
+                <span>Longitude</span>
+                <input
+                  step={0.1}
+                  type="number"
+                  value={Number(selectedPosition[0].toFixed(4))}
+                  onChange={(event) => updateSelectedPosition(0, Number(event.target.value))}
+                />
+              </label>
+              <label>
+                <span>Latitude</span>
+                <input
+                  step={0.1}
+                  type="number"
+                  value={Number(selectedPosition[1].toFixed(4))}
+                  onChange={(event) => updateSelectedPosition(1, Number(event.target.value))}
+                />
+              </label>
+            </div>
+          </>
+        ) : null}
 
         <dl className="demo-interpolation-facts">
           <div>
@@ -2236,17 +2302,33 @@ function GeoJsonInterpolationWorkbench() {
             <dd>{countDemoGeometryParts(previewGeometry)}</dd>
           </div>
           <div>
-            <dt>Start</dt>
+            <dt>{isTopologyExample ? "Start features" : "Start"}</dt>
             <dd>
-              {geometryPair.start.type} / {countDemoGeometryPositions(geometryPair.start)}
+              {isTopologyExample
+                ? startCollection.features.length
+                : `${geometryPair!.start.type} / ${countDemoGeometryPositions(geometryPair!.start)}`}
             </dd>
           </div>
           <div>
-            <dt>End</dt>
+            <dt>{isTopologyExample ? "End features" : "End"}</dt>
             <dd>
-              {geometryPair.end.type} / {countDemoGeometryPositions(geometryPair.end)}
+              {isTopologyExample
+                ? endCollection.features.length
+                : `${geometryPair!.end.type} / ${countDemoGeometryPositions(geometryPair!.end)}`}
             </dd>
           </div>
+          {isTopologyExample ? (
+            <>
+              <div>
+                <dt>Preview features</dt>
+                <dd>{interpolatedCollection.features.length}</dd>
+              </div>
+              <div>
+                <dt>Kinds</dt>
+                <dd>{transitionKinds.length > 0 ? transitionKinds.join(", ") : "scene"}</dd>
+              </div>
+            </>
+          ) : null}
         </dl>
       </div>
     </section>
@@ -2306,10 +2388,60 @@ function getDemoInterpolationLayerStyle(
   };
 }
 
+function getDemoInterpolationPreviewLayerStyle(
+  feature: GeoJsonLayerFeature<DemoGeoJsonProperties>,
+  geometryType: DemoInterpolationGeometryType,
+) {
+  const transitionKind = readDemoTransitionKind(feature.properties);
+
+  if (transitionKind === "split") {
+    return {
+      polygonFillColor: "#14b8a6",
+      polygonFillOpacity: 0.24,
+      polygonStrokeColor: "#0f766e",
+      polygonStrokeWidth: 3,
+    };
+  }
+
+  if (transitionKind === "merge") {
+    return {
+      polygonFillColor: "#f59e0b",
+      polygonFillOpacity: 0.24,
+      polygonStrokeColor: "#b45309",
+      polygonStrokeWidth: 3,
+    };
+  }
+
+  if (transitionKind === "preserve") {
+    return {
+      polygonFillColor: "#64748b",
+      polygonFillOpacity: 0.2,
+      polygonStrokeColor: "#475569",
+      polygonStrokeWidth: 3,
+    };
+  }
+
+  return getDemoInterpolationLayerStyle("preview", geometryType);
+}
+
+function readDemoTransitionKind(properties: unknown) {
+  return isDemoRecord(properties) ? properties.transitionKind : undefined;
+}
+
+function isDemoRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function createDemoInterpolationGeometryExamples() {
   return Object.fromEntries(
-    demoInterpolationExamples.map((example) => [example.id, example.pair]),
+    demoInterpolationExamples.flatMap((example) =>
+      example.kind === "topology" ? [] : [[example.id, example.pair]],
+    ),
   ) as Record<string, DemoInterpolationGeometryPair>;
+}
+
+function getDemoInterpolationDefaultStrategy(example: DemoInterpolationExample) {
+  return example.kind === "topology" ? "vertex-union" : example.defaultStrategy;
 }
 
 function createDemoInterpolationExamples(): DemoInterpolationExample[] {
@@ -2421,7 +2553,129 @@ function createDemoInterpolationExamples(): DemoInterpolationExample[] {
         start: createDemoInterpolationGeometryPair("Polygon").start,
       },
     },
+    {
+      description:
+        "One service region separates into three district polygons using collection-level topology fragments.",
+      endCollection: createDemoTopologySplitCollection("end"),
+      geometryType: "Polygon",
+      id: "topology-polygon-split",
+      kind: "topology",
+      label: "Topology: polygon split",
+      startCollection: createDemoTopologySplitCollection("start"),
+    },
+    {
+      description:
+        "Three district polygons consolidate into one service region using collection-level topology fragments.",
+      endCollection: createDemoTopologyMergeCollection("end"),
+      geometryType: "Polygon",
+      id: "topology-polygon-merge",
+      kind: "topology",
+      label: "Topology: polygon merge",
+      startCollection: createDemoTopologyMergeCollection("start"),
+    },
   ];
+}
+
+function createDemoTopologySplitCollection(
+  keyframe: DemoInterpolationKeyframeId,
+): TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> {
+  if (keyframe === "start") {
+    return {
+      features: [
+        demoTopologyFeature("topology-source", "Service region", {
+          coordinates: [
+            [
+              [-7.0, 43.5],
+              [6.2, 43.8],
+              [6.7, 49.0],
+              [-6.4, 49.4],
+              [-7.0, 43.5],
+            ],
+          ],
+          type: "Polygon",
+        }),
+      ],
+      type: "FeatureCollection",
+    };
+  }
+
+  return {
+    features: [
+      demoTopologyFeature("topology-west", "West district", {
+        coordinates: [[[-5.8, 44.4], [-1.3, 44.1], [-1.1, 50.0], [-6.0, 49.5], [-5.8, 44.4]]],
+        type: "Polygon",
+      }),
+      demoTopologyFeature("topology-central", "Central district", {
+        coordinates: [[[-1.0, 44.0], [3.2, 44.5], [3.0, 50.2], [-0.8, 49.8], [-1.0, 44.0]]],
+        type: "Polygon",
+      }),
+      demoTopologyFeature("topology-east", "East district", {
+        coordinates: [[[3.4, 44.4], [8.1, 44.8], [7.5, 50.3], [3.2, 49.9], [3.4, 44.4]]],
+        type: "Polygon",
+      }),
+    ],
+    type: "FeatureCollection",
+  };
+}
+
+function createDemoTopologyMergeCollection(
+  keyframe: DemoInterpolationKeyframeId,
+): TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> {
+  if (keyframe === "end") {
+    return {
+      features: [
+        demoTopologyFeature("topology-target", "Merged service region", {
+          coordinates: [
+            [
+              [-5.6, 44.4],
+              [8.2, 44.8],
+              [7.4, 50.3],
+              [-5.1, 49.8],
+              [-5.6, 44.4],
+            ],
+          ],
+          type: "Polygon",
+        }),
+      ],
+      type: "FeatureCollection",
+    };
+  }
+
+  return {
+    features: [
+      demoTopologyFeature("topology-west", "West district", {
+        coordinates: [[[-7.2, 43.3], [-2.5, 43.6], [-2.2, 48.8], [-6.8, 49.0], [-7.2, 43.3]]],
+        type: "Polygon",
+      }),
+      demoTopologyFeature("topology-central", "Central district", {
+        coordinates: [[[-2.1, 43.6], [2.3, 43.4], [2.6, 49.0], [-1.8, 48.9], [-2.1, 43.6]]],
+        type: "Polygon",
+      }),
+      demoTopologyFeature("topology-east", "East district", {
+        coordinates: [[[2.8, 43.7], [6.7, 43.5], [6.9, 49.2], [3.0, 49.0], [2.8, 43.7]]],
+        type: "Polygon",
+      }),
+    ],
+    type: "FeatureCollection",
+  };
+}
+
+function demoTopologyFeature(
+  id: string,
+  label: string,
+  geometry: TemporalGeoJsonSupportedGeometry,
+): TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>["features"][number] {
+  return {
+    geometry,
+    id,
+    properties: {
+      kind: "topology-area",
+      label,
+      time: 0,
+      trackId: id,
+    },
+    type: "Feature",
+  };
 }
 
 function createDemoInterpolationGeometryPair(

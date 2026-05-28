@@ -100,6 +100,7 @@ describe("@moritzbrantner/maps GeoJSON timeline", () => {
     });
 
     expect(frame.features).toHaveLength(1);
+    expect(readTransitionKind(frame.features[0])).toBe("morph");
     expect(frame.features[0]?.geometry).toEqual({
       coordinates: [
         [
@@ -153,6 +154,89 @@ describe("@moritzbrantner/maps GeoJSON timeline", () => {
       }).features,
     ).toHaveLength(1);
   });
+
+  test("samples one-to-many scene transition as split fragments", () => {
+    const document = createGeoJsonTimelineDocument(splitSceneCollection, {
+      durationMs: 2_000,
+      getItemDurationMs: (feature) => Number(feature.properties?.durationMs),
+      getItemStartMs: (feature) => Number(feature.properties?.startMs),
+      getTimelineTrackId: () => "districts",
+    });
+    const options = {
+      defaultTransition: {
+        algorithm: "topology-plan" as const,
+        durationMs: 500,
+      },
+    };
+
+    expect(getGeoJsonTimelineSceneAtTime(splitSceneCollection, document, 250, options).features.map((feature) => feature.id)).toEqual([
+      "source",
+    ]);
+
+    const transitionFrame = getGeoJsonTimelineSceneAtTime(splitSceneCollection, document, 750, options);
+    expect(transitionFrame.features).toHaveLength(2);
+    expect(transitionFrame.features.every((feature) => feature.properties?.transitionKind === "split")).toBe(true);
+    expectGeometriesAreFiniteAndClosed(transitionFrame);
+
+    expect(getGeoJsonTimelineSceneAtTime(splitSceneCollection, document, 1_000, options).features.map((feature) => feature.id)).toEqual([
+      "left",
+      "right",
+    ]);
+    expect(getGeoJsonTimelineSceneAtTime(splitSceneCollection, document, 1_250, options).features.map((feature) => feature.id)).toEqual([
+      "left",
+      "right",
+    ]);
+  });
+
+  test("samples many-to-one scene transition as merge fragments", () => {
+    const document = createGeoJsonTimelineDocument(mergeSceneCollection, {
+      durationMs: 2_000,
+      getItemDurationMs: (feature) => Number(feature.properties?.durationMs),
+      getItemStartMs: (feature) => Number(feature.properties?.startMs),
+      getTimelineTrackId: () => "districts",
+    });
+    const options = {
+      defaultTransition: {
+        algorithm: "topology-plan" as const,
+        durationMs: 500,
+      },
+    };
+
+    expect(getGeoJsonTimelineSceneAtTime(mergeSceneCollection, document, 250, options).features.map((feature) => feature.id)).toEqual([
+      "left",
+      "right",
+    ]);
+
+    const transitionFrame = getGeoJsonTimelineSceneAtTime(mergeSceneCollection, document, 750, options);
+    expect(transitionFrame.features).toHaveLength(2);
+    expect(transitionFrame.features.every((feature) => feature.properties?.transitionKind === "merge")).toBe(true);
+    expectGeometriesAreFiniteAndClosed(transitionFrame);
+
+    expect(getGeoJsonTimelineSceneAtTime(mergeSceneCollection, document, 1_000, options).features.map((feature) => feature.id)).toEqual([
+      "target",
+    ]);
+  });
+
+  test("uses getSceneTransition before getTransition", () => {
+    const document = createGeoJsonTimelineDocument(splitSceneCollection, {
+      durationMs: 2_000,
+      getItemDurationMs: (feature) => Number(feature.properties?.durationMs),
+      getItemStartMs: (feature) => Number(feature.properties?.startMs),
+      getTimelineTrackId: () => "districts",
+    });
+    let itemTransitionCalled = false;
+    const frame = getGeoJsonTimelineSceneAtTime(splitSceneCollection, document, 750, {
+      getSceneTransition: () => ({ algorithm: "topology-plan", durationMs: 500 }),
+      getTransition: () => {
+        itemTransitionCalled = true;
+        return { algorithm: "hold", durationMs: 500 };
+      },
+    });
+
+    expect(itemTransitionCalled).toBe(false);
+    expect(frame.features).toHaveLength(2);
+    expect(frame.features.every((feature) => feature.properties?.transitionKind === "split")).toBe(true);
+  });
 });
 
 const sceneCollection = {
@@ -198,3 +282,91 @@ const sceneCollection = {
   ],
   type: "FeatureCollection",
 } satisfies TemporalGeoJsonGeometryFeatureCollection;
+
+const splitSceneCollection = {
+  features: [
+    sceneFeature("source", 0, 1_000, square(0, 0, 8, 4)),
+    sceneFeature("left", 1_000, 1_000, square(0, 0, 4, 4)),
+    sceneFeature("right", 1_000, 1_000, square(4, 0, 8, 4)),
+  ],
+  type: "FeatureCollection",
+} satisfies TemporalGeoJsonGeometryFeatureCollection;
+
+const mergeSceneCollection = {
+  features: [
+    sceneFeature("left", 0, 1_000, square(0, 0, 4, 4)),
+    sceneFeature("right", 0, 1_000, square(4, 0, 8, 4)),
+    sceneFeature("target", 1_000, 1_000, square(0, 0, 8, 4)),
+  ],
+  type: "FeatureCollection",
+} satisfies TemporalGeoJsonGeometryFeatureCollection;
+
+function sceneFeature(
+  id: string,
+  startMs: number,
+  durationMs: number,
+  geometry: TemporalGeoJsonGeometryFeatureCollection["features"][number]["geometry"],
+): TemporalGeoJsonGeometryFeatureCollection["features"][number] {
+  return {
+    geometry,
+    id,
+    properties: {
+      durationMs,
+      startMs,
+    },
+    type: "Feature",
+  };
+}
+
+function square(west: number, south: number, east: number, north: number) {
+  return {
+    coordinates: [
+      [
+        [west, south],
+        [east, south],
+        [east, north],
+        [west, north],
+        [west, south],
+      ],
+    ],
+    type: "Polygon" as const,
+  };
+}
+
+function expectGeometriesAreFiniteAndClosed(collection: TemporalGeoJsonGeometryFeatureCollection) {
+  for (const item of collection.features) {
+    const geometry = item.geometry as
+      | {
+          coordinates?: unknown;
+          type: string;
+        }
+      | null;
+    const coordinates = geometry?.coordinates;
+
+    expect(flattenNumbers(coordinates).every(Number.isFinite)).toBe(true);
+
+    if (geometry?.type === "Polygon") {
+      for (const ring of coordinates as Array<Array<[number, number]>>) {
+        expect(ring.at(0)).toEqual(ring.at(-1));
+      }
+    }
+  }
+}
+
+function flattenNumbers(value: unknown): number[] {
+  if (typeof value === "number") {
+    return [value];
+  }
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap(flattenNumbers);
+}
+
+function readTransitionKind(feature: TemporalGeoJsonGeometryFeatureCollection["features"][number] | undefined) {
+  const properties = feature?.properties as { transitionKind?: unknown } | null | undefined;
+
+  return properties?.transitionKind;
+}

@@ -22,7 +22,7 @@ import {
   createGeoJsonTransitionPlan,
   interpolateGeoJsonTransitionPlan,
   type GeoJsonTransitionAlgorithm,
-  type GeoJsonTransitionFallback,
+  type GeoJsonTransitionOptions,
 } from "./geojson-transition";
 import { cloneGeometry, normalizeSupportedGeometry } from "./temporal-geojson-geometry";
 import type {
@@ -103,20 +103,34 @@ export type GeoJsonTimelineApplyOptions<
   outsideItemBehavior?: "none" | "hold";
 };
 
-export type GeoJsonTimelineTransitionSpec = {
-  algorithm?: GeoJsonTransitionAlgorithm;
+export type GeoJsonTimelineTransitionSpec = GeoJsonTransitionOptions & {
   durationMs?: number;
-  fallback?: GeoJsonTransitionFallback;
 };
 
 export type GeoJsonTimelineSceneOptions<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 > = GeoJsonTimelineApplyOptions<TProperties> & {
   defaultTransition?: GeoJsonTimelineTransitionSpec;
+  getSceneTransition?: (
+    previous: Array<
+      TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>
+    >,
+    next: Array<
+      TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>
+    >,
+  ) => GeoJsonTimelineTransitionSpec | undefined;
   getTransition?: (
     previous: TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>,
     next: TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>,
   ) => GeoJsonTimelineTransitionSpec | undefined;
+};
+
+type GeoJsonTimelineScene<TProperties extends Record<string, unknown>> = {
+  endMs: number;
+  items: Array<
+    TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>
+  >;
+  startMs: number;
 };
 
 export type GeoJsonTimelineEditorProps<
@@ -390,79 +404,78 @@ function getGeoJsonTimelineTrackFeaturesAtTime<
   timeMs: number,
   options: GeoJsonTimelineSceneOptions<TProperties>,
 ): Array<TemporalGeoJsonGeometryFeature<TProperties>> {
-  const sortedItems = [...items].sort((left, right) => left.startMs - right.startMs);
-  const transition = findActiveTimelineTransition(sortedItems, timeMs, options);
+  const scenes = createTimelineScenes(items);
+  const transition = findActiveTimelineTransition(scenes, timeMs, options);
 
   if (transition) {
     const transitionSpec = transition.spec ?? {};
-    const previousFeature = getTransformedFeatureForTimelineItem(
+    const previousFeatures = getTransformedFeaturesForTimelineScene(
       collection,
       transition.previous,
       timeMs,
       options,
     );
-    const nextFeature = getTransformedFeatureForTimelineItem(
+    const nextFeatures = getTransformedFeaturesForTimelineScene(
       collection,
       transition.next,
       timeMs,
       options,
     );
 
-    if (!previousFeature || !nextFeature) {
+    if (previousFeatures.length === 0 && nextFeatures.length === 0) {
       return [];
     }
 
     return [
       ...interpolateGeoJsonTransitionPlan(
-      createGeoJsonTransitionPlan(
-        { features: [previousFeature], type: "FeatureCollection" },
-        { features: [nextFeature], type: "FeatureCollection" },
-        {
-          algorithm: transitionSpec.algorithm ?? getDefaultTransitionAlgorithm(previousFeature.geometry),
-          fallback: transitionSpec.fallback,
-        },
-      ),
-      transition.progress,
+        createGeoJsonTransitionPlan(
+          { features: previousFeatures, type: "FeatureCollection" },
+          { features: nextFeatures, type: "FeatureCollection" },
+          {
+            ...getTransitionOptionsWithoutDuration(transitionSpec),
+            algorithm:
+              transitionSpec.algorithm ??
+              getDefaultSceneTransitionAlgorithm(previousFeatures, nextFeatures),
+          },
+        ),
+        transition.progress,
       ).features,
     ];
   }
 
-  const activeItem = findActiveTimelineItem(sortedItems, timeMs, options.outsideItemBehavior);
-  const activeFeature = activeItem
-    ? getTransformedFeatureForTimelineItem(collection, activeItem, timeMs, options)
-    : null;
+  const activeScene = findActiveTimelineScene(scenes, timeMs, options.outsideItemBehavior);
 
-  return activeFeature ? [activeFeature] : [];
+  return activeScene
+    ? getTransformedFeaturesForTimelineScene(collection, activeScene, timeMs, options)
+    : [];
 }
 
 function findActiveTimelineTransition<TProperties extends Record<string, unknown>>(
-  items: Array<
-    TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>
-  >,
+  scenes: Array<GeoJsonTimelineScene<TProperties>>,
   timeMs: number,
   options: GeoJsonTimelineSceneOptions<TProperties>,
 ) {
-  for (let index = 0; index < items.length - 1; index += 1) {
-    const previous = items[index]!;
-    const next = items[index + 1]!;
-    const spec = options.getTransition?.(previous, next) ?? options.defaultTransition;
+  for (let index = 0; index < scenes.length - 1; index += 1) {
+    const previous = scenes[index]!;
+    const next = scenes[index + 1]!;
+    const spec = resolveTimelineTransitionSpec(previous, next, options);
     const durationMs = Math.max(0, spec?.durationMs ?? 0);
 
     if (durationMs <= 0) {
       continue;
     }
 
-    const previousEndMs = previous.startMs + previous.durationMs;
-    const transitionStartMs = previousEndMs - durationMs;
+    const transitionEndMs = previous.endMs;
+    const transitionStartMs = transitionEndMs - durationMs;
 
-    if (timeMs < transitionStartMs || timeMs > previousEndMs) {
+    if (timeMs <= transitionStartMs || timeMs >= transitionEndMs) {
       continue;
     }
 
     return {
       next,
       previous,
-      progress: durationMs === 0 ? 1 : (timeMs - transitionStartMs) / durationMs,
+      progress: (timeMs - transitionStartMs) / durationMs,
       spec,
     };
   }
@@ -470,25 +483,90 @@ function findActiveTimelineTransition<TProperties extends Record<string, unknown
   return null;
 }
 
-function findActiveTimelineItem<TProperties extends Record<string, unknown>>(
+function createTimelineScenes<TProperties extends Record<string, unknown>>(
   items: Array<
     TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>
   >,
+): Array<GeoJsonTimelineScene<TProperties>> {
+  const scenes: Array<GeoJsonTimelineScene<TProperties>> = [];
+  const sortedItems = [...items].sort((left, right) => {
+    const leftEndMs = left.startMs + left.durationMs;
+    const rightEndMs = right.startMs + right.durationMs;
+
+    return left.startMs - right.startMs || leftEndMs - rightEndMs || left.id.localeCompare(right.id);
+  });
+
+  for (const item of sortedItems) {
+    const endMs = item.startMs + item.durationMs;
+    const activeScene = scenes.at(-1);
+
+    if (activeScene && activeScene.startMs === item.startMs && activeScene.endMs === endMs) {
+      activeScene.items.push(item);
+      continue;
+    }
+
+    scenes.push({
+      endMs,
+      items: [item],
+      startMs: item.startMs,
+    });
+  }
+
+  return scenes;
+}
+
+function resolveTimelineTransitionSpec<TProperties extends Record<string, unknown>>(
+  previous: GeoJsonTimelineScene<TProperties>,
+  next: GeoJsonTimelineScene<TProperties>,
+  options: GeoJsonTimelineSceneOptions<TProperties>,
+) {
+  const firstPreviousItem = previous.items[0];
+  const firstNextItem = next.items[0];
+
+  return (
+    options.getSceneTransition?.(previous.items, next.items) ??
+    (firstPreviousItem && firstNextItem
+      ? options.getTransition?.(firstPreviousItem, firstNextItem)
+      : undefined) ??
+    options.defaultTransition
+  );
+}
+
+function findActiveTimelineScene<TProperties extends Record<string, unknown>>(
+  scenes: Array<GeoJsonTimelineScene<TProperties>>,
   timeMs: number,
   outsideItemBehavior: "none" | "hold" | undefined,
 ) {
-  const active = items.find((item) => timeMs >= item.startMs && timeMs <= item.startMs + item.durationMs);
+  const active = scenes.find(
+    (scene, index) =>
+      timeMs >= scene.startMs && (timeMs < scene.endMs || (index === scenes.length - 1 && timeMs <= scene.endMs)),
+  );
 
   if (active || outsideItemBehavior !== "hold") {
     return active;
   }
 
   return (
-    [...items]
+    [...scenes]
       .reverse()
-      .find((item) => item.startMs + item.durationMs < timeMs) ??
-    items.find((item) => item.startMs > timeMs)
+      .find((scene) => scene.endMs < timeMs) ??
+    scenes.find((scene) => scene.startMs > timeMs)
   );
+}
+
+function getTransformedFeaturesForTimelineScene<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>(
+  collection: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
+  scene: GeoJsonTimelineScene<TProperties>,
+  timeMs: number,
+  options: GeoJsonTimelineSceneOptions<TProperties>,
+): Array<TemporalGeoJsonGeometryFeature<TProperties>> {
+  return scene.items.flatMap((item) => {
+    const feature = getTransformedFeatureForTimelineItem(collection, item, timeMs, options);
+
+    return feature ? [feature] : [];
+  });
 }
 
 function getTransformedFeatureForTimelineItem<
@@ -535,6 +613,33 @@ function getFeatureForTimelineItem<TProperties extends Record<string, unknown>>(
   );
 }
 
+function getDefaultSceneTransitionAlgorithm<TProperties extends Record<string, unknown>>(
+  previousFeatures: Array<TemporalGeoJsonGeometryFeature<TProperties>>,
+  nextFeatures: Array<TemporalGeoJsonGeometryFeature<TProperties>>,
+): GeoJsonTransitionAlgorithm {
+  const previousPolygonCount = countPolygonLikeFeatures(previousFeatures);
+  const nextPolygonCount = countPolygonLikeFeatures(nextFeatures);
+
+  if (
+    (previousPolygonCount > 0 || nextPolygonCount > 0) &&
+    previousPolygonCount !== nextPolygonCount
+  ) {
+    return "topology-plan";
+  }
+
+  return getDefaultTransitionAlgorithm(previousFeatures[0]?.geometry ?? nextFeatures[0]?.geometry ?? null);
+}
+
+function countPolygonLikeFeatures<TProperties extends Record<string, unknown>>(
+  features: Array<TemporalGeoJsonGeometryFeature<TProperties>>,
+) {
+  return features.filter((feature) => {
+    const geometry = normalizeSupportedGeometry(feature.geometry);
+
+    return geometry?.type === "Polygon" || geometry?.type === "MultiPolygon";
+  }).length;
+}
+
 function getDefaultTransitionAlgorithm(
   geometry: TemporalGeoJsonGeometryFeature["geometry"],
 ): GeoJsonTransitionAlgorithm {
@@ -547,6 +652,14 @@ function getDefaultTransitionAlgorithm(
   return normalized.type === "Polygon" || normalized.type === "MultiPolygon"
     ? "vertex-union"
     : "resample";
+}
+
+function getTransitionOptionsWithoutDuration(
+  spec: GeoJsonTimelineTransitionSpec,
+): GeoJsonTransitionOptions {
+  const { durationMs: _durationMs, ...options } = spec;
+
+  return options;
 }
 
 export function applyGeoJsonTimelineTransform(

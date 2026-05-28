@@ -63,6 +63,18 @@ type PolygonLikeGeometry =
   | Extract<TemporalGeoJsonSupportedGeometry, { type: "Polygon" }>
   | Extract<TemporalGeoJsonSupportedGeometry, { type: "MultiPolygon" }>;
 
+type GeoJsonTransitionFeatureEntry<TProperties extends Record<string, unknown>> = {
+  feature: TemporalGeoJsonGeometryFeature<TProperties>;
+  geometry: TemporalGeoJsonSupportedGeometry | null;
+  index: number;
+};
+
+type PolygonLikeFeatureEntry<TProperties extends Record<string, unknown>> = {
+  feature: TemporalGeoJsonGeometryFeature<TProperties>;
+  geometry: PolygonLikeGeometry;
+  index: number;
+};
+
 const DEFAULT_TRANSITION_OPTIONS: ResolvedGeoJsonTransitionOptions = {
   algorithm: "vertex-union",
   coordinateSpace: "lonlat",
@@ -118,52 +130,62 @@ function createPairedPlanFragments<TProperties extends Record<string, unknown>>(
   from: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   to: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
-  if (from.features.length === 1 && to.features.length === 1) {
-    const fromFeature = from.features[0]!;
-    const toFeature = to.features[0]!;
+  return createPairedPlanFragmentsFromEntries(
+    createTransitionFeatureEntries(from),
+    createTransitionFeatureEntries(to),
+  );
+}
+
+function createPairedPlanFragmentsFromEntries<TProperties extends Record<string, unknown>>(
+  fromEntries: Array<GeoJsonTransitionFeatureEntry<TProperties>>,
+  toEntries: Array<GeoJsonTransitionFeatureEntry<TProperties>>,
+): Array<GeoJsonTransitionPlanFragment<TProperties>> {
+  if (fromEntries.length === 1 && toEntries.length === 1) {
+    const fromEntry = fromEntries[0]!;
+    const toEntry = toEntries[0]!;
 
     return [
       {
-        fromFeature,
-        fromGeometry: normalizeSupportedGeometry(fromFeature.geometry) ?? undefined,
-        id: `${getFeatureKey(fromFeature, 0)}:${getFeatureKey(toFeature, 0)}`,
+        fromFeature: fromEntry.feature,
+        fromGeometry: fromEntry.geometry ?? undefined,
+        id: `${getFeatureKey(fromEntry.feature, fromEntry.index)}:${getFeatureKey(toEntry.feature, toEntry.index)}`,
         kind: "morph",
-        sourceIds: [fromFeature.id ?? getFeatureKey(fromFeature, 0)],
-        targetIds: [toFeature.id ?? getFeatureKey(toFeature, 0)],
-        toFeature,
-        toGeometry: normalizeSupportedGeometry(toFeature.geometry) ?? undefined,
+        sourceIds: [fromEntry.feature.id ?? getFeatureKey(fromEntry.feature, fromEntry.index)],
+        targetIds: [toEntry.feature.id ?? getFeatureKey(toEntry.feature, toEntry.index)],
+        toFeature: toEntry.feature,
+        toGeometry: toEntry.geometry ?? undefined,
       },
     ];
   }
 
   const targetById = new Map(
-    to.features.map((feature, index) => [getFeatureKey(feature, index), feature]),
+    toEntries.map((entry) => [getFeatureKey(entry.feature, entry.index), entry]),
   );
   const consumedTargetIds = new Set<string>();
   const fragments: Array<GeoJsonTransitionPlanFragment<TProperties>> = [];
 
-  from.features.forEach((fromFeature, index) => {
-    const id = getFeatureKey(fromFeature, index);
-    const toFeature = targetById.get(id);
+  fromEntries.forEach((fromEntry) => {
+    const id = getFeatureKey(fromEntry.feature, fromEntry.index);
+    const toEntry = targetById.get(id);
 
-    if (toFeature) {
+    if (toEntry) {
       consumedTargetIds.add(id);
     }
 
     fragments.push({
-      fromFeature,
-      fromGeometry: normalizeSupportedGeometry(fromFeature.geometry) ?? undefined,
+      fromFeature: fromEntry.feature,
+      fromGeometry: fromEntry.geometry ?? undefined,
       id,
-      kind: toFeature ? "morph" : "disappear",
-      sourceIds: [fromFeature.id ?? id],
-      targetIds: toFeature ? [toFeature.id ?? id] : [],
-      toFeature,
-      toGeometry: toFeature ? normalizeSupportedGeometry(toFeature.geometry) ?? undefined : undefined,
+      kind: toEntry ? "morph" : "disappear",
+      sourceIds: [fromEntry.feature.id ?? id],
+      targetIds: toEntry ? [toEntry.feature.id ?? id] : [],
+      toFeature: toEntry?.feature,
+      toGeometry: toEntry?.geometry ?? undefined,
     });
   });
 
-  to.features.forEach((toFeature, index) => {
-    const id = getFeatureKey(toFeature, index);
+  toEntries.forEach((toEntry) => {
+    const id = getFeatureKey(toEntry.feature, toEntry.index);
 
     if (consumedTargetIds.has(id)) {
       return;
@@ -173,9 +195,9 @@ function createPairedPlanFragments<TProperties extends Record<string, unknown>>(
       id,
       kind: "appear",
       sourceIds: [],
-      targetIds: [toFeature.id ?? id],
-      toFeature,
-      toGeometry: normalizeSupportedGeometry(toFeature.geometry) ?? undefined,
+      targetIds: [toEntry.feature.id ?? id],
+      toFeature: toEntry.feature,
+      toGeometry: toEntry.geometry ?? undefined,
     });
   });
 
@@ -186,63 +208,82 @@ function createTopologyPlanFragments<TProperties extends Record<string, unknown>
   from: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   to: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
-  const fromPolygonFeatures = from.features
-    .map((feature, index) => ({ feature, geometry: normalizeSupportedGeometry(feature.geometry), index }))
-    .filter(
-      (entry): entry is {
-        feature: TemporalGeoJsonGeometryFeature<TProperties>;
-        geometry: PolygonLikeGeometry;
-        index: number;
-      } => entry.geometry?.type === "Polygon" || entry.geometry?.type === "MultiPolygon",
-    );
-  const toPolygonFeatures = to.features
-    .map((feature, index) => ({ feature, geometry: normalizeSupportedGeometry(feature.geometry), index }))
-    .filter(
-      (entry): entry is {
-        feature: TemporalGeoJsonGeometryFeature<TProperties>;
-        geometry: PolygonLikeGeometry;
-        index: number;
-      } => entry.geometry?.type === "Polygon" || entry.geometry?.type === "MultiPolygon",
-    );
+  const fromEntries = createTransitionFeatureEntries(from);
+  const toEntries = createTransitionFeatureEntries(to);
+  const fromPolygonFeatures = fromEntries.filter(isPolygonLikeFeatureEntry);
+  const toPolygonFeatures = toEntries.filter(isPolygonLikeFeatureEntry);
+  const pairedNonPolygonFragments = createPairedPlanFragmentsFromEntries(
+    fromEntries.filter((entry) => !isPolygonLikeFeatureEntry(entry)),
+    toEntries.filter((entry) => !isPolygonLikeFeatureEntry(entry)),
+  );
 
   if (fromPolygonFeatures.length === 1 && toPolygonFeatures.length === 1) {
-    return createSinglePolygonTopologyFragments(fromPolygonFeatures[0]!, toPolygonFeatures[0]!);
+    return [
+      ...createSinglePolygonTopologyFragments(fromPolygonFeatures[0]!, toPolygonFeatures[0]!),
+      ...pairedNonPolygonFragments,
+    ];
   }
 
   if (fromPolygonFeatures.length === 1 && toPolygonFeatures.length > 1) {
     const source = fromPolygonFeatures[0]!;
 
-    return toPolygonFeatures.map((target, index) => ({
-      fromFeature: source.feature,
-      fromGeometry: source.geometry,
-      id: `split:${getFeatureKey(source.feature, source.index)}:${getFeatureKey(target.feature, target.index)}`,
-      kind: "split" as const,
-      sourceIds: [source.feature.id ?? source.index],
-      targetIds: [target.feature.id ?? target.index],
-      toFeature: target.feature,
-      toGeometry: target.geometry,
-    }));
+    return [
+      ...toPolygonFeatures.map((target) => ({
+        fromFeature: source.feature,
+        fromGeometry:
+          getBoundsIntersectionGeometry(source.geometry, target.geometry) ??
+          createCollapsedPolygonGeometry(getGeometryCentroid(source.geometry)),
+        id: `split:${getFeatureKey(source.feature, source.index)}:${getFeatureKey(target.feature, target.index)}`,
+        kind: "split" as const,
+        sourceIds: [source.feature.id ?? source.index],
+        targetIds: [target.feature.id ?? target.index],
+        toFeature: target.feature,
+        toGeometry: target.geometry,
+      })),
+      ...pairedNonPolygonFragments,
+    ];
   }
 
   if (fromPolygonFeatures.length > 1 && toPolygonFeatures.length === 1) {
     const target = toPolygonFeatures[0]!;
 
-    return fromPolygonFeatures.map((source) => ({
-      fromFeature: source.feature,
-      fromGeometry: source.geometry,
-      id: `merge:${getFeatureKey(source.feature, source.index)}:${getFeatureKey(target.feature, target.index)}`,
-      kind: "merge" as const,
-      sourceIds: [source.feature.id ?? source.index],
-      targetIds: [target.feature.id ?? target.index],
-      toFeature: target.feature,
-      toGeometry: target.geometry,
-    }));
+    return [
+      ...fromPolygonFeatures.map((source) => ({
+        fromFeature: source.feature,
+        fromGeometry: source.geometry,
+        id: `merge:${getFeatureKey(source.feature, source.index)}:${getFeatureKey(target.feature, target.index)}`,
+        kind: "merge" as const,
+        sourceIds: [source.feature.id ?? source.index],
+        targetIds: [target.feature.id ?? target.index],
+        toFeature: target.feature,
+        toGeometry:
+          getBoundsIntersectionGeometry(source.geometry, target.geometry) ??
+          createCollapsedPolygonGeometry(getGeometryCentroid(target.geometry)),
+      })),
+      ...pairedNonPolygonFragments,
+    ];
   }
 
   return createPairedPlanFragments(from, to).map((fragment) => ({
     ...fragment,
     kind: fragment.kind === "morph" ? "preserve" : fragment.kind,
   }));
+}
+
+function createTransitionFeatureEntries<TProperties extends Record<string, unknown>>(
+  collection: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
+): Array<GeoJsonTransitionFeatureEntry<TProperties>> {
+  return collection.features.map((feature, index) => ({
+    feature,
+    geometry: normalizeSupportedGeometry(feature.geometry),
+    index,
+  }));
+}
+
+function isPolygonLikeFeatureEntry<TProperties extends Record<string, unknown>>(
+  entry: GeoJsonTransitionFeatureEntry<TProperties>,
+): entry is PolygonLikeFeatureEntry<TProperties> {
+  return entry.geometry?.type === "Polygon" || entry.geometry?.type === "MultiPolygon";
 }
 
 function createSinglePolygonTopologyFragments<TProperties extends Record<string, unknown>>(

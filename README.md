@@ -511,6 +511,26 @@ const frame = getGeoJsonTimelineSceneAtTime(collection, document, 750, {
 });
 ```
 
+Items on the same timeline track with identical `startMs` and identical
+`endMs = startMs + durationMs` are treated as one scene state. Adjacent scene
+states transition as whole feature collections, which lets `topology-plan`
+represent one-to-many splits and many-to-one merges.
+
+```ts
+const document = createGeoJsonTimelineDocument(collection, {
+  getTimelineTrackId: () => "district-scene",
+  getItemStartMs: (feature) => Number(feature.properties?.startMs),
+  getItemDurationMs: (feature) => Number(feature.properties?.durationMs),
+});
+
+const frame = getGeoJsonTimelineSceneAtTime(collection, document, 750, {
+  defaultTransition: {
+    algorithm: "topology-plan",
+    durationMs: 500,
+  },
+});
+```
+
 The transition engine also works without a timeline:
 
 ```ts
