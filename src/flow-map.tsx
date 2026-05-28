@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type { LayerGroup, Map as LeafletMap } from "leaflet";
 
@@ -32,7 +33,13 @@ import {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
-import { FlowLayer } from "./flow-layer";
+import {
+  FlowLayer,
+  addFlowArrowMarker,
+  createFlowPathCoordinates,
+  type FlowDirectionMarker,
+  type FlowShape,
+} from "./flow-layer";
 import {
   createGeoJsonOverlayFeatureCollection,
   createMapFlowsFromGeoJson,
@@ -79,17 +86,23 @@ export type FlowMapWeightAccessor<TProperties extends Record<string, unknown> = 
 
 export type FlowMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   className?: string;
+  directionMarker?: FlowDirectionMarker;
   fitBoundsPadding?: number;
   fitToData?: boolean;
   flowColor?: string;
+  flowShape?: FlowShape;
+  flowValueFormat?: (value: number, feature: FlowMapFeature<TProperties>) => string;
   flows?: readonly MapFlow<TProperties>[];
   geoJson?: GeoJsonMapSource<TProperties>;
   geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
   geoJsonOverlay?: GeoJsonOverlayMode;
   geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
+  getFlowLabel?: (feature: FlowMapFeature<TProperties>) => ReactNode;
   getWeight?: FlowMapWeightAccessor<TProperties>;
   globeBasemapMode?: GlobeBasemapMode;
+  hoveredFlowOpacity?: number;
+  inactiveFlowOpacity?: number;
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -100,7 +113,9 @@ export type FlowMapProps<TProperties extends Record<string, unknown> = Record<st
   onFeatureSelect?: (feature: FlowMapFeature<TProperties> | null) => void;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: LeafletMap) => void;
+  selectedFlowOpacity?: number;
   showAttributionControl?: boolean;
+  showDirection?: boolean;
   showEndpoints?: boolean;
   style?: React.CSSProperties;
   weightMetric?: string;
@@ -225,9 +240,11 @@ export function createFlowMapFeatures<TProperties extends Record<string, unknown
 
 export function FlatFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   className,
+  directionMarker = "arrow",
   fitBoundsPadding = 56,
   fitToData = true,
   flowColor = "#0f766e",
+  flowShape = "straight",
   flows = [],
   getFlowColor,
   getWeight,
@@ -248,6 +265,7 @@ export function FlatFlowMap<TProperties extends Record<string, unknown> = Record
   onMeasurementDraftChange,
   onMeasurementSelect,
   showAttributionControl = true,
+  showDirection = false,
   showEndpoints = true,
   style,
   weightMetric,
@@ -295,13 +313,16 @@ export function FlatFlowMap<TProperties extends Record<string, unknown> = Record
 
     renderFlowOverlay({
       features,
+      directionMarker,
       flowColor,
+      flowShape,
       getFlowColor,
       handleClick,
       isMeasuring,
       leaflet,
       map,
       overlay,
+      showDirection,
       showEndpoints,
     });
   });
@@ -647,31 +668,38 @@ function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
 }
 
 function renderFlowOverlay<TProperties extends Record<string, unknown>>({
+  directionMarker,
   features,
   flowColor,
+  flowShape,
   getFlowColor,
   handleClick,
   isMeasuring,
   leaflet,
   map,
   overlay,
+  showDirection,
   showEndpoints,
 }: {
+  directionMarker: FlowDirectionMarker;
   features: readonly FlowMapFeature<TProperties>[];
   flowColor: string;
+  flowShape: FlowShape;
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
   handleClick: (feature: FlowMapFeature<TProperties> | null) => void;
   isMeasuring: boolean;
   leaflet: typeof import("leaflet");
   map: LeafletMap;
   overlay: LayerGroup;
+  showDirection: boolean;
   showEndpoints: boolean;
 }) {
   overlay.clearLayers();
 
   for (const feature of features) {
     const color = getFlowColor?.(feature) ?? flowColor;
-    const line = leaflet.polyline([toLeafletLatLng(feature.flow.from), toLeafletLatLng(feature.flow.to)], {
+    const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
+    const line = leaflet.polyline(flowCoordinates.map(toLeafletLatLng), {
       className: "mb-maps__flow-line",
       color,
       interactive: !isMeasuring,
@@ -691,6 +719,18 @@ function renderFlowOverlay<TProperties extends Record<string, unknown>>({
       });
     }
     line.addTo(overlay);
+
+    if (showDirection && directionMarker === "arrow") {
+      addFlowArrowMarker({
+        color,
+        feature,
+        flowCoordinates,
+        leaflet,
+        map,
+        opacity: 0.72,
+        overlay,
+      });
+    }
 
     if (showEndpoints) {
       leaflet

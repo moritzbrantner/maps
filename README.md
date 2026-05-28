@@ -316,7 +316,14 @@ export function NetworkMaps() {
         style={{ height: 360 }}
       />
       <BubbleMap points={points} weightMetric="demand" style={{ height: 360 }} />
-      <FlowMap flows={flows} weightMetric="trips" style={{ height: 360 }} />
+      <FlowMap
+        flows={flows}
+        flowShape="arc"
+        renderFeatureTooltip={(feature) => `${feature.flow.label}: ${feature.rawValue} trips`}
+        showDirection
+        weightMetric="trips"
+        style={{ height: 360 }}
+      />
     </>
   );
 }
@@ -330,6 +337,11 @@ calls `onFeatureContextMenu` and can render a feature-specific menu. `MapView`,
 `PointMap`, and `BubbleMap` also accept `renderMapContextMenu` for background
 right-click menus. Point and bubble layers can be made draggable with
 `draggable`, `onFeatureDrag`, and `onFeatureDragEnd`.
+
+Flow layers also support `flowShape="arc"` for curved flat-map routes and
+`showDirection` for destination arrows. Globe flow rendering currently keeps
+routes as projected straight segments; curved route geometry is supported for
+flat maps first.
 
 ## Composable layers
 

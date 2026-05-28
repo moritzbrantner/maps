@@ -34,6 +34,7 @@ import {
   type MapBeeLineMeasurement,
   type MapBeeLineMeasurementResult,
   type MapFlow,
+  type FlowMapFeature,
   type MapPoint,
   type HeatFieldRenderMode,
   type PointMapFeature,
@@ -68,6 +69,21 @@ type DemoGeoJsonProperties = {
   label: string;
   time: number;
   trackId: string;
+};
+
+type DemoTimelineProperties = {
+  corridor: string;
+  status: "loading" | "in-transit" | "handoff" | "arrived";
+};
+
+type DemoTimelineStop = {
+  city: string;
+  demand: number;
+  delayMinutes: number;
+  latitude: number;
+  longitude: number;
+  status: DemoTimelineProperties["status"];
+  time: number;
 };
 
 type DemoView =
@@ -241,29 +257,53 @@ const demoFlowFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoFl
 
 const demoFlows = createDemoFlowsFromGeoJson(demoFlowFeatureCollection);
 
-const demoTracks: TemporalMapTrack[] = [
-  track("cargo-1", "North sea freight", [
-    [0, 51.5072, -0.1276, 70],
-    [25, 52.3676, 4.9041, 110],
-    [50, 53.551, 9.9937, 150],
-    [75, 55.6761, 12.5683, 130],
-    [100, 59.3293, 18.0686, 90],
+const demoTimelineViewState: MapViewState = {
+  center: [8.8, 51.0],
+  zoom: 4.2,
+};
+
+const demoTracks: Array<TemporalMapTrack<DemoTimelineProperties>> = [
+  routeTrack("north-sea-freight", "North sea freight", [
+    timelineStop(0, "London", 51.5072, -0.1276, 70, 2, "loading"),
+    timelineStop(30, "Amsterdam", 52.3676, 4.9041, 110, 5, "handoff"),
+    timelineStop(60, "Hamburg", 53.551, 9.9937, 150, 7, "in-transit"),
+    timelineStop(90, "Copenhagen", 55.6761, 12.5683, 130, 4, "handoff"),
+    timelineStop(120, "Stockholm", 59.3293, 18.0686, 90, 1, "arrived"),
   ]),
-  track("cargo-2", "Alpine express", [
-    [0, 45.4642, 9.19, 80],
-    [25, 47.3769, 8.5417, 120],
-    [50, 48.1351, 11.582, 180],
-    [75, 48.2082, 16.3738, 140],
-    [100, 50.0755, 14.4378, 100],
+  routeTrack("alpine-express", "Alpine express", [
+    timelineStop(0, "Milan", 45.4642, 9.19, 80, 1, "loading"),
+    timelineStop(30, "Zurich", 47.3769, 8.5417, 120, 3, "handoff"),
+    timelineStop(60, "Munich", 48.1351, 11.582, 180, 8, "in-transit"),
+    timelineStop(90, "Vienna", 48.2082, 16.3738, 140, 4, "handoff"),
+    timelineStop(120, "Prague", 50.0755, 14.4378, 100, 2, "arrived"),
   ]),
-  track("cargo-3", "Iberia connector", [
-    [0, 40.4168, -3.7038, 110],
-    [25, 41.3874, 2.1686, 160],
-    [50, 45.4642, 9.19, 130],
-    [75, 41.9028, 12.4964, 100],
-    [100, 48.8566, 2.3522, 150],
+  routeTrack("iberia-connector", "Iberia connector", [
+    timelineStop(0, "Lisbon", 38.7223, -9.1393, 95, 0, "loading"),
+    timelineStop(30, "Madrid", 40.4168, -3.7038, 130, 2, "handoff"),
+    timelineStop(60, "Barcelona", 41.3874, 2.1686, 165, 6, "in-transit"),
+    timelineStop(90, "Marseille", 43.2965, 5.3698, 125, 3, "handoff"),
+    timelineStop(120, "Paris", 48.8566, 2.3522, 150, 1, "arrived"),
+  ]),
+  routeTrack("baltic-relay", "Baltic relay", [
+    timelineStop(0, "Warsaw", 52.2297, 21.0122, 76, 2, "loading"),
+    timelineStop(30, "Gdansk", 54.352, 18.6466, 92, 3, "handoff"),
+    timelineStop(60, "Vilnius", 54.6872, 25.2797, 118, 5, "in-transit"),
+    timelineStop(90, "Riga", 56.9496, 24.1052, 108, 4, "handoff"),
+    timelineStop(120, "Helsinki", 60.1699, 24.9384, 82, 2, "arrived"),
+  ]),
+  routeTrack("adriatic-service", "Adriatic service", [
+    timelineStop(0, "Rome", 41.9028, 12.4964, 88, 1, "loading"),
+    timelineStop(30, "Bologna", 44.4949, 11.3426, 102, 3, "handoff"),
+    timelineStop(60, "Venice", 45.4408, 12.3155, 135, 6, "in-transit"),
+    timelineStop(90, "Ljubljana", 46.0569, 14.5058, 118, 4, "handoff"),
+    timelineStop(120, "Budapest", 47.4979, 19.0402, 96, 2, "arrived"),
   ]),
 ];
+
+const demoTimelineKeyframeCount = demoTracks.reduce(
+  (total, item) => total + item.frames.length,
+  0,
+);
 
 const demoGeoJsonCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> = {
   features: [
@@ -421,6 +461,7 @@ export function App() {
   );
   const selectedGeoJsonId = geoJsonSelection.primaryFeatureId;
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewState>({
     center: [13.405, 52.52],
     zoom: 5,
@@ -721,6 +762,8 @@ export function App() {
             heatFieldRenderMode,
             heatFieldContourLineWidth,
             showHeatDataPoints,
+            selectedFlowId,
+            setSelectedFlowId,
           )}
         </div>
         <aside aria-label="Current dataset">
@@ -886,6 +929,28 @@ export function App() {
                     />
                     <span>Show data points</span>
                   </label>
+                </div>
+              ) : null}
+              {view === "flows" ? <FlowVolumeLegend flows={demoFlows} /> : null}
+              {view === "temporal" ? (
+                <div className="demo-layer-manager" aria-label="Timeline route summary">
+                  <div className="demo-layer-manager__header">
+                    <h2>Timeline</h2>
+                  </div>
+                  <dl className="demo-editor-facts">
+                    <div>
+                      <dt>Routes</dt>
+                      <dd>{demoTracks.length}</dd>
+                    </div>
+                    <div>
+                      <dt>Range</dt>
+                      <dd>08:00-10:00</dd>
+                    </div>
+                    <div>
+                      <dt>Keyframes</dt>
+                      <dd>{demoTimelineKeyframeCount}</dd>
+                    </div>
+                  </dl>
                 </div>
               ) : null}
               {view === "editor" ? (
@@ -1107,6 +1172,8 @@ function renderMap(
   heatFieldRenderMode: HeatFieldRenderMode,
   heatFieldContourLineWidth: number,
   showHeatDataPoints: boolean,
+  selectedFlowId: string | null,
+  setSelectedFlowId: Dispatch<SetStateAction<string | null>>,
 ) {
   const sharedMeasurementProps = {
     measurementMode: isMeasuring ? ("bee-line" as const) : ("none" as const),
@@ -1208,9 +1275,15 @@ function renderMap(
         <FlowMap
           {...sharedMeasurementProps}
           flowColor="#b45309"
+          flowShape="arc"
           flows={demoFlows}
           maxWidth={18}
+          onFeatureSelect={(feature) => setSelectedFlowId(feature?.flow.id ?? null)}
           onViewStateChange={setViewport}
+          renderFeaturePopup={renderDemoFlowPopup}
+          renderFeatureTooltip={renderDemoFlowTooltip}
+          selectedFeatureId={selectedFlowId}
+          showDirection
           showEndpoints
           weightMetric="trips"
           style={{ minHeight: 620 }}
@@ -1233,8 +1306,14 @@ function renderMap(
       return (
         <TemporalClusteredMap
           autoPlay
+          fitToData={false}
+          formatTimeLabel={formatDemoTimelineTime}
+          initialViewState={demoTimelineViewState}
           loopPlayback
-          playbackRate={8}
+          mapLabel="European logistics timeline"
+          onViewStateChange={setViewport}
+          playbackRate={6}
+          timelineLabel="Shipment timeline"
           tracks={demoTracks}
           style={{ minHeight: 560 }}
           timeStep={1}
@@ -1547,6 +1626,76 @@ function renderComposedLayer(layer: DemoLayerConfig, points: Array<MapPoint<Demo
   }
 }
 
+function FlowVolumeLegend({ flows }: { flows: MapFlow[] }) {
+  const values = getDemoFlowLegendValues(flows);
+
+  return (
+    <div className="demo-flow-legend" aria-label="Flow volume">
+      <div className="demo-layer-manager__header">
+        <h2>Flow volume</h2>
+      </div>
+      <div className="demo-flow-legend__rows">
+        {values.map((item) => (
+          <div className="demo-flow-legend__row" key={item.label}>
+            <span className="demo-flow-legend__sample" aria-hidden="true">
+              <span style={{ height: item.strokeWidth }} />
+            </span>
+            <span className="demo-flow-legend__label">
+              <span>{item.label}</span>
+              <strong>{item.value.toLocaleString()} trips</strong>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function renderDemoFlowTooltip(feature: FlowMapFeature) {
+  return (
+    <div className="demo-popup">
+      <strong>{feature.flow.label}</strong>
+      <span>{feature.rawValue.toLocaleString()} trips</span>
+    </div>
+  );
+}
+
+function renderDemoFlowPopup(feature: FlowMapFeature) {
+  return (
+    <div className="demo-popup">
+      <strong>{feature.flow.label}</strong>
+      <span>{feature.rawValue.toLocaleString()} trips</span>
+      <span>From {formatDemoCoordinate(feature.flow.from)}</span>
+      <span>To {formatDemoCoordinate(feature.flow.to)}</span>
+    </div>
+  );
+}
+
+function getDemoFlowLegendValues(flows: MapFlow[]) {
+  const values = flows
+    .map((item) => item.metrics?.trips ?? 0)
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+
+  if (values.length === 0) {
+    return [
+      { label: "Low", strokeWidth: 3, value: 0 },
+      { label: "Medium", strokeWidth: 7, value: 0 },
+      { label: "High", strokeWidth: 12, value: 0 },
+    ];
+  }
+
+  return [
+    { label: "Low", strokeWidth: 3, value: values[0]! },
+    { label: "Medium", strokeWidth: 7, value: values[Math.floor(values.length / 2)]! },
+    { label: "High", strokeWidth: 12, value: values.at(-1)! },
+  ];
+}
+
+function formatDemoCoordinate([longitude, latitude]: [longitude: number, latitude: number]) {
+  return `${longitude.toFixed(2)}, ${latitude.toFixed(2)}`;
+}
+
 function getLayerKindLabel(kind: DemoLayerKind) {
   return layerKinds.find((item) => item.id === kind)?.label ?? "Layer";
 }
@@ -1781,19 +1930,72 @@ function geoJsonFeature(
   };
 }
 
-function track(
+function timelineStop(
+  time: number,
+  city: string,
+  latitude: number,
+  longitude: number,
+  demand: number,
+  delayMinutes: number,
+  status: DemoTimelineProperties["status"],
+): DemoTimelineStop {
+  return {
+    city,
+    demand,
+    delayMinutes,
+    latitude,
+    longitude,
+    status,
+    time,
+  };
+}
+
+function routeTrack(
   id: string,
   label: string,
-  frames: Array<[time: number, latitude: number, longitude: number, demand: number]>,
-): TemporalMapTrack {
+  stops: DemoTimelineStop[],
+): TemporalMapTrack<DemoTimelineProperties> {
   return {
     id,
     label,
-    frames: frames.map(([time, latitude, longitude, demand]) => ({
-      latitude,
-      longitude,
-      metrics: { demand },
-      time,
+    properties: {
+      corridor: label,
+      status: stops[0]?.status ?? "loading",
+    },
+    frames: stops.map((stop) => ({
+      label: `${stop.city} ${getDemoTimelineStatusLabel(stop.status).toLowerCase()}`,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      metrics: {
+        delayMinutes: stop.delayMinutes,
+        demand: stop.demand,
+      },
+      properties: {
+        corridor: label,
+        status: stop.status,
+      },
+      time: stop.time,
     })),
   };
+}
+
+function getDemoTimelineStatusLabel(status: DemoTimelineProperties["status"]) {
+  switch (status) {
+    case "loading":
+      return "Loading";
+    case "in-transit":
+      return "In transit";
+    case "handoff":
+      return "Handoff";
+    case "arrived":
+      return "Arrived";
+  }
+}
+
+function formatDemoTimelineTime(time: number) {
+  const totalMinutes = Math.max(0, Math.round(time));
+  const hours = 8 + Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }

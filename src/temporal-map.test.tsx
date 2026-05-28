@@ -1,7 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { ClusteredMap, TemporalClusteredMap, type TemporalMapTrack } from ".";
+import {
+  ClusteredMap,
+  TemporalClusteredMap,
+  type MapSurfaceController,
+  type TemporalMapTrack,
+} from ".";
 
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -35,6 +40,7 @@ const leafletMock = vi.hoisted(() => {
   }
 
   class MockMap {
+    fitBoundsCalls = 0;
     handlers = new Map<string, Handler[]>();
     removed = false;
     zoom = 6;
@@ -58,7 +64,9 @@ const leafletMock = vi.hoisted(() => {
       };
     }
 
-    fitBounds() {}
+    fitBounds() {
+      this.fitBoundsCalls += 1;
+    }
 
     getBounds() {
       return {
@@ -128,6 +136,8 @@ const leafletMock = vi.hoisted(() => {
     divIcon: (options: Record<string, unknown>) => options,
     getLayerGroups: () => layerGroups,
     getMaps: () => maps,
+    getFitBoundsCallCount: () =>
+      maps.reduce((total, map) => total + map.fitBoundsCalls, 0),
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
     marker: (latLng: [number, number], options: Record<string, unknown>) =>
@@ -242,6 +252,82 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
       latLng: [15, 30],
       type: "circleMarker",
     });
+  });
+
+  test("keeps a fixed viewport during timeline seeking when fit to data is disabled", async () => {
+    const onViewStateChange = vi.fn();
+    let controller: MapSurfaceController | null = null;
+    const tracks: TemporalMapTrack[] = [
+      {
+        id: "courier-viewport",
+        label: "Courier viewport",
+        frames: [
+          {
+            latitude: 51,
+            longitude: -0.1,
+            time: 0,
+          },
+          {
+            latitude: 60,
+            longitude: 24,
+            time: 120,
+          },
+        ],
+      },
+    ];
+
+    render(
+      <TemporalClusteredMap
+        defaultTime={0}
+        fitToData={false}
+        initialViewState={{ center: [8.8, 51], zoom: 4.2 }}
+        mapLabel="Stable timeline"
+        onMapControllerReady={(nextController) => {
+          controller = nextController;
+        }}
+        onViewStateChange={onViewStateChange}
+        showAttributionControl={false}
+        timeStep={1}
+        tracks={tracks}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Stable timeline").getAttribute("data-map-ready")).toBe("true");
+    });
+    await waitFor(() => {
+      expect(controller).not.toBeNull();
+    });
+
+    expect(leafletMock.getFitBoundsCallCount()).toBe(0);
+
+    fireEvent.change(screen.getByRole("slider", { name: "Timeline" }), {
+      target: {
+        value: "70",
+      },
+    });
+
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe(
+      "70",
+    );
+    await waitFor(() => {
+      const pointMarker = leafletMock
+        .getLayerGroups()[0]
+        ?.layers.find((layer) => layer.options?.className === "mb-maps__point-marker");
+
+      expect(pointMarker?.latLng?.[0]).toBeCloseTo(56.25, 6);
+      expect(pointMarker?.latLng?.[1]).toBeCloseTo(13.958333, 6);
+    });
+    expect(leafletMock.getFitBoundsCallCount()).toBe(0);
+
+    act(() => {
+      controller!.setViewState({ center: [9, 52], zoom: 5 }, "programmatic");
+    });
+
+    expect(onViewStateChange).toHaveBeenLastCalledWith(
+      { center: [9, 52], zoom: 5 },
+      { display: "flat", reason: "programmatic" },
+    );
   });
 
   test("derives temporal points from GeoJSON and renders synchronized geometry overlays", async () => {

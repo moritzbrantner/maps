@@ -385,6 +385,58 @@ select {
   text-align: right;
 }
 
+.demo-flow-legend {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #e1e7ef;
+  padding-top: 14px;
+}
+
+.demo-flow-legend__rows {
+  display: grid;
+  gap: 10px;
+}
+
+.demo-flow-legend__row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.demo-flow-legend__sample {
+  display: grid;
+  width: 56px;
+  height: 18px;
+  align-items: center;
+}
+
+.demo-flow-legend__sample span {
+  display: block;
+  width: 100%;
+  border-radius: 999px;
+  background: #b45309;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.16);
+}
+
+.demo-flow-legend__label {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: #526170;
+  font-size: 0.82rem;
+  font-weight: 680;
+}
+
+.demo-flow-legend__label strong {
+  color: #101827;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .demo-layer-colors {
   display: flex;
   flex-wrap: wrap;

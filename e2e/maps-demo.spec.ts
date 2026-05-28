@@ -82,6 +82,64 @@ for (const view of [
   });
 }
 
+test("Timeline view keeps a stable viewport while seeking through playback", async ({ page }) => {
+  await openView(page, "Timeline");
+  await page.getByRole("button", { name: "Pause" }).click();
+  await expect(page.getByLabel("European logistics timeline")).toBeVisible();
+
+  const viewportValue = page.locator("aside dl > div").filter({ hasText: "Viewport" }).locator("dd");
+  const initialViewport = await viewportValue.textContent();
+  const slider = page.getByRole("slider", { name: "Shipment timeline" });
+
+  await expect(slider).toBeVisible();
+  await expect(page.getByText("08:00").first()).toBeVisible();
+
+  const nextButton = page.getByRole("button", { name: "Next time step" });
+
+  for (let index = 0; index < 70; index += 1) {
+    await nextButton.click();
+  }
+
+  await expect(page.locator(".mb-temporal-map__current-time")).toHaveText("09:10");
+
+  expect(await viewportValue.textContent()).toBe(initialViewport);
+  await expect(page.locator(".demo-stage")).toHaveScreenshot("timeline-desktop.png");
+});
+
+test("Flows view exposes direction, volume legend, and hover context", async ({ page }) => {
+  await openView(page, "Flows");
+
+  const flowLine = page.locator(".mb-maps__flow-line").first();
+
+  await expect(flowLine).toBeVisible();
+  await expect(page.getByText("Flow volume")).toBeVisible();
+
+  const hoverPoint = await flowLine.evaluate((element) => {
+    const path = element as SVGPathElement;
+    const matrix = path.getScreenCTM();
+    const point = path.getPointAtLength(path.getTotalLength() * 0.5);
+
+    if (!matrix) {
+      const box = path.getBoundingClientRect();
+
+      return {
+        x: box.x + box.width * 0.5,
+        y: box.y + box.height * 0.5,
+      };
+    }
+
+    const screenPoint = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+
+    return {
+      x: screenPoint.x,
+      y: screenPoint.y,
+    };
+  });
+
+  await page.mouse.move(hoverPoint.x, hoverPoint.y);
+  await expect(page.locator(".mb-maps__feature-tooltip").getByText(/trips/)).toBeVisible();
+});
+
 test("Globe view renders nonblank canvas and responds to dragging", async ({ page }) => {
   await openView(page, "Globe");
 

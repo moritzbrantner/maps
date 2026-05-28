@@ -205,6 +205,31 @@
     stroke-linejoin: round;
   }
 
+  .mb-maps__flow-line--inactive {
+    filter: saturate(0.8);
+  }
+
+  .mb-maps__flow-line--active {
+    filter: brightness(1.08) saturate(1.15);
+  }
+
+  .mb-maps__flow-arrow {
+    @apply pointer-events-none grid place-items-center border-0 bg-transparent;
+  }
+
+  .mb-maps__flow-arrow-glyph {
+    display: block;
+    width: 0;
+    height: 0;
+    opacity: var(--mb-maps-flow-arrow-opacity, 0.72);
+    transform: rotate(var(--mb-maps-flow-arrow-rotation, 0deg));
+    transform-origin: 50% 50%;
+    border-top: calc(var(--mb-maps-flow-arrow-size, 12px) * 0.42) solid transparent;
+    border-bottom: calc(var(--mb-maps-flow-arrow-size, 12px) * 0.42) solid transparent;
+    border-left: var(--mb-maps-flow-arrow-size, 12px) solid var(--mb-maps-flow-arrow-color, currentColor);
+    filter: drop-shadow(0 1px 2px rgb(15 23 42 / 0.24));
+  }
+
   .mb-maps__flow-endpoint {
     pointer-events: none;
   }

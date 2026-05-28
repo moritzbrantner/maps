@@ -34,6 +34,10 @@ export {
   type MapFlow,
 } from "../flow-map";
 export {
+  type FlowDirectionMarker,
+  type FlowShape,
+} from "../flow-layer";
+export {
   FlatHeatFieldMap,
   FlatHeatMap,
   createHeatMapDensityIndex,

@@ -1,6 +1,7 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useId, useMemo } from "react";
+import { useContext, useDeferredValue, useEffect, useId, useMemo, type ReactNode } from "react";
+import type { LayerGroup } from "leaflet";
 
 import { joinClassNames, toLeafletLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
@@ -35,27 +36,45 @@ export type FlowLayerWeightAccessor<TProperties = Record<string, unknown>> = (
   flow: IndexedMapFlow<TProperties>,
 ) => number;
 
+export type FlowShape = "straight" | "arc";
+
+export type FlowDirectionMarker = "arrow" | "none";
+
 export type FlowLayerProps<TProperties = Record<string, unknown>> =
   MapFeatureInteractionProps<FlowLayerFeature<TProperties>> & {
+    directionMarker?: FlowDirectionMarker;
     flowColor?: string;
+    flowShape?: FlowShape;
+    flowValueFormat?: (value: number, feature: FlowLayerFeature<TProperties>) => string;
     flows: readonly MapFlow<TProperties>[];
+    getFlowLabel?: (feature: FlowLayerFeature<TProperties>) => ReactNode;
     getFlowColor?: (feature: FlowLayerFeature<TProperties>) => string;
     getWeight?: FlowLayerWeightAccessor<TProperties>;
+    hoveredFlowOpacity?: number;
+    inactiveFlowOpacity?: number;
     layerId?: string;
     maxWeight?: number;
     maxWidth?: number;
     minWidth?: number;
     onFeatureSelect?: (feature: FlowLayerFeature<TProperties> | null) => void;
+    selectedFlowOpacity?: number;
+    showDirection?: boolean;
     showEndpoints?: boolean;
     weightMetric?: string;
   };
 
 export function FlowLayer<TProperties = Record<string, unknown>>({
+  directionMarker = "arrow",
   flowColor = "#0f766e",
+  flowShape = "straight",
+  flowValueFormat = defaultFlowValueFormat,
   flows,
   getFeatureId,
   getFlowColor,
+  getFlowLabel,
   getWeight,
+  hoveredFlowOpacity = 0.95,
+  inactiveFlowOpacity = 0.22,
   layerId,
   maxWeight,
   maxWidth,
@@ -67,6 +86,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   renderFeaturePopup,
   renderFeatureTooltip,
   selectedFeatureId,
+  selectedFlowOpacity = 0.95,
+  showDirection = false,
   showEndpoints = true,
   weightMetric,
 }: FlowLayerProps<TProperties>) {
@@ -94,19 +115,34 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
       layer.clearLayers();
 
+      const hasHoveredFlow = features.some((feature) => surface.isFeatureHovered(feature, getFeatureId));
+
       for (const feature of features) {
         const color = getFlowColor?.(feature) ?? flowColor;
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
         const hovered = surface.isFeatureHovered(feature, getFeatureId);
-        const line = leaflet.polyline([toLeafletLatLng(feature.flow.from), toLeafletLatLng(feature.flow.to)], {
+        const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
+        const flowLatLngs = flowCoordinates.map(toLeafletLatLng);
+        const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
+        const active = selected || hovered;
+        const opacity = active
+          ? hovered
+            ? hoveredFlowOpacity
+            : selectedFlowOpacity
+          : hasActiveFlow
+            ? inactiveFlowOpacity
+            : 0.72;
+        const line = leaflet.polyline(flowLatLngs, {
           className: joinClassNames(
             "mb-maps__flow-line",
+            active && "mb-maps__flow-line--active",
+            hasActiveFlow && !active && "mb-maps__flow-line--inactive",
             hovered && "mb-maps__feature--hovered",
             selected && "mb-maps__feature--selected",
           ),
           color,
           interactive: !isMeasuring,
-          opacity: 0.72,
+          opacity,
           weight: selected ? feature.width + 1.5 : feature.width,
         });
 
@@ -142,6 +178,18 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
 
         line.addTo(layer);
 
+        if (showDirection && directionMarker === "arrow") {
+          addFlowArrowMarker({
+            color,
+            feature,
+            flowCoordinates,
+            leaflet,
+            map,
+            opacity,
+            overlay: layer,
+          });
+        }
+
         if (showEndpoints) {
           leaflet
             .circleMarker(toLeafletLatLng(feature.flow.from), {
@@ -171,10 +219,14 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
       }
     });
   }, [
+    directionMarker,
     features,
     flowColor,
+    flowShape,
     getFeatureId,
     getFlowColor,
+    hoveredFlowOpacity,
+    inactiveFlowOpacity,
     resolvedLayerId,
     onFeatureContextMenu,
     onFeatureHover,
@@ -183,6 +235,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     renderFeatureContextMenu,
     renderFeatureTooltip,
     selectedFeatureId,
+    selectedFlowOpacity,
+    showDirection,
     showEndpoints,
     surface,
   ]);
@@ -190,6 +244,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   if (!surface || surface.display !== "globe") {
     return null;
   }
+
+  const hasHoveredFlow = features.some((feature) => surface.isFeatureHovered(feature, getFeatureId));
 
   return (
     <>
@@ -204,13 +260,25 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
         const color = getFlowColor?.(feature) ?? flowColor;
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
         const hovered = surface.isFeatureHovered(feature, getFeatureId);
-        const opacity = clamp(0.28 + Math.min(from.scale, to.scale) * 0.72, 0.18, 0.92);
+        const baseOpacity = clamp(0.28 + Math.min(from.scale, to.scale) * 0.72, 0.18, 0.92);
+        const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
+        const active = selected || hovered;
+        const opacity = active
+          ? hovered
+            ? hoveredFlowOpacity
+            : selectedFlowOpacity
+          : hasActiveFlow
+            ? inactiveFlowOpacity
+            : baseOpacity;
         const position = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+        const title = formatFlowTitle(feature, getFlowLabel, flowValueFormat);
 
         return (
           <g
             className={joinClassNames(
               "mb-maps__globe-flow",
+              active && "mb-maps__flow-line--active",
+              hasActiveFlow && !active && "mb-maps__flow-line--inactive",
               hovered && "mb-maps__feature--hovered",
               selected && "mb-maps__feature--selected",
             )}
@@ -253,7 +321,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
               stroke={color}
               strokeWidth={selected ? feature.width + 1.5 : feature.width}
             >
-              <title>{feature.flow.label}</title>
+              <title>{title}</title>
             </path>
             {showEndpoints && from.visible ? (
               <circle cx={from.x} cy={from.y} fill={color} r={Math.max(2.5, feature.width * 0.52)} />
@@ -349,6 +417,128 @@ function getFlowPosition<TProperties>(
   ];
 
   return map.latLngToContainerPoint?.(toLeafletLatLng(midpoint)) ?? { x: 0, y: 0 };
+}
+
+export function createFlowPathCoordinates<TProperties>(
+  feature: FlowLayerFeature<TProperties>,
+  shape: FlowShape = "straight",
+): Array<[longitude: number, latitude: number]> {
+  const from = feature.flow.from;
+  const to = feature.flow.to;
+
+  if (shape !== "arc") {
+    return [from, to];
+  }
+
+  const deltaLongitude = to[0] - from[0];
+  const deltaLatitude = to[1] - from[1];
+  const distance = Math.hypot(deltaLongitude, deltaLatitude);
+
+  if (distance <= 0) {
+    return [from, to];
+  }
+
+  const offset = clamp(distance * 0.22, 0, 4);
+  const direction = getFlowArcDirection(feature.flow.id);
+  const control: [number, number] = [
+    (from[0] + to[0]) / 2 + (-deltaLatitude / distance) * offset * direction,
+    (from[1] + to[1]) / 2 + (deltaLongitude / distance) * offset * direction,
+  ];
+  const coordinates: Array<[longitude: number, latitude: number]> = [];
+
+  for (let index = 0; index < 24; index += 1) {
+    const t = index / 23;
+    const inverse = 1 - t;
+
+    coordinates.push([
+      inverse * inverse * from[0] + 2 * inverse * t * control[0] + t * t * to[0],
+      inverse * inverse * from[1] + 2 * inverse * t * control[1] + t * t * to[1],
+    ]);
+  }
+
+  return coordinates;
+}
+
+export function addFlowArrowMarker<TProperties>({
+  color,
+  feature,
+  flowCoordinates,
+  leaflet,
+  map,
+  opacity,
+  overlay,
+}: {
+  color: string;
+  feature: FlowLayerFeature<TProperties>;
+  flowCoordinates: Array<[longitude: number, latitude: number]>;
+  leaflet: typeof import("leaflet");
+  map: {
+    latLngToContainerPoint?: (latLng: [number, number]) => { x: number; y: number };
+  };
+  opacity: number;
+  overlay: LayerGroup;
+}) {
+  if (!leaflet.divIcon || !leaflet.marker || flowCoordinates.length < 2) {
+    return;
+  }
+
+  const to = flowCoordinates.at(-1)!;
+  const previous = flowCoordinates.at(-2)!;
+  const toPoint = map.latLngToContainerPoint?.(toLeafletLatLng(to));
+  const previousPoint = map.latLngToContainerPoint?.(toLeafletLatLng(previous));
+  const rotation =
+    toPoint && previousPoint
+      ? (Math.atan2(toPoint.y - previousPoint.y, toPoint.x - previousPoint.x) * 180) / Math.PI
+      : 0;
+  const size = clamp(feature.width * 1.35, 9, 22);
+  const icon = leaflet.divIcon({
+    className: "mb-maps__flow-arrow",
+    html: `<span class="mb-maps__flow-arrow-glyph" style="--mb-maps-flow-arrow-color: ${escapeFlowCssValue(
+      color,
+    )}; --mb-maps-flow-arrow-opacity: ${opacity}; --mb-maps-flow-arrow-rotation: ${rotation}deg; --mb-maps-flow-arrow-size: ${size}px;"></span>`,
+    iconAnchor: [size * 0.62, size / 2],
+    iconSize: [size, size],
+  });
+
+  leaflet
+    .marker(toLeafletLatLng(to), {
+      icon,
+      interactive: false,
+      keyboard: false,
+      opacity,
+    })
+    .addTo(overlay);
+}
+
+function getFlowArcDirection(id: string) {
+  let hash = 0;
+
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) | 0;
+  }
+
+  return hash % 2 === 0 ? 1 : -1;
+}
+
+function formatFlowTitle<TProperties>(
+  feature: FlowLayerFeature<TProperties>,
+  getFlowLabel: ((feature: FlowLayerFeature<TProperties>) => ReactNode) | undefined,
+  flowValueFormat: (value: number, feature: FlowLayerFeature<TProperties>) => string,
+) {
+  const label = getFlowLabel?.(feature) ?? feature.flow.label;
+  const labelText =
+    typeof label === "string" || typeof label === "number" ? String(label) : feature.flow.label;
+  const valueText = flowValueFormat(feature.rawValue, feature);
+
+  return labelText ? `${labelText}: ${valueText}` : valueText;
+}
+
+function defaultFlowValueFormat(value: number) {
+  return String(Math.round(value));
+}
+
+function escapeFlowCssValue(value: string) {
+  return value.replace(/[;"'<>]/g, "");
 }
 
 type LeafletFeaturePointerEvent = {

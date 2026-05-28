@@ -24,6 +24,10 @@ export {
   type FlowMapProps,
 } from "../flow-map";
 export {
+  type FlowDirectionMarker,
+  type FlowShape,
+} from "../flow-layer";
+export {
   GlobeHeatMap,
   type HeatMapProps,
 } from "../heat-map";

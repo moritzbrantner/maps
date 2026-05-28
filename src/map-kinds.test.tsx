@@ -191,12 +191,18 @@ const leafletMock = vi.hoisted(() => {
   return {
     circleMarker: (latLng: [number, number], options: Record<string, unknown>) =>
       createLayer("circleMarker", latLng, options),
+    divIcon: (options: Record<string, unknown>) => ({
+      options,
+      type: "divIcon",
+    }),
     getLayerGroups: () => layerGroups,
     getMaps: () => maps,
     imageOverlay: (_url: string, _bounds: unknown, options: Record<string, unknown>) =>
       createLayer("imageOverlay", undefined, options),
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
+    marker: (latLng: [number, number], options: Record<string, unknown>) =>
+      createLayer("marker", latLng, options),
     polygon: (latLngs: unknown, options: Record<string, unknown>) =>
       createLayer("polygon", undefined, options, latLngs),
     polyline: (latLngs: unknown, options: Record<string, unknown>) =>
@@ -1192,5 +1198,146 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       type: "polyline",
     });
     expect(layers.filter((layer) => layer.type === "circleMarker")).toHaveLength(2);
+  });
+
+  test("renders arc flow paths when requested", async () => {
+    render(
+      <FlowMap
+        flowShape="arc"
+        flows={[
+          {
+            id: "nyc-boston",
+            from: [-74, 40],
+            to: [-71, 42],
+            metrics: {
+              trips: 9,
+            },
+          },
+        ]}
+        mapLabel="Curved route flows"
+        showAttributionControl={false}
+        weightMetric="trips"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Curved route flows").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const polyline = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+    const latLngs = polyline?.latLngs as Array<[number, number]>;
+
+    expect(latLngs).toHaveLength(24);
+    expect(latLngs[0]).toEqual([40, -74]);
+    expect(latLngs.at(-1)).toEqual([42, -71]);
+  });
+
+  test("renders direction arrow markers for flat flows", async () => {
+    render(
+      <FlowMap
+        flowShape="arc"
+        flows={[
+          {
+            id: "nyc-boston",
+            from: [-74, 40],
+            to: [-71, 42],
+            metrics: {
+              trips: 9,
+            },
+          },
+        ]}
+        mapLabel="Directional route flows"
+        showAttributionControl={false}
+        showDirection
+        weightMetric="trips"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Directional route flows").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const marker = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "marker");
+
+    expect(marker?.options?.icon).toMatchObject({
+      options: {
+        className: "mb-maps__flow-arrow",
+      },
+    });
+  });
+
+  test("selects flow features from flat flow clicks", async () => {
+    const handleFeatureSelect = vi.fn();
+
+    render(
+      <FlowMap
+        flows={[
+          {
+            id: "nyc-boston",
+            from: [-74, 40],
+            to: [-71, 42],
+            metrics: {
+              trips: 9,
+            },
+          },
+        ]}
+        mapLabel="Selectable route flows"
+        onFeatureSelect={handleFeatureSelect}
+        showAttributionControl={false}
+        weightMetric="trips"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Selectable route flows").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const polyline = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+
+    await act(async () => {
+      polyline?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(handleFeatureSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flow: expect.objectContaining({
+          id: "nyc-boston",
+        }),
+      }),
+    );
+  });
+
+  test("renders flow tooltips on hover", async () => {
+    render(
+      <FlowMap
+        flows={[
+          {
+            id: "nyc-boston",
+            label: "NYC to Boston",
+            from: [-74, 40],
+            to: [-71, 42],
+            metrics: {
+              trips: 9,
+            },
+          },
+        ]}
+        mapLabel="Tooltip route flows"
+        renderFeatureTooltip={(feature) => `${feature.flow.label}: ${feature.rawValue} trips`}
+        showAttributionControl={false}
+        weightMetric="trips"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Tooltip route flows").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const polyline = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+
+    await act(async () => {
+      polyline?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.getByText("NYC to Boston: 9 trips")).toBeTruthy();
   });
 });

@@ -20,8 +20,10 @@ export {
 } from "../heat-layer";
 export {
   FlowLayer,
+  type FlowDirectionMarker,
   type FlowLayerFeature as FlowMapLayerFeature,
   type FlowLayerProps,
+  type FlowShape,
 } from "../flow-layer";
 export {
   GeoJsonLayer,
