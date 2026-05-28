@@ -25,6 +25,7 @@ import {
   createGeoJsonOverlayFeatureCollection,
   createMapPointsFromGeoJson,
   getBoundsFromGeoJson,
+  mergeMapDataBounds,
   type GeoJsonMapSource,
   type GeoJsonOverlayMode,
   type GeoJsonSourceOptions,
@@ -253,11 +254,15 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
           target: "point",
         })
       : null);
+  const dataBounds = mergeMapDataBounds(
+    geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints),
+    resolvedGeoJsonOverlayCollection ? getBoundsFromGeoJson(resolvedGeoJsonOverlayCollection) : null,
+  );
 
   return (
     <MapView
       className={className}
-      dataBounds={geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints)}
+      dataBounds={dataBounds}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}

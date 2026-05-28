@@ -21,6 +21,7 @@ import {
   type GeoJsonOverlayMode,
 } from "./geojson-source";
 import type { GeoJsonLayerProps } from "./geojson-layer";
+import { mergeTemporalMapTimeRanges } from "./temporal-core";
 import { TemporalPlaybackControls } from "./temporal-controls";
 import {
   createTemporalMapPlaybackIndex,
@@ -121,21 +122,33 @@ export function TemporalHeatMap<TProperties extends Record<string, unknown> = Re
         : null,
     [geoJson, geoJsonOverlay],
   );
-  const overlayPlaybackIndex = useMemo(() => {
+  const overlayTracks = useMemo(() => {
     if (!overlaySource || overlaySource.features.length === 0) {
+      return [];
+    }
+
+    return createTemporalGeoJsonTracksFromGeoJson(
+      overlaySource,
+      geoJsonOverlayTrackOptions ??
+        (geoJsonTrackOptions as unknown as TemporalGeoJsonGeometryTrackOptions<TProperties, TProperties> | undefined),
+    );
+  }, [geoJsonOverlayTrackOptions, geoJsonTrackOptions, overlaySource]);
+  const overlayPlaybackIndex = useMemo(() => {
+    if (overlayTracks.length === 0) {
       return null;
     }
 
-    return createTemporalGeoJsonPlaybackIndex(
-      createTemporalGeoJsonTracksFromGeoJson(
-        overlaySource,
-        geoJsonOverlayTrackOptions ??
-          (geoJsonTrackOptions as unknown as TemporalGeoJsonGeometryTrackOptions<TProperties, TProperties> | undefined),
-      ),
-      geoJsonPlaybackOptions,
-    );
-  }, [geoJsonOverlayTrackOptions, geoJsonPlaybackOptions, geoJsonTrackOptions, overlaySource]);
-  const timeRange = useMemo(() => playbackIndex.getTimeRange(), [playbackIndex]);
+    return createTemporalGeoJsonPlaybackIndex(overlayTracks, geoJsonPlaybackOptions);
+  }, [geoJsonPlaybackOptions, overlayTracks]);
+  const pointTimeRange = useMemo(() => playbackIndex.getTimeRange(), [playbackIndex]);
+  const overlayTimeRange = useMemo(
+    () => overlayPlaybackIndex?.getTimeRange() ?? null,
+    [overlayPlaybackIndex],
+  );
+  const timeRange = useMemo(
+    () => mergeTemporalMapTimeRanges(pointTimeRange, overlayTimeRange),
+    [overlayTimeRange, pointTimeRange],
+  );
   const [uncontrolledTime, setUncontrolledTime] = useState(() =>
     getInitialTime(defaultTime, timeRange),
   );

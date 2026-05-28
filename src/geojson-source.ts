@@ -159,6 +159,32 @@ export function getBoundsFromGeoJson<TProperties extends Record<string, unknown>
   );
 }
 
+export function mergeMapDataBounds(
+  ...bounds: Array<[west: number, south: number, east: number, north: number] | null | undefined>
+): [west: number, south: number, east: number, north: number] | null {
+  let west = Number.POSITIVE_INFINITY;
+  let south = Number.POSITIVE_INFINITY;
+  let east = Number.NEGATIVE_INFINITY;
+  let north = Number.NEGATIVE_INFINITY;
+
+  for (const item of bounds) {
+    if (!item) {
+      continue;
+    }
+
+    west = Math.min(west, item[0]);
+    south = Math.min(south, item[1]);
+    east = Math.max(east, item[2]);
+    north = Math.max(north, item[3]);
+  }
+
+  if (!Number.isFinite(west) || !Number.isFinite(south) || !Number.isFinite(east) || !Number.isFinite(north)) {
+    return null;
+  }
+
+  return [west, south, east, north];
+}
+
 export function flattenGeoJsonFeatures<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 >(
@@ -266,6 +292,8 @@ function createFeaturePartId<TProperties extends Record<string, unknown>>(
     feature.id ??
     (typeof feature.properties?.id === "string" || typeof feature.properties?.id === "number"
       ? feature.properties.id
+      : typeof feature.properties?.trackId === "string" || typeof feature.properties?.trackId === "number"
+        ? feature.properties.trackId
       : `feature-${index}`);
 
   return partIndex === undefined ? String(baseId) : `${String(baseId)}:part-${partIndex}`;

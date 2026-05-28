@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   ClusteredMap,
   TemporalClusteredMap,
+  TemporalHeatMap,
   type MapSurfaceController,
   type TemporalMapTrack,
 } from ".";
@@ -12,6 +13,7 @@ const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
     latLng?: [number, number];
+    latLngs?: unknown;
     options?: Record<string, unknown>;
     type: string;
   };
@@ -110,12 +112,18 @@ const leafletMock = vi.hoisted(() => {
     }
   }
 
-  function createLayer(type: string, latLng?: [number, number], options?: Record<string, unknown>) {
+  function createLayer(
+    type: string,
+    latLng?: [number, number],
+    options?: Record<string, unknown>,
+    latLngs?: unknown,
+  ) {
     const layer: Layer & {
       addTo: (group: MockLayerGroup) => typeof layer;
       on: () => typeof layer;
     } = {
       latLng,
+      latLngs,
       options,
       type,
       addTo(group: MockLayerGroup) {
@@ -138,14 +146,16 @@ const leafletMock = vi.hoisted(() => {
     getMaps: () => maps,
     getFitBoundsCallCount: () =>
       maps.reduce((total, map) => total + map.fitBoundsCalls, 0),
+    imageOverlay: (_url: string, latLngs: unknown, options: Record<string, unknown>) =>
+      createLayer("imageOverlay", undefined, options, latLngs),
     layerGroup: () => new MockLayerGroup(),
     map: () => new MockMap(),
     marker: (latLng: [number, number], options: Record<string, unknown>) =>
       createLayer("marker", latLng, options),
-    polygon: (_latLngs: unknown, options: Record<string, unknown>) =>
-      createLayer("polygon", undefined, options),
-    polyline: (_latLngs: unknown, options: Record<string, unknown>) =>
-      createLayer("polyline", undefined, options),
+    polygon: (latLngs: unknown, options: Record<string, unknown>) =>
+      createLayer("polygon", undefined, options, latLngs),
+    polyline: (latLngs: unknown, options: Record<string, unknown>) =>
+      createLayer("polyline", undefined, options, latLngs),
     reset: () => {
       maps.length = 0;
       layerGroups.length = 0;
@@ -163,6 +173,19 @@ vi.mock("leaflet", () => leafletMock);
 afterEach(() => {
   leafletMock.reset();
 });
+
+function getRenderedLayersByType(type: string) {
+  return leafletMock
+    .getLayerGroups()
+    .flatMap((group) => group.layers)
+    .filter((layer) => layer.type === type);
+}
+
+function getRenderedGeoJsonLayersByType(type: string) {
+  return getRenderedLayersByType(type).filter(
+    (layer) => layer.options?.className === "mb-maps__geojson-feature",
+  );
+}
 
 describe("@moritzbrantner/maps TemporalClusteredMap", () => {
   test("renders clustered points on the globe display", () => {
@@ -385,6 +408,314 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
         .flatMap((group) => group.layers)
         .map((layer) => layer.type),
     ).toEqual(expect.arrayContaining(["polygon", "circleMarker"]));
+  });
+
+  test("extends clustered playback range with temporal GeoJSON overlay frames", async () => {
+    render(
+      <TemporalClusteredMap
+        defaultTime={0}
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [
+                  [20, 20],
+                  [30, 30],
+                ],
+                type: "LineString",
+              },
+              properties: {
+                time: 20,
+                trackId: "late-corridor",
+              },
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [25, 25],
+                  [35, 35],
+                ],
+                type: "LineString",
+              },
+              properties: {
+                time: 30,
+                trackId: "late-corridor",
+              },
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        showAttributionControl={false}
+        tracks={[
+          {
+            id: "courier-short",
+            frames: [
+              { latitude: 0, longitude: 0, time: 0 },
+              { latitude: 10, longitude: 10, time: 10 },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Interactive timeline map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).max).toBe("30");
+  });
+
+  test("plays temporal GeoJSON overlays without point tracks", async () => {
+    render(
+      <TemporalClusteredMap
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [0, 0],
+                    [4, 0],
+                    [4, 4],
+                    [0, 4],
+                    [0, 0],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              properties: {
+                time: 20,
+                trackId: "overlay-only",
+              },
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [2, 2],
+                    [6, 2],
+                    [6, 6],
+                    [2, 6],
+                    [2, 2],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              properties: {
+                time: 30,
+                trackId: "overlay-only",
+              },
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Interactive timeline map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const slider = screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement;
+
+    expect(slider.min).toBe("20");
+    expect(slider.max).toBe("30");
+    expect((screen.getByRole("button", { name: "Play" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(getRenderedGeoJsonLayersByType("polygon")).toHaveLength(1);
+  });
+
+  test("hides, interpolates, and removes temporal GeoJSON overlays while seeking", async () => {
+    render(
+      <TemporalClusteredMap
+        defaultTime={0}
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [0, 0],
+                    [4, 0],
+                    [4, 4],
+                    [0, 4],
+                    [0, 0],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              properties: {
+                time: 20,
+                trackId: "changing-zone",
+              },
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [10, 10],
+                    [14, 10],
+                    [14, 14],
+                    [10, 14],
+                    [10, 10],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              properties: {
+                time: 30,
+                trackId: "changing-zone",
+              },
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [10, 10],
+                    [14, 10],
+                    [14, 14],
+                    [10, 14],
+                    [10, 10],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              properties: {
+                time: 40,
+                trackId: "changing-zone",
+                visible: false,
+              },
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        showAttributionControl={false}
+        tracks={[
+          {
+            id: "courier-window",
+            frames: [
+              { latitude: 0, longitude: 0, time: 0 },
+              { latitude: 10, longitude: 10, time: 40 },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Interactive timeline map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    expect(getRenderedGeoJsonLayersByType("polygon")).toHaveLength(0);
+
+    fireEvent.change(screen.getByRole("slider", { name: "Timeline" }), {
+      target: {
+        value: "25",
+      },
+    });
+
+    await waitFor(() => {
+      const interpolatedRing = getRenderedGeoJsonLayersByType("polygon")[0]?.latLngs as
+        | Array<Array<[number, number]>>
+        | undefined;
+
+      expect(interpolatedRing?.[0]?.[0]).toEqual([5, 5]);
+      expect(interpolatedRing?.[0]?.[1]).toEqual([5, 9]);
+    });
+
+    fireEvent.change(screen.getByRole("slider", { name: "Timeline" }), {
+      target: {
+        value: "40",
+      },
+    });
+
+    await waitFor(() => {
+      expect(getRenderedGeoJsonLayersByType("polygon")).toHaveLength(0);
+    });
+  });
+
+  test("extends heat map playback range with temporal GeoJSON overlay frames", async () => {
+    render(
+      <TemporalHeatMap
+        defaultTime={0}
+        geoJson={{
+          features: [
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [20, 20],
+                    [30, 20],
+                    [30, 30],
+                    [20, 30],
+                    [20, 20],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              properties: {
+                time: 20,
+                trackId: "heat-zone",
+              },
+              type: "Feature",
+            },
+            {
+              geometry: {
+                coordinates: [
+                  [
+                    [25, 25],
+                    [35, 25],
+                    [35, 35],
+                    [25, 35],
+                    [25, 25],
+                  ],
+                ],
+                type: "Polygon",
+              },
+              properties: {
+                time: 30,
+                trackId: "heat-zone",
+              },
+              type: "Feature",
+            },
+          ],
+          type: "FeatureCollection",
+        }}
+        showAttributionControl={false}
+        tracks={[
+          {
+            id: "heat-point-short",
+            frames: [
+              { latitude: 0, longitude: 0, time: 0 },
+              { latitude: 10, longitude: 10, time: 10 },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Interactive temporal heat map").getAttribute("data-map-ready"),
+      ).toBe("true");
+    });
+
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).max).toBe("30");
   });
 
   test("snaps slider changes and reports the active time", async () => {

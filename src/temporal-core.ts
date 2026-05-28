@@ -60,6 +60,28 @@ export function getTemporalMapTimeRange<
   return { end, start };
 }
 
+export function mergeTemporalMapTimeRanges(
+  ...ranges: Array<TemporalMapTimeRange | null | undefined>
+): TemporalMapTimeRange | null {
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+
+  for (const range of ranges) {
+    if (!range) {
+      continue;
+    }
+
+    start = Math.min(start, range.start);
+    end = Math.max(end, range.end);
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+
+  return { end, start };
+}
+
 export function clampTemporalMapTime(time: number, timeRange: TemporalMapTimeRange) {
   if (!Number.isFinite(time)) {
     return timeRange.start;

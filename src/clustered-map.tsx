@@ -27,6 +27,7 @@ import {
   createGeoJsonOverlayFeatureCollection,
   createMapPointsFromGeoJson,
   getBoundsFromGeoJson,
+  mergeMapDataBounds,
   type GeoJsonMapSource,
   type GeoJsonOverlayMode,
   type GeoJsonSourceOptions,
@@ -171,11 +172,15 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
           target: "point",
         })
       : null);
+  const dataBounds = mergeMapDataBounds(
+    geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints),
+    resolvedGeoJsonOverlayCollection ? getBoundsFromGeoJson(resolvedGeoJsonOverlayCollection) : null,
+  );
 
   return (
     <MapView
       className={className}
-      dataBounds={geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints)}
+      dataBounds={dataBounds}
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
