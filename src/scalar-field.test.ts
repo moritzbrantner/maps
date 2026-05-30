@@ -5,6 +5,8 @@ import {
   createScalarFieldGrid,
   getScalarFieldValueAtCoordinate,
   normalizeScalarFieldValue,
+  resetMapsScalarFieldWasmRuntimeForTests,
+  setMapsScalarFieldWasmRuntimeForTests,
   type ScalarFieldGrid,
 } from "./scalar-field";
 import type { MapPoint } from "./aggregation";
@@ -149,6 +151,60 @@ describe("scalar-field IDW interpolation", () => {
     });
 
     expect(getScalarFieldValueAtCoordinate(interpolator, [5, 5])).toBeNull();
+  });
+
+  test("delegates compatible grids to an initialized WASM scalar field runtime", () => {
+    try {
+      setMapsScalarFieldWasmRuntimeForTests({
+        createScalarFieldGrid(points, options) {
+          expect(points).toHaveLength(1);
+          expect(options.valueMetric).toBe("temperature");
+
+          return {
+            bounds: [0, 0, 1, 1],
+            columns: 1,
+            rows: 1,
+            valueDomain: [42, 42],
+            values: [42],
+          };
+        },
+      });
+
+      expect(
+        createScalarFieldGrid([point("a", 0, 0, 42)], {
+          domainBounds: [0, 0, 1, 1],
+          fieldColumns: 1,
+          fieldRows: 1,
+          valueMetric: "temperature",
+        }),
+      ).toMatchObject({
+        valueDomain: [42, 42],
+        values: [42],
+      });
+    } finally {
+      resetMapsScalarFieldWasmRuntimeForTests();
+    }
+  });
+
+  test("keeps custom value callbacks on the TypeScript scalar field path", () => {
+    try {
+      setMapsScalarFieldWasmRuntimeForTests({
+        createScalarFieldGrid() {
+          throw new Error("WASM runtime should not handle custom getValue options");
+        },
+      });
+
+      expect(
+        createScalarFieldGrid([point("a", 0, 0, 1)], {
+          domainBounds: [0, 0, 1, 1],
+          fieldColumns: 1,
+          fieldRows: 1,
+          getValue: () => 7,
+        }).values,
+      ).toEqual([7]);
+    } finally {
+      resetMapsScalarFieldWasmRuntimeForTests();
+    }
   });
 });
 

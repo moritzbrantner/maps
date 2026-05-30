@@ -74,6 +74,7 @@
     "verify:release": "bun run check-types && bun run lint && bun run test && bun run build && bun run verify:entry-bundles && bun run test:browser && bun run bench:temporal-geojson && bun run bench:performance && bun run pack:dry"
   },
   "dependencies": {
+    "@mb-rust/geo-viz-wasm": "file:../rust-packages/packages/geo-viz-wasm",
     "@moritzbrantner/viz-engine": "file:../viz-engine",
     "@moritzbrantner/data-density": "^0.1.1",
     "@moritzbrantner/timeline-editor": "file:../timeline-editor",

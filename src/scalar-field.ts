@@ -7,6 +7,7 @@ const DEFAULT_INTERPOLATION_POWER = 2;
 const DEFAULT_DOMAIN_PADDING_RATIO = 0.08;
 const DEFAULT_EPSILON_METERS = 1;
 const MAX_EXPLICIT_FIELD_SIZE = 2_048;
+const DEFAULT_GEO_VIZ_WASM_PACKAGE = "@mb-rust/geo-viz-wasm";
 
 export type HeatFieldInterpolation = "idw";
 
@@ -59,6 +60,21 @@ export type ScalarFieldInterpolator = {
   valueDomain: [min: number, max: number] | null;
 };
 
+export type MapsScalarFieldWasmRuntime = {
+  createScalarFieldGrid<TProperties = Record<string, unknown>>(
+    points: readonly MapPoint<TProperties>[],
+    options: HeatFieldOptions<TProperties>,
+  ): ScalarFieldGrid;
+};
+
+type GeoVizWasmModule = {
+  createScalarFieldGrid: (
+    points: readonly unknown[],
+    options: Record<string, unknown>,
+  ) => ScalarFieldGrid;
+  init?: () => Promise<unknown>;
+};
+
 type MetricProjection = {
   centerLatitudeRadians: number;
   project: (coordinate: [longitude: number, latitude: number]) => MetricPoint;
@@ -91,7 +107,54 @@ type SpatialGrid<TProperties = Record<string, unknown>> = {
   minRow: number;
 };
 
+let scalarFieldWasmRuntime: MapsScalarFieldWasmRuntime | null = null;
+let scalarFieldWasmLoadError: unknown = null;
+
+export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_GEO_VIZ_WASM_PACKAGE) {
+  try {
+    const wasmModule = await importOptionalGeoVizWasmModule(packageName);
+
+    await wasmModule.init?.();
+    scalarFieldWasmRuntime = {
+      createScalarFieldGrid(points, options) {
+        return wasmModule.createScalarFieldGrid(points, toGeoVizScalarFieldOptions(options));
+      },
+    };
+    scalarFieldWasmLoadError = null;
+    return true;
+  } catch (error) {
+    scalarFieldWasmRuntime = null;
+    scalarFieldWasmLoadError = error;
+    return false;
+  }
+}
+
+export function setMapsScalarFieldWasmRuntimeForTests(runtime: MapsScalarFieldWasmRuntime | null) {
+  scalarFieldWasmRuntime = runtime;
+  scalarFieldWasmLoadError = null;
+}
+
+export function resetMapsScalarFieldWasmRuntimeForTests() {
+  scalarFieldWasmRuntime = null;
+  scalarFieldWasmLoadError = null;
+}
+
+export function getMapsScalarFieldWasmLoadError() {
+  return scalarFieldWasmLoadError;
+}
+
 export function createScalarFieldGrid<TProperties = Record<string, unknown>>(
+  points: readonly MapPoint<TProperties>[],
+  options: HeatFieldOptions<TProperties> = {},
+): ScalarFieldGrid {
+  if (scalarFieldWasmRuntime && canUseWasmScalarFieldGrid(options)) {
+    return scalarFieldWasmRuntime.createScalarFieldGrid(points, options);
+  }
+
+  return createScalarFieldGridTypeScript(points, options);
+}
+
+function createScalarFieldGridTypeScript<TProperties = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: HeatFieldOptions<TProperties> = {},
 ): ScalarFieldGrid {
@@ -740,4 +803,35 @@ function clamp(value: number, min: number, max: number) {
 
 function isDefined<T>(value: T | null): value is T {
   return value !== null;
+}
+
+function canUseWasmScalarFieldGrid<TProperties>(options: HeatFieldOptions<TProperties>) {
+  return !options.filterPoint && !options.getValue && !options.maskGeoJson;
+}
+
+function toGeoVizScalarFieldOptions<TProperties>(
+  options: HeatFieldOptions<TProperties>,
+): Record<string, unknown> {
+  return {
+    domainBounds: options.domainBounds,
+    domainPaddingRatio: options.domainPaddingRatio,
+    fieldCellSizeMeters: options.fieldCellSizeMeters,
+    fieldColumns: options.fieldColumns,
+    fieldRows: options.fieldRows,
+    interpolationEpsilonMeters: options.interpolationEpsilonMeters,
+    interpolationExtrapolate: options.interpolationExtrapolate,
+    interpolationK: options.interpolationK,
+    interpolationMaxDistanceMeters: options.interpolationMaxDistanceMeters,
+    interpolationPower: options.interpolationPower,
+    valueDomain: options.valueDomain,
+    valueMetric: options.valueMetric,
+  };
+}
+
+async function importOptionalGeoVizWasmModule(packageName: string): Promise<GeoVizWasmModule> {
+  const dynamicImport = new Function("specifier", "return import(specifier)") as (
+    specifier: string,
+  ) => Promise<GeoVizWasmModule>;
+
+  return dynamicImport(packageName);
 }
