@@ -5,9 +5,15 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    exclude: ["@mb-rust/geo-viz-wasm"],
+  },
   resolve: {
     alias: {
       "@moritzbrantner/maps": fileURLToPath(new URL("./src/index.ts", import.meta.url)),
+      "@moritzbrantner/viz-engine": fileURLToPath(
+        new URL("./src/test-viz-engine.ts", import.meta.url),
+      ),
     },
   },
   server: {

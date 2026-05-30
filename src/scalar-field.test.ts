@@ -1,9 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import {
   createIdwInterpolator,
   createScalarFieldGrid,
+  getMapsScalarFieldWasmLoadError,
   getScalarFieldValueAtCoordinate,
+  initializeMapsScalarFieldWasm,
   normalizeScalarFieldValue,
   resetMapsScalarFieldWasmRuntimeForTests,
   setMapsScalarFieldWasmRuntimeForTests,
@@ -12,6 +14,10 @@ import {
 import type { MapPoint } from "./aggregation";
 
 describe("scalar-field IDW interpolation", () => {
+  afterEach(() => {
+    resetMapsScalarFieldWasmRuntimeForTests();
+  });
+
   test("returns the source value for an exact source-point match", () => {
     const interpolator = createIdwInterpolator([point("a", 13, 52, 21.5)], {
       domainBounds: [12, 51, 14, 53],
@@ -205,6 +211,39 @@ describe("scalar-field IDW interpolation", () => {
     } finally {
       resetMapsScalarFieldWasmRuntimeForTests();
     }
+  });
+
+  test("reports failed optional WASM initialization and keeps the TypeScript scalar field path", async () => {
+    expect(await initializeMapsScalarFieldWasm("missing-package")).toBe(false);
+    expect(getMapsScalarFieldWasmLoadError()).toBeTruthy();
+
+    const grid = createScalarFieldGrid([point("a", 0, 0, 12)], {
+      domainBounds: [0, 0, 1, 1],
+      fieldColumns: 1,
+      fieldRows: 1,
+      valueMetric: "temperature",
+    });
+
+    expect(grid.bounds).toEqual([0, 0, 1, 1]);
+    expect(grid.columns).toBe(1);
+    expect(grid.rows).toBe(1);
+    expect(grid.valueDomain?.[0]).toBeCloseTo(12, 10);
+    expect(grid.valueDomain?.[1]).toBeCloseTo(12, 10);
+    expect(grid.values[0]).toBeCloseTo(12, 10);
+  });
+
+  test("repeated failed WASM initialization does not poison scalar field creation", async () => {
+    expect(await initializeMapsScalarFieldWasm("missing-package")).toBe(false);
+    expect(await initializeMapsScalarFieldWasm("missing-package")).toBe(false);
+
+    expect(
+      createScalarFieldGrid([point("a", 0, 0, 4)], {
+        domainBounds: [0, 0, 1, 1],
+        fieldColumns: 2,
+        fieldRows: 1,
+        valueMetric: "temperature",
+      }).values,
+    ).toEqual([4, 4]);
   });
 });
 

@@ -1,11 +1,4 @@
-export {
-  MapDataset,
-  MapEngineProvider,
-  useMapEngine,
-  useMapFrame,
-  type MapDatasetProps,
-  type MapEngineProviderProps,
-} from "../map-engine";
+export type { MapDatasetProps, MapEngineProviderProps } from "../map-engine";
 export {
   createMapDensityViewportSummary,
   createPointAggregationIndex,

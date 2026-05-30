@@ -5,6 +5,28 @@ const benignConsolePatterns = [
   /Failed to load resource: net::ERR_ABORTED/,
   /WebGL: INVALID_OPERATION/,
 ];
+const visualBaselineViews = [
+  "Clusters",
+  "Points",
+  "Heat",
+  "Flows",
+  "Composed",
+  "Interpolation",
+  "GeoJSON",
+  "Editor",
+] as const;
+const topLevelViews = [
+  "Clusters",
+  "Points",
+  "Heat",
+  "Flows",
+  "Composed",
+  "Timeline",
+  "Interpolation",
+  "Globe",
+  "GeoJSON",
+  "Editor",
+] as const;
 
 test.beforeEach(async ({ page }) => {
   const consoleErrors: string[] = [];
@@ -68,21 +90,21 @@ test.afterEach(async ({ page }) => {
   expect(consoleErrors).toEqual([]);
 });
 
-for (const view of [
-  "Clusters",
-  "Points",
-  "Heat",
-  "Flows",
-  "Composed",
-  "Interpolation",
-  "GeoJSON",
-  "Editor",
-] as const) {
+for (const view of visualBaselineViews) {
   test(`${view} view visual baseline`, async ({ page }) => {
     await openView(page, view);
     await expect(page.locator(".demo-stage")).toHaveScreenshot(`${view.toLowerCase()}-desktop.png`);
   });
 }
+
+test("Heat view renders a nonblank field surface", async ({ page }) => {
+  await openView(page, "Heat");
+
+  const fieldSurface = page.locator(".mb-maps__heat-surface--field").first();
+
+  await expect(fieldSurface).toBeVisible();
+  await expect.poll(async () => pngHasPixelVariance(await fieldSurface.screenshot())).toBe(true);
+});
 
 test("Timeline view keeps a stable viewport while seeking through playback", async ({ page }) => {
   await openView(page, "Timeline");
@@ -134,6 +156,48 @@ test("Interpolation view exposes algorithm and keyframe controls", async ({ page
   await expect(page.getByText("74%")).toBeVisible();
   await interpolationPanel.getByLabel("Example").selectOption("type-change-fallback");
   await expect(interpolationPanel.getByText("The geometry type changes")).toBeVisible();
+});
+
+test("Interpolation view renders every algorithm option without console errors", async ({ page }) => {
+  await openView(page, "Interpolation");
+
+  const interpolationPanel = page.locator(".demo-interpolation-panel");
+  const algorithmSelect = interpolationPanel.getByLabel("Algorithm");
+
+  await interpolationPanel.getByLabel("Example").selectOption("polygon-concave-extra-vertices");
+
+  for (const algorithm of ["compatible", "resample", "vertex-union", "centroid-radial", "hold"]) {
+    await algorithmSelect.selectOption(algorithm);
+    await expect(page.locator(".mb-maps__geojson-feature").first()).toBeVisible();
+    await expect.poll(async () => pngHasPixelVariance(await page.locator(".mb-maps").first().screenshot())).toBe(true);
+  }
+
+  await interpolationPanel.getByLabel("Example").selectOption("topology-polygon-split");
+  await interpolationPanel.getByLabel("Topology strategy").selectOption("area-overlap");
+  await expect(page.locator(".mb-maps__geojson-feature").first()).toBeVisible();
+  await interpolationPanel.getByLabel("Topology strategy").selectOption("voronoi-partition");
+  await expect(page.locator(".mb-maps__geojson-feature").first()).toBeVisible();
+});
+
+test("Timeline view samples topology transitions at start, middle, and end", async ({ page }) => {
+  await openView(page, "Timeline");
+  await page.getByRole("button", { name: "Pause" }).click();
+
+  const nextButton = page.getByRole("button", { name: "Next time step" });
+
+  for (const [steps, label] of [
+    [0, "08:00"],
+    [60, "09:00"],
+    [60, "10:00"],
+  ] as const) {
+    for (let index = 0; index < steps; index += 1) {
+      await nextButton.click();
+    }
+
+    await expect(page.locator(".mb-temporal-map__current-time")).toHaveText(label);
+    await expect(page.locator(".mb-maps__geojson-feature").first()).toBeVisible();
+    expect(await page.locator(".mb-maps__geojson-feature").count()).toBeGreaterThan(0);
+  }
 });
 
 test("Flows view exposes direction, volume legend, and hover context", async ({ page }) => {
@@ -220,6 +284,27 @@ test("Editor mode controls update without visual breakage", async ({ page }) => 
   await expect(page.locator(".demo-stage")).toHaveScreenshot("editor-draw-polygon-desktop.png");
 });
 
+test("Editor mode creates a polygon from map clicks", async ({ page }) => {
+  await openView(page, "Editor");
+
+  const initialFeatureCount = await getEditorFeatureCount(page);
+  const map = page.locator(".mb-maps").first();
+  const box = await map.boundingBox();
+
+  expect(box).not.toBeNull();
+
+  await page.getByRole("button", { name: "Polygon" }).click();
+  await page.mouse.click(box!.x + box!.width * 0.42, box!.y + box!.height * 0.46);
+  await page.mouse.click(box!.x + box!.width * 0.54, box!.y + box!.height * 0.43);
+  await page.mouse.click(box!.x + box!.width * 0.58, box!.y + box!.height * 0.56);
+  await page.mouse.dblclick(box!.x + box!.width * 0.45, box!.y + box!.height * 0.58);
+
+  await expect
+    .poll(async () => getEditorFeatureCount(page))
+    .toBeGreaterThan(initialFeatureCount);
+  await expect(page.locator(".mb-maps__editor-feature").last()).toBeVisible();
+});
+
 test("Mobile layout does not overflow horizontally", async ({ page }) => {
   await page.setViewportSize({ height: 844, width: 390 });
   await page.goto("/");
@@ -245,10 +330,64 @@ test("Mobile layout does not overflow horizontally", async ({ page }) => {
   await expect(page.locator("main")).toHaveScreenshot("clusters-mobile.png");
 });
 
-async function openView(page: Page, view: string) {
-  await page.getByRole("tab", { name: view }).click();
+test("Mobile layout does not overflow horizontally on any top-level tab", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ height: 844, width: 390 });
+  await page.goto("/");
+  await page.addStyleTag({
+    content: `
+      *, *::before, *::after {
+        animation-duration: 0s !important;
+        transition-duration: 0s !important;
+      }
+
+      .leaflet-tile-pane {
+        opacity: 0 !important;
+      }
+    `,
+  });
+
+  for (const view of topLevelViews) {
+    await openView(page, view, { clickMethod: "keyboard" });
+    await expect(page.getByRole("tab", { name: view })).toHaveAttribute("aria-selected", "true");
+    await expect
+      .poll(async () => hasHorizontalOverflow(page), { message: `${view} tab should not overflow` })
+      .toBe(false);
+  }
+});
+
+async function openView(
+  page: Page,
+  view: string,
+  options: { clickMethod?: "keyboard" | "pointer"; force?: boolean } = {},
+) {
+  const tab = page.getByRole("tab", { name: view });
+
+  if (options.clickMethod === "keyboard") {
+    await tab.focus();
+    await page.keyboard.press("Enter");
+  } else {
+    await tab.click({ force: options.force });
+  }
+
   await expect(page.locator(".mb-maps").first()).toBeVisible();
   await page.waitForTimeout(150);
+}
+
+async function getEditorFeatureCount(page: Page) {
+  const value = await page
+    .locator(".demo-editor-facts div")
+    .filter({ hasText: "Features" })
+    .locator("dd")
+    .textContent();
+
+  return Number(value ?? Number.NaN);
+}
+
+async function hasHorizontalOverflow(page: Page) {
+  return page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
 }
 
 function pngHasPixelVariance(png: Buffer) {

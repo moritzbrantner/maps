@@ -39,6 +39,48 @@ describe("@moritzbrantner/maps kernel runtime", () => {
     expect(diagnostics.some((event) => event.mode === "fallback")).toBe(true);
   });
 
+  test("includes a clear fallback reason when WASM initialization fails", async () => {
+    const diagnostics: MapsKernelDiagnostic[] = [];
+    const initialized = await initializeMapsWasmKernels({
+      backend: "wasm",
+      onKernelDiagnostic(event) {
+        diagnostics.push(event);
+      },
+      wasmPackage: "missing-package",
+    });
+
+    expect(initialized).toBe(false);
+    const initializationFallback = diagnostics.find((event) => event.mode === "fallback");
+
+    expect(initializationFallback?.fallbackReason).toEqual(expect.any(String));
+    expect(initializationFallback?.fallbackReason).not.toBe("wasm runtime is not initialized");
+
+    const output = getMapsKernelRuntime().resampleRingFlat(
+      new Float64Array([0, 0, 10, 0, 10, 10, 0, 10]),
+      4,
+    );
+
+    expect(Array.from(output)).toEqual([0, 0, 10, 0, 10, 10, 0, 10]);
+    const ringFallback = diagnostics.find(
+      (event) => event.kernel === "resampleRing" && event.mode === "fallback",
+    );
+
+    expect(ringFallback?.fallbackReason).toBe(initializationFallback?.fallbackReason);
+  });
+
+  test("repeated failed WASM initialization keeps TypeScript kernels available", async () => {
+    expect(await initializeMapsWasmKernels({ backend: "wasm", wasmPackage: "missing-package" })).toBe(
+      false,
+    );
+    expect(await initializeMapsWasmKernels({ backend: "wasm", wasmPackage: "missing-package" })).toBe(
+      false,
+    );
+
+    const output = getMapsKernelRuntime().resampleLineFlat(new Float64Array([0, 0, 10, 0]), 3);
+
+    expect(Array.from(output)).toEqual([0, 0, 5, 0, 10, 0]);
+  });
+
   test("A/B testing returns the TypeScript control result and disables mismatching WASM", () => {
     const diagnostics: MapsKernelDiagnostic[] = [];
 
