@@ -527,8 +527,25 @@ const frame = getGeoJsonTimelineSceneAtTime(collection, document, 750, {
   defaultTransition: {
     algorithm: "topology-plan",
     durationMs: 500,
+    topologyStrategy: "voronoi-partition",
   },
 });
+```
+
+Topology planning supports three strategies:
+
+```txt
+bounds:
+  Lightweight fallback using bounding-box intersection. Mostly useful for
+  simple demos or no extra clipping dependency behavior.
+
+area-overlap:
+  Uses polygon boolean intersection to classify source/target relationships by
+  area.
+
+voronoi-partition:
+  Uses area-overlap matching plus centroid Voronoi cells to produce cleaner
+  split/merge fragments.
 ```
 
 The transition engine also works without a timeline:
@@ -541,6 +558,7 @@ import {
 
 const plan = createGeoJsonTransitionPlan(previousCollection, nextCollection, {
   algorithm: "topology-plan",
+  topologyStrategy: "area-overlap",
 });
 
 const halfway = interpolateGeoJsonTransitionPlan(plan, 0.5);

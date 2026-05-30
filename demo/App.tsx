@@ -46,6 +46,7 @@ import {
   type GeoJsonEditorSelection,
   createGeoJsonTransitionPlan,
   interpolateGeoJsonTransitionPlan,
+  type GeoJsonTopologyStrategy,
   type TemporalGeoJsonGeometryFeature,
   type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalGeoJsonInterpolationStrategy,
@@ -692,6 +693,14 @@ const demoInterpolationStrategies: Array<{
     id: "hold",
     label: "Hold",
   },
+];
+
+const demoTopologyStrategies: Array<{
+  id: Exclude<GeoJsonTopologyStrategy, "bounds">;
+  label: string;
+}> = [
+  { id: "area-overlap", label: "Area overlap" },
+  { id: "voronoi-partition", label: "Voronoi partition" },
 ];
 
 const demoInterpolationExamples = createDemoInterpolationExamples();
@@ -1967,6 +1976,8 @@ function GeoJsonInterpolationWorkbench() {
   const [strategy, setStrategy] = useState<TemporalGeoJsonInterpolationStrategy>(
     getDemoInterpolationDefaultStrategy(demoInterpolationExamples[0]!),
   );
+  const [topologyStrategy, setTopologyStrategy] =
+    useState<Exclude<GeoJsonTopologyStrategy, "bounds">>("area-overlap");
   const [progress, setProgress] = useState(50);
   const [selectedKeyframe, setSelectedKeyframe] = useState<DemoInterpolationKeyframeId>("end");
   const [selectedHandleIndex, setSelectedHandleIndex] = useState(0);
@@ -2001,6 +2012,7 @@ function GeoJsonInterpolationWorkbench() {
         return interpolateGeoJsonTransitionPlan(
           createGeoJsonTransitionPlan(topologyPair.start, topologyPair.end, {
             algorithm: "topology-plan",
+            topologyStrategy,
           }),
           progressTime,
         );
@@ -2031,7 +2043,7 @@ function GeoJsonInterpolationWorkbench() {
         },
       );
     },
-    [geometryPair, geometryType, progressTime, strategy, topologyPair],
+    [geometryPair, geometryType, progressTime, strategy, topologyPair, topologyStrategy],
   );
   const startCollection = topologyPair
     ? topologyPair.start
@@ -2061,6 +2073,7 @@ function GeoJsonInterpolationWorkbench() {
 
     setExampleId(nextExample.id);
     setStrategy(getDemoInterpolationDefaultStrategy(nextExample));
+    setTopologyStrategy("area-overlap");
     setSelectedHandleIndex(0);
   };
   const updateSelectedPosition = (axis: 0 | 1, value: number) => {
@@ -2086,6 +2099,7 @@ function GeoJsonInterpolationWorkbench() {
   const resetCurrentGeometry = () => {
     if (isTopologyExample) {
       setProgress(50);
+      setTopologyStrategy("area-overlap");
       setSelectedHandleIndex(0);
       return;
     }
@@ -2107,6 +2121,10 @@ function GeoJsonInterpolationWorkbench() {
       }),
     ),
   ];
+  const totalFlowArea = interpolatedCollection.features.reduce(
+    (sum, feature) => sum + readDemoNumericProperty(feature.properties, "flowArea"),
+    0,
+  );
 
   return (
     <section className="demo-interpolation-workbench" aria-label="GeoJSON interpolation workbench">
@@ -2181,10 +2199,21 @@ function GeoJsonInterpolationWorkbench() {
         </label>
 
         {isTopologyExample ? (
-          <div className="demo-interpolation-note">
-            <strong>Topology plan</strong>
-            <span>Collection-level split and merge fragments.</span>
-          </div>
+          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+            <span>Topology strategy</span>
+            <NativeSelect
+              value={topologyStrategy}
+              onChange={(event) =>
+                setTopologyStrategy(event.target.value as Exclude<GeoJsonTopologyStrategy, "bounds">)
+              }
+            >
+              {demoTopologyStrategies.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
         ) : (
           <label className="grid gap-1 text-xs font-medium text-muted-foreground">
             <span>Algorithm</span>
@@ -2320,12 +2349,20 @@ function GeoJsonInterpolationWorkbench() {
           {isTopologyExample ? (
             <>
               <div>
+                <dt>Strategy</dt>
+                <dd>{demoTopologyStrategies.find((item) => item.id === topologyStrategy)?.label}</dd>
+              </div>
+              <div>
                 <dt>Preview features</dt>
                 <dd>{interpolatedCollection.features.length}</dd>
               </div>
               <div>
                 <dt>Kinds</dt>
                 <dd>{transitionKinds.length > 0 ? transitionKinds.join(", ") : "scene"}</dd>
+              </div>
+              <div>
+                <dt>Total flow area</dt>
+                <dd>{totalFlowArea.toFixed(2)}</dd>
               </div>
             </>
           ) : null}
@@ -2421,11 +2458,35 @@ function getDemoInterpolationPreviewLayerStyle(
     };
   }
 
+  if (transitionKind === "appear") {
+    return {
+      polygonFillColor: "#22c55e",
+      polygonFillOpacity: 0.22,
+      polygonStrokeColor: "#15803d",
+      polygonStrokeWidth: 3,
+    };
+  }
+
+  if (transitionKind === "disappear") {
+    return {
+      polygonFillColor: "#f43f5e",
+      polygonFillOpacity: 0.22,
+      polygonStrokeColor: "#be123c",
+      polygonStrokeWidth: 3,
+    };
+  }
+
   return getDemoInterpolationLayerStyle("preview", geometryType);
 }
 
 function readDemoTransitionKind(properties: unknown) {
   return isDemoRecord(properties) ? properties.transitionKind : undefined;
+}
+
+function readDemoNumericProperty(properties: unknown, key: string) {
+  const value = isDemoRecord(properties) ? properties[key] : undefined;
+
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function isDemoRecord(value: unknown): value is Record<string, unknown> {
@@ -2573,6 +2634,16 @@ function createDemoInterpolationExamples(): DemoInterpolationExample[] {
       label: "Topology: polygon merge",
       startCollection: createDemoTopologyMergeCollection("start"),
     },
+    {
+      description:
+        "Two partially overlapping source and target regions show preserved, appearing, disappearing, and ambiguous area fragments.",
+      endCollection: createDemoTopologyMixedOverlapCollection("end"),
+      geometryType: "Polygon",
+      id: "topology-mixed-overlap",
+      kind: "topology",
+      label: "Topology: mixed overlap",
+      startCollection: createDemoTopologyMixedOverlapCollection("start"),
+    },
   ];
 }
 
@@ -2653,6 +2724,40 @@ function createDemoTopologyMergeCollection(
       }),
       demoTopologyFeature("topology-east", "East district", {
         coordinates: [[[2.8, 43.7], [6.7, 43.5], [6.9, 49.2], [3.0, 49.0], [2.8, 43.7]]],
+        type: "Polygon",
+      }),
+    ],
+    type: "FeatureCollection",
+  };
+}
+
+function createDemoTopologyMixedOverlapCollection(
+  keyframe: DemoInterpolationKeyframeId,
+): TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> {
+  if (keyframe === "start") {
+    return {
+      features: [
+        demoTopologyFeature("topology-northwest", "Northwest area", {
+          coordinates: [[[-6.8, 44.1], [-1.0, 44.3], [-1.3, 49.2], [-6.4, 49.0], [-6.8, 44.1]]],
+          type: "Polygon",
+        }),
+        demoTopologyFeature("topology-southeast", "Southeast area", {
+          coordinates: [[[0.5, 43.7], [5.8, 43.9], [5.4, 48.8], [0.2, 48.5], [0.5, 43.7]]],
+          type: "Polygon",
+        }),
+      ],
+      type: "FeatureCollection",
+    };
+  }
+
+  return {
+    features: [
+      demoTopologyFeature("topology-west-shift", "Shifted west area", {
+        coordinates: [[[-5.4, 44.8], [0.1, 44.5], [0.0, 49.9], [-5.8, 49.6], [-5.4, 44.8]]],
+        type: "Polygon",
+      }),
+      demoTopologyFeature("topology-east-new", "New east area", {
+        coordinates: [[[3.4, 44.2], [8.4, 44.8], [7.7, 50.0], [3.1, 49.3], [3.4, 44.2]]],
         type: "Polygon",
       }),
     ],

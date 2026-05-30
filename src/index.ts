@@ -1,6 +1,24 @@
 "use client";
 
 export {
+  EngineGeoJsonLayer,
+  GeoClusterLayer,
+  GeoFlowLayer,
+  GeoHeatLayer,
+  GeoPointLayer,
+  MapDataset,
+  MapEngineProvider,
+  useMapEngine,
+  useMapFrame,
+  type EngineGeoJsonLayerProps,
+  type GeoClusterLayerProps,
+  type GeoFlowLayerProps,
+  type GeoHeatLayerProps,
+  type GeoPointLayerProps,
+  type MapDatasetProps,
+  type MapEngineProviderProps,
+} from "./map-engine";
+export {
   createMapDensityViewportSummary,
   createPointAggregationIndex,
   getBoundsFromPoints,
@@ -139,6 +157,7 @@ export {
   type GeoJsonTransitionFragmentKind,
   type GeoJsonTransitionOptions,
   type GeoJsonTransitionPlan,
+  type GeoJsonTopologyStrategy,
   type ResolvedGeoJsonTransitionOptions,
 } from "./geojson-transition";
 export {
@@ -267,7 +286,10 @@ export {
   type PolygonLineDrawingOptions,
   type PolygonLineDrawingResult,
 } from "./polygon-line-drawing";
-export { TemporalClusteredMap, type TemporalClusteredMapProps } from "./temporal-map";
+export {
+  TemporalClusteredMap,
+  type TemporalClusteredMapProps,
+} from "./temporal-map";
 export {
   TemporalHeatMap,
   getTemporalHeatMapMaxWeight,

@@ -1,4 +1,12 @@
 export {
+  MapDataset,
+  MapEngineProvider,
+  useMapEngine,
+  useMapFrame,
+  type MapDatasetProps,
+  type MapEngineProviderProps,
+} from "../map-engine";
+export {
   createMapDensityViewportSummary,
   createPointAggregationIndex,
   getBoundsFromPoints,
@@ -39,10 +47,7 @@ export {
   type GeoJsonOverlayTarget,
   type GeoJsonSourceOptions,
 } from "../geojson-source";
-export {
-  createPointMapFeatures,
-  createBubbleMapFeatures,
-} from "../point-core";
+export { createPointMapFeatures, createBubbleMapFeatures } from "../point-core";
 export {
   type BubbleMapFeature,
   type BubbleMapWeightAccessor,

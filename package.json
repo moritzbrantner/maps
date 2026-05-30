@@ -74,6 +74,7 @@
     "verify:release": "bun run check-types && bun run lint && bun run test && bun run build && bun run verify:entry-bundles && bun run test:browser && bun run bench:temporal-geojson && bun run bench:performance && bun run pack:dry"
   },
   "dependencies": {
+    "@moritzbrantner/viz-engine": "file:../viz-engine",
     "@moritzbrantner/data-density": "^0.1.1",
     "@moritzbrantner/timeline-editor": "file:../timeline-editor",
     "@moritzbrantner/ui": "https://registry.npmjs.org/@moritzbrantner/ui/-/ui-0.8.0.tgz",
@@ -83,6 +84,7 @@
     "d3-delaunay": "^6.0.4",
     "d3-geo": "^3.1.1",
     "leaflet": "^1.9.4",
+    "polygon-clipping": "^0.15.7",
     "tailwindcss": "^4.1.14",
     "three": "^0.184.0",
     "topojson-client": "^3.1.0",

@@ -166,6 +166,7 @@ describe("@moritzbrantner/maps GeoJSON timeline", () => {
       defaultTransition: {
         algorithm: "topology-plan" as const,
         durationMs: 500,
+        topologyStrategy: "area-overlap" as const,
       },
     };
 
@@ -199,6 +200,7 @@ describe("@moritzbrantner/maps GeoJSON timeline", () => {
       defaultTransition: {
         algorithm: "topology-plan" as const,
         durationMs: 500,
+        topologyStrategy: "area-overlap" as const,
       },
     };
 
@@ -236,6 +238,32 @@ describe("@moritzbrantner/maps GeoJSON timeline", () => {
     expect(itemTransitionCalled).toBe(false);
     expect(frame.features).toHaveLength(2);
     expect(frame.features.every((feature) => feature.properties?.transitionKind === "split")).toBe(true);
+  });
+
+  test("samples one-to-many scene transition with voronoi topology partitions", () => {
+    const document = createGeoJsonTimelineDocument(splitSceneCollection, {
+      durationMs: 2_000,
+      getItemDurationMs: (feature) => Number(feature.properties?.durationMs),
+      getItemStartMs: (feature) => Number(feature.properties?.startMs),
+      getTimelineTrackId: () => "districts",
+    });
+    const options = {
+      defaultTransition: {
+        algorithm: "topology-plan" as const,
+        durationMs: 500,
+        topologyStrategy: "voronoi-partition" as const,
+      },
+    };
+
+    const transitionFrame = getGeoJsonTimelineSceneAtTime(splitSceneCollection, document, 750, options);
+
+    expect(transitionFrame.features).toHaveLength(2);
+    expect(transitionFrame.features.every((feature) => feature.properties?.transitionKind === "split")).toBe(true);
+    expectGeometriesAreFiniteAndClosed(transitionFrame);
+    expect(getGeoJsonTimelineSceneAtTime(splitSceneCollection, document, 1_000, options).features.map((feature) => feature.id)).toEqual([
+      "left",
+      "right",
+    ]);
   });
 });
 

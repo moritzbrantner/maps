@@ -1,5 +1,17 @@
 "use client";
 
+export {
+  EngineGeoJsonLayer,
+  GeoClusterLayer,
+  GeoFlowLayer,
+  GeoHeatLayer,
+  GeoPointLayer,
+  type EngineGeoJsonLayerProps,
+  type GeoClusterLayerProps,
+  type GeoFlowLayerProps,
+  type GeoHeatLayerProps,
+  type GeoPointLayerProps,
+} from "../map-engine";
 export { MapView, type FlatLayerRender, type MapViewProps } from "../map-view";
 export { ClusterLayer, type ClusterLayerProps } from "../cluster-layer";
 export {

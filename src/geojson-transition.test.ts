@@ -372,6 +372,217 @@ describe("@moritzbrantner/maps GeoJSON transitions", () => {
     expectPointGeometryCloseTo(pointFeature, [4, 2]);
     expectGeometriesAreFiniteAndClosed(frame);
   });
+
+  test("topology-plan area-overlap classifies stable overlap as preserve", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("from", square(0, 0, 6, 4))]),
+        collection([feature("to", square(4, 2, 10, 6))]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      0.5,
+    );
+    const kinds = frame.features.map((item) => item.properties?.transitionKind).sort();
+
+    expect(kinds).toEqual(["appear", "disappear", "preserve"]);
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
+
+  test("topology-plan area-overlap splits one source into multiple targets by overlap", () => {
+    const source = square(0, 0, 10, 4);
+    const start = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("source", source)]),
+        collection([feature("left", square(1, 0, 5, 4)), feature("right", square(5, 0, 9, 4))]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      0,
+    );
+    const splitFeatures = start.features.filter((item) => item.properties?.transitionKind === "split");
+
+    expect(splitFeatures.flatMap((item) => readPropertyIds(item, "targetIds")).sort()).toEqual([
+      "left",
+      "right",
+    ]);
+    expect(splitFeatures.every((item) => !boundsEqual(getFeatureBounds(item), getGeometryBounds(source)))).toBe(
+      true,
+    );
+    expectGeometriesAreFiniteAndClosed(start);
+  });
+
+  test("topology-plan area-overlap merges multiple sources into one target by overlap", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("left", square(0, 0, 5, 4)), feature("right", square(5, 0, 10, 4))]),
+        collection([feature("target", square(1, 0, 9, 4))]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      0.5,
+    );
+    const mergeFeatures = frame.features.filter((item) => item.properties?.transitionKind === "merge");
+
+    expect(mergeFeatures.flatMap((item) => readPropertyIds(item, "sourceIds")).sort()).toEqual([
+      "left",
+      "right",
+    ]);
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
+
+  test("topology-plan area-overlap emits appear for target with no overlap", () => {
+    const start = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("source", square(0, 0, 2, 2))]),
+        collection([feature("target", square(12, 12, 14, 14))]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      0,
+    );
+    const appear = start.features.find((item) => item.properties?.transitionKind === "appear");
+
+    expect(appear).toBeDefined();
+    expect(getFeaturePositions(appear!).every((position) => positionsEqual(position, [13, 13]))).toBe(true);
+  });
+
+  test("topology-plan area-overlap emits disappear for source with no overlap", () => {
+    const end = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("source", square(0, 0, 2, 2))]),
+        collection([feature("target", square(12, 12, 14, 14))]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      1,
+    );
+    const disappear = end.features.find((item) => item.properties?.transitionKind === "disappear");
+
+    expect(disappear).toBeDefined();
+    expect(getFeaturePositions(disappear!).every((position) => positionsEqual(position, [1, 1]))).toBe(true);
+  });
+
+  test("topology-plan area-overlap handles holes", () => {
+    const withHole = {
+      coordinates: [squareRing(0, 0, 10, 10), squareRing(3, 3, 7, 7)],
+      type: "Polygon" as const,
+    };
+    const shiftedHole = {
+      coordinates: [squareRing(1, 1, 11, 11), squareRing(4, 4, 8, 8)],
+      type: "Polygon" as const,
+    };
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("source", withHole)]),
+        collection([feature("target", shiftedHole)]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      0.5,
+    );
+
+    expect(frame.features.map((item) => item.properties?.transitionKind)).toContain("preserve");
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
+
+  test("topology-plan area-overlap preserves non-polygon paired features", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([
+          feature("source", square(0, 0, 4, 4)),
+          feature("checkpoint", { coordinates: [0, 0], type: "Point" }),
+        ]),
+        collection([
+          feature("target", square(1, 1, 5, 5)),
+          feature("checkpoint", { coordinates: [4, 4], type: "Point" }),
+        ]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      0.5,
+    );
+    const pointFeature = frame.features.find((item) => item.geometry?.type === "Point");
+
+    expect(pointFeature?.properties?.transitionKind).toBe("morph");
+    expectPointGeometryCloseTo(pointFeature, [2, 2]);
+  });
+
+  test("topology-plan voronoi-partition splits source into clipped partitions", () => {
+    const source = square(0, 0, 12, 6);
+    const start = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("source", source)]),
+        collection([
+          feature("west", square(0, 0, 4, 6)),
+          feature("center", square(4, 0, 8, 6)),
+          feature("east", square(8, 0, 12, 6)),
+        ]),
+        { algorithm: "topology-plan", topologyStrategy: "voronoi-partition" },
+      ),
+      0,
+    );
+    const splitFeatures = start.features.filter((item) => item.properties?.transitionKind === "split");
+    const bounds = splitFeatures.map(getFeatureBounds);
+
+    expect(splitFeatures).toHaveLength(3);
+    expect(new Set(bounds.map((item) => `${item.west}:${item.east}`)).size).toBe(3);
+    expect(bounds.every((item) => !boundsEqual(item, getGeometryBounds(source)))).toBe(true);
+    expectGeometriesAreFiniteAndClosed(start);
+  });
+
+  test("topology-plan voronoi-partition merges sources into target partitions", () => {
+    const end = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([
+          feature("west", square(0, 0, 4, 6)),
+          feature("center", square(4, 0, 8, 6)),
+          feature("east", square(8, 0, 12, 6)),
+        ]),
+        collection([feature("target", square(0, 0, 12, 6))]),
+        { algorithm: "topology-plan", topologyStrategy: "voronoi-partition" },
+      ),
+      1,
+    );
+    const mergeFeatures = end.features.filter((item) => item.properties?.transitionKind === "merge");
+    const bounds = mergeFeatures.map(getFeatureBounds);
+
+    expect(mergeFeatures).toHaveLength(3);
+    expect(new Set(bounds.map((item) => `${item.west}:${item.east}`)).size).toBe(3);
+    expectGeometriesAreFiniteAndClosed(end);
+  });
+
+  test("topology-plan voronoi-partition falls back when duplicate centroids degenerate", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("source", square(0, 0, 10, 10))]),
+        collection([
+          feature("first", square(2, 2, 8, 8)),
+          feature("second", square(2, 2, 8, 8)),
+        ]),
+        { algorithm: "topology-plan", topologyStrategy: "voronoi-partition" },
+      ),
+      0.5,
+    );
+
+    expect(frame.features.filter((item) => item.properties?.transitionKind === "split")).toHaveLength(2);
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
+
+  test("topology-plan voronoi-partition handles separated islands", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([
+          feature("source", {
+            coordinates: [[squareRing(0, 0, 2, 2)], [squareRing(10, 0, 12, 2)]],
+            type: "MultiPolygon",
+          }),
+        ]),
+        collection([
+          feature("left", square(0, 0, 2, 2)),
+          feature("right", square(10, 0, 12, 2)),
+        ]),
+        { algorithm: "topology-plan", topologyStrategy: "voronoi-partition" },
+      ),
+      0.5,
+    );
+
+    expect(frame.features).toHaveLength(2);
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
 });
 
 function collection(
@@ -450,6 +661,59 @@ function countFeatureCoordinates(feature: TemporalGeoJsonGeometryFeature) {
   return flattenNumbers(
     (feature.geometry as { coordinates?: unknown } | null | undefined)?.coordinates,
   ).length / 2;
+}
+
+function getFeaturePositions(feature: TemporalGeoJsonGeometryFeature) {
+  return getGeometryPositions(feature.geometry);
+}
+
+function getGeometryPositions(geometry: TemporalGeoJsonGeometryFeature["geometry"]) {
+  const coordinates = (geometry as { coordinates?: unknown } | null | undefined)?.coordinates;
+  const numbers = flattenNumbers(coordinates);
+  const positions: Array<[number, number]> = [];
+
+  for (let index = 0; index < numbers.length; index += 2) {
+    positions.push([numbers[index]!, numbers[index + 1]!]);
+  }
+
+  return positions;
+}
+
+function getFeatureBounds(feature: TemporalGeoJsonGeometryFeature) {
+  return getBoundsFromPositions(getFeaturePositions(feature));
+}
+
+function getGeometryBounds(geometry: TemporalGeoJsonGeometryFeature["geometry"]) {
+  return getBoundsFromPositions(getGeometryPositions(geometry));
+}
+
+function getBoundsFromPositions(positions: Array<[number, number]>) {
+  return positions.reduce(
+    (bounds, position) => ({
+      east: Math.max(bounds.east, position[0]),
+      north: Math.max(bounds.north, position[1]),
+      south: Math.min(bounds.south, position[1]),
+      west: Math.min(bounds.west, position[0]),
+    }),
+    {
+      east: Number.NEGATIVE_INFINITY,
+      north: Number.NEGATIVE_INFINITY,
+      south: Number.POSITIVE_INFINITY,
+      west: Number.POSITIVE_INFINITY,
+    },
+  );
+}
+
+function boundsEqual(
+  left: ReturnType<typeof getBoundsFromPositions>,
+  right: ReturnType<typeof getBoundsFromPositions>,
+) {
+  return (
+    Math.abs(left.west - right.west) < 1e-6 &&
+    Math.abs(left.south - right.south) < 1e-6 &&
+    Math.abs(left.east - right.east) < 1e-6 &&
+    Math.abs(left.north - right.north) < 1e-6
+  );
 }
 
 function expectGeometriesAreFiniteAndClosed(collection: TemporalGeoJsonGeometryFeatureCollection) {
