@@ -10,6 +10,7 @@ import {
 import { joinClassNames, toLatLng, type MapViewportProps } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
+import type { FlatLayer, FlatLayerGroup } from "./maplibre-compat";
 
 export type PointLayerFeature<TProperties = Record<string, unknown>> = {
   coordinates: [longitude: number, latitude: number];
@@ -171,87 +172,144 @@ function PointFeatureLayer<
   const surface = useContext(MapSurfaceContext);
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `point-layer-${generatedLayerId}`;
+  const isFlatSurface = surface?.display === "flat";
+  const surfaceRef = useRef(surface);
+  const flatMarkerCacheRef = useRef<Map<string, FlatPointCacheEntry<TFeature>>>(new Map());
   const globeDragRef = useRef<{
     feature: TFeature;
     pointerId: number;
   } | null>(null);
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat") {
+    surfaceRef.current = surface;
+  });
+
+  useEffect(() => {
+    if (!isFlatSurface) {
+      flatMarkerCacheRef.current.clear();
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
-      layer.clearLayers();
+    flatMarkerCacheRef.current.clear();
 
-      for (const feature of features) {
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
-        const featureDraggable = isFeatureDraggable(feature, draggable);
-        const marker = flat.circleMarker(toLatLng(feature.coordinates), {
-          bubblingMouseEvents: false,
-          className: joinClassNames(
-            "mb-maps__point-marker",
-            featureDraggable && "mb-maps__feature--draggable",
-            hovered && "mb-maps__feature--hovered",
-            selected && "mb-maps__feature--selected",
-          ),
-          color: "#ffffff",
-          fillColor: getPointColor?.(feature) ?? pointColor,
-          fillOpacity: 0.92,
-          interactive: !isMeasuring,
-          opacity: 1,
-          radius: Math.max(0, getPointRadius?.(feature) ?? pointRadius),
-          weight: selected ? 3 : 2,
-        });
+    return surfaceRef.current?.registerFlatLayer(
+      resolvedLayerId,
+      ({ isMeasuring, layer, flat, map }) => {
+        const currentSurface = surfaceRef.current;
 
-        if (!isMeasuring) {
-          marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            surface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-              onFeatureSelect,
-              renderFeaturePopup,
-            });
+        if (!currentSurface) {
+          return;
+        }
+
+        const cache = flatMarkerCacheRef.current;
+        const seen = new Set<string>();
+
+        for (const feature of features) {
+          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+          const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
+          const featureDraggable = isFeatureDraggable(feature, draggable);
+          const featureKey = getFlatPointFeatureKey(feature, getFeatureId);
+          const signature = createFlatPointSignature({
+            feature,
+            featureDraggable,
+            fillColor: getPointColor?.(feature) ?? pointColor,
+            hovered,
+            isMeasuring,
+            radius: Math.max(0, getPointRadius?.(feature) ?? pointRadius),
+            selected,
           });
-          marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
-            suppressNativeContextMenu(event);
-            surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-              coordinates: feature.coordinates,
-              onFeatureContextMenu,
-              onFeatureSelect,
-              renderFeatureContextMenu,
-              renderFeaturePopup,
-            });
+          const cached = cache.get(featureKey);
+
+          seen.add(featureKey);
+
+          if (cached?.signature === signature) {
+            continue;
+          }
+
+          if (cached) {
+            removeFlatPointCacheEntry(layer, cached);
+          }
+
+          const marker = flat.circleMarker(toLatLng(feature.coordinates), {
+            bubblingMouseEvents: false,
+            className: joinClassNames(
+              "mb-maps__point-marker",
+              featureDraggable && "mb-maps__feature--draggable",
+              hovered && "mb-maps__feature--hovered",
+              selected && "mb-maps__feature--selected",
+            ),
+            color: "#ffffff",
+            fillColor: getPointColor?.(feature) ?? pointColor,
+            fillOpacity: 0.92,
+            interactive: !isMeasuring,
+            opacity: 1,
+            radius: Math.max(0, getPointRadius?.(feature) ?? pointRadius),
+            weight: selected ? 3 : 2,
           });
-          if (featureDraggable) {
-            bindFlatPointDrag(marker as FlatPointMarker, {
-              feature,
-              map: map as FlatDragMap,
-              onFeatureDrag,
-              onFeatureDragEnd,
+
+          if (!isMeasuring) {
+            marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+              currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                onFeatureSelect,
+                renderFeaturePopup,
+              });
+            });
+            marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
+              suppressNativeContextMenu(event);
+              currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                coordinates: feature.coordinates,
+                onFeatureContextMenu,
+                onFeatureSelect,
+                renderFeatureContextMenu,
+                renderFeaturePopup,
+              });
+            });
+            if (featureDraggable) {
+              bindFlatPointDrag(marker as FlatPointMarker, {
+                coordinates: feature.coordinates,
+                feature,
+                map: map as FlatDragMap,
+                onFeatureDrag,
+                onFeatureDragEnd,
+              });
+            }
+            marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+              map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
+              currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
+            });
+            marker.on("mousemove", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+              currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
+            });
+            marker.on("mouseout", () => {
+              map.getContainer().style.cursor = "";
+              currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
             });
           }
-          marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
-            surface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-              onFeatureHover,
-              renderFeatureTooltip,
-            });
-          });
-          marker.on("mousemove", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            surface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-              onFeatureHover,
-              renderFeatureTooltip,
-            });
-          });
-          marker.on("mouseout", () => {
-            map.getContainer().style.cursor = "";
-            surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+
+          marker.addTo(layer);
+          cache.set(featureKey, {
+            layers: [marker],
+            signature,
           });
         }
 
-        marker.addTo(layer);
-      }
-    });
+        for (const [featureKey, cached] of cache) {
+          if (seen.has(featureKey)) {
+            continue;
+          }
+
+          removeFlatPointCacheEntry(layer, cached);
+          cache.delete(featureKey);
+        }
+      },
+      { preserveOnRender: true },
+    );
   }, [
     features,
     draggable,
@@ -270,7 +328,7 @@ function PointFeatureLayer<
     renderFeatureContextMenu,
     renderFeatureTooltip,
     selectedFeatureId,
-    surface,
+    isFlatSurface,
   ]);
 
   if (!surface || surface.display !== "globe") {
@@ -507,16 +565,26 @@ function getFlatFeaturePosition(
 function bindFlatPointDrag<TFeature>(
   marker: FlatPointMarker,
   options: {
+    coordinates: [longitude: number, latitude: number];
     feature: TFeature;
     map: FlatDragMap;
     onFeatureDrag?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
     onFeatureDragEnd?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
   },
 ) {
+  let dragStart:
+    | {
+        coordinates: [number, number];
+        pointer: [number, number];
+      }
+    | null = null;
   let lastCoordinates: [number, number] | null = null;
 
   const handleMove = (event: FlatDragEvent = {}) => {
-    const coordinates = getFlatDragCoordinates(options.map, event);
+    const pointerCoordinates = getFlatDragCoordinates(options.map, event);
+    const coordinates = dragStart && pointerCoordinates
+      ? getOffsetDragCoordinates(dragStart, pointerCoordinates)
+      : pointerCoordinates;
 
     if (!coordinates) {
       return;
@@ -528,7 +596,11 @@ function bindFlatPointDrag<TFeature>(
   };
 
   const handleUp = (event: FlatDragEvent = {}) => {
-    const coordinates = getFlatDragCoordinates(options.map, event) ?? lastCoordinates;
+    const pointerCoordinates = getFlatDragCoordinates(options.map, event);
+    const coordinates =
+      dragStart && pointerCoordinates
+        ? getOffsetDragCoordinates(dragStart, pointerCoordinates)
+        : pointerCoordinates ?? lastCoordinates;
 
     options.map.off?.("mousemove", handleMove);
     options.map.off?.("mouseup", handleUp);
@@ -540,12 +612,21 @@ function bindFlatPointDrag<TFeature>(
       options.onFeatureDragEnd?.(options.feature, coordinates);
     }
 
+    dragStart = null;
     lastCoordinates = null;
   };
 
   marker.on("mousedown", (event: FlatDragEvent = {}) => {
     suppressNativeContextMenu(event);
-    lastCoordinates = getFlatDragCoordinates(options.map, event);
+    const pointerCoordinates = getFlatDragCoordinates(options.map, event);
+
+    dragStart = pointerCoordinates
+      ? {
+          coordinates: options.coordinates,
+          pointer: pointerCoordinates,
+        }
+      : null;
+    lastCoordinates = options.coordinates;
     marker.bringToFront?.();
     options.map.dragging?.disable?.();
     options.map.getContainer?.().style && (options.map.getContainer().style.cursor = "grabbing");
@@ -566,6 +647,19 @@ function getFlatDragCoordinates(map: FlatDragMap, event: FlatDragEvent) {
   }
 
   return null;
+}
+
+function getOffsetDragCoordinates(
+  start: {
+    coordinates: [number, number];
+    pointer: [number, number];
+  },
+  pointerCoordinates: [number, number],
+) {
+  return [
+    start.coordinates[0] + pointerCoordinates[0] - start.pointer[0],
+    start.coordinates[1] + pointerCoordinates[1] - start.pointer[1],
+  ] as [number, number];
 }
 
 function isFeatureDraggable<TFeature>(
@@ -594,6 +688,11 @@ type FlatDragMap = {
 
 type FlatDragEvent = FlatFeaturePointerEvent & {
   latlng?: { lat: number; lng: number };
+};
+
+type FlatPointCacheEntry<TFeature> = {
+  layers: FlatLayer[];
+  signature: string;
 };
 
 type FlatFeaturePointerEvent = {
@@ -645,6 +744,57 @@ function isValidPoint<TProperties>(point: IndexedMapPoint<TProperties>) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getFlatPointFeatureKey<TFeature>(
+  feature: TFeature & {
+    coordinates: [longitude: number, latitude: number];
+    point: {
+      id: string;
+    };
+  },
+  getFeatureId?: (feature: TFeature) => string,
+) {
+  return getFeatureId?.(feature) || feature.point.id || feature.coordinates.join(",");
+}
+
+function createFlatPointSignature<TFeature>({
+  feature,
+  featureDraggable,
+  fillColor,
+  hovered,
+  isMeasuring,
+  radius,
+  selected,
+}: {
+  feature: TFeature & {
+    coordinates: [longitude: number, latitude: number];
+  };
+  featureDraggable: boolean;
+  fillColor: string;
+  hovered: boolean;
+  isMeasuring: boolean;
+  radius: number;
+  selected: boolean;
+}) {
+  return JSON.stringify({
+    coordinates: feature.coordinates,
+    featureDraggable,
+    fillColor,
+    hovered,
+    interactive: !isMeasuring,
+    radius,
+    selected,
+  });
+}
+
+function removeFlatPointCacheEntry<TFeature>(
+  layer: FlatLayerGroup,
+  entry: FlatPointCacheEntry<TFeature>,
+) {
+  for (const cachedLayer of entry.layers) {
+    layer.removeLayer(cachedLayer);
+  }
 }
 
 export type { MapViewportProps };

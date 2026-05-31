@@ -49,7 +49,11 @@ import {
   type FlatLayerGroup,
   type FlatMapAdapter,
 } from "./maplibre-compat";
-import { areMapViewStatesEqual, useControllableMapViewState } from "./map-view-state";
+import {
+  areMapViewStatesEqual,
+  serializeMapViewState,
+  useControllableMapViewState,
+} from "./map-view-state";
 import { WebGlFlatRuntime, type FlatMapRuntime } from "./webgl-flat-runtime";
 import type {
   MapContextMenuContext,
@@ -74,6 +78,10 @@ export type FlatLayerRender = (context: {
   maplibre: typeof import("maplibre-gl");
   maplibreMap: MapLibreMap;
 }) => void;
+
+export type FlatLayerRegistrationOptions = {
+  preserveOnRender?: boolean;
+};
 
 export type MapInteractionMode = "none" | "measurement" | "editing";
 
@@ -126,7 +134,11 @@ export type MapSurfaceContextValue = {
   maplibre: typeof import("maplibre-gl") | null;
   maplibreMap: MapLibreMap | null;
   projectGlobeCoordinate: typeof projectGlobeCoordinate;
-  registerFlatLayer: (id: string, render: FlatLayerRender) => () => void;
+  registerFlatLayer: (
+    id: string,
+    render: FlatLayerRender,
+    options?: FlatLayerRegistrationOptions,
+  ) => () => void;
   registerInteractionMode: (id: string, mode: Exclude<MapInteractionMode, "none">) => () => void;
   requestRender: () => void;
   setMeasurementActive: (active: boolean) => void;
@@ -157,6 +169,7 @@ type RegisteredFlatLayer = {
   cleanup: (() => void) | null;
   id: string;
   group: FlatLayerGroup | null;
+  preserveOnRender: boolean;
   render: FlatLayerRender;
 };
 
@@ -204,6 +217,8 @@ export function MapView({
   const lastCommittedFlatStateRef = useRef<MapViewState | null>(null);
   const lastFlatMoveStateRef = useRef<MapViewState | null>(null);
   const lastFitBoundsKeyRef = useRef<string | null>(null);
+  const lastFlatRenderKeyRef = useRef<string | null>(null);
+  const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const isFlatStyleReadyRef = useRef(false);
   const [isReady, setIsReady] = useState(mapDisplay === "globe");
   const [renderVersion, setRenderVersion] = useState(0);
@@ -223,6 +238,16 @@ export function MapView({
     onViewStateChange,
     viewState,
   });
+  const currentViewStateKey = serializeMapViewState(currentViewState);
+  const flatRenderKey = [
+    controlled ? "controlled" : "uncontrolled",
+    currentViewStateKey,
+    flatRuntime,
+    interactionMode,
+    isMeasuring ? "measuring" : "idle",
+    mapDisplay,
+    renderVersion,
+  ].join(":");
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
 
   const requestRender = useCallback(() => {
@@ -289,7 +314,9 @@ export function MapView({
       }
 
       layer.cleanup?.();
-      layer.group.clearLayers();
+      if (!layer.preserveOnRender) {
+        layer.group.clearLayers();
+      }
       layer.cleanup = null;
       layer.render({
         flat,
@@ -301,6 +328,12 @@ export function MapView({
         maplibreMap,
       });
     }
+  });
+
+  const clearFeatureHover = useEffectEvent(() => {
+    blockedHoverPositionRef.current = null;
+    setHovered(null);
+    setTooltip(null);
   });
 
   const fitFlatToData = useEffectEvent(() => {
@@ -367,6 +400,8 @@ export function MapView({
       return;
     }
 
+    clearFeatureHover();
+
     const next = getMapLibreViewState(map);
     const previous = lastFlatMoveStateRef.current;
     const reason =
@@ -383,7 +418,6 @@ export function MapView({
     }
 
     setViewState(next, reason);
-    renderFlatLayers();
   });
 
   const handleMapReady = useEffectEvent((map: MapLibreMap) => {
@@ -429,7 +463,11 @@ export function MapView({
       lastFlatMoveStateRef.current = currentViewState;
 
       localMap.on("moveend", emitFlatMoveEnd);
+      localMap.on("movestart", clearFeatureHover);
+      localMap.on("zoomstart", clearFeatureHover);
+      localMap.on("dragstart", clearFeatureHover);
       localMap.on("click", () => {
+        clearFeatureHover();
         setPopup(null);
         setContextMenu(null);
       });
@@ -469,6 +507,9 @@ export function MapView({
 
       if (localMap) {
         localMap.off("moveend", emitFlatMoveEnd);
+        localMap.off("movestart", clearFeatureHover);
+        localMap.off("zoomstart", clearFeatureHover);
+        localMap.off("dragstart", clearFeatureHover);
         localMap.remove();
       }
 
@@ -485,12 +526,18 @@ export function MapView({
       return;
     }
 
+    if (lastFlatRenderKeyRef.current === flatRenderKey) {
+      return;
+    }
+
+    lastFlatRenderKeyRef.current = flatRenderKey;
+
     if (controlled) {
       syncFlatControlledView();
     }
 
     renderFlatLayers();
-  }, [controlled, currentViewState, flatRuntime, interactionMode, isMeasuring, mapDisplay, renderVersion]);
+  }, [controlled, flatRenderKey, flatRuntime, mapDisplay]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -521,18 +568,20 @@ export function MapView({
   }, [currentViewState, fitToDataNow, mapDisplay, onMapControllerReady, setViewState]);
 
   const registerFlatLayer = useCallback(
-    (id: string, render: FlatLayerRender) => {
+    (id: string, render: FlatLayerRender, options: FlatLayerRegistrationOptions = {}) => {
       const flat = flatLayerFactoryRef.current;
       const map = flatMapAdapterRef.current;
       const maplibre = maplibreRef.current;
       const maplibreMap = mapRef.current;
       const previous = layersRef.current.get(id);
       const group = previous?.group ?? (flat && maplibreMap ? flat.layerGroup().addTo(maplibreMap) : null);
+      const preserveOnRender = options.preserveOnRender === true;
 
       layersRef.current.set(id, {
         cleanup: previous?.cleanup ?? null,
         id,
         group,
+        preserveOnRender,
         render,
       });
 
@@ -545,9 +594,6 @@ export function MapView({
       return () => {
         const layer = layersRef.current.get(id);
 
-        if (layer?.group) {
-          layer.group.clearLayers();
-        }
         layer?.cleanup?.();
 
         if (!layer) {
@@ -561,6 +607,7 @@ export function MapView({
         layersRef.current.set(id, {
           ...layer,
           cleanup: null,
+          preserveOnRender: false,
           render: clearRender,
         });
 
@@ -668,6 +715,9 @@ export function MapView({
       display: mapDisplay,
       getGlobePointerCoordinate,
       handleBackgroundClick: () => {
+        blockedHoverPositionRef.current = null;
+        setHovered(null);
+        setTooltip(null);
         setPopup(null);
         setContextMenu(null);
       },
@@ -677,6 +727,9 @@ export function MapView({
         }
 
         setContextMenu(null);
+        setHovered(null);
+        setTooltip(null);
+        blockedHoverPositionRef.current = position;
 
         startTransition(() => {
           options?.onFeatureSelect?.(feature);
@@ -739,11 +792,17 @@ export function MapView({
         });
 
         if (!feature || !position) {
+          blockedHoverPositionRef.current = null;
           setHovered(null);
           setTooltip(null);
           return;
         }
 
+        if (isBlockedHoverPosition(blockedHoverPositionRef.current, position)) {
+          return;
+        }
+
+        blockedHoverPositionRef.current = null;
         setHovered({ feature, id: getFeatureId(feature) || null });
 
         if (options?.renderFeatureTooltip) {
@@ -1009,6 +1068,17 @@ function getFeatureCoordinate(feature: unknown): [longitude: number, latitude: n
   }
 
   return [0, 0];
+}
+
+function isBlockedHoverPosition(
+  blocked: { x: number; y: number } | null,
+  position: { x: number; y: number },
+) {
+  return Boolean(
+    blocked &&
+      Math.abs(blocked.x - position.x) <= 1 &&
+      Math.abs(blocked.y - position.y) <= 1,
+  );
 }
 
 function isCoordinate(value: unknown): value is [number, number] {

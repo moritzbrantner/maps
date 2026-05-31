@@ -13,6 +13,7 @@ import {
 import { escapeHtml, GLOBE_MAX_ZOOM, joinClassNames, toLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
+import type { FlatLayer, FlatLayerGroup } from "./maplibre-compat";
 
 export type ClusterLayerProps<TProperties = Record<string, unknown>> =
   MapFeatureInteractionProps<AggregatedMapFeature<TProperties>> & {
@@ -46,8 +47,11 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   const surface = useContext(MapSurfaceContext);
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `cluster-layer-${generatedLayerId}`;
+  const isFlatSurface = surface?.display === "flat";
   const deferredPoints = useDeferredValue(points);
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
+  const surfaceRef = useRef(surface);
+  const flatFeatureCacheRef = useRef<Map<string, FlatClusterCacheEntry>>(new Map());
   const index = useMemo(
     () =>
       createPointAggregationIndex(deferredPoints, {
@@ -60,12 +64,25 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   );
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat") {
+    surfaceRef.current = surface;
+  });
+
+  useEffect(() => {
+    if (!isFlatSurface) {
+      flatFeatureCacheRef.current.clear();
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
-      layer.clearLayers();
+    flatFeatureCacheRef.current.clear();
+
+    return surfaceRef.current?.registerFlatLayer(
+      resolvedLayerId,
+      ({ isMeasuring, layer, flat, map }) => {
+        const currentSurface = surfaceRef.current;
+
+        if (!currentSurface) {
+          return;
+        }
 
       const bounds = map.getBounds();
       const aggregation = index.getViewportAggregation({
@@ -75,9 +92,30 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
       emitViewportSummary(aggregation.summary, lastViewportSummaryKeyRef, onViewportAggregationChange);
 
+      const cache = flatFeatureCacheRef.current;
+      const seen = new Set<string>();
+
       for (const feature of aggregation.features) {
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
+        const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+        const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
+        const featureKey = getFlatClusterFeatureKey(feature, getFeatureId);
+        const signature = createFlatClusterSignature({
+          feature,
+          hovered,
+          isMeasuring,
+          selected,
+        });
+        const cached = cache.get(featureKey);
+
+        seen.add(featureKey);
+
+        if (cached?.signature === signature) {
+          continue;
+        }
+
+        if (cached) {
+          removeFlatClusterCacheEntry(layer, cached);
+        }
 
         if (feature.kind === "cluster") {
           const marker = flat.circleMarker(toLatLng(feature.coordinates), {
@@ -98,21 +136,21 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           if (!isMeasuring) {
             marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
               map.setView(toLatLng(feature.coordinates), feature.expansionZoom);
-              surface.setViewState(
+              currentSurface.setViewState(
                 {
                   center: feature.coordinates,
                   zoom: feature.expansionZoom,
                 },
                 "cluster-expand",
               );
-              surface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+              currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
                 onFeatureSelect,
                 renderFeaturePopup,
               });
             });
             marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
               suppressNativeContextMenu(event);
-              surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+              currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
                 coordinates: feature.coordinates,
                 onFeatureContextMenu,
                 onFeatureSelect,
@@ -122,19 +160,19 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             });
             marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
               map.getContainer().style.cursor = "pointer";
-              surface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+              currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
                 onFeatureHover,
                 renderFeatureTooltip,
               });
             });
             marker.on("mouseout", () => {
               map.getContainer().style.cursor = "";
-              surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+              currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
             });
           }
 
           marker.addTo(layer);
-          flat
+          const countMarker = flat
             .marker(toLatLng(feature.coordinates), {
               icon: flat.divIcon({
                 className: "mb-maps__cluster-count",
@@ -145,6 +183,10 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
               interactive: false,
             })
             .addTo(layer);
+          cache.set(featureKey, {
+            layers: [marker, countMarker],
+            signature,
+          });
           continue;
         }
 
@@ -165,14 +207,14 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
         if (!isMeasuring) {
           marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            surface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+            currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
               onFeatureSelect,
               renderFeaturePopup,
             });
           });
           marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
             suppressNativeContextMenu(event);
-            surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+            currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
               coordinates: feature.coordinates,
               onFeatureContextMenu,
               onFeatureSelect,
@@ -182,20 +224,35 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           });
           marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             map.getContainer().style.cursor = "pointer";
-            surface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+            currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
               onFeatureHover,
               renderFeatureTooltip,
             });
           });
           marker.on("mouseout", () => {
             map.getContainer().style.cursor = "";
-            surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+            currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
           });
         }
 
         marker.addTo(layer);
+        cache.set(featureKey, {
+          layers: [marker],
+          signature,
+        });
       }
-    });
+
+        for (const [featureKey, cached] of cache) {
+          if (seen.has(featureKey)) {
+            continue;
+          }
+
+          removeFlatClusterCacheEntry(layer, cached);
+          cache.delete(featureKey);
+        }
+      },
+      { preserveOnRender: true },
+    );
   }, [
     getFeatureId,
     index,
@@ -208,7 +265,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
     renderFeatureContextMenu,
     renderFeatureTooltip,
     selectedFeatureId,
-    surface,
+    isFlatSurface,
   ]);
 
   if (!surface || surface.display !== "globe") {
@@ -394,6 +451,11 @@ type FlatFeaturePointerEvent = {
   };
 };
 
+type FlatClusterCacheEntry = {
+  layers: FlatLayer[];
+  signature: string;
+};
+
 function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
   event.originalEvent?.preventDefault?.();
 }
@@ -441,4 +503,43 @@ function serializeVisibleAggregationSummary(summary: VisibleAggregationSummary) 
     visibleUnclusteredCount: summary.visibleUnclusteredCount,
     zoom: Number(summary.zoom.toFixed(6)),
   });
+}
+
+function getFlatClusterFeatureKey<TProperties>(
+  feature: AggregatedMapFeature<TProperties>,
+  getFeatureId?: (feature: AggregatedMapFeature<TProperties>) => string,
+) {
+  return (
+    getFeatureId?.(feature) ||
+    (feature.kind === "cluster" ? `cluster:${feature.clusterId}` : `point:${feature.point.id}`)
+  );
+}
+
+function createFlatClusterSignature<TProperties>({
+  feature,
+  hovered,
+  isMeasuring,
+  selected,
+}: {
+  feature: AggregatedMapFeature<TProperties>;
+  hovered: boolean;
+  isMeasuring: boolean;
+  selected: boolean;
+}) {
+  return JSON.stringify({
+    coordinates: feature.coordinates,
+    fillColor: feature.kind === "cluster" ? getClusterColor(feature.pointCount) : "#0f172a",
+    hovered,
+    interactive: !isMeasuring,
+    kind: feature.kind,
+    label: feature.kind === "cluster" ? feature.pointCountAbbreviated : feature.point.id,
+    radius: feature.kind === "cluster" ? getClusterRadius(feature.pointCount) : 6,
+    selected,
+  });
+}
+
+function removeFlatClusterCacheEntry(layer: FlatLayerGroup, entry: FlatClusterCacheEntry) {
+  for (const cachedLayer of entry.layers) {
+    layer.removeLayer(cachedLayer);
+  }
 }

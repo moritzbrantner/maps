@@ -479,6 +479,14 @@
   }
 }
 
+.mb-maps > .mb-maps__canvas,
+.mb-maps > .mb-maps__canvas.maplibregl-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
 @media (max-width: 720px) {
   .mb-maps__overlay {
     @apply max-w-[calc(100%-1.5rem)];

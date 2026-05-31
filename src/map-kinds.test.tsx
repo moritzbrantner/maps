@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   BubbleMap,
+  ClusteredMap,
   FlowMap,
   GeoJsonMap,
   GeoJsonLayer,
@@ -67,6 +68,7 @@ const flatMock = vi.hoisted(() => {
   const layerGroups: MockLayerGroup[] = [];
 
   class MockLayerGroup {
+    clearCount = 0;
     layers: Layer[] = [];
 
     constructor() {
@@ -82,7 +84,12 @@ const flatMock = vi.hoisted(() => {
     }
 
     clearLayers() {
+      this.clearCount += 1;
       this.layers = [];
+    }
+
+    removeLayer(layer: Layer) {
+      this.layers = this.layers.filter((candidate) => candidate !== layer);
     }
   }
 
@@ -502,6 +509,236 @@ describe("@moritzbrantner/maps additional map kinds", () => {
         type: "circleMarker",
       },
     ]);
+  });
+
+  test("keeps flat point markers mounted while hovering", async () => {
+    render(
+      <PointMap
+        mapLabel="Hoverable store points"
+        points={[
+          {
+            id: "store-1",
+            label: "Store 1",
+            latitude: 40,
+            longitude: -74,
+          },
+        ]}
+        renderFeatureTooltip={(feature) => feature.point.label}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Hoverable store points").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const marker = group?.layers[0];
+
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.getByText("Store 1")).toBeTruthy();
+    expect(group?.layers[0]).toBe(marker);
+  });
+
+  test("keeps flat cluster markers mounted while hovering", async () => {
+    render(
+      <ClusteredMap
+        mapLabel="Hoverable store clusters"
+        points={[
+          {
+            id: "store-1",
+            latitude: 40,
+            longitude: -74,
+          },
+          {
+            id: "store-2",
+            latitude: 40.01,
+            longitude: -74.01,
+          },
+        ]}
+        renderFeatureTooltip={(feature) =>
+          feature.kind === "cluster" ? feature.pointCountAbbreviated : feature.point.label
+        }
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Hoverable store clusters").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const marker = group?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__cluster-marker",
+    );
+
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(
+      group?.layers.find((layer) => layer.options?.className === "mb-maps__cluster-marker"),
+    ).toBe(marker);
+  });
+
+  test("clears flat cluster hover tooltip on click", async () => {
+    render(
+      <ClusteredMap
+        mapLabel="Clickable store clusters"
+        points={[
+          {
+            id: "store-1",
+            latitude: 40,
+            longitude: -74,
+          },
+          {
+            id: "store-2",
+            latitude: 40.01,
+            longitude: -74.01,
+          },
+        ]}
+        renderFeatureTooltip={(feature) =>
+          feature.kind === "cluster" ? `${feature.pointCountAbbreviated} stores` : feature.point.label
+        }
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Clickable store clusters").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const marker = flatMock
+      .getLayerGroups()[0]
+      ?.layers.find((layer) => layer.options?.className === "mb-maps__cluster-marker");
+
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.getByText("2 stores")).toBeTruthy();
+
+    await act(async () => {
+      marker?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.queryByText("2 stores")).toBeNull();
+
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.queryByText("2 stores")).toBeNull();
+  });
+
+  test("clears flat cluster hover tooltip when the map moves", async () => {
+    render(
+      <ClusteredMap
+        mapLabel="Moving store clusters"
+        points={[
+          {
+            id: "store-1",
+            latitude: 40,
+            longitude: -74,
+          },
+          {
+            id: "store-2",
+            latitude: 40.01,
+            longitude: -74.01,
+          },
+        ]}
+        renderFeatureTooltip={(feature) =>
+          feature.kind === "cluster" ? `${feature.pointCountAbbreviated} stores` : feature.point.label
+        }
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Moving store clusters").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const map = flatMock.getMaps()[0];
+    const marker = flatMock
+      .getLayerGroups()[0]
+      ?.layers.find((layer) => layer.options?.className === "mb-maps__cluster-marker");
+
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.getByText("2 stores")).toBeTruthy();
+
+    await act(async () => {
+      map?.handlers.get("movestart")?.[0]?.();
+    });
+
+    expect(screen.queryByText("2 stores")).toBeNull();
+  });
+
+  test("keeps unchanged flat point markers mounted after zoom end", async () => {
+    render(
+      <PointMap
+        fitToData={false}
+        mapLabel="Zoomable store points"
+        points={[
+          {
+            id: "store-1",
+            latitude: 40,
+            longitude: -74,
+          },
+        ]}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Zoomable store points").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const map = flatMock.getMaps()[0];
+    const group = flatMock.getLayerGroups()[0];
+    const marker = group?.layers[0];
+    const initialClearCount = group?.clearCount ?? 0;
+
+    await act(async () => {
+      if (map) {
+        map.zoom = 6;
+      }
+      map?.handlers.get("moveend")?.[0]?.();
+    });
+
+    expect(group?.clearCount).toBe(initialClearCount);
+    expect(group?.layers[0]).toBe(marker);
   });
 
   test("renders multiple flat layers of the same kind independently", async () => {
@@ -1068,6 +1305,61 @@ describe("@moritzbrantner/maps additional map kinds", () => {
         }),
       }),
       [-72, 42],
+    );
+  });
+
+  test("drags flat point markers without snapping to an off-center pointer", async () => {
+    const onFeatureDragEnd = vi.fn();
+
+    render(
+      <PointMap
+        draggable
+        fitToData={false}
+        mapLabel="Offset draggable store points"
+        onFeatureDragEnd={onFeatureDragEnd}
+        points={[
+          {
+            id: "store-1",
+            label: "Store 1",
+            latitude: 40,
+            longitude: -74,
+          },
+        ]}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Offset draggable store points").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const map = flatMock.getMaps()[0];
+    const marker = flatMock.getLayerGroups()[0]?.layers[0];
+    const [handleMouseDown] = marker?.handlers.get("mousedown") ?? [];
+
+    act(() => {
+      handleMouseDown?.({
+        latlng: { lat: 40.1, lng: -73.9 },
+        originalEvent: { preventDefault() {}, stopPropagation() {} },
+      });
+      map?.handlers.get("mousemove")?.[0]?.({
+        latlng: { lat: 41, lng: -73 },
+      });
+      map?.handlers.get("mouseup")?.[0]?.({
+        latlng: { lat: 42, lng: -72 },
+      });
+    });
+
+    expect(marker?.latLng).toEqual([41.9, -72.1]);
+    expect(onFeatureDragEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        point: expect.objectContaining({
+          id: "store-1",
+        }),
+      }),
+      [-72.1, 41.9],
     );
   });
 
