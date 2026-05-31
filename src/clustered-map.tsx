@@ -75,6 +75,7 @@ import type { MapMeasurementProps } from "./measurement";
 import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
 export type ClusteredMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
+  children?: React.ReactNode;
   className?: string;
   clusterRadius?: PointAggregationIndexOptions<TProperties>["radius"];
   filterPoint?: MapPointFilter<TProperties>;
@@ -131,6 +132,7 @@ export {
 
 export function ClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   {
+    children,
     className,
     fitBoundsPadding = 56,
     fitToData = true,
@@ -213,6 +215,7 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
         onMeasurementDraftChange={onMeasurementDraftChange}
         onMeasurementSelect={onMeasurementSelect}
       />
+      {children}
     </MapView>
   );
 }

@@ -26,6 +26,7 @@ export type GeoJsonMapProps<
 > = Omit<GeoJsonLayerProps<TProperties>, "featureCollection"> &
   MapMeasurementProps &
   MapViewportProps & {
+    children?: React.ReactNode;
     className?: string;
     fitBoundsPadding?: number;
     fitToData?: boolean;
@@ -47,6 +48,7 @@ export function GeoJsonMap<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 >({
   className,
+  children,
   fitBoundsPadding = 56,
   fitToData = true,
   geoJson,
@@ -109,6 +111,7 @@ export function GeoJsonMap<
         onMeasurementDraftChange={onMeasurementDraftChange}
         onMeasurementSelect={onMeasurementSelect}
       />
+      {children}
     </MapView>
   );
 }

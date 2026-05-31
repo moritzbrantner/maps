@@ -49,6 +49,19 @@
     @apply block size-full;
   }
 
+  .mb-maps__webgl-flat {
+    @apply touch-none select-none;
+    cursor: grab;
+  }
+
+  .mb-maps__webgl-flat:active {
+    cursor: grabbing;
+  }
+
+  .mb-maps__webgl-flat-canvas {
+    @apply block size-full;
+  }
+
   .mb-maps__globe-land,
   .mb-maps__globe-country-borders {
     pointer-events: none;
@@ -302,6 +315,55 @@
     text-anchor: middle;
   }
 
+  .mb-maps__overlays {
+    @apply pointer-events-none absolute inset-0 z-[450];
+  }
+
+  .mb-maps__overlay {
+    @apply pointer-events-auto absolute grid max-w-[min(20rem,calc(100%-2rem))] gap-2;
+  }
+
+  .mb-maps__overlay--top-left {
+    @apply left-4 top-4;
+  }
+
+  .mb-maps__overlay--top {
+    @apply left-1/2 top-4 -translate-x-1/2;
+  }
+
+  .mb-maps__overlay--top-right {
+    @apply right-4 top-4;
+  }
+
+  .mb-maps__overlay--right {
+    @apply right-4 top-1/2 -translate-y-1/2;
+  }
+
+  .mb-maps__overlay--bottom-right {
+    @apply bottom-4 right-4;
+  }
+
+  .mb-maps__overlay--bottom {
+    @apply bottom-4 left-1/2 -translate-x-1/2;
+  }
+
+  .mb-maps__overlay--bottom-left {
+    @apply bottom-4 left-4;
+  }
+
+  .mb-maps__overlay--left {
+    @apply left-4 top-1/2 -translate-y-1/2;
+  }
+
+  .mb-maps__controls,
+  .mb-maps__legend {
+    @apply rounded-lg border border-slate-900/10 bg-white/92 p-3 text-sm text-slate-950 shadow-[0_12px_30px_rgb(15_23_42_/_0.14)] backdrop-blur-[14px];
+  }
+
+  .mb-maps__controls {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
   .mb-maps__feature-overlay {
     @apply pointer-events-none absolute inset-0 z-[500];
   }
@@ -418,6 +480,40 @@
 }
 
 @media (max-width: 720px) {
+  .mb-maps__overlay {
+    @apply max-w-[calc(100%-1.5rem)];
+  }
+
+  .mb-maps__overlay--top-left,
+  .mb-maps__overlay--left {
+    @apply left-3;
+  }
+
+  .mb-maps__overlay--top,
+  .mb-maps__overlay--top-left,
+  .mb-maps__overlay--top-right {
+    @apply top-3;
+  }
+
+  .mb-maps__overlay--top-right,
+  .mb-maps__overlay--right {
+    @apply right-3;
+  }
+
+  .mb-maps__overlay--bottom,
+  .mb-maps__overlay--bottom-left,
+  .mb-maps__overlay--bottom-right {
+    @apply bottom-3;
+  }
+
+  .mb-maps__overlay--bottom-left {
+    @apply left-3;
+  }
+
+  .mb-maps__overlay--bottom-right {
+    @apply right-3;
+  }
+
   .mb-temporal-map__timeline-header,
   .mb-temporal-map__axis {
     grid-template-columns: 1fr;

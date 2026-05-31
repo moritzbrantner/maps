@@ -146,6 +146,7 @@ export type HeatMapDensityIndex = {
 export type HeatMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> =
   HeatMapWeightOptions<TProperties> &
     MapMeasurementProps & {
+    children?: React.ReactNode;
     className?: string;
     domainBounds?: HeatFieldOptions<TProperties>["domainBounds"];
     domainPaddingRatio?: HeatFieldOptions<TProperties>["domainPaddingRatio"];
@@ -215,6 +216,7 @@ const defaultHeatMapColorRamp = [
 
 export function HeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
+  children,
   className,
   fitBoundsPadding = 56,
   fitToData = true,
@@ -295,6 +297,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
         onMeasurementDraftChange={onMeasurementDraftChange}
         onMeasurementSelect={onMeasurementSelect}
       />
+      {children}
     </MapView>
   );
 }

@@ -12,7 +12,18 @@ export {
   type GeoHeatLayerProps,
   type GeoPointLayerProps,
 } from "../map-engine";
-export { MapView, type FlatLayerRender, type MapViewProps } from "../map-view";
+export { MapView, type FlatLayerRender, type FlatMapRuntime, type MapViewProps } from "../map-view";
+export {
+  MapControls,
+  MapLayers,
+  MapLegend,
+  MapOverlay,
+  type MapControlsProps,
+  type MapLayersProps,
+  type MapLegendProps,
+  type MapOverlayPosition,
+  type MapOverlayProps,
+} from "../map-components";
 export { ClusterLayer, type ClusterLayerProps } from "../cluster-layer";
 export {
   BubbleLayer,

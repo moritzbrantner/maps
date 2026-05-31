@@ -49,7 +49,18 @@ export {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./clustered-map";
-export { MapView, type MapViewProps, type FlatLayerRender } from "./map-view";
+export { MapView, type FlatLayerRender, type FlatMapRuntime, type MapViewProps } from "./map-view";
+export {
+  MapControls,
+  MapLayers,
+  MapLegend,
+  MapOverlay,
+  type MapControlsProps,
+  type MapLayersProps,
+  type MapLegendProps,
+  type MapOverlayPosition,
+  type MapOverlayProps,
+} from "./map-components";
 export {
   type MapContextMenuContext,
   type MapFeatureContextMenuContext,

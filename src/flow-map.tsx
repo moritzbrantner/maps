@@ -85,6 +85,7 @@ export type FlowMapWeightAccessor<TProperties extends Record<string, unknown> = 
 ) => number;
 
 export type FlowMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
+  children?: ReactNode;
   className?: string;
   directionMarker?: FlowDirectionMarker;
   fitBoundsPadding?: number;
@@ -125,6 +126,7 @@ export type FlowMapProps<TProperties extends Record<string, unknown> = Record<st
 
 export function FlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
+  children,
   className,
   fitBoundsPadding = 56,
   fitToData = true,
@@ -198,6 +200,7 @@ export function FlowMap<TProperties extends Record<string, unknown> = Record<str
         onMeasurementDraftChange={onMeasurementDraftChange}
         onMeasurementSelect={onMeasurementSelect}
       />
+      {children}
     </MapView>
   );
 }

@@ -18,6 +18,7 @@ import {
   type ContextMenuOverlayState,
   type FeatureOverlayState,
 } from "./feature-overlays";
+import { splitMapViewChildren } from "./map-components";
 import { GlobeBase, GlobeSvgOverlayBase, GLOBE_TILE_MIN_ZOOM } from "./globe-base";
 import {
   defaultRasterMapStyle,
@@ -40,6 +41,7 @@ import {
   type RasterMapStyle,
 } from "./map-display";
 import { areMapViewStatesEqual, useControllableMapViewState } from "./map-view-state";
+import { WebGlFlatRuntime, type FlatMapRuntime } from "./webgl-flat-runtime";
 import type {
   MapContextMenuContext,
   MapFeatureContextMenuContext,
@@ -118,6 +120,7 @@ export type MapViewProps = MapViewportProps & {
   dataBounds?: [west: number, south: number, east: number, north: number] | null;
   fitBoundsPadding?: number;
   fitToData?: boolean;
+  flatRuntime?: FlatMapRuntime;
   globeBasemapMode?: GlobeBasemapMode;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -145,6 +148,7 @@ export function MapView({
   defaultViewState,
   fitBoundsPadding = 56,
   fitToData = true,
+  flatRuntime = "leaflet",
   globeBasemapMode = "vector",
   initialViewState,
   mapDisplay = "flat",
@@ -195,6 +199,7 @@ export function MapView({
     onViewStateChange,
     viewState,
   });
+  const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
 
   const requestRender = useCallback(() => {
     setRenderVersion((version) => version + 1);
@@ -365,7 +370,7 @@ export function MapView({
   });
 
   useEffect(() => {
-    if (mapDisplay !== "flat") {
+    if (mapDisplay !== "flat" || flatRuntime !== "leaflet") {
       setIsReady(true);
       return;
     }
@@ -444,10 +449,10 @@ export function MapView({
       mapRef.current = null;
       leafletRef.current = null;
     };
-  }, [mapDisplay]);
+  }, [flatRuntime, mapDisplay]);
 
   useEffect(() => {
-    if (mapDisplay !== "flat") {
+    if (mapDisplay !== "flat" || flatRuntime !== "leaflet") {
       return;
     }
 
@@ -456,7 +461,7 @@ export function MapView({
     }
 
     renderFlatLayers();
-  }, [controlled, currentViewState, interactionMode, isMeasuring, mapDisplay, renderVersion]);
+  }, [controlled, currentViewState, flatRuntime, interactionMode, isMeasuring, mapDisplay, renderVersion]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -778,14 +783,32 @@ export function MapView({
           width: "100%",
           ...style,
         }}
-      onClick={() => {
+        onClick={() => {
           if (mapDisplay === "globe") {
             setPopup(null);
             setContextMenu(null);
           }
         }}
       >
-        {mapDisplay === "flat" ? <div ref={containerRef} className="mb-maps__canvas" /> : null}
+        {mapDisplay === "flat" && flatRuntime === "leaflet" ? (
+          <div ref={containerRef} className="mb-maps__canvas" />
+        ) : null}
+        {mapDisplay === "flat" && flatRuntime === "webgl" ? (
+          <WebGlFlatRuntime
+            mapStyle={mapStyle}
+            viewState={currentViewState}
+            onContextMenu={(context) => {
+              handleMapContextMenu(context, {
+                onMapContextMenu,
+                renderMapContextMenu,
+              });
+            }}
+            onReady={() => {
+              setIsReady(true);
+            }}
+            onViewStateChange={setViewState}
+          />
+        ) : null}
         {mapDisplay === "globe" ? (
           <>
             <GlobeBase
@@ -875,12 +898,15 @@ export function MapView({
                 }
                 viewState={currentViewState as GlobeViewState}
               />
-              <g className="mb-maps__globe-features">{children}</g>
+              <g className="mb-maps__globe-features">{mapChildren.layers}</g>
             </svg>
           </>
         ) : (
-          children
+          mapChildren.layers
         )}
+        {mapChildren.overlays.length > 0 ? (
+          <div className="mb-maps__overlays">{mapChildren.overlays}</div>
+        ) : null}
         <FeatureOverlays
           contextMenu={contextMenu}
           popup={popup}
@@ -989,6 +1015,10 @@ function getLeafletViewState(map: LeafletMap): MapViewState {
     zoom: map.getZoom(),
   };
 }
+
+export type {
+  FlatMapRuntime,
+} from "./webgl-flat-runtime";
 
 export type {
   MapSurfaceController,

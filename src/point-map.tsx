@@ -61,6 +61,7 @@ export type PointMapFeature<TProperties extends Record<string, unknown> = Record
 };
 
 export type PointMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
+  children?: React.ReactNode;
   className?: string;
   draggable?: boolean | ((feature: PointMapFeature<TProperties>) => boolean);
   filterPoint?: MapPointFilter<TProperties>;
@@ -141,6 +142,7 @@ export type BubbleMapProps<TProperties extends Record<string, unknown> = Record<
 
 export function PointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
+  children,
   className,
   fitBoundsPadding = 56,
   fitToData = true,
@@ -221,12 +223,14 @@ export function PointMap<TProperties extends Record<string, unknown> = Record<st
         onMeasurementDraftChange={onMeasurementDraftChange}
         onMeasurementSelect={onMeasurementSelect}
       />
+      {children}
     </MapView>
   );
 }
 
 export function BubbleMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
+  children,
   className,
   fitBoundsPadding = 56,
   fitToData = true,
@@ -304,6 +308,7 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
         onMeasurementDraftChange={onMeasurementDraftChange}
         onMeasurementSelect={onMeasurementSelect}
       />
+      {children}
     </MapView>
   );
 }

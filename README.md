@@ -354,6 +354,9 @@ import {
   FlowLayer,
   GeoJsonLayer,
   HeatLayer,
+  MapControls,
+  MapLayers,
+  MapLegend,
   MapView,
   PointLayer,
 } from "@moritzbrantner/maps";
@@ -365,19 +368,35 @@ function OperationsMap() {
       defaultViewState={{ center: [13.405, 52.52], zoom: 8 }}
       style={{ height: 420 }}
     >
-      <HeatLayer points={points} weightMetric="demand" />
-      <FlowLayer flows={flows} weightMetric="trips" />
-      <GeoJsonLayer featureCollection={geoJsonFeatureCollection} />
-      <PointLayer points={points} renderFeatureTooltip={(feature) => feature.point.label} />
-      <BeeLineMeasurementLayer
-        measurementMode={isMeasuring ? "bee-line" : "none"}
-        measurements={measurements}
-        onMeasurementCreate={handleMeasurementCreate}
-      />
+      <MapLayers>
+        <HeatLayer points={points} weightMetric="demand" />
+        <FlowLayer flows={flows} weightMetric="trips" />
+        <GeoJsonLayer featureCollection={geoJsonFeatureCollection} />
+        <PointLayer points={points} renderFeatureTooltip={(feature) => feature.point.label} />
+        <BeeLineMeasurementLayer
+          measurementMode={isMeasuring ? "bee-line" : "none"}
+          measurements={measurements}
+          onMeasurementCreate={handleMeasurementCreate}
+        />
+      </MapLayers>
+      <MapControls aria-label="Map tools" position="top-right">
+        <button type="button" onClick={() => setIsMeasuring((value) => !value)}>
+          Measure
+        </button>
+      </MapControls>
+      <MapLegend aria-label="Demand legend" position="bottom-left">
+        <span>Demand heat and active routes</span>
+      </MapLegend>
     </MapView>
   );
 }
 ```
+
+`MapLayers` is optional for existing layer-only maps, but it makes mixed map
+composition explicit. `MapOverlay`, `MapControls`, and `MapLegend` render as
+HTML overlays above both flat and globe maps. Convenience maps such as
+`PointMap`, `HeatMap`, `FlowMap`, `GeoJsonMap`, and `EditableGeoJsonMap` also
+accept these components as children.
 
 ## Bee-line measurements
 

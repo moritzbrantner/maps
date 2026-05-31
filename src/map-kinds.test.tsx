@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -7,6 +7,9 @@ import {
   GeoJsonMap,
   GeoJsonLayer,
   HeatMap,
+  MapControls,
+  MapLayers,
+  MapLegend,
   MapView,
   PointLayer,
   PointMap,
@@ -37,6 +40,16 @@ import {
   projectGlobeBasemapCoordinate,
   resolveGlobeTileSource,
 } from "./globe-base";
+import {
+  buildWebGlFlatTileUrl,
+  coordinateToWebGlFlatWorldPoint,
+  getVisibleWebGlFlatTiles,
+  getWebGlFlatViewport,
+  getWebGlFlatZoom,
+  panWebGlFlatViewState,
+  resolveWebGlFlatTileSource,
+  webGlFlatWorldPointToCoordinate,
+} from "./webgl-flat-runtime";
 
 const leafletMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -551,6 +564,51 @@ describe("@moritzbrantner/maps additional map kinds", () => {
         }),
       ]);
     });
+  });
+
+  test("renders layer and overlay slots across map displays", () => {
+    render(
+      <MapView
+        initialViewState={{ center: [-74, 40], zoom: 2 }}
+        mapDisplay="globe"
+        mapLabel="Modular map"
+      >
+        <MapLayers>
+          <PointLayer points={[{ id: "store-1", latitude: 40, longitude: -74 }]} />
+        </MapLayers>
+        <MapControls aria-label="Map controls">
+          <button type="button">Reset</button>
+        </MapControls>
+        <MapLegend aria-label="Demand legend">
+          <span>Demand</span>
+        </MapLegend>
+      </MapView>,
+    );
+
+    const map = screen.getByLabelText("Modular map");
+
+    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
+    expect(screen.getByLabelText("Map controls")).toBeTruthy();
+    expect(screen.getByLabelText("Demand legend")).toBeTruthy();
+    expect(map.querySelector(".mb-maps__globe-features")?.textContent).not.toContain("Reset");
+  });
+
+  test("renders overlay components inside convenience maps", () => {
+    render(
+      <PointMap
+        initialViewState={{ center: [-74, 40], zoom: 2 }}
+        mapDisplay="globe"
+        mapLabel="Point map with legend"
+        points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+      >
+        <MapLegend aria-label="Store legend">Stores</MapLegend>
+      </PointMap>,
+    );
+
+    const map = screen.getByLabelText("Point map with legend");
+
+    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
+    expect(screen.getByLabelText("Store legend")).toBeTruthy();
   });
 
   test("renders GeoJSON points, lines, and polygons as flat map layers", async () => {
@@ -1163,6 +1221,90 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     expect(basemapProjected?.[0]).toBeCloseTo(projected.x);
     expect(basemapProjected?.[1]).toBeCloseTo(projected.y);
+  });
+
+  test("roundtrips WebGL flat Mercator projection", () => {
+    const coordinate: [number, number] = [13.405, 52.52];
+    const worldPoint = coordinateToWebGlFlatWorldPoint(coordinate, 8);
+    const roundtrip = webGlFlatWorldPointToCoordinate(worldPoint, 8);
+
+    expect(roundtrip[0]).toBeCloseTo(coordinate[0], 6);
+    expect(roundtrip[1]).toBeCloseTo(coordinate[1], 6);
+  });
+
+  test("selects visible WebGL flat raster tiles", () => {
+    const source = resolveWebGlFlatTileSource({
+      maxZoom: 12,
+      tiles: "https://tiles.example.test/{z}/{x}/{y}.png",
+    });
+
+    expect(source).toBeTruthy();
+
+    const viewport = getWebGlFlatViewport(
+      {
+        center: [13.405, 52.52],
+        zoom: 6,
+      },
+      {
+        height: 720,
+        width: 1280,
+      },
+    );
+    const tiles = getVisibleWebGlFlatTiles(viewport, source!);
+
+    expect(tiles.length).toBeGreaterThan(0);
+    expect(tiles.length).toBeLessThanOrEqual(256);
+    expect(buildWebGlFlatTileUrl(source!, tiles[0]!)).toMatch(
+      /^https:\/\/tiles\.example\.test\/\d+\/\d+\/\d+\.png$/,
+    );
+    expect(viewport.bounds[0]).toBeLessThan(viewport.bounds[2]);
+    expect(viewport.bounds[1]).toBeLessThan(viewport.bounds[3]);
+  });
+
+  test("pans and zooms WebGL flat view state", () => {
+    const initial = { center: [13.405, 52.52] as [number, number], zoom: 6 };
+    const panned = panWebGlFlatViewState(initial.center, initial.zoom, 80, -40);
+
+    expect(panned.center[0]).toBeLessThan(initial.center[0]);
+    expect(panned.center[1]).toBeLessThan(initial.center[1]);
+    expect(getWebGlFlatZoom(4, -1000)).toBeGreaterThan(4);
+  });
+
+  test("mounts WebGL flat MapView without creating a Leaflet map", async () => {
+    const onViewStateChange = vi.fn();
+
+    render(
+      <MapView
+        flatRuntime="webgl"
+        initialViewState={{ center: [13.405, 52.52], zoom: 6 }}
+        mapLabel="WebGL flat map"
+        mapStyle={{ tiles: false }}
+        onViewStateChange={onViewStateChange}
+      />,
+    );
+
+    const map = screen.getByLabelText("WebGL flat map");
+
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(map.querySelector('[data-flat-runtime="webgl"]')).toBeTruthy();
+    expect(leafletMock.getMaps()).toHaveLength(0);
+
+    fireEvent.wheel(map.querySelector('[data-flat-runtime="webgl"]')!, {
+      deltaY: -120,
+    });
+
+    expect(onViewStateChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        zoom: expect.any(Number),
+      }),
+      expect.objectContaining({
+        display: "flat",
+        reason: "zoom",
+      }),
+    );
   });
 
   test("renders weighted flat flow lines with endpoints", async () => {

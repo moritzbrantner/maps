@@ -198,6 +198,7 @@ export type EditableGeoJsonMapProps<
 > = Omit<GeoJsonEditorLayerProps<TProperties>, "featureCollection" | "mode" | "style"> &
   MapMeasurementProps &
   MapViewportProps & {
+    children?: React.ReactNode;
     className?: string;
     editMode: GeoJsonEditMode;
     editorStyle?: GeoJsonLayerStyle;
@@ -1284,6 +1285,7 @@ export function EditableGeoJsonMap<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 >({
   className,
+  children,
   editMode,
   editorStyle,
   enableKeyboardShortcuts = true,
@@ -1400,6 +1402,7 @@ export function EditableGeoJsonMap<
         onMeasurementDraftChange={onMeasurementDraftChange}
         onMeasurementSelect={onMeasurementSelect}
       />
+      {children}
     </MapView>
   );
 
