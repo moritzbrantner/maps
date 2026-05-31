@@ -1,19 +1,19 @@
 "use client";
 
 import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { LayerGroup, Map as LeafletMap } from "leaflet";
+import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { getBoundsFromGeoJson, type GeoJsonMapSource } from "./geojson-source";
 import { type GeoJsonLayerStyle } from "./geojson-layer";
 import {
   createFlatGeometryLayers,
   type FlatGeometryLayer,
-  type LeafletFeaturePointerEvent,
+  type FlatFeaturePointerEvent,
 } from "./geojson-rendering";
 import {
   defaultRasterMapStyle,
   joinClassNames,
-  toLeafletLatLng,
+  toLatLng,
   type GlobeBasemapMode,
   type MapDisplayMode,
   type MapSurfaceController,
@@ -21,6 +21,11 @@ import {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
+import type {
+  FlatLayerFactory,
+  FlatLayerGroup,
+  FlatMapAdapter,
+} from "./maplibre-compat";
 import type { MapContextMenuContext } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
@@ -212,7 +217,7 @@ export type EditableGeoJsonMapProps<
     mapStyle?: string | RasterMapStyle;
     onMapControllerReady?: (controller: MapSurfaceController) => void;
     onMapContextMenu?: (context: MapContextMenuContext) => void;
-    onMapReady?: (map: LeafletMap) => void;
+    onMapReady?: (map: MapLibreMap) => void;
     renderMapContextMenu?: (context: MapContextMenuContext) => React.ReactNode;
     showAttributionControl?: boolean;
     style?: React.CSSProperties;
@@ -415,17 +420,17 @@ export function GeoJsonEditorLayer<
   }, [mode, resolvedLayerId, surface]);
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat" || !surface.leafletMap) {
+    if (!surface || surface.display !== "flat" || !surface.flatMap) {
       return;
     }
 
-    const map = surface.leafletMap;
+    const map = surface.flatMap;
 
-    function getCoordinate(event: LeafletFeaturePointerEvent = {}) {
+    function getCoordinate(event: FlatFeaturePointerEvent = {}) {
       return getEventCoordinate(map, event);
     }
 
-    function handleClick(event: LeafletFeaturePointerEvent = {}) {
+    function handleClick(event: FlatFeaturePointerEvent = {}) {
       if (event.originalEvent?.defaultPrevented) {
         return;
       }
@@ -466,7 +471,7 @@ export function GeoJsonEditorLayer<
       }
     }
 
-    function handleMouseMove(event: LeafletFeaturePointerEvent = {}) {
+    function handleMouseMove(event: FlatFeaturePointerEvent = {}) {
       const current = latestRef.current;
 
       if (
@@ -485,7 +490,7 @@ export function GeoJsonEditorLayer<
       updateDraftPreview(null);
     }
 
-    function handleDoubleClick(event: LeafletFeaturePointerEvent = {}) {
+    function handleDoubleClick(event: FlatFeaturePointerEvent = {}) {
       const current = latestRef.current;
 
       if (current.mode !== "draw-line" && current.mode !== "draw-polygon") {
@@ -549,7 +554,7 @@ export function GeoJsonEditorLayer<
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
       layer.clearLayers();
 
       if (mode === "none") {
@@ -584,7 +589,7 @@ export function GeoJsonEditorLayer<
           ),
           bubblingMouseEvents: false,
           interactive: true,
-          leaflet,
+          flat,
           selected,
           style: resolvedStyle,
         });
@@ -604,14 +609,14 @@ export function GeoJsonEditorLayer<
           renderVertexHandles(feature, {
             handleColor,
             layer,
-            leaflet,
+            flat,
             map,
             midpointHandleColor,
           });
         }
       }
 
-      renderDraft(layer, leaflet, draftRef.current, draftPreviewRef.current, mode);
+      renderDraft(layer, flat, draftRef.current, draftPreviewRef.current, mode);
     });
   }, [
     features,
@@ -732,7 +737,7 @@ export function GeoJsonEditorLayer<
     latestRef.current.onSelectionChange?.(normalized.primaryFeatureId);
   }
 
-  function selectFeature(featureId: string, event: LeafletFeaturePointerEvent = {}) {
+  function selectFeature(featureId: string, event: FlatFeaturePointerEvent = {}) {
     if (mode === "delete") {
       const feature = features.find((candidate) => candidate.id === featureId);
 
@@ -1088,8 +1093,8 @@ export function GeoJsonEditorLayer<
 
   function startFeatureDrag(
     feature: EditableFeature<TProperties>,
-    event: LeafletFeaturePointerEvent,
-    map: LeafletMap,
+    event: FlatFeaturePointerEvent,
+    map: FlatMapAdapter,
   ) {
     if (mode !== "move" || !feature.editable || !selectedFeatureIdSet.has(feature.id)) {
       return;
@@ -1116,8 +1121,8 @@ export function GeoJsonEditorLayer<
   function startVertexDrag(
     feature: EditableFeature<TProperties>,
     handle: GeoJsonVertexHandle,
-    event: LeafletFeaturePointerEvent,
-    map: LeafletMap,
+    event: FlatFeaturePointerEvent,
+    map: FlatMapAdapter,
   ) {
     if (mode !== "reshape" || handle.kind !== "vertex") {
       return;
@@ -1142,9 +1147,9 @@ export function GeoJsonEditorLayer<
     map.on("mouseup", handleDragEnd as never);
   }
 
-  function handleDragEnd(event: LeafletFeaturePointerEvent = {}) {
+  function handleDragEnd(event: FlatFeaturePointerEvent = {}) {
     const drag = dragRef.current;
-    const map = surface?.leafletMap;
+    const map = surface?.flatMap;
 
     if (!drag || !map) {
       return;
@@ -1227,16 +1232,16 @@ export function GeoJsonEditorLayer<
     feature: EditableFeature<TProperties>,
     options: {
       handleColor: string;
-      layer: LayerGroup;
-      leaflet: typeof import("leaflet");
-      map: LeafletMap;
+      layer: FlatLayerGroup;
+      flat: FlatLayerFactory;
+      map: FlatMapAdapter;
       midpointHandleColor: string;
     },
   ) {
     for (const handle of getGeoJsonVertexHandles(feature.geometry, feature.id)) {
       const isMidpoint = handle.kind === "midpoint";
       const selected = !isMidpoint && areVertexHandlesEqual(selectedHandleRef.current, handle);
-      const marker = options.leaflet.circleMarker(toLeafletLatLng(handle.coordinates), {
+      const marker = options.flat.circleMarker(toLatLng(handle.coordinates), {
         bubblingMouseEvents: false,
         className: joinClassNames(
           "mb-maps__editor-handle",
@@ -1256,7 +1261,7 @@ export function GeoJsonEditorLayer<
         weight: selected ? 3 : 2,
       }) as FlatGeometryLayer;
 
-      marker.on("click", (event: LeafletFeaturePointerEvent = {}) => {
+      marker.on("click", (event: FlatFeaturePointerEvent = {}) => {
         event.originalEvent?.preventDefault?.();
         event.originalEvent?.stopPropagation?.();
 
@@ -1267,7 +1272,7 @@ export function GeoJsonEditorLayer<
 
         updateSelectedHandle(handle);
       });
-      marker.on("mousedown", (event: LeafletFeaturePointerEvent = {}) => {
+      marker.on("mousedown", (event: FlatFeaturePointerEvent = {}) => {
         startVertexDrag(feature, handle, event, options.map);
       });
       marker.addTo(options.layer);
@@ -1702,23 +1707,23 @@ function bindFeatureLayer<TProperties extends Record<string, unknown>>(
   layer: FlatGeometryLayer,
   options: {
     feature: EditableFeature<TProperties>;
-    map: LeafletMap;
-    onDragStart: (event: LeafletFeaturePointerEvent) => void;
+    map: FlatMapAdapter;
+    onDragStart: (event: FlatFeaturePointerEvent) => void;
     onGroupSelect: () => void;
-    onSelect: (event: LeafletFeaturePointerEvent) => void;
+    onSelect: (event: FlatFeaturePointerEvent) => void;
   },
 ) {
-  layer.on("click", (event: LeafletFeaturePointerEvent = {}) => {
+  layer.on("click", (event: FlatFeaturePointerEvent = {}) => {
     event.originalEvent?.preventDefault?.();
     event.originalEvent?.stopPropagation?.();
     options.onSelect(event);
   });
-  layer.on("dblclick", (event: LeafletFeaturePointerEvent = {}) => {
+  layer.on("dblclick", (event: FlatFeaturePointerEvent = {}) => {
     event.originalEvent?.preventDefault?.();
     event.originalEvent?.stopPropagation?.();
     options.onGroupSelect();
   });
-  layer.on("mousedown", (event: LeafletFeaturePointerEvent = {}) => {
+  layer.on("mousedown", (event: FlatFeaturePointerEvent = {}) => {
     options.onDragStart(event);
   });
   layer.on("mouseover", () => {
@@ -1730,8 +1735,8 @@ function bindFeatureLayer<TProperties extends Record<string, unknown>>(
 }
 
 function renderDraft(
-  layer: LayerGroup,
-  leaflet: typeof import("leaflet"),
+  layer: FlatLayerGroup,
+  flat: FlatLayerFactory,
   draft: readonly GeoJsonPosition[],
   preview: GeoJsonPosition | null,
   mode: GeoJsonEditMode,
@@ -1741,8 +1746,8 @@ function renderDraft(
       return;
     }
 
-    leaflet
-      .circleMarker(toLeafletLatLng(preview), {
+    flat
+      .circleMarker(toLatLng(preview), {
         className: "mb-maps__editor-draft mb-maps__editor-draft-point",
         color: "#0284c7",
         fillColor: "#38bdf8",
@@ -1769,11 +1774,11 @@ function renderDraft(
     return;
   }
 
-  const latLngs = previewDraft.map(toLeafletLatLng);
+  const latLngs = previewDraft.map(toLatLng);
 
   if (mode === "draw-polygon" && previewDraft.length >= 3) {
-    leaflet
-      .polygon([closeRing(previewDraft).map(toLeafletLatLng)], {
+    flat
+      .polygon([closeRing(previewDraft).map(toLatLng)], {
         className: "mb-maps__editor-draft",
         color: "#0284c7",
         fillColor: "#38bdf8",
@@ -1786,7 +1791,7 @@ function renderDraft(
     return;
   }
 
-  leaflet
+  flat
     .polyline(latLngs, {
       className: "mb-maps__editor-draft",
       color: "#0284c7",
@@ -2421,10 +2426,10 @@ function cloneProperties<TProperties extends Record<string, unknown>>(
 }
 
 function getEventCoordinate(
-  map: LeafletMap & {
+  map: FlatMapAdapter & {
     containerPointToLatLng?: (point: [number, number]) => { lat: number; lng: number };
   },
-  event: LeafletFeaturePointerEvent,
+  event: FlatFeaturePointerEvent,
 ): GeoJsonPosition | null {
   if (event.latlng) {
     return [event.latlng.lng, event.latlng.lat];

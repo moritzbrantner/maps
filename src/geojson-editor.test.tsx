@@ -14,7 +14,7 @@ import {
   type TemporalGeoJsonGeometryFeatureCollection,
 } from ".";
 
-const leafletMock = vi.hoisted(() => {
+const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
     handlers: Map<string, Handler[]>;
@@ -179,10 +179,10 @@ const leafletMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("leaflet", () => leafletMock);
+vi.mock("flat", () => flatMock);
 
 afterEach(() => {
-  leafletMock.reset();
+  flatMock.reset();
 });
 
 const emptyCollection: TemporalGeoJsonGeometryFeatureCollection = {
@@ -267,7 +267,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Point editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
+    const map = flatMock.getMaps()[0];
 
     await waitFor(() => {
       expect(map?.handlers.get("click")?.length).toBeGreaterThan(1);
@@ -314,7 +314,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Line editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
+    const map = flatMock.getMaps()[0];
 
     act(() => {
       map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 1, lng: 2 } });
@@ -360,7 +360,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Polygon editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
+    const map = flatMock.getMaps()[0];
 
     act(() => {
       map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0, lng: 0 } });
@@ -400,7 +400,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Cancelable editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
+    const map = flatMock.getMaps()[0];
 
     act(() => {
       map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 1, lng: 2 } });
@@ -429,7 +429,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Point preview editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
+    const map = flatMock.getMaps()[0];
 
     act(() => {
       map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 52, lng: 13 } });
@@ -437,7 +437,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
 
     await waitFor(() => {
       expect(
-        leafletMock.getLayerGroups()[0]?.layers.some(
+        flatMock.getLayerGroups()[0]?.layers.some(
           (layer) => layer.options?.className === "mb-maps__editor-draft mb-maps__editor-draft-point",
         ),
       ).toBe(true);
@@ -460,7 +460,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Line preview editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
+    const map = flatMock.getMaps()[0];
 
     act(() => {
       map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 1, lng: 2 } });
@@ -468,7 +468,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     await waitFor(() => {
-      const draftLine = leafletMock.getLayerGroups()[0]?.layers.find(
+      const draftLine = flatMock.getLayerGroups()[0]?.layers.find(
         (layer) => layer.options?.className === "mb-maps__editor-draft",
       );
 
@@ -499,7 +499,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Selection editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const featureLayer = leafletMock.getLayerGroups()[0]?.layers[0];
+    const featureLayer = flatMock.getLayerGroups()[0]?.layers[0];
 
     act(() => {
       featureLayer?.handlers.get("click")?.[0]?.({
@@ -523,7 +523,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       />,
     );
 
-    const deleteLayer = leafletMock.getLayerGroups()[0]?.layers[0];
+    const deleteLayer = flatMock.getLayerGroups()[0]?.layers[0];
 
     act(() => {
       deleteLayer?.handlers.get("click")?.[0]?.({
@@ -572,7 +572,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Multi-selection editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const [firstLayer, secondLayer] = leafletMock.getLayerGroups()[0]?.layers ?? [];
+    const [firstLayer, secondLayer] = flatMock.getLayerGroups()[0]?.layers ?? [];
 
     act(() => {
       firstLayer?.handlers.get("click")?.[0]?.({
@@ -756,8 +756,8 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Move editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
-    const featureLayer = leafletMock.getLayerGroups()[0]?.layers[0];
+    const map = flatMock.getMaps()[0];
+    const featureLayer = flatMock.getLayerGroups()[0]?.layers[0];
 
     act(() => {
       featureLayer?.handlers.get("mousedown")?.[0]?.({
@@ -794,8 +794,8 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Move selection editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
-    const featureLayer = leafletMock.getLayerGroups()[0]?.layers[0];
+    const map = flatMock.getMaps()[0];
+    const featureLayer = flatMock.getLayerGroups()[0]?.layers[0];
 
     act(() => {
       featureLayer?.handlers.get("mousedown")?.[0]?.({
@@ -840,7 +840,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     expect(
-      leafletMock
+      flatMock
         .getLayerGroups()[0]
         ?.layers.filter((layer) =>
           String(layer.options?.className ?? "").includes("mb-maps__editor-handle"),
@@ -867,7 +867,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Reshape editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const midpointHandle = leafletMock.getLayerGroups()[0]?.layers.find(
+    const midpointHandle = flatMock.getLayerGroups()[0]?.layers.find(
       (layer) => layer.options?.className === "mb-maps__editor-handle mb-maps__editor-handle--midpoint",
     );
 
@@ -883,7 +883,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       [10, 0],
     ]);
 
-    const vertexHandle = leafletMock.getLayerGroups()[0]?.layers.find(
+    const vertexHandle = flatMock.getLayerGroups()[0]?.layers.find(
       (layer) => layer.options?.className === "mb-maps__editor-handle",
     );
 
@@ -916,8 +916,8 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Vertex move editor").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
-    const vertexHandle = leafletMock.getLayerGroups()[0]?.layers.find(
+    const map = flatMock.getMaps()[0];
+    const vertexHandle = flatMock.getLayerGroups()[0]?.layers.find(
       (layer) => layer.options?.className === "mb-maps__editor-handle",
     );
 
@@ -987,7 +987,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     await waitFor(() => {
-      expect(leafletMock.getLayerGroups()[0]?.layers[0]?.options?.interactive).toBe(false);
+      expect(flatMock.getLayerGroups()[0]?.layers[0]?.options?.interactive).toBe(false);
     });
   });
 
@@ -1003,7 +1003,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       />,
     );
 
-    expect(leafletMock.getMaps()).toHaveLength(0);
+    expect(flatMock.getMaps()).toHaveLength(0);
     expect(onFeatureCollectionChange).not.toHaveBeenCalled();
   });
 });

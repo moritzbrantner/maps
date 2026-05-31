@@ -63,7 +63,7 @@ test.beforeEach(async ({ page }) => {
         caret-color: transparent !important;
       }
 
-      .leaflet-tile-pane {
+      .flat-tile-pane {
         opacity: 0 !important;
       }
 
@@ -315,7 +315,7 @@ test("Mobile layout does not overflow horizontally", async ({ page }) => {
         transition-duration: 0s !important;
       }
 
-      .leaflet-tile-pane {
+      .flat-tile-pane {
         opacity: 0 !important;
       }
     `,
@@ -341,7 +341,7 @@ test("Mobile layout does not overflow horizontally on any top-level tab", async 
         transition-duration: 0s !important;
       }
 
-      .leaflet-tile-pane {
+      .flat-tile-pane {
         opacity: 0 !important;
       }
     `,

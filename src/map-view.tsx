@@ -2,7 +2,9 @@
 
 import {
   createContext,
+  lazy,
   startTransition,
+  Suspense,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -11,7 +13,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { LayerGroup, Map as LeafletMap } from "leaflet";
+import type { Map as MapLibreMap } from "maplibre-gl";
 
 import {
   FeatureOverlays,
@@ -19,7 +21,6 @@ import {
   type FeatureOverlayState,
 } from "./feature-overlays";
 import { splitMapViewChildren } from "./map-components";
-import { GlobeBase, GlobeSvgOverlayBase, GLOBE_TILE_MIN_ZOOM } from "./globe-base";
 import {
   defaultRasterMapStyle,
   getGlobeDragCenter,
@@ -28,8 +29,8 @@ import {
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
   projectGlobeCoordinate,
-  resolveTileLayerOptions,
-  toLeafletLatLng,
+  resolveMapLibreStyle,
+  toMapLibreBounds,
   unprojectGlobePoint,
   type GlobeBasemapMode,
   type GlobeViewState,
@@ -40,6 +41,14 @@ import {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
+import {
+  attachMapLibreMarkerConstructor,
+  createMapLibreFlatLayerFactory,
+  createMapLibreFlatMapAdapter,
+  type FlatLayerFactory,
+  type FlatLayerGroup,
+  type FlatMapAdapter,
+} from "./maplibre-compat";
 import { areMapViewStatesEqual, useControllableMapViewState } from "./map-view-state";
 import { WebGlFlatRuntime, type FlatMapRuntime } from "./webgl-flat-runtime";
 import type {
@@ -48,12 +57,22 @@ import type {
 } from "./map-interaction";
 import type { MapCoordinate } from "./measurement";
 
+const GLOBE_TILE_MIN_ZOOM = 4;
+const GlobeBase = lazy(() =>
+  import("./globe-base").then((module) => ({ default: module.GlobeBase })),
+);
+const GlobeSvgOverlayBase = lazy(() =>
+  import("./globe-base").then((module) => ({ default: module.GlobeSvgOverlayBase })),
+);
+
 export type FlatLayerRender = (context: {
+  flat: FlatLayerFactory;
   interactionMode: MapInteractionMode;
   isMeasuring: boolean;
-  layer: LayerGroup;
-  leaflet: typeof import("leaflet");
-  map: LeafletMap;
+  layer: FlatLayerGroup;
+  map: FlatMapAdapter;
+  maplibre: typeof import("maplibre-gl");
+  maplibreMap: MapLibreMap;
 }) => void;
 
 export type MapInteractionMode = "none" | "measurement" | "editing";
@@ -103,8 +122,9 @@ export type MapSurfaceContextValue = {
   ) => boolean;
   isMeasuring: boolean;
   interactionMode: MapInteractionMode;
-  leaflet: typeof import("leaflet") | null;
-  leafletMap: LeafletMap | null;
+  flatMap: FlatMapAdapter | null;
+  maplibre: typeof import("maplibre-gl") | null;
+  maplibreMap: MapLibreMap | null;
   projectGlobeCoordinate: typeof projectGlobeCoordinate;
   registerFlatLayer: (id: string, render: FlatLayerRender) => () => void;
   registerInteractionMode: (id: string, mode: Exclude<MapInteractionMode, "none">) => () => void;
@@ -127,15 +147,16 @@ export type MapViewProps = MapViewportProps & {
   mapStyle?: string | RasterMapStyle;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapContextMenu?: (context: MapContextMenuContext) => void;
-  onMapReady?: (map: LeafletMap) => void;
+  onMapReady?: (map: MapLibreMap) => void;
   renderMapContextMenu?: (context: MapContextMenuContext) => ReactNode;
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
 };
 
 type RegisteredFlatLayer = {
+  cleanup: (() => void) | null;
   id: string;
-  group: LayerGroup | null;
+  group: FlatLayerGroup | null;
   render: FlatLayerRender;
 };
 
@@ -148,7 +169,7 @@ export function MapView({
   defaultViewState,
   fitBoundsPadding = 56,
   fitToData = true,
-  flatRuntime = "leaflet",
+  flatRuntime = "maplibre",
   globeBasemapMode = "vector",
   initialViewState,
   mapDisplay = "flat",
@@ -165,8 +186,10 @@ export function MapView({
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const leafletRef = useRef<typeof import("leaflet") | null>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
+  const maplibreRef = useRef<typeof import("maplibre-gl") | null>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
+  const flatMapAdapterRef = useRef<FlatMapAdapter | null>(null);
+  const flatLayerFactoryRef = useRef<FlatLayerFactory | null>(null);
   const mapContextMenuOptionsRef = useRef<{
     onMapContextMenu?: (context: MapContextMenuContext) => void;
     renderMapContextMenu?: (context: MapContextMenuContext) => ReactNode;
@@ -181,6 +204,7 @@ export function MapView({
   const lastCommittedFlatStateRef = useRef<MapViewState | null>(null);
   const lastFlatMoveStateRef = useRef<MapViewState | null>(null);
   const lastFitBoundsKeyRef = useRef<string | null>(null);
+  const isFlatStyleReadyRef = useRef(false);
   const [isReady, setIsReady] = useState(mapDisplay === "globe");
   const [renderVersion, setRenderVersion] = useState(0);
   const interactionModesRef = useRef<Map<string, Exclude<MapInteractionMode, "none">>>(new Map());
@@ -250,24 +274,31 @@ export function MapView({
   }, [onMapContextMenu, renderMapContextMenu]);
 
   const renderFlatLayers = useEffectEvent(() => {
-    const leaflet = leafletRef.current;
-    const map = mapRef.current;
+    const flat = flatLayerFactoryRef.current;
+    const map = flatMapAdapterRef.current;
+    const maplibre = maplibreRef.current;
+    const maplibreMap = mapRef.current;
 
-    if (!leaflet || !map) {
+    if (!flat || !map || !maplibre || !maplibreMap || !isFlatStyleReadyRef.current) {
       return;
     }
 
     for (const layer of layersRef.current.values()) {
       if (!layer.group) {
-        layer.group = leaflet.layerGroup().addTo(map);
+        layer.group = flat.layerGroup().addTo(maplibreMap);
       }
 
+      layer.cleanup?.();
+      layer.group.clearLayers();
+      layer.cleanup = null;
       layer.render({
+        flat,
         interactionMode,
         isMeasuring,
         layer: layer.group,
-        leaflet,
         map,
+        maplibre,
+        maplibreMap,
       });
     }
   });
@@ -279,17 +310,11 @@ export function MapView({
       return;
     }
 
-    map.fitBounds(
-      [
-        [dataBounds[1], dataBounds[0]],
-        [dataBounds[3], dataBounds[2]],
-      ],
-      {
-        animate: false,
-        padding: [fitBoundsPadding, fitBoundsPadding],
-      },
-    );
-    const next = getLeafletViewState(map);
+    map.fitBounds(toMapLibreBounds(dataBounds), {
+      animate: false,
+      padding: fitBoundsPadding,
+    });
+    const next = getMapLibreViewState(map);
 
     lastCommittedFlatStateRef.current = next;
     setViewState(next, "fit-to-data");
@@ -325,16 +350,14 @@ export function MapView({
       return;
     }
 
-    const current = getLeafletViewState(map);
+    const current = getMapLibreViewState(map);
 
     if (areMapViewStatesEqual(current, currentViewState)) {
       return;
     }
 
     lastCommittedFlatStateRef.current = currentViewState;
-    map.setView(toLeafletLatLng(currentViewState.center), currentViewState.zoom, {
-      animate: false,
-    });
+    map.jumpTo({ center: currentViewState.center, zoom: currentViewState.zoom });
   });
 
   const emitFlatMoveEnd = useEffectEvent(() => {
@@ -344,7 +367,7 @@ export function MapView({
       return;
     }
 
-    const next = getLeafletViewState(map);
+    const next = getMapLibreViewState(map);
     const previous = lastFlatMoveStateRef.current;
     const reason =
       previous && Math.abs(previous.zoom - next.zoom) > 1e-8 ? "zoom" : "pan";
@@ -363,55 +386,55 @@ export function MapView({
     renderFlatLayers();
   });
 
-  const handleMapReady = useEffectEvent((map: LeafletMap) => {
+  const handleMapReady = useEffectEvent((map: MapLibreMap) => {
     startTransition(() => {
       onMapReady?.(map);
     });
   });
 
   useEffect(() => {
-    if (mapDisplay !== "flat" || flatRuntime !== "leaflet") {
+    if (mapDisplay !== "flat" || flatRuntime !== "maplibre") {
       setIsReady(true);
       return;
     }
 
     let isCancelled = false;
-    let localMap: LeafletMap | null = null;
+    let localMap: MapLibreMap | null = null;
 
     async function initializeMap() {
       if (!containerRef.current) {
         return;
       }
 
-      const leaflet = await import("leaflet");
+      const maplibre = await import("maplibre-gl");
 
       if (isCancelled || !containerRef.current) {
         return;
       }
 
-      leafletRef.current = leaflet;
-      localMap = leaflet.map(containerRef.current, {
-        attributionControl: showAttributionControl,
-        center: toLeafletLatLng(currentViewState.center),
+      maplibreRef.current = maplibre;
+      isFlatStyleReadyRef.current = false;
+      localMap = new maplibre.Map({
+        attributionControl: showAttributionControl ? {} : false,
+        center: currentViewState.center,
+        container: containerRef.current,
+        style: resolveMapLibreStyle(mapStyle),
         zoom: currentViewState.zoom,
-        zoomControl: true,
       });
+      localMap.addControl(new maplibre.NavigationControl({ showCompass: false }), "top-left");
+      attachMapLibreMarkerConstructor(localMap, maplibre.Marker);
+      flatMapAdapterRef.current = createMapLibreFlatMapAdapter(localMap);
+      flatLayerFactoryRef.current = createMapLibreFlatLayerFactory(maplibre, localMap);
       mapRef.current = localMap;
       lastFlatMoveStateRef.current = currentViewState;
-
-      const tileLayerOptions = resolveTileLayerOptions(mapStyle);
-
-      if (tileLayerOptions) {
-        leaflet.tileLayer(tileLayerOptions.url, tileLayerOptions.options).addTo(localMap);
-      }
 
       localMap.on("moveend", emitFlatMoveEnd);
       localMap.on("click", () => {
         setPopup(null);
         setContextMenu(null);
       });
-      localMap.on("contextmenu", (event: LeafletMapContextMenuEvent = {}) => {
-        if (isLeafletOriginalEventPrevented(event)) {
+      localMap.on("contextmenu", (event: MapLibreMapContextMenuEvent) => {
+        if (isMapLibreOriginalEventPrevented(event)) {
           return;
         }
 
@@ -419,11 +442,12 @@ export function MapView({
         handleMapContextMenu(getFlatContextMenuContext(localMap!, event), mapContextMenuOptionsRef.current);
       });
 
-      queueMicrotask(() => {
+      localMap.once("load", () => {
         if (isCancelled || !localMap) {
           return;
         }
 
+        isFlatStyleReadyRef.current = true;
         renderFlatLayers();
         setIsReady(true);
         handleMapReady(localMap);
@@ -439,6 +463,8 @@ export function MapView({
       for (const layer of layersRef.current.values()) {
         layer.group?.clearLayers();
         layer.group = null;
+        layer.cleanup?.();
+        layer.cleanup = null;
       }
 
       if (localMap) {
@@ -447,12 +473,15 @@ export function MapView({
       }
 
       mapRef.current = null;
-      leafletRef.current = null;
+      flatMapAdapterRef.current = null;
+      flatLayerFactoryRef.current = null;
+      maplibreRef.current = null;
+      isFlatStyleReadyRef.current = false;
     };
   }, [flatRuntime, mapDisplay]);
 
   useEffect(() => {
-    if (mapDisplay !== "flat" || flatRuntime !== "leaflet") {
+    if (mapDisplay !== "flat" || flatRuntime !== "maplibre") {
       return;
     }
 
@@ -493,19 +522,24 @@ export function MapView({
 
   const registerFlatLayer = useCallback(
     (id: string, render: FlatLayerRender) => {
-      const leaflet = leafletRef.current;
-      const map = mapRef.current;
+      const flat = flatLayerFactoryRef.current;
+      const map = flatMapAdapterRef.current;
+      const maplibre = maplibreRef.current;
+      const maplibreMap = mapRef.current;
       const previous = layersRef.current.get(id);
-      const group = previous?.group ?? (leaflet && map ? leaflet.layerGroup().addTo(map) : null);
+      const group = previous?.group ?? (flat && maplibreMap ? flat.layerGroup().addTo(maplibreMap) : null);
 
       layersRef.current.set(id, {
+        cleanup: previous?.cleanup ?? null,
         id,
         group,
         render,
       });
 
-      if (leaflet && map && group) {
-        render({ interactionMode, isMeasuring, layer: group, leaflet, map });
+      if (flat && map && maplibre && maplibreMap && group && isFlatStyleReadyRef.current) {
+        previous?.cleanup?.();
+        group.clearLayers();
+        render({ flat, interactionMode, isMeasuring, layer: group, map, maplibre, maplibreMap });
       }
 
       return () => {
@@ -514,6 +548,7 @@ export function MapView({
         if (layer?.group) {
           layer.group.clearLayers();
         }
+        layer?.cleanup?.();
 
         if (!layer) {
           return;
@@ -525,6 +560,7 @@ export function MapView({
 
         layersRef.current.set(id, {
           ...layer,
+          cleanup: null,
           render: clearRender,
         });
 
@@ -736,8 +772,9 @@ export function MapView({
       },
       isMeasuring,
       interactionMode,
-      leaflet: leafletRef.current,
-      leafletMap: mapRef.current,
+      flatMap: flatMapAdapterRef.current,
+      maplibre: maplibreRef.current,
+      maplibreMap: mapRef.current,
       projectGlobeCoordinate,
       registerFlatLayer,
       registerInteractionMode,
@@ -790,7 +827,7 @@ export function MapView({
           }
         }}
       >
-        {mapDisplay === "flat" && flatRuntime === "leaflet" ? (
+        {mapDisplay === "flat" && flatRuntime === "maplibre" ? (
           <div ref={containerRef} className="mb-maps__canvas" />
         ) : null}
         {mapDisplay === "flat" && flatRuntime === "webgl" ? (
@@ -811,11 +848,13 @@ export function MapView({
         ) : null}
         {mapDisplay === "globe" ? (
           <>
-            <GlobeBase
-              basemapMode={globeBasemapMode}
-              mapStyle={mapStyle}
-              viewState={currentViewState as GlobeViewState}
-            />
+            <Suspense fallback={null}>
+              <GlobeBase
+                basemapMode={globeBasemapMode}
+                mapStyle={mapStyle}
+                viewState={currentViewState as GlobeViewState}
+              />
+            </Suspense>
             <svg
               ref={svgRef}
               className="mb-maps__globe"
@@ -892,12 +931,14 @@ export function MapView({
                 );
               }}
             >
-              <GlobeSvgOverlayBase
-                showVectorBasemap={
-                  globeBasemapMode !== "tiles" || currentViewState.zoom < GLOBE_TILE_MIN_ZOOM
-                }
-                viewState={currentViewState as GlobeViewState}
-              />
+              <Suspense fallback={null}>
+                <GlobeSvgOverlayBase
+                  showVectorBasemap={
+                    globeBasemapMode !== "tiles" || currentViewState.zoom < GLOBE_TILE_MIN_ZOOM
+                  }
+                  viewState={currentViewState as GlobeViewState}
+                />
+              </Suspense>
               <g className="mb-maps__globe-features">{mapChildren.layers}</g>
             </svg>
           </>
@@ -923,46 +964,27 @@ export function MapView({
   );
 }
 
-type LeafletMapContextMenuEvent = {
-  containerPoint?: { x: number; y: number };
-  latlng?: { lat: number; lng: number };
+type MapLibreMapContextMenuEvent = {
+  lngLat?: { lat: number; lng: number };
   originalEvent?: {
     defaultPrevented?: boolean;
     preventDefault?: () => void;
     stopPropagation?: () => void;
   };
+  point?: { x: number; y: number };
 };
 
 function getFlatContextMenuContext(
-  map: LeafletMap & {
-    containerPointToLatLng?: (point: [number, number]) => { lat: number; lng: number };
-    latLngToContainerPoint?: (latLng: { lat: number; lng: number }) => { x: number; y: number };
-  },
-  event: LeafletMapContextMenuEvent,
+  map: MapLibreMap,
+  event: MapLibreMapContextMenuEvent,
 ) {
-  const position = event.containerPoint ?? getFlatContextMenuPosition(map, event);
-  const latlng =
-    event.latlng ??
-    map.containerPointToLatLng?.([position.x, position.y]) ??
-    map.getCenter?.() ?? { lat: 25, lng: 12 };
+  const position = event.point ?? { x: 0, y: 0 };
+  const lngLat = event.lngLat ?? map.unproject([position.x, position.y]) ?? map.getCenter?.() ?? { lat: 25, lng: 12 };
 
   return {
-    coordinates: [latlng.lng, latlng.lat] as [number, number],
+    coordinates: [lngLat.lng, lngLat.lat] as [number, number],
     position,
   };
-}
-
-function getFlatContextMenuPosition(
-  map: LeafletMap & {
-    latLngToContainerPoint?: (latLng: { lat: number; lng: number }) => { x: number; y: number };
-  },
-  event: LeafletMapContextMenuEvent,
-) {
-  if (event.latlng && map.latLngToContainerPoint) {
-    return map.latLngToContainerPoint(event.latlng);
-  }
-
-  return { x: 0, y: 0 };
 }
 
 function getFeatureCoordinate(feature: unknown): [longitude: number, latitude: number] {
@@ -998,16 +1020,16 @@ function isCoordinate(value: unknown): value is [number, number] {
   );
 }
 
-function isLeafletOriginalEventPrevented(event: LeafletMapContextMenuEvent) {
+function isMapLibreOriginalEventPrevented(event: MapLibreMapContextMenuEvent) {
   return event.originalEvent?.defaultPrevented === true;
 }
 
-function suppressNativeContextMenu(event: LeafletMapContextMenuEvent) {
+function suppressNativeContextMenu(event: MapLibreMapContextMenuEvent) {
   event.originalEvent?.preventDefault?.();
   event.originalEvent?.stopPropagation?.();
 }
 
-function getLeafletViewState(map: LeafletMap): MapViewState {
+function getMapLibreViewState(map: MapLibreMap): MapViewState {
   const center = map.getCenter?.() ?? { lat: 25, lng: 12 };
 
   return {

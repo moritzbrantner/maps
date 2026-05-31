@@ -14,5 +14,5 @@ export default defineConfig({
   },
   format: ["esm"],
   outDir: "dist",
-  splitting: false,
+  splitting: true,
 });

@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { LayerGroup, Map as LeafletMap } from "leaflet";
+import type { LayerGroup, Map as FlatMap } from "flat";
 
 import {
   createGlobeGraticuleLines,
@@ -24,7 +24,7 @@ import {
   joinClassNames,
   projectGlobeCoordinate,
   resolveTileLayerOptions,
-  toLeafletLatLng,
+  toLatLng,
   type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
@@ -52,7 +52,7 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
-import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
+import { useFlatBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 
 export type MapFlow<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
@@ -113,7 +113,7 @@ export type FlowMapProps<TProperties extends Record<string, unknown> = Record<st
   minWidth?: number;
   onFeatureSelect?: (feature: FlowMapFeature<TProperties> | null) => void;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
-  onMapReady?: (map: LeafletMap) => void;
+  onMapReady?: (map: import("maplibre-gl").Map) => void;
   selectedFlowOpacity?: number;
   showAttributionControl?: boolean;
   showDirection?: boolean;
@@ -242,208 +242,10 @@ export function createFlowMapFeatures<TProperties extends Record<string, unknown
 }
 
 export function FlatFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
-  className,
-  directionMarker = "arrow",
-  fitBoundsPadding = 56,
-  fitToData = true,
-  flowColor = "#0f766e",
-  flowShape = "straight",
-  flows = [],
-  getFlowColor,
-  getWeight,
-  initialViewState,
-  mapLabel = "Interactive flow map",
-  mapStyle = defaultRasterMapStyle,
-  measurementDistanceFormat,
-  measurementDraftLineColor,
-  measurementLineColor,
-  measurementMode,
-  measurements,
-  maxWeight,
-  maxWidth,
-  minWidth,
-  onFeatureSelect,
-  onMapReady,
-  onMeasurementCreate,
-  onMeasurementDraftChange,
-  onMeasurementSelect,
-  showAttributionControl = true,
-  showDirection = false,
-  showEndpoints = true,
-  style,
-  weightMetric,
+  mapDisplay: _mapDisplay,
+  ...props
 }: FlowMapProps<TProperties>) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
-  const overlayRef = useRef<LayerGroup | null>(null);
-  const measurementLayerRef = useRef<LayerGroup | null>(null);
-  const leafletRef = useRef<typeof import("leaflet") | null>(null);
-  const [isReady, setIsReady] = useState(false);
-  const deferredFlows = useDeferredValue(flows);
-  const features = useMemo(
-    () =>
-      createFlowMapFeatures(deferredFlows, {
-        getWeight,
-        maxWeight,
-        maxWidth,
-        minWidth,
-        weightMetric,
-      }),
-    [deferredFlows, getWeight, maxWeight, maxWidth, minWidth, weightMetric],
-  );
-  const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
-    layerRef: measurementLayerRef,
-    leafletRef,
-    mapRef,
-    measurementDistanceFormat,
-    measurementDraftLineColor,
-    measurementLineColor,
-    measurementMode,
-    measurements,
-    onMeasurementCreate,
-    onMeasurementDraftChange,
-    onMeasurementSelect,
-  });
-
-  const syncSource = useEffectEvent(() => {
-    const map = mapRef.current;
-    const overlay = overlayRef.current;
-    const leaflet = leafletRef.current;
-
-    if (!map || !overlay || !leaflet) {
-      return;
-    }
-
-    renderFlowOverlay({
-      features,
-      directionMarker,
-      flowColor,
-      flowShape,
-      getFlowColor,
-      handleClick,
-      isMeasuring,
-      leaflet,
-      map,
-      overlay,
-      showDirection,
-      showEndpoints,
-    });
-  });
-
-  const handleClick = useEffectEvent((feature: FlowMapFeature<TProperties> | null) => {
-    startTransition(() => {
-      onFeatureSelect?.(feature);
-    });
-  });
-
-  const handleMapReady = useEffectEvent((map: LeafletMap) => {
-    setIsReady(true);
-    startTransition(() => {
-      onMapReady?.(map);
-    });
-  });
-
-  useEffect(() => {
-    let isCancelled = false;
-    let localMap: LeafletMap | null = null;
-
-    async function initializeMap() {
-      if (!containerRef.current) {
-        return;
-      }
-
-      const leaflet = await import("leaflet");
-
-      if (isCancelled || !containerRef.current) {
-        return;
-      }
-
-      leafletRef.current = leaflet;
-      localMap = leaflet.map(containerRef.current, {
-        attributionControl: showAttributionControl,
-        center: toLeafletLatLng(initialViewState?.center ?? [12, 25]),
-        zoom: initialViewState?.zoom ?? 1.6,
-        zoomControl: true,
-      });
-      mapRef.current = localMap;
-
-      const tileLayerOptions = resolveTileLayerOptions(mapStyle);
-
-      if (tileLayerOptions) {
-        leaflet.tileLayer(tileLayerOptions.url, tileLayerOptions.options).addTo(localMap);
-      }
-
-      overlayRef.current = leaflet.layerGroup().addTo(localMap);
-      measurementLayerRef.current = leaflet.layerGroup().addTo(localMap);
-
-      queueMicrotask(() => {
-        if (isCancelled || !localMap) {
-          return;
-        }
-
-        syncSource();
-        handleMapReady(localMap);
-      });
-    }
-
-    initializeMap();
-
-    return () => {
-      isCancelled = true;
-      setIsReady(false);
-
-      if (localMap) {
-        localMap.remove();
-      }
-
-      overlayRef.current = null;
-      measurementLayerRef.current = null;
-      mapRef.current = null;
-      leafletRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map) {
-      return;
-    }
-
-    if (fitToData && !initialViewState) {
-      const dataBounds = getBoundsFromFlows(deferredFlows);
-
-      if (dataBounds) {
-        map.fitBounds(
-          [
-            [dataBounds[1], dataBounds[0]],
-            [dataBounds[3], dataBounds[2]],
-          ],
-          {
-            animate: false,
-            padding: [fitBoundsPadding, fitBoundsPadding],
-          },
-        );
-      }
-    }
-
-    syncSource();
-  }, [deferredFlows, features, fitBoundsPadding, fitToData, initialViewState, isMeasuring, syncSource]);
-
-  return (
-    <div
-      aria-label={mapLabel}
-      className={joinClassNames("mb-maps", isMeasuring && "mb-maps--measuring", className)}
-      data-map-ready={isReady ? "true" : "false"}
-      style={{
-        minHeight: 480,
-        width: "100%",
-        ...style,
-      }}
-    >
-      <div ref={containerRef} className="mb-maps__canvas" />
-    </div>
-  );
+  return <FlowMap {...props} mapDisplay="flat" />;
 }
 
 export function GlobeFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
@@ -678,7 +480,7 @@ function renderFlowOverlay<TProperties extends Record<string, unknown>>({
   getFlowColor,
   handleClick,
   isMeasuring,
-  leaflet,
+  flat,
   map,
   overlay,
   showDirection,
@@ -691,8 +493,8 @@ function renderFlowOverlay<TProperties extends Record<string, unknown>>({
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
   handleClick: (feature: FlowMapFeature<TProperties> | null) => void;
   isMeasuring: boolean;
-  leaflet: typeof import("leaflet");
-  map: LeafletMap;
+  flat: typeof import("flat");
+  map: FlatMap;
   overlay: LayerGroup;
   showDirection: boolean;
   showEndpoints: boolean;
@@ -702,7 +504,7 @@ function renderFlowOverlay<TProperties extends Record<string, unknown>>({
   for (const feature of features) {
     const color = getFlowColor?.(feature) ?? flowColor;
     const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
-    const line = leaflet.polyline(flowCoordinates.map(toLeafletLatLng), {
+    const line = flat.polyline(flowCoordinates.map(toLatLng), {
       className: "mb-maps__flow-line",
       color,
       interactive: !isMeasuring,
@@ -728,7 +530,7 @@ function renderFlowOverlay<TProperties extends Record<string, unknown>>({
         color,
         feature,
         flowCoordinates,
-        leaflet,
+        flat,
         map,
         opacity: 0.72,
         overlay,
@@ -736,8 +538,8 @@ function renderFlowOverlay<TProperties extends Record<string, unknown>>({
     }
 
     if (showEndpoints) {
-      leaflet
-        .circleMarker(toLeafletLatLng(feature.flow.from), {
+      flat
+        .circleMarker(toLatLng(feature.flow.from), {
           className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--from",
           color: "#ffffff",
           fillColor: color,
@@ -748,8 +550,8 @@ function renderFlowOverlay<TProperties extends Record<string, unknown>>({
           weight: 1.5,
         })
         .addTo(overlay);
-      leaflet
-        .circleMarker(toLeafletLatLng(feature.flow.to), {
+      flat
+        .circleMarker(toLatLng(feature.flow.to), {
           className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--to",
           color: "#ffffff",
           fillColor: color,

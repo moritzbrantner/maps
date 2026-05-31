@@ -1,8 +1,12 @@
 "use client";
 
-import type { TileLayerOptions } from "leaflet";
-
 import { getBoundsFromPoints, type MapPoint } from "./aggregation";
+import {
+  type MapLibreMapStyle,
+  toLatLng as toFlatLatLng,
+  toLngLat,
+  toMapLibreBounds,
+} from "./maplibre-compat";
 import type { MapCoordinate } from "./measurement";
 
 export type MapDisplayMode = "flat" | "globe";
@@ -44,13 +48,15 @@ export type MapSurfaceController = {
   setViewState: (viewState: MapViewState, reason?: MapViewStateChangeReason) => void;
 };
 
-export type RasterMapStyle = {
+export type { MapLibreMapStyle };
+export type LegacyRasterMapStyle = {
   attribution?: string;
   maxZoom?: number;
   minZoom?: number;
   tileSize?: number;
   tiles?: string | readonly string[] | false;
 } & Record<string, unknown>;
+export type RasterMapStyle = MapLibreMapStyle | LegacyRasterMapStyle;
 
 export type GlobeViewState = {
   center: [longitude: number, latitude: number];
@@ -71,11 +77,26 @@ export const GLOBE_MIN_ZOOM = 0.8;
 const GLOBE_BASE_ZOOM = 1.35;
 const GLOBE_BASE_RADIUS_FACTOR = 0.42;
 const THREE_SPHERE_TEXTURE_FRONT_OFFSET = Math.PI / 2;
-export const defaultRasterMapStyle: RasterMapStyle = {
-  attribution: "\u00a9 OpenStreetMap contributors",
-  tiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-  tileSize: 256,
-};
+export const defaultMapLibreStyle = {
+  sources: {
+    osm: {
+      attribution: "\u00a9 OpenStreetMap contributors",
+      tileSize: 256,
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      type: "raster",
+    },
+  },
+  layers: [
+    {
+      id: "osm-raster",
+      source: "osm",
+      type: "raster",
+    },
+  ],
+  version: 8,
+} satisfies Exclude<MapLibreMapStyle, string>;
+
+export const defaultRasterMapStyle: RasterMapStyle = defaultMapLibreStyle;
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -267,40 +288,89 @@ export function createVisibleSvgPath(points: readonly GlobeProjectionResult[]) {
   return path;
 }
 
-export function resolveTileLayerOptions(mapStyle: string | RasterMapStyle): {
-  options: TileLayerOptions;
+export function toLatLng([longitude, latitude]: [number, number]) {
+  return toFlatLatLng([longitude, latitude]);
+}
+
+export { toLngLat, toMapLibreBounds };
+
+export function resolveTileLayerOptions(mapStyle: RasterMapStyle): {
+  options: {
+    attribution?: string;
+    maxZoom?: number;
+    minZoom?: number;
+    tileSize?: number;
+  };
   url: string;
 } | null {
-  if (typeof mapStyle === "string") {
+  const resolvedStyle = resolveMapLibreStyle(mapStyle);
+
+  if (typeof resolvedStyle === "string") {
+    return { options: {}, url: resolvedStyle };
+  }
+
+  const rasterSource = Object.values(resolvedStyle.sources ?? {}).find(
+    (source) => source && typeof source === "object" && "type" in source && source.type === "raster",
+  ) as
+    | {
+        attribution?: string;
+        maxzoom?: number;
+        minzoom?: number;
+        tileSize?: number;
+        tiles?: string[];
+      }
+    | undefined;
+  const url = rasterSource?.tiles?.[0];
+
+  return url
+    ? {
+        options: {
+          attribution: rasterSource.attribution,
+          maxZoom: rasterSource.maxzoom,
+          minZoom: rasterSource.minzoom,
+          tileSize: rasterSource.tileSize,
+        },
+        url,
+      }
+    : null;
+}
+
+export function resolveMapLibreStyle(mapStyle: RasterMapStyle): MapLibreMapStyle {
+  if (typeof mapStyle === "string" || "version" in mapStyle) {
+    return mapStyle as MapLibreMapStyle;
+  }
+
+  const tiles = mapStyle.tiles ?? "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const url = Array.isArray(tiles) ? tiles[0] : tiles;
+
+  if (tiles === false || !url) {
     return {
-      options: {
-        attribution: defaultRasterMapStyle.attribution,
-      },
-      url: mapStyle,
+      layers: [],
+      sources: {},
+      version: 8,
     };
   }
 
-  const tiles = mapStyle.tiles ?? defaultRasterMapStyle.tiles;
-
-  if (tiles === false) {
-    return null;
-  }
-
-  const url = Array.isArray(tiles) ? tiles[0] : tiles;
-
   return {
-    options: {
-      attribution: mapStyle.attribution ?? defaultRasterMapStyle.attribution,
-      maxZoom: typeof mapStyle.maxZoom === "number" ? mapStyle.maxZoom : undefined,
-      minZoom: typeof mapStyle.minZoom === "number" ? mapStyle.minZoom : undefined,
-      tileSize: typeof mapStyle.tileSize === "number" ? mapStyle.tileSize : undefined,
+    layers: [
+      {
+        id: "legacy-raster",
+        source: "legacy-raster",
+        type: "raster",
+      },
+    ],
+    sources: {
+      "legacy-raster": {
+        attribution: mapStyle.attribution,
+        maxzoom: mapStyle.maxZoom,
+        minzoom: mapStyle.minZoom,
+        tileSize: mapStyle.tileSize,
+        tiles: [url],
+        type: "raster",
+      },
     },
-    url: url ?? String(defaultRasterMapStyle.tiles),
+    version: 8,
   };
-}
-
-export function toLeafletLatLng([longitude, latitude]: [number, number]) {
-  return [latitude, longitude] as [number, number];
 }
 
 export function joinClassNames(...values: Array<string | undefined | false>) {

@@ -10,7 +10,7 @@ import {
   type PointAggregationIndexOptions,
   type VisibleAggregationSummary,
 } from "./aggregation";
-import { escapeHtml, GLOBE_MAX_ZOOM, joinClassNames, toLeafletLatLng } from "./map-display";
+import { escapeHtml, GLOBE_MAX_ZOOM, joinClassNames, toLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 
@@ -64,7 +64,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
       layer.clearLayers();
 
       const bounds = map.getBounds();
@@ -80,7 +80,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         const hovered = surface.isFeatureHovered(feature, getFeatureId);
 
         if (feature.kind === "cluster") {
-          const marker = leaflet.circleMarker(toLeafletLatLng(feature.coordinates), {
+          const marker = flat.circleMarker(toLatLng(feature.coordinates), {
             className: joinClassNames(
               "mb-maps__cluster-marker",
               hovered && "mb-maps__feature--hovered",
@@ -97,9 +97,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
           if (!isMeasuring) {
             marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-              map.setView(toLeafletLatLng(feature.coordinates), feature.expansionZoom, {
-                animate: false,
-              });
+              map.setView(toLatLng(feature.coordinates), feature.expansionZoom);
               surface.setViewState(
                 {
                   center: feature.coordinates,
@@ -112,7 +110,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 renderFeaturePopup,
               });
             });
-            marker.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+            marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
               suppressNativeContextMenu(event);
               surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
                 coordinates: feature.coordinates,
@@ -136,9 +134,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           }
 
           marker.addTo(layer);
-          leaflet
-            .marker(toLeafletLatLng(feature.coordinates), {
-              icon: leaflet.divIcon({
+          flat
+            .marker(toLatLng(feature.coordinates), {
+              icon: flat.divIcon({
                 className: "mb-maps__cluster-count",
                 html: escapeHtml(feature.pointCountAbbreviated),
                 iconAnchor: [18, 18],
@@ -150,7 +148,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           continue;
         }
 
-        const marker = leaflet.circleMarker(toLeafletLatLng(feature.coordinates), {
+        const marker = flat.circleMarker(toLatLng(feature.coordinates), {
           className: joinClassNames(
             "mb-maps__point-marker",
             hovered && "mb-maps__feature--hovered",
@@ -172,7 +170,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
               renderFeaturePopup,
             });
           });
-          marker.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+          marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
             suppressNativeContextMenu(event);
             surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
               coordinates: feature.coordinates,
@@ -386,17 +384,17 @@ function getFlatFeaturePosition(
     return event.containerPoint;
   }
 
-  return map.latLngToContainerPoint?.(toLeafletLatLng(coordinates)) ?? { x: 0, y: 0 };
+  return map.latLngToContainerPoint?.(toLatLng(coordinates)) ?? { x: 0, y: 0 };
 }
 
-type LeafletFeaturePointerEvent = {
+type FlatFeaturePointerEvent = {
   containerPoint?: { x: number; y: number };
   originalEvent?: {
     preventDefault?: () => void;
   };
 };
 
-function suppressNativeContextMenu(event: LeafletFeaturePointerEvent) {
+function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
   event.originalEvent?.preventDefault?.();
 }
 

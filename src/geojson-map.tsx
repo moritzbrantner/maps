@@ -1,6 +1,6 @@
 "use client";
 
-import type { Map as LeafletMap } from "leaflet";
+import type { Map as MapLibreMap } from "maplibre-gl";
 
 import {
   getBoundsFromGeoJson,
@@ -38,7 +38,7 @@ export type GeoJsonMapProps<
     mapStyle?: string | RasterMapStyle;
     onMapControllerReady?: (controller: MapSurfaceController) => void;
     onMapContextMenu?: (context: MapContextMenuContext) => void;
-    onMapReady?: (map: LeafletMap) => void;
+    onMapReady?: (map: MapLibreMap) => void;
     renderMapContextMenu?: (context: MapContextMenuContext) => React.ReactNode;
     showAttributionControl?: boolean;
     style?: React.CSSProperties;

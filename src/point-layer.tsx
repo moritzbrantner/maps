@@ -7,7 +7,7 @@ import {
   type MapPoint,
   type MapPointFilter,
 } from "./aggregation";
-import { joinClassNames, toLeafletLatLng, type MapViewportProps } from "./map-display";
+import { joinClassNames, toLatLng, type MapViewportProps } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 
@@ -181,14 +181,14 @@ function PointFeatureLayer<
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
       layer.clearLayers();
 
       for (const feature of features) {
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
         const hovered = surface.isFeatureHovered(feature, getFeatureId);
         const featureDraggable = isFeatureDraggable(feature, draggable);
-        const marker = leaflet.circleMarker(toLeafletLatLng(feature.coordinates), {
+        const marker = flat.circleMarker(toLatLng(feature.coordinates), {
           bubblingMouseEvents: false,
           className: joinClassNames(
             "mb-maps__point-marker",
@@ -212,7 +212,7 @@ function PointFeatureLayer<
               renderFeaturePopup,
             });
           });
-          marker.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+          marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
             suppressNativeContextMenu(event);
             surface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
               coordinates: feature.coordinates,
@@ -501,7 +501,7 @@ function getFlatFeaturePosition(
     return event.containerPoint;
   }
 
-  return map.latLngToContainerPoint?.(toLeafletLatLng(coordinates)) ?? { x: 0, y: 0 };
+  return map.latLngToContainerPoint?.(toLatLng(coordinates)) ?? { x: 0, y: 0 };
 }
 
 function bindFlatPointDrag<TFeature>(
@@ -515,7 +515,7 @@ function bindFlatPointDrag<TFeature>(
 ) {
   let lastCoordinates: [number, number] | null = null;
 
-  const handleMove = (event: LeafletDragEvent = {}) => {
+  const handleMove = (event: FlatDragEvent = {}) => {
     const coordinates = getFlatDragCoordinates(options.map, event);
 
     if (!coordinates) {
@@ -523,11 +523,11 @@ function bindFlatPointDrag<TFeature>(
     }
 
     lastCoordinates = coordinates;
-    marker.setLatLng?.(toLeafletLatLng(coordinates));
+    marker.setLatLng?.(toLatLng(coordinates));
     options.onFeatureDrag?.(options.feature, coordinates);
   };
 
-  const handleUp = (event: LeafletDragEvent = {}) => {
+  const handleUp = (event: FlatDragEvent = {}) => {
     const coordinates = getFlatDragCoordinates(options.map, event) ?? lastCoordinates;
 
     options.map.off?.("mousemove", handleMove);
@@ -536,14 +536,14 @@ function bindFlatPointDrag<TFeature>(
     options.map.getContainer?.().style && (options.map.getContainer().style.cursor = "");
 
     if (coordinates) {
-      marker.setLatLng?.(toLeafletLatLng(coordinates));
+      marker.setLatLng?.(toLatLng(coordinates));
       options.onFeatureDragEnd?.(options.feature, coordinates);
     }
 
     lastCoordinates = null;
   };
 
-  marker.on("mousedown", (event: LeafletDragEvent = {}) => {
+  marker.on("mousedown", (event: FlatDragEvent = {}) => {
     suppressNativeContextMenu(event);
     lastCoordinates = getFlatDragCoordinates(options.map, event);
     marker.bringToFront?.();
@@ -554,7 +554,7 @@ function bindFlatPointDrag<TFeature>(
   });
 }
 
-function getFlatDragCoordinates(map: FlatDragMap, event: LeafletDragEvent) {
+function getFlatDragCoordinates(map: FlatDragMap, event: FlatDragEvent) {
   if (event.latlng) {
     return [event.latlng.lng, event.latlng.lat] as [number, number];
   }
@@ -577,7 +577,7 @@ function isFeatureDraggable<TFeature>(
 
 type FlatPointMarker = {
   bringToFront?: () => void;
-  on: (event: string, handler: (event?: LeafletDragEvent) => void) => FlatPointMarker;
+  on: (event: string, handler: (event?: FlatDragEvent) => void) => FlatPointMarker;
   setLatLng?: (latLng: [number, number]) => void;
 };
 
@@ -588,15 +588,15 @@ type FlatDragMap = {
     enable?: () => void;
   };
   getContainer?: () => { style: { cursor: string } };
-  off?: (event: string, handler: (event?: LeafletDragEvent) => void) => void;
-  on?: (event: string, handler: (event?: LeafletDragEvent) => void) => void;
+  off?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
+  on?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
 };
 
-type LeafletDragEvent = LeafletFeaturePointerEvent & {
+type FlatDragEvent = FlatFeaturePointerEvent & {
   latlng?: { lat: number; lng: number };
 };
 
-type LeafletFeaturePointerEvent = {
+type FlatFeaturePointerEvent = {
   containerPoint?: { x: number; y: number };
   originalEvent?: {
     preventDefault?: () => void;
@@ -604,7 +604,7 @@ type LeafletFeaturePointerEvent = {
   };
 };
 
-function suppressNativeContextMenu(event: LeafletFeaturePointerEvent) {
+function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
   event.originalEvent?.preventDefault?.();
   event.originalEvent?.stopPropagation?.();
 }

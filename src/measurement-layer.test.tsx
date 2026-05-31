@@ -12,7 +12,7 @@ import {
   type TemporalMapTrack,
 } from ".";
 
-const leafletMock = vi.hoisted(() => {
+const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
     bounds?: [[number, number], [number, number]];
@@ -228,10 +228,10 @@ const leafletMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("leaflet", () => leafletMock);
+vi.mock("flat", () => flatMock);
 
 afterEach(() => {
-  leafletMock.reset();
+  flatMock.reset();
 });
 
 describe("@moritzbrantner/maps bee-line measurement layer", () => {
@@ -306,7 +306,7 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
 
     await waitForReadyMap("Interactive point map");
 
-    const measurementLayer = leafletMock.getLayerGroups()[1];
+    const measurementLayer = flatMock.getLayerGroups()[1];
     const line = measurementLayer?.layers.find(
       (layer) => layer.options?.className === "mb-maps__measurement-line",
     );
@@ -359,7 +359,7 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
 
     await waitForReadyMap("Interactive point map");
 
-    const pointMarker = leafletMock
+    const pointMarker = flatMock
       .getLayerGroups()[0]
       ?.layers.find((layer) => layer.options?.className === "mb-maps__point-marker");
 
@@ -386,10 +386,10 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
       />,
     );
     await waitForReadyMap("Interactive map");
-    expect(leafletMock.getLayerGroups()).toHaveLength(2);
-    expect(leafletMock.getLayerGroups()[0]?.layers.length).toBeGreaterThan(0);
+    expect(flatMock.getLayerGroups()).toHaveLength(2);
+    expect(flatMock.getLayerGroups()[0]?.layers.length).toBeGreaterThan(0);
     clustered.unmount();
-    leafletMock.reset();
+    flatMock.reset();
 
     const flow = render(
       <FlowMap
@@ -404,10 +404,10 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
       />,
     );
     await waitForReadyMap("Interactive flow map");
-    expect(leafletMock.getLayerGroups()).toHaveLength(2);
-    expect(leafletMock.getLayerGroups()[0]?.layers.length).toBeGreaterThan(0);
+    expect(flatMock.getLayerGroups()).toHaveLength(2);
+    expect(flatMock.getLayerGroups()[0]?.layers.length).toBeGreaterThan(0);
     flow.unmount();
-    leafletMock.reset();
+    flatMock.reset();
 
     render(
       <HeatMap
@@ -422,8 +422,8 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
       />,
     );
     await waitForReadyMap("Interactive heat map");
-    expect(leafletMock.getLayerGroups()).toHaveLength(2);
-    expect(leafletMock.getLayerGroups()[0]?.layers.length).toBeGreaterThan(0);
+    expect(flatMock.getLayerGroups()).toHaveLength(2);
+    expect(flatMock.getLayerGroups()[0]?.layers.length).toBeGreaterThan(0);
   });
 
   test("temporal wrappers pass measurement props through to their flat maps", async () => {
@@ -459,7 +459,7 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
 
     expect(clusteredCreate).toHaveBeenCalledTimes(1);
     clustered.unmount();
-    leafletMock.reset();
+    flatMock.reset();
 
     render(
       <TemporalHeatMap
@@ -485,5 +485,5 @@ async function waitForReadyMap(label: string) {
     expect(screen.getByLabelText(label).getAttribute("data-map-ready")).toBe("true");
   });
 
-  return leafletMock.getMaps().at(-1)!;
+  return flatMock.getMaps().at(-1)!;
 }

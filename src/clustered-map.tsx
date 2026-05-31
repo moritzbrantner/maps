@@ -10,7 +10,7 @@ import {
   useState,
   type MutableRefObject,
 } from "react";
-import type { LayerGroup, Map as LeafletMap, PathOptions } from "leaflet";
+import type { LayerGroup, Map as FlatMap, PathOptions } from "flat";
 
 import {
   createPointAggregationIndex,
@@ -54,7 +54,7 @@ import {
   joinClassNames,
   projectGlobeCoordinate,
   resolveTileLayerOptions,
-  toLeafletLatLng,
+  toLatLng,
   type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
@@ -70,7 +70,7 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
-import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
+import { useFlatBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
@@ -95,7 +95,7 @@ export type ClusteredMapProps<TProperties extends Record<string, unknown> = Reco
   minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
   onFeatureSelect?: (feature: AggregatedMapFeature<TProperties> | null) => void;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
-  onMapReady?: (map: LeafletMap) => void;
+  onMapReady?: (map: import("maplibre-gl").Map) => void;
   onViewportAggregationChange?: (summary: VisibleAggregationSummary) => void;
   points?: readonly MapPoint<TProperties>[];
   showAttributionControl?: boolean;
@@ -221,226 +221,10 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
 }
 
 export function FlatClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
-  className,
-  clusterRadius,
-  filterPoint,
-  fitBoundsPadding = 56,
-  fitToData = true,
-  initialViewState,
   mapDisplay: _mapDisplay,
-  mapLabel = "Interactive map",
-  mapStyle = defaultRasterMapStyle,
-  measurementDistanceFormat,
-  measurementDraftLineColor,
-  measurementLineColor,
-  measurementMode,
-  measurements,
-  maxZoom,
-  minZoom,
-  onFeatureSelect,
-  onMapReady,
-  onMeasurementCreate,
-  onMeasurementDraftChange,
-  onMeasurementSelect,
-  onViewportAggregationChange,
-  points = [],
-  showAttributionControl = true,
-  style,
+  ...props
 }: ClusteredMapProps<TProperties>) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
-  const overlayRef = useRef<LayerGroup | null>(null);
-  const measurementLayerRef = useRef<LayerGroup | null>(null);
-  const leafletRef = useRef<typeof import("leaflet") | null>(null);
-  const lastViewportSummaryKeyRef = useRef<string | null>(null);
-  const clusterAreaCacheRef = useRef<ClusterAreaFeatureCache | null>(null);
-  const [isReady, setIsReady] = useState(false);
-  const deferredPoints = useDeferredValue(points);
-  const index = useMemo(
-    () =>
-      createPointAggregationIndex(deferredPoints, {
-        filterPoint,
-        maxZoom,
-        minZoom,
-        radius: clusterRadius,
-      }),
-    [clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
-  );
-
-  useEffect(() => {
-    clusterAreaCacheRef.current = null;
-  }, [index]);
-  const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
-    layerRef: measurementLayerRef,
-    leafletRef,
-    mapRef,
-    measurementDistanceFormat,
-    measurementDraftLineColor,
-    measurementLineColor,
-    measurementMode,
-    measurements,
-    onMeasurementCreate,
-    onMeasurementDraftChange,
-    onMeasurementSelect,
-  });
-
-  const syncSource = useEffectEvent(() => {
-    const map = mapRef.current;
-    const overlay = overlayRef.current;
-    const leaflet = leafletRef.current;
-
-    if (!map || !overlay || !leaflet) {
-      return;
-    }
-
-    const bounds = map.getBounds();
-    const query: ViewportAggregationQuery = {
-      bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
-      zoom: map.getZoom(),
-    };
-    const aggregation = index.getViewportAggregation(query);
-
-    renderAggregationOverlay({
-      clusterAreaCache: clusterAreaCacheRef,
-      features: aggregation.features,
-      handleClick,
-      index,
-      isMeasuring,
-      leaflet,
-      map,
-      overlay,
-    });
-
-    const nextSummaryKey = serializeVisibleAggregationSummary(aggregation.summary);
-
-    if (lastViewportSummaryKeyRef.current === nextSummaryKey) {
-      return;
-    }
-
-    lastViewportSummaryKeyRef.current = nextSummaryKey;
-    startTransition(() => {
-      onViewportAggregationChange?.(aggregation.summary);
-    });
-  });
-
-  const handleClick = useEffectEvent((feature: AggregatedMapFeature<TProperties> | null) => {
-    startTransition(() => {
-      onFeatureSelect?.(feature);
-    });
-  });
-
-  const handleMapReady = useEffectEvent((map: LeafletMap) => {
-    setIsReady(true);
-    startTransition(() => {
-      onMapReady?.(map);
-    });
-  });
-
-  useEffect(() => {
-    let isCancelled = false;
-    let localMap: LeafletMap | null = null;
-
-    async function initializeMap() {
-      if (!containerRef.current) {
-        return;
-      }
-
-      const leaflet = await import("leaflet");
-
-      if (isCancelled || !containerRef.current) {
-        return;
-      }
-
-      leafletRef.current = leaflet;
-      localMap = leaflet.map(containerRef.current, {
-        attributionControl: showAttributionControl,
-        center: toLeafletLatLng(initialViewState?.center ?? [12, 25]),
-        zoom: initialViewState?.zoom ?? 1.6,
-        zoomControl: true,
-      });
-      mapRef.current = localMap;
-
-      const tileLayerOptions = resolveTileLayerOptions(mapStyle);
-
-      if (tileLayerOptions) {
-        leaflet.tileLayer(tileLayerOptions.url, tileLayerOptions.options).addTo(localMap);
-      }
-
-      overlayRef.current = leaflet.layerGroup().addTo(localMap);
-      measurementLayerRef.current = leaflet.layerGroup().addTo(localMap);
-      localMap.on("moveend", syncSource);
-
-      queueMicrotask(() => {
-        if (isCancelled || !localMap) {
-          return;
-        }
-
-        syncSource();
-        handleMapReady(localMap);
-      });
-    }
-
-    initializeMap();
-
-    return () => {
-      isCancelled = true;
-      lastViewportSummaryKeyRef.current = null;
-      clusterAreaCacheRef.current = null;
-      setIsReady(false);
-
-      if (localMap) {
-        localMap.off("moveend", syncSource);
-        localMap.remove();
-      }
-
-      overlayRef.current = null;
-      measurementLayerRef.current = null;
-      mapRef.current = null;
-      leafletRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map) {
-      return;
-    }
-
-    if (fitToData && !initialViewState) {
-      const dataBounds = getBoundsFromPoints(deferredPoints);
-
-      if (dataBounds) {
-        map.fitBounds(
-          [
-            [dataBounds[1], dataBounds[0]],
-            [dataBounds[3], dataBounds[2]],
-          ],
-          {
-            animate: false,
-            padding: [fitBoundsPadding, fitBoundsPadding],
-          },
-        );
-      }
-    }
-
-    syncSource();
-  }, [deferredPoints, fitBoundsPadding, fitToData, index, initialViewState, isMeasuring, syncSource]);
-
-  return (
-    <div
-      aria-label={mapLabel}
-      data-map-ready={isReady ? "true" : "false"}
-      className={joinClassNames("mb-maps", isMeasuring && "mb-maps--measuring", className)}
-      style={{
-        minHeight: 480,
-        width: "100%",
-        ...style,
-      }}
-    >
-      <div ref={containerRef} className="mb-maps__canvas" />
-    </div>
-  );
+  return <ClusteredMap {...props} mapDisplay="flat" />;
 }
 
 export function GlobeClusteredMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
@@ -696,7 +480,7 @@ function renderAggregationOverlay<TProperties>({
   handleClick,
   index,
   isMeasuring,
-  leaflet,
+  flat,
   map,
   overlay,
 }: {
@@ -705,8 +489,8 @@ function renderAggregationOverlay<TProperties>({
   handleClick: (feature: AggregatedMapFeature<TProperties> | null) => void;
   index: PointAggregationIndex<TProperties>;
   isMeasuring: boolean;
-  leaflet: typeof import("leaflet");
-  map: LeafletMap;
+  flat: typeof import("flat");
+  map: FlatMap;
   overlay: LayerGroup;
 }) {
   overlay.clearLayers();
@@ -714,18 +498,18 @@ function renderAggregationOverlay<TProperties>({
   const areaFeatures = createClusterAreaFeatures(features, index, map, clusterAreaCache);
 
   for (const areaFeature of areaFeatures.areaFeatures) {
-    addClusterAreaLayer(areaFeature, isMeasuring, leaflet, overlay);
+    addClusterAreaLayer(areaFeature, isMeasuring, flat, overlay);
   }
 
   for (const feature of features) {
     const clusterColor = areaFeatures.colorsByAreaId.get(getClusterAreaId(feature)) ?? null;
 
     if (feature.kind === "cluster") {
-      addClusterMarker(feature, clusterColor, isMeasuring, leaflet, map, overlay, handleClick);
+      addClusterMarker(feature, clusterColor, isMeasuring, flat, map, overlay, handleClick);
       continue;
     }
 
-    addPointMarker(feature, clusterColor, isMeasuring, leaflet, map, overlay, handleClick);
+    addPointMarker(feature, clusterColor, isMeasuring, flat, map, overlay, handleClick);
   }
 }
 
@@ -733,12 +517,12 @@ function addClusterMarker<TProperties>(
   feature: Extract<AggregatedMapFeature<TProperties>, { kind: "cluster" }>,
   clusterColor: string | null,
   isMeasuring: boolean,
-  leaflet: typeof import("leaflet"),
-  map: LeafletMap,
+  flat: typeof import("flat"),
+  map: FlatMap,
   overlay: LayerGroup,
   handleClick: (feature: AggregatedMapFeature<TProperties>) => void,
 ) {
-  const marker = leaflet.circleMarker(toLeafletLatLng(feature.coordinates), {
+  const marker = flat.circleMarker(toLatLng(feature.coordinates), {
     className: "mb-maps__cluster-marker",
     color: "#ffffff",
     fillColor: clusterColor ?? getClusterColor(feature.pointCount),
@@ -751,9 +535,7 @@ function addClusterMarker<TProperties>(
 
   if (!isMeasuring) {
     marker.on("click", () => {
-      map.setView(toLeafletLatLng(feature.coordinates), feature.expansionZoom, {
-        animate: false,
-      });
+      map.setView(toLatLng(feature.coordinates), feature.expansionZoom);
       handleClick(feature);
     });
     marker.on("mouseover", () => {
@@ -765,9 +547,9 @@ function addClusterMarker<TProperties>(
   }
   marker.addTo(overlay);
 
-  leaflet
-    .marker(toLeafletLatLng(feature.coordinates), {
-      icon: leaflet.divIcon({
+  flat
+    .marker(toLatLng(feature.coordinates), {
+      icon: flat.divIcon({
         className: "mb-maps__cluster-count",
         html: escapeHtml(feature.pointCountAbbreviated),
         iconAnchor: [18, 18],
@@ -782,12 +564,12 @@ function addPointMarker<TProperties>(
   feature: Extract<AggregatedMapFeature<TProperties>, { kind: "point" }>,
   clusterColor: string | null,
   isMeasuring: boolean,
-  leaflet: typeof import("leaflet"),
-  map: LeafletMap,
+  flat: typeof import("flat"),
+  map: FlatMap,
   overlay: LayerGroup,
   handleClick: (feature: AggregatedMapFeature<TProperties>) => void,
 ) {
-  const marker = leaflet.circleMarker(toLeafletLatLng(feature.coordinates), {
+  const marker = flat.circleMarker(toLatLng(feature.coordinates), {
     className: "mb-maps__point-marker",
     color: "#ffffff",
     fillColor: clusterColor ?? "#0f172a",
@@ -817,14 +599,14 @@ function addClusterAreaLayer(
     | ReturnType<typeof createClusterAreaFeature>
     | ReturnType<typeof createClusterAreaBoundaryFeature>,
   isMeasuring: boolean,
-  leaflet: typeof import("leaflet"),
+  flat: typeof import("flat"),
   overlay: LayerGroup,
 ) {
   if ("lineColor" in feature.properties) {
     const coordinates = feature.geometry.coordinates as Array<[number, number]>;
 
-    leaflet
-      .polyline(coordinates.map(toLeafletLatLng), {
+    flat
+      .polyline(coordinates.map(toLatLng), {
         className: "mb-maps__cluster-area-boundary",
         color: feature.properties.lineColor,
         interactive: !isMeasuring,
@@ -846,10 +628,10 @@ function addClusterAreaLayer(
   };
 
   if (areaFeature.geometry.type === "MultiPolygon") {
-    leaflet
+    flat
       .polygon(
         areaFeature.geometry.coordinates.map((polygon) =>
-          polygon.map((ring) => ring.map(toLeafletLatLng)),
+          polygon.map((ring) => ring.map(toLatLng)),
         ),
         options,
       )
@@ -857,9 +639,9 @@ function addClusterAreaLayer(
     return;
   }
 
-  leaflet
+  flat
     .polygon(
-      areaFeature.geometry.coordinates.map((ring) => ring.map(toLeafletLatLng)),
+      areaFeature.geometry.coordinates.map((ring) => ring.map(toLatLng)),
       options,
     )
     .addTo(overlay);
@@ -868,7 +650,7 @@ function addClusterAreaLayer(
 function createClusterAreaFeatures<TProperties>(
   features: readonly AggregatedMapFeature<TProperties>[],
   index: PointAggregationIndex<TProperties>,
-  map: LeafletMap,
+  map: FlatMap,
   cache: MutableRefObject<ClusterAreaFeatureCache | null>,
 ): ClusterAreaFeatureResult {
   const viewportWidth = map.getContainer().clientWidth;
@@ -907,7 +689,7 @@ function createClusterAreaFeatures<TProperties>(
   const geometry = createProjectedClusterVoronoiGeometry(projectedInputs, {
     includeOuterEdges: false,
     project(coordinate) {
-      const point = map.latLngToContainerPoint(toLeafletLatLng(coordinate));
+      const point = map.latLngToContainerPoint(toLatLng(coordinate));
       return [point.x, point.y];
     },
     unproject(coordinate) {
@@ -960,7 +742,7 @@ function createClusterAreaFeatures<TProperties>(
 
 function serializeClusterAreaFeatureCacheKey<TProperties>(
   features: readonly AggregatedMapFeature<TProperties>[],
-  map: LeafletMap,
+  map: FlatMap,
   viewportWidth: number,
   viewportHeight: number,
 ) {

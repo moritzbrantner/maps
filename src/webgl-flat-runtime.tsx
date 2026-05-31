@@ -4,13 +4,13 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
 import {
-  resolveTileLayerOptions,
+  resolveMapLibreStyle,
   type MapViewState,
   type MapViewStateChangeReason,
   type RasterMapStyle,
 } from "./map-display";
 
-export type FlatMapRuntime = "leaflet" | "webgl";
+export type FlatMapRuntime = "maplibre" | "webgl";
 
 export type WebGlFlatViewport = {
   bounds: [west: number, south: number, east: number, north: number];
@@ -36,7 +36,7 @@ export type WebGlFlatTile = {
 };
 
 type WebGlFlatRuntimeProps = {
-  mapStyle: string | RasterMapStyle;
+  mapStyle: RasterMapStyle;
   onContextMenu?: (context: {
     coordinates: [longitude: number, latitude: number];
     position: { x: number; y: number };
@@ -178,29 +178,32 @@ export function WebGlFlatRuntime({
 }
 
 export function resolveWebGlFlatTileSource(
-  mapStyle: string | RasterMapStyle,
+  mapStyle: RasterMapStyle,
 ): WebGlFlatTileSource | null {
-  const tileLayerOptions = resolveTileLayerOptions(mapStyle);
+  const resolvedStyle = resolveMapLibreStyle(mapStyle);
 
-  if (!tileLayerOptions) {
-    return null;
+  if (typeof resolvedStyle === "string") {
+    return {
+      maxZoom: FLAT_TILE_DEFAULT_MAX_ZOOM,
+      minZoom: FLAT_TILE_DEFAULT_MIN_ZOOM,
+      tileSize: DEFAULT_TILE_SIZE,
+      url: resolvedStyle,
+    };
   }
 
-  return {
-    maxZoom:
-      typeof tileLayerOptions.options.maxZoom === "number"
-        ? tileLayerOptions.options.maxZoom
-        : FLAT_TILE_DEFAULT_MAX_ZOOM,
-    minZoom:
-      typeof tileLayerOptions.options.minZoom === "number"
-        ? tileLayerOptions.options.minZoom
-        : FLAT_TILE_DEFAULT_MIN_ZOOM,
-    tileSize:
-      typeof tileLayerOptions.options.tileSize === "number"
-        ? tileLayerOptions.options.tileSize
-        : DEFAULT_TILE_SIZE,
-    url: tileLayerOptions.url,
-  };
+  const rasterSource = Object.values(resolvedStyle.sources ?? {}).find(
+    (source) => source && typeof source === "object" && "type" in source && source.type === "raster",
+  ) as { maxzoom?: number; minzoom?: number; tileSize?: number; tiles?: string[] } | undefined;
+  const url = rasterSource?.tiles?.[0];
+
+  return url
+    ? {
+        maxZoom: rasterSource.maxzoom ?? FLAT_TILE_DEFAULT_MAX_ZOOM,
+        minZoom: rasterSource.minzoom ?? FLAT_TILE_DEFAULT_MIN_ZOOM,
+        tileSize: rasterSource.tileSize ?? DEFAULT_TILE_SIZE,
+        url,
+      }
+    : null;
 }
 
 export function getWebGlFlatViewport(
@@ -358,7 +361,7 @@ function createWebGlFlatRuntime({
   viewState,
 }: {
   container: HTMLDivElement;
-  mapStyle: string | RasterMapStyle;
+  mapStyle: RasterMapStyle;
   viewState: MapViewState;
 }) {
   let renderer: THREE.WebGLRenderer | null = null;
@@ -459,7 +462,7 @@ function createWebGlFlatRuntime({
       renderer?.domElement.remove();
     },
     render: scheduleRender,
-    setMapStyle(nextMapStyle: string | RasterMapStyle) {
+    setMapStyle(nextMapStyle: RasterMapStyle) {
       currentMapStyle = nextMapStyle;
     },
     setViewState(nextViewState: MapViewState) {

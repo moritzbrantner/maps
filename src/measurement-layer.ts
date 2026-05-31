@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useEffectEvent, useState, type MutableRefObject } from "react";
-import type { LayerGroup, Map as LeafletMap } from "leaflet";
+import type { LayerGroup, Map as FlatMap } from "flat";
 
 import {
   formatMapDistance,
@@ -17,9 +17,9 @@ import {
   type MapMeasurementMode,
 } from "./measurement";
 
-export function useLeafletBeeLineMeasurementLayer(options: {
-  leafletRef: MutableRefObject<typeof import("leaflet") | null>;
-  mapRef: MutableRefObject<LeafletMap | null>;
+export function useFlatBeeLineMeasurementLayer(options: {
+  flatRef: MutableRefObject<typeof import("flat") | null>;
+  mapRef: MutableRefObject<FlatMap | null>;
   layerRef: MutableRefObject<LayerGroup | null>;
   measurementMode?: MapMeasurementMode;
   measurements?: readonly MapBeeLineMeasurement[];
@@ -33,7 +33,7 @@ export function useLeafletBeeLineMeasurementLayer(options: {
   isMeasuring: boolean;
 } {
   const {
-    leafletRef,
+    flatRef,
     layerRef,
     mapRef,
     measurementMode = "none",
@@ -42,7 +42,7 @@ export function useLeafletBeeLineMeasurementLayer(options: {
     measurementLineColor = "#0f766e",
     measurementDraftLineColor = measurementLineColor,
   } = options;
-  const leaflet = leafletRef.current;
+  const flat = flatRef.current;
   const layer = layerRef.current;
   const map = mapRef.current;
   const [draft, setDraft] = useState<MapBeeLineMeasurementDraft | null>(null);
@@ -92,7 +92,7 @@ export function useLeafletBeeLineMeasurementLayer(options: {
   }, [isMeasuring, map]);
 
   useEffect(() => {
-    if (!leaflet || !layer) {
+    if (!flat || !layer) {
       return;
     }
 
@@ -100,7 +100,7 @@ export function useLeafletBeeLineMeasurementLayer(options: {
 
     for (const measurement of measurements) {
       renderCompletedMeasurement({
-        leaflet,
+        flat,
         layer,
         measurement,
         measurementDistanceFormat,
@@ -112,7 +112,7 @@ export function useLeafletBeeLineMeasurementLayer(options: {
     if (draft?.to && draft.distanceMeters !== undefined) {
       renderDraftMeasurement({
         draft,
-        leaflet,
+        flat,
         layer,
         measurementDraftLineColor,
       });
@@ -121,7 +121,7 @@ export function useLeafletBeeLineMeasurementLayer(options: {
     draft,
     emitSelect,
     layer,
-    leaflet,
+    flat,
     measurementDistanceFormat,
     measurementDraftLineColor,
     measurementLineColor,
@@ -227,14 +227,14 @@ export function useLeafletBeeLineMeasurementLayer(options: {
 }
 
 function renderCompletedMeasurement({
-  leaflet,
+  flat,
   layer,
   measurement,
   measurementDistanceFormat,
   measurementLineColor,
   onSelect,
 }: {
-  leaflet: typeof import("leaflet");
+  flat: typeof import("flat");
   layer: LayerGroup;
   measurement: MapBeeLineMeasurement;
   measurementDistanceFormat: MapDistanceFormat;
@@ -250,7 +250,7 @@ function renderCompletedMeasurement({
     return;
   }
 
-  const line = leaflet.polyline([toLeafletLatLng(from), toLeafletLatLng(to)], {
+  const line = flat.polyline([toLatLng(from), toLatLng(to)], {
     className: "mb-maps__measurement-line",
     color: measurementLineColor,
     opacity: 0.92,
@@ -262,24 +262,24 @@ function renderCompletedMeasurement({
     direction: "center",
     permanent: true,
   });
-  line.openTooltip(toLeafletLatLng(midpoint));
+  line.openTooltip(toLatLng(midpoint));
   line.on("click", () => {
     onSelect(measurement);
   });
   line.addTo(layer);
 
-  addEndpoint(leaflet, layer, from, measurementLineColor);
-  addEndpoint(leaflet, layer, to, measurementLineColor);
+  addEndpoint(flat, layer, from, measurementLineColor);
+  addEndpoint(flat, layer, to, measurementLineColor);
 }
 
 function renderDraftMeasurement({
   draft,
-  leaflet,
+  flat,
   layer,
   measurementDraftLineColor,
 }: {
   draft: MapBeeLineMeasurementDraft;
-  leaflet: typeof import("leaflet");
+  flat: typeof import("flat");
   layer: LayerGroup;
   measurementDraftLineColor: string;
 }) {
@@ -291,8 +291,8 @@ function renderDraftMeasurement({
     return;
   }
 
-  leaflet
-    .polyline([toLeafletLatLng(from), toLeafletLatLng(to)], {
+  flat
+    .polyline([toLatLng(from), toLatLng(to)], {
       className: "mb-maps__measurement-line mb-maps__measurement-line--draft",
       color: measurementDraftLineColor,
       opacity: 0.76,
@@ -303,21 +303,21 @@ function renderDraftMeasurement({
       direction: "center",
       permanent: true,
     })
-    .openTooltip(toLeafletLatLng(midpoint))
+    .openTooltip(toLatLng(midpoint))
     .addTo(layer);
 
-  addEndpoint(leaflet, layer, from, measurementDraftLineColor);
-  addEndpoint(leaflet, layer, to, measurementDraftLineColor);
+  addEndpoint(flat, layer, from, measurementDraftLineColor);
+  addEndpoint(flat, layer, to, measurementDraftLineColor);
 }
 
 function addEndpoint(
-  leaflet: typeof import("leaflet"),
+  flat: typeof import("flat"),
   layer: LayerGroup,
   coordinate: MapCoordinate,
   color: string,
 ) {
-  leaflet
-    .circleMarker(toLeafletLatLng(coordinate), {
+  flat
+    .circleMarker(toLatLng(coordinate), {
       className: "mb-maps__measurement-endpoint",
       color: "#ffffff",
       fillColor: color,
@@ -336,6 +336,6 @@ function getEventCoordinate(event: { latlng?: { lat?: number; lng?: number } }) 
   return normalizeMapCoordinate([latlng?.lng ?? Number.NaN, latlng?.lat ?? Number.NaN]);
 }
 
-function toLeafletLatLng([longitude, latitude]: MapCoordinate): [number, number] {
+function toLatLng([longitude, latitude]: MapCoordinate): [number, number] {
   return [latitude, longitude];
 }

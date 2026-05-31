@@ -2,7 +2,8 @@
 
 import { useContext, useEffect, useId, useState } from "react";
 
-import { toLeafletLatLng } from "./map-display";
+import { toLatLng } from "./map-display";
+import type { FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
 import { MapSurfaceContext } from "./map-view";
 import {
   formatMapDistance,
@@ -60,12 +61,12 @@ export function BeeLineMeasurementLayer({
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
       layer.clearLayers();
 
       for (const measurement of measurements) {
         renderCompletedFlatMeasurement({
-          leaflet,
+          flat,
           layer,
           measurement,
           measurementDistanceFormat,
@@ -77,7 +78,7 @@ export function BeeLineMeasurementLayer({
       if (draft?.to && draft.distanceMeters !== undefined) {
         renderDraftFlatMeasurement({
           draft,
-          leaflet,
+          flat,
           layer,
           measurementDraftLineColor: draftLineColor,
         });
@@ -104,11 +105,11 @@ export function BeeLineMeasurementLayer({
   ]);
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat" || !surface.leafletMap || !isMeasuring) {
+    if (!surface || surface.display !== "flat" || !surface.flatMap || !isMeasuring) {
       return;
     }
 
-    const map = surface.leafletMap;
+    const map = surface.flatMap;
     let draftFrom: MapCoordinate | null = null;
 
     function clearDraft() {
@@ -394,15 +395,15 @@ function GlobeDraftMeasurement({
 }
 
 function renderCompletedFlatMeasurement({
-  leaflet,
+  flat,
   layer,
   measurement,
   measurementDistanceFormat,
   measurementLineColor,
   onSelect,
 }: {
-  leaflet: typeof import("leaflet");
-  layer: import("leaflet").LayerGroup;
+  flat: FlatLayerFactory;
+  layer: FlatLayerGroup;
   measurement: MapBeeLineMeasurement;
   measurementDistanceFormat: MapDistanceFormat;
   measurementLineColor: string;
@@ -417,7 +418,7 @@ function renderCompletedFlatMeasurement({
     return;
   }
 
-  const line = leaflet.polyline([toLeafletLatLng(from), toLeafletLatLng(to)], {
+  const line = flat.polyline([toLatLng(from), toLatLng(to)], {
     className: "mb-maps__measurement-line",
     color: measurementLineColor,
     opacity: 0.92,
@@ -429,25 +430,25 @@ function renderCompletedFlatMeasurement({
     direction: "center",
     permanent: true,
   });
-  line.openTooltip(toLeafletLatLng(midpoint));
+  line.openTooltip(toLatLng(midpoint));
   line.on("click", () => {
     onSelect?.(measurement);
   });
   line.addTo(layer);
 
-  addEndpoint(leaflet, layer, from, measurementLineColor);
-  addEndpoint(leaflet, layer, to, measurementLineColor);
+  addEndpoint(flat, layer, from, measurementLineColor);
+  addEndpoint(flat, layer, to, measurementLineColor);
 }
 
 function renderDraftFlatMeasurement({
   draft,
-  leaflet,
+  flat,
   layer,
   measurementDraftLineColor,
 }: {
   draft: MapBeeLineMeasurementDraft;
-  leaflet: typeof import("leaflet");
-  layer: import("leaflet").LayerGroup;
+  flat: FlatLayerFactory;
+  layer: FlatLayerGroup;
   measurementDraftLineColor: string;
 }) {
   const from = normalizeMapCoordinate(draft.from);
@@ -458,8 +459,8 @@ function renderDraftFlatMeasurement({
     return;
   }
 
-  leaflet
-    .polyline([toLeafletLatLng(from), toLeafletLatLng(to)], {
+  flat
+    .polyline([toLatLng(from), toLatLng(to)], {
       className: "mb-maps__measurement-line mb-maps__measurement-line--draft",
       color: measurementDraftLineColor,
       opacity: 0.76,
@@ -470,21 +471,21 @@ function renderDraftFlatMeasurement({
       direction: "center",
       permanent: true,
     })
-    .openTooltip(toLeafletLatLng(midpoint))
+    .openTooltip(toLatLng(midpoint))
     .addTo(layer);
 
-  addEndpoint(leaflet, layer, from, measurementDraftLineColor);
-  addEndpoint(leaflet, layer, to, measurementDraftLineColor);
+  addEndpoint(flat, layer, from, measurementDraftLineColor);
+  addEndpoint(flat, layer, to, measurementDraftLineColor);
 }
 
 function addEndpoint(
-  leaflet: typeof import("leaflet"),
-  layer: import("leaflet").LayerGroup,
+  flat: FlatLayerFactory,
+  layer: FlatLayerGroup,
   coordinate: MapCoordinate,
   color: string,
 ) {
-  leaflet
-    .circleMarker(toLeafletLatLng(coordinate), {
+  flat
+    .circleMarker(toLatLng(coordinate), {
       className: "mb-maps__measurement-endpoint",
       color: "#ffffff",
       fillColor: color,

@@ -51,7 +51,7 @@ import {
   webGlFlatWorldPointToCoordinate,
 } from "./webgl-flat-runtime";
 
-const leafletMock = vi.hoisted(() => {
+const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
     bringToFront?: () => Layer;
@@ -232,10 +232,10 @@ const leafletMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("leaflet", () => leafletMock);
+vi.mock("flat", () => flatMock);
 
 afterEach(() => {
-  leafletMock.reset();
+  flatMock.reset();
   vi.unstubAllGlobals();
 });
 
@@ -472,7 +472,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     ).toEqual(["stores", "route", "zone"]);
   });
 
-  test("renders flat point markers with Leaflet", async () => {
+  test("renders flat point markers with Flat", async () => {
     render(
       <PointMap
         mapLabel="Store points"
@@ -492,7 +492,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Store points").getAttribute("data-map-ready")).toBe("true");
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers).toMatchObject([
+    expect(flatMock.getLayerGroups()[0]?.layers).toMatchObject([
       {
         latLng: [40, -74],
         options: {
@@ -528,12 +528,12 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Composed layers").getAttribute("data-map-ready")).toBe("true");
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
+    expect(flatMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
       options: {
         fillColor: "#dc2626",
       },
     });
-    expect(leafletMock.getLayerGroups()[1]?.layers[0]).toMatchObject({
+    expect(flatMock.getLayerGroups()[1]?.layers[0]).toMatchObject({
       options: {
         fillColor: "#2563eb",
       },
@@ -554,7 +554,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      const layers = leafletMock.getLayerGroups().flatMap((group) => group.layers);
+      const layers = flatMock.getLayerGroups().flatMap((group) => group.layers);
 
       expect(layers).toEqual([
         expect.objectContaining({
@@ -666,13 +666,13 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("GeoJSON layers").getAttribute("data-map-ready")).toBe("true");
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
+    expect(flatMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
       "circleMarker",
       "polyline",
       "polygon",
     ]);
     expect(
-      leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.options?.bubblingMouseEvents),
+      flatMock.getLayerGroups()[0]?.layers.map((layer) => layer.options?.bubblingMouseEvents),
     ).toEqual([false, false, false]);
   });
 
@@ -737,7 +737,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       );
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
+    expect(flatMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
       "circleMarker",
       "circleMarker",
       "polyline",
@@ -785,7 +785,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("GeoJSON point map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers).toMatchObject([
+    expect(flatMock.getLayerGroups()[0]?.layers).toMatchObject([
       {
         options: {
           className: "mb-maps__geojson-feature",
@@ -793,7 +793,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
         type: "polygon",
       },
     ]);
-    expect(leafletMock.getLayerGroups()[1]?.layers).toMatchObject([
+    expect(flatMock.getLayerGroups()[1]?.layers).toMatchObject([
       {
         options: {
           className: "mb-maps__point-marker",
@@ -834,7 +834,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("GeoJSON heat map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
+    expect(flatMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
       options: {
         className: "mb-maps__heat-surface mb-maps__heat-surface--data",
       },
@@ -871,13 +871,13 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("GeoJSON flow map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
+    expect(flatMock.getLayerGroups()[0]?.layers[0]).toMatchObject({
       options: {
         className: "mb-maps__geojson-feature",
       },
       type: "polyline",
     });
-    expect(leafletMock.getLayerGroups()[1]?.layers[0]).toMatchObject({
+    expect(flatMock.getLayerGroups()[1]?.layers[0]).toMatchObject({
       options: {
         className: "mb-maps__flow-line",
       },
@@ -921,7 +921,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Pure GeoJSON map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    expect(leafletMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
+    expect(flatMock.getLayerGroups()[0]?.layers.map((layer) => layer.type)).toEqual([
       "circleMarker",
       "polyline",
     ]);
@@ -954,7 +954,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       );
     });
 
-    const marker = leafletMock.getLayerGroups()[0]?.layers[0];
+    const marker = flatMock.getLayerGroups()[0]?.layers[0];
     const [handleContextMenu] = marker?.handlers.get("contextmenu") ?? [];
 
     act(() => {
@@ -997,7 +997,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Editable map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0];
+    const map = flatMock.getMaps()[0];
     const [handleContextMenu] = map?.handlers.get("contextmenu") ?? [];
 
     act(() => {
@@ -1043,8 +1043,8 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       );
     });
 
-    const map = leafletMock.getMaps()[0];
-    const marker = leafletMock.getLayerGroups()[0]?.layers[0];
+    const map = flatMock.getMaps()[0];
+    const marker = flatMock.getLayerGroups()[0]?.layers[0];
     const [handleMouseDown] = marker?.handlers.get("mousedown") ?? [];
 
     act(() => {
@@ -1071,7 +1071,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
   });
 
-  test("renders globe bubble markers without Leaflet", () => {
+  test("renders globe bubble markers without Flat", () => {
     render(
       <BubbleMap
         initialViewState={{ center: [-74, 40], zoom: 2 }}
@@ -1099,7 +1099,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(map.querySelector(".mb-maps__globe-country-borders")?.getAttribute("d")).not.toBe("");
     expect(map.querySelector(".mb-maps__globe-rim")).toBeTruthy();
     expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
-    expect(leafletMock.getMaps()).toHaveLength(0);
+    expect(flatMock.getMaps()).toHaveLength(0);
   });
 
   test("keeps vector globe basemap non-empty at close zoom", () => {
@@ -1194,7 +1194,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(map.querySelector(".mb-maps__globe-renderer")).toBeTruthy();
     expect(map.querySelector(".mb-maps__globe-land")).toBeFalsy();
     expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
-    expect(leafletMock.getMaps()).toHaveLength(0);
+    expect(flatMock.getMaps()).toHaveLength(0);
   });
 
   test("allows a closer globe zoom", () => {
@@ -1270,7 +1270,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(getWebGlFlatZoom(4, -1000)).toBeGreaterThan(4);
   });
 
-  test("mounts WebGL flat MapView without creating a Leaflet map", async () => {
+  test("mounts WebGL flat MapView without creating a Flat map", async () => {
     const onViewStateChange = vi.fn();
 
     render(
@@ -1290,7 +1290,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     });
 
     expect(map.querySelector('[data-flat-runtime="webgl"]')).toBeTruthy();
-    expect(leafletMock.getMaps()).toHaveLength(0);
+    expect(flatMock.getMaps()).toHaveLength(0);
 
     fireEvent.wheel(map.querySelector('[data-flat-runtime="webgl"]')!, {
       deltaY: -120,
@@ -1330,7 +1330,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Route flows").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const layers = leafletMock.getLayerGroups()[0]?.layers ?? [];
+    const layers = flatMock.getLayerGroups()[0]?.layers ?? [];
 
     expect(layers[0]).toMatchObject({
       latLngs: [
@@ -1369,7 +1369,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Curved route flows").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const polyline = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+    const polyline = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
     const latLngs = polyline?.latLngs as Array<[number, number]>;
 
     expect(latLngs).toHaveLength(24);
@@ -1402,7 +1402,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Directional route flows").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const marker = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "marker");
+    const marker = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "marker");
 
     expect(marker?.options?.icon).toMatchObject({
       options: {
@@ -1437,7 +1437,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Selectable route flows").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const polyline = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+    const polyline = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
 
     await act(async () => {
       polyline?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
@@ -1477,7 +1477,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(screen.getByLabelText("Tooltip route flows").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const polyline = leafletMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+    const polyline = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
 
     await act(async () => {
       polyline?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });

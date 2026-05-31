@@ -11,7 +11,7 @@ const errors = [];
 verifyMissingImports("core", [
   "react",
   "react/jsx-runtime",
-  "leaflet",
+  "flat",
   "three",
   "world-atlas",
   "topojson-client",

@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Map as LeafletMap } from "leaflet";
+import type { Map as FlatMap } from "flat";
 import {
   createVizEngine,
   type VizBackendOption,
@@ -26,7 +26,7 @@ import {
   type VizEngine,
 } from "@moritzbrantner/viz-engine";
 
-import { escapeHtml, joinClassNames, toLeafletLatLng } from "./map-display";
+import { escapeHtml, joinClassNames, toLatLng } from "./map-display";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-view";
 
 export type MapEngineProviderProps = {
@@ -280,7 +280,7 @@ function EngineGeoLayerRenderer(
 
     return surface.registerFlatLayer(
       registeredLayerId,
-      ({ layer, leaflet, map }) => {
+      ({ layer, flat, map }) => {
         layer.clearLayers();
         const frameLayer = computeEngineLayerForMap(
           engine,
@@ -292,7 +292,7 @@ function EngineGeoLayerRenderer(
           return;
         }
 
-        renderFlatEngineLayer(frameLayer, leaflet, layer);
+        renderFlatEngineLayer(frameLayer, flat, layer);
       },
     );
   }, [engine, props, registeredLayerId, resolvedDatasetId, surface, version]);
@@ -316,7 +316,7 @@ function EngineGeoLayerRenderer(
 function computeEngineLayerForMap(
   engine: VizEngine,
   layer: EngineGeoLayer,
-  map: LeafletMap,
+  map: FlatMap,
 ): VizRenderLayer | null {
   const layerId = engine.addLayer(
     layer as Parameters<VizEngine["addLayer"]>[0],
@@ -377,8 +377,8 @@ function computeEngineLayerForGlobe(engine: VizEngine, layer: EngineGeoLayer) {
 
 function renderFlatEngineLayer(
   frameLayer: VizRenderLayer,
-  leaflet: typeof import("leaflet"),
-  layer: import("leaflet").LayerGroup,
+  flat: typeof import("flat"),
+  layer: import("flat").LayerGroup,
 ) {
   switch (frameLayer.kind) {
     case "geo-clusters":
@@ -387,8 +387,8 @@ function renderFlatEngineLayer(
           feature.kind === "cluster"
             ? Math.min(28, 8 + Math.sqrt(feature.pointCount))
             : 5;
-        const marker = leaflet.circleMarker(
-          toLeafletLatLng(feature.coordinates),
+        const marker = flat.circleMarker(
+          toLatLng(feature.coordinates),
           {
             className: joinClassNames(
               "mb-maps__engine-feature",
@@ -405,9 +405,9 @@ function renderFlatEngineLayer(
         );
         marker.addTo(layer);
         if (feature.kind === "cluster") {
-          leaflet
-            .marker(toLeafletLatLng(feature.coordinates), {
-              icon: leaflet.divIcon({
+          flat
+            .marker(toLatLng(feature.coordinates), {
+              icon: flat.divIcon({
                 className: "mb-maps__cluster-count",
                 html: escapeHtml(feature.pointCountAbbreviated),
                 iconAnchor: [18, 18],
@@ -421,8 +421,8 @@ function renderFlatEngineLayer(
       break;
     case "geo-points":
       for (const point of frameLayer.features) {
-        leaflet
-          .circleMarker(toLeafletLatLng([point.longitude, point.latitude]), {
+        flat
+          .circleMarker(toLatLng([point.longitude, point.latitude]), {
             className: "mb-maps__point-marker",
             color: "#ffffff",
             fillColor: "#0f172a",
@@ -435,8 +435,8 @@ function renderFlatEngineLayer(
       break;
     case "geo-heat":
       for (const feature of frameLayer.features) {
-        leaflet
-          .circleMarker(toLeafletLatLng(feature.coordinates), {
+        flat
+          .circleMarker(toLatLng(feature.coordinates), {
             className: "mb-maps__engine-heat",
             color: "transparent",
             fillColor: resolveHeatColor(feature),
@@ -449,11 +449,11 @@ function renderFlatEngineLayer(
       break;
     case "geo-flows":
       for (const feature of frameLayer.features) {
-        leaflet
+        flat
           .polyline(
             [
-              toLeafletLatLng(feature.flow.from),
-              toLeafletLatLng(feature.flow.to),
+              toLatLng(feature.flow.from),
+              toLatLng(feature.flow.to),
             ],
             {
               className: "mb-maps__engine-flow",

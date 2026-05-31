@@ -1,9 +1,9 @@
 "use client";
 
 import { useContext, useDeferredValue, useEffect, useId, useMemo, type ReactNode } from "react";
-import type { LayerGroup } from "leaflet";
 
-import { joinClassNames, toLeafletLatLng } from "./map-display";
+import { joinClassNames, toLatLng } from "./map-display";
+import type { FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 
@@ -112,7 +112,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
+    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
       layer.clearLayers();
 
       const hasHoveredFlow = features.some((feature) => surface.isFeatureHovered(feature, getFeatureId));
@@ -122,7 +122,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
         const hovered = surface.isFeatureHovered(feature, getFeatureId);
         const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
-        const flowLatLngs = flowCoordinates.map(toLeafletLatLng);
+        const flowLatLngs = flowCoordinates.map(toLatLng);
         const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
         const active = selected || hovered;
         const opacity = active
@@ -132,7 +132,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
           : hasActiveFlow
             ? inactiveFlowOpacity
             : 0.72;
-        const line = leaflet.polyline(flowLatLngs, {
+        const line = flat.polyline(flowLatLngs, {
           className: joinClassNames(
             "mb-maps__flow-line",
             active && "mb-maps__flow-line--active",
@@ -153,7 +153,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
               renderFeaturePopup,
             });
           });
-          line.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+          line.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
             suppressNativeContextMenu(event);
             surface.handleFeatureContextMenu(feature, getFlowPosition(map, feature, event), {
               coordinates: getFlowCenter(feature),
@@ -183,7 +183,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             color,
             feature,
             flowCoordinates,
-            leaflet,
+            flat,
             map,
             opacity,
             overlay: layer,
@@ -191,8 +191,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
         }
 
         if (showEndpoints) {
-          leaflet
-            .circleMarker(toLeafletLatLng(feature.flow.from), {
+          flat
+            .circleMarker(toLatLng(feature.flow.from), {
               className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--from",
               color: "#ffffff",
               fillColor: color,
@@ -203,8 +203,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
               weight: 1.5,
             })
             .addTo(layer);
-          leaflet
-            .circleMarker(toLeafletLatLng(feature.flow.to), {
+          flat
+            .circleMarker(toLatLng(feature.flow.to), {
               className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--to",
               color: "#ffffff",
               fillColor: color,
@@ -416,7 +416,7 @@ function getFlowPosition<TProperties>(
     (feature.flow.from[1] + feature.flow.to[1]) / 2,
   ];
 
-  return map.latLngToContainerPoint?.(toLeafletLatLng(midpoint)) ?? { x: 0, y: 0 };
+  return map.latLngToContainerPoint?.(toLatLng(midpoint)) ?? { x: 0, y: 0 };
 }
 
 export function createFlowPathCoordinates<TProperties>(
@@ -463,7 +463,7 @@ export function addFlowArrowMarker<TProperties>({
   color,
   feature,
   flowCoordinates,
-  leaflet,
+  flat,
   map,
   opacity,
   overlay,
@@ -471,27 +471,27 @@ export function addFlowArrowMarker<TProperties>({
   color: string;
   feature: FlowLayerFeature<TProperties>;
   flowCoordinates: Array<[longitude: number, latitude: number]>;
-  leaflet: typeof import("leaflet");
+  flat: FlatLayerFactory;
   map: {
     latLngToContainerPoint?: (latLng: [number, number]) => { x: number; y: number };
   };
   opacity: number;
-  overlay: LayerGroup;
+  overlay: FlatLayerGroup;
 }) {
-  if (!leaflet.divIcon || !leaflet.marker || flowCoordinates.length < 2) {
+  if (!flat.divIcon || !flat.marker || flowCoordinates.length < 2) {
     return;
   }
 
   const to = flowCoordinates.at(-1)!;
   const previous = flowCoordinates.at(-2)!;
-  const toPoint = map.latLngToContainerPoint?.(toLeafletLatLng(to));
-  const previousPoint = map.latLngToContainerPoint?.(toLeafletLatLng(previous));
+  const toPoint = map.latLngToContainerPoint?.(toLatLng(to));
+  const previousPoint = map.latLngToContainerPoint?.(toLatLng(previous));
   const rotation =
     toPoint && previousPoint
       ? (Math.atan2(toPoint.y - previousPoint.y, toPoint.x - previousPoint.x) * 180) / Math.PI
       : 0;
   const size = clamp(feature.width * 1.35, 9, 22);
-  const icon = leaflet.divIcon({
+  const icon = flat.divIcon({
     className: "mb-maps__flow-arrow",
     html: `<span class="mb-maps__flow-arrow-glyph" style="--mb-maps-flow-arrow-color: ${escapeFlowCssValue(
       color,
@@ -500,8 +500,8 @@ export function addFlowArrowMarker<TProperties>({
     iconSize: [size, size],
   });
 
-  leaflet
-    .marker(toLeafletLatLng(to), {
+  flat
+    .marker(toLatLng(to), {
       icon,
       interactive: false,
       keyboard: false,
@@ -541,14 +541,14 @@ function escapeFlowCssValue(value: string) {
   return value.replace(/[;"'<>]/g, "");
 }
 
-type LeafletFeaturePointerEvent = {
+type FlatFeaturePointerEvent = {
   containerPoint?: { x: number; y: number };
   originalEvent?: {
     preventDefault?: () => void;
   };
 };
 
-function suppressNativeContextMenu(event: LeafletFeaturePointerEvent) {
+function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
   event.originalEvent?.preventDefault?.();
 }
 

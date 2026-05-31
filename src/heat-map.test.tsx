@@ -13,7 +13,7 @@ import {
   type TemporalMapTrack,
 } from ".";
 
-const leafletMock = vi.hoisted(() => {
+const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
     bounds?: [[number, number], [number, number]];
@@ -198,10 +198,10 @@ const leafletMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("leaflet", () => leafletMock);
+vi.mock("flat", () => flatMock);
 
 afterEach(() => {
-  leafletMock.reset();
+  flatMock.reset();
 });
 
 describe("@moritzbrantner/maps heat maps", () => {
@@ -351,7 +351,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(data.features[0]?.properties).not.toHaveProperty("__moritzbrantnerHeatMapWeight");
   });
 
-  test("renders weighted Leaflet heat as a smooth interpolated surface by default", async () => {
+  test("renders weighted Flat heat as a smooth interpolated surface by default", async () => {
     render(
       <HeatMap
         heatmapIntensity={1.4}
@@ -376,7 +376,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       expect(screen.getByLabelText("Demand heat map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const surface = leafletMock
+    const surface = flatMock
       .getLayerGroups()[0]
       ?.layers.find(
         (layer) =>
@@ -394,7 +394,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(surface?.url).toContain("data:image/svg+xml");
     expect(decodeURIComponent(surface?.url ?? "")).toContain("heat-soften");
     expect(
-      leafletMock
+      flatMock
         .getLayerGroups()[0]
         ?.layers.some((layer) => layer.type === "circleMarker" || layer.type === "rectangle"),
     ).toBe(false);
@@ -426,13 +426,13 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const surface = leafletMock
+    const surface = flatMock
       .getLayerGroups()[0]
       ?.layers.find(
         (layer) =>
           layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
       );
-    const sourcePoint = leafletMock.getMaps()[0]?.latLngToContainerPoint([40, -74]);
+    const sourcePoint = flatMock.getMaps()[0]?.latLngToContainerPoint([40, -74]);
     const sourceCell = getNearestSvgCircle(surface?.url ?? "", sourcePoint!);
     const northWestCell = getNearestSvgCircle(surface?.url ?? "", { x: 0, y: 0 });
     const southEastCell = getNearestSvgCircle(surface?.url ?? "", { x: 960, y: 640 });
@@ -488,9 +488,9 @@ describe("@moritzbrantner/maps heat maps", () => {
       ).toBe("true");
     });
 
-    const map = leafletMock.getMaps()[0]!;
+    const map = flatMock.getMaps()[0]!;
     const weakPoint = map.latLngToContainerPoint([0, 0]);
-    const initialSurface = leafletMock
+    const initialSurface = flatMock
       .getLayerGroups()[0]
       ?.layers.find(
         (layer) =>
@@ -509,7 +509,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       />,
     );
 
-    const changedSurface = leafletMock
+    const changedSurface = flatMock
       .getLayerGroups()[0]
       ?.layers.find(
         (layer) =>
@@ -545,7 +545,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       expect(screen.getByLabelText("Data heat map").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const surface = leafletMock
+    const surface = flatMock
       .getLayerGroups()[0]
       ?.layers.find(
         (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
@@ -594,7 +594,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const layerGroup = leafletMock.getLayerGroups()[0];
+    const layerGroup = flatMock.getLayerGroups()[0];
     const surface = layerGroup?.layers.find(
       (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
     );
@@ -612,7 +612,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     });
     expect(surface?.url).toContain("data:image/");
 
-    const map = leafletMock.getMaps()[0]!;
+    const map = flatMock.getMaps()[0]!;
     const initialUrl = surface?.url;
 
     map.centerLongitude = 12;
@@ -727,7 +727,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const contourLines = leafletMock
+    const contourLines = flatMock
       .getLayerGroups()[0]
       ?.layers.filter((layer) => layer.options?.className === "mb-maps__heat-contour");
 
@@ -747,7 +747,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       type: "polyline",
     });
     expect(
-      leafletMock.getLayerGroups()[0]?.layers.some((layer) => layer.type === "imageOverlay"),
+      flatMock.getLayerGroups()[0]?.layers.some((layer) => layer.type === "imageOverlay"),
     ).toBe(false);
   });
 
@@ -802,7 +802,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       ).toBe("true");
     });
 
-    const layerGroup = leafletMock.getLayerGroups()[0];
+    const layerGroup = flatMock.getLayerGroups()[0];
     const surface = layerGroup?.layers.find(
       (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
     );
@@ -872,7 +872,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const markers = leafletMock
+    const markers = flatMock
       .getLayerGroups()[0]
       ?.layers.filter((layer) => layer.options?.className === "mb-maps__heat-data-point");
 
@@ -916,8 +916,8 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const layerGroup = leafletMock.getLayerGroups()[0];
-    const map = leafletMock.getMaps()[0];
+    const layerGroup = flatMock.getLayerGroups()[0];
+    const map = flatMock.getMaps()[0];
     map!.zoom = 4;
     await act(async () => {
       map!.handlers.get("moveend")?.[0]?.();
@@ -985,13 +985,13 @@ describe("@moritzbrantner/maps heat maps", () => {
       ).toBe("true");
     });
 
-    const surface = leafletMock
+    const surface = flatMock
       .getLayerGroups()[0]
       ?.layers.find(
         (layer) =>
           layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
       );
-    const weakPoint = leafletMock.getMaps()[0]?.latLngToContainerPoint([0, 0]);
+    const weakPoint = flatMock.getMaps()[0]?.latLngToContainerPoint([0, 0]);
     const weakCell = getNearestSvgCircle(surface?.url ?? "", weakPoint!);
 
     expect(weakCell?.opacity).toBeGreaterThan(0.55);
@@ -1023,8 +1023,8 @@ describe("@moritzbrantner/maps heat maps", () => {
       ).toBe("true");
     });
 
-    const layerGroup = leafletMock.getLayerGroups()[0];
-    const map = leafletMock.getMaps()[0]!;
+    const layerGroup = flatMock.getLayerGroups()[0];
+    const map = flatMock.getMaps()[0]!;
     const initialSurface = layerGroup?.layers.find(
       (layer) =>
         layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
@@ -1075,7 +1075,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(map.getAttribute("data-map-ready")).toBe("true");
     expect(map.querySelector(".mb-maps__globe")).toBeTruthy();
     expect(map.querySelector(".mb-maps__globe-heat-marker")).toBeTruthy();
-    expect(leafletMock.getMaps()).toHaveLength(0);
+    expect(flatMock.getMaps()).toHaveLength(0);
   });
 
   test("slices temporal tracks into weighted heat-map frames", async () => {
@@ -1131,7 +1131,7 @@ describe("@moritzbrantner/maps heat maps", () => {
       );
     });
 
-    const surface = leafletMock
+    const surface = flatMock
       .getLayerGroups()[0]
       ?.layers.find(
         (layer) =>

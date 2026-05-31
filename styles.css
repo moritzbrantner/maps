@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "leaflet/dist/leaflet.css";
+@import "maplibre-gl/dist/maplibre-gl.css";
 
 @source "./dist/**/*.{js,mjs}";
 @source "./src/**/*.{ts,tsx}";
@@ -15,16 +15,16 @@
   }
 
   .mb-maps__canvas,
-  .mb-maps .leaflet-container {
+  .mb-maps .maplibregl-map {
     @apply absolute inset-0 size-full;
   }
 
   .mb-maps--measuring,
-  .mb-maps--measuring .leaflet-container {
+  .mb-maps--measuring .maplibregl-map {
     cursor: crosshair;
   }
 
-  .mb-maps--editing .leaflet-container {
+  .mb-maps--editing .maplibregl-map {
     cursor: crosshair;
   }
 
@@ -121,15 +121,15 @@
     stroke: transparent;
   }
 
-  .mb-maps .leaflet-control-container .leaflet-top.leaflet-left {
+  .mb-maps .maplibregl-ctrl-top-left {
     @apply left-4 top-4;
   }
 
-  .mb-maps .leaflet-bar {
+  .mb-maps .maplibregl-ctrl-group {
     @apply overflow-hidden rounded-full border border-slate-900/10 shadow-[0_10px_30px_rgb(15_23_42_/_0.18)];
   }
 
-  .mb-maps .leaflet-bar a {
+  .mb-maps .maplibregl-ctrl-group button {
     @apply size-[34px];
   }
 

@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { LayerGroup, Map as LeafletMap } from "leaflet";
+import type { Map as MapLibreMap } from "maplibre-gl";
 
 import {
   getBoundsFromPoints,
@@ -37,8 +37,6 @@ import {
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
   projectGlobeCoordinate,
-  resolveTileLayerOptions,
-  toLeafletLatLng,
   type GlobeViewState,
   type GlobeBasemapMode,
   type MapDisplayMode,
@@ -51,7 +49,6 @@ import type { MapContextMenuContext, MapFeatureInteractionProps } from "./map-in
 import { MapView } from "./map-view";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
-import { useLeafletBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 import { BubbleLayer, PointLayer } from "./point-layer";
 
@@ -89,7 +86,7 @@ export type PointMapProps<TProperties extends Record<string, unknown> = Record<s
   onFeatureSelect?: (feature: PointMapFeature<TProperties> | null) => void;
   onMapContextMenu?: (context: MapContextMenuContext) => void;
   onMapControllerReady?: (controller: MapSurfaceController) => void;
-  onMapReady?: (map: LeafletMap) => void;
+  onMapReady?: (map: MapLibreMap) => void;
   points?: readonly MapPoint<TProperties>[];
   pointColor?: string;
   pointRadius?: number;
@@ -373,193 +370,10 @@ export function createBubbleMapFeatures<TProperties extends Record<string, unkno
 }
 
 export function FlatPointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
-  className,
-  filterPoint,
-  fitBoundsPadding = 56,
-  fitToData = true,
-  getPointColor,
-  getPointRadius,
-  initialViewState,
-  mapLabel = "Interactive point map",
-  mapStyle = defaultRasterMapStyle,
-  measurementDistanceFormat,
-  measurementDraftLineColor,
-  measurementLineColor,
-  measurementMode,
-  measurements,
-  onMeasurementCreate,
-  onMeasurementDraftChange,
-  onMeasurementSelect,
-  onFeatureSelect,
-  onMapReady,
-  points = [],
-  pointColor = "#0f172a",
-  pointRadius = 6,
-  showAttributionControl = true,
-  style,
+  mapDisplay: _mapDisplay,
+  ...props
 }: PointMapProps<TProperties>) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
-  const overlayRef = useRef<LayerGroup | null>(null);
-  const measurementLayerRef = useRef<LayerGroup | null>(null);
-  const leafletRef = useRef<typeof import("leaflet") | null>(null);
-  const [isReady, setIsReady] = useState(false);
-  const deferredPoints = useDeferredValue(points);
-  const features = useMemo(
-    () => createPointMapFeatures(deferredPoints, { filterPoint }),
-    [deferredPoints, filterPoint],
-  );
-  const { isMeasuring } = useLeafletBeeLineMeasurementLayer({
-    layerRef: measurementLayerRef,
-    leafletRef,
-    mapRef,
-    measurementDistanceFormat,
-    measurementDraftLineColor,
-    measurementLineColor,
-    measurementMode,
-    measurements,
-    onMeasurementCreate,
-    onMeasurementDraftChange,
-    onMeasurementSelect,
-  });
-
-  const syncSource = useEffectEvent(() => {
-    const map = mapRef.current;
-    const overlay = overlayRef.current;
-    const leaflet = leafletRef.current;
-
-    if (!map || !overlay || !leaflet) {
-      return;
-    }
-
-    renderPointOverlay({
-      features,
-      getPointColor,
-      getPointRadius,
-      handleClick,
-      isMeasuring,
-      leaflet,
-      map,
-      overlay,
-      pointColor,
-      pointRadius,
-    });
-  });
-
-  const handleClick = useEffectEvent((feature: PointMapFeature<TProperties> | null) => {
-    startTransition(() => {
-      onFeatureSelect?.(feature);
-    });
-  });
-
-  const handleMapReady = useEffectEvent((map: LeafletMap) => {
-    setIsReady(true);
-    startTransition(() => {
-      onMapReady?.(map);
-    });
-  });
-
-  useEffect(() => {
-    let isCancelled = false;
-    let localMap: LeafletMap | null = null;
-
-    async function initializeMap() {
-      if (!containerRef.current) {
-        return;
-      }
-
-      const leaflet = await import("leaflet");
-
-      if (isCancelled || !containerRef.current) {
-        return;
-      }
-
-      leafletRef.current = leaflet;
-      localMap = leaflet.map(containerRef.current, {
-        attributionControl: showAttributionControl,
-        center: toLeafletLatLng(initialViewState?.center ?? [12, 25]),
-        zoom: initialViewState?.zoom ?? 1.6,
-        zoomControl: true,
-      });
-      mapRef.current = localMap;
-
-      const tileLayerOptions = resolveTileLayerOptions(mapStyle);
-
-      if (tileLayerOptions) {
-        leaflet.tileLayer(tileLayerOptions.url, tileLayerOptions.options).addTo(localMap);
-      }
-
-      overlayRef.current = leaflet.layerGroup().addTo(localMap);
-      measurementLayerRef.current = leaflet.layerGroup().addTo(localMap);
-
-      queueMicrotask(() => {
-        if (isCancelled || !localMap) {
-          return;
-        }
-
-        syncSource();
-        handleMapReady(localMap);
-      });
-    }
-
-    initializeMap();
-
-    return () => {
-      isCancelled = true;
-      setIsReady(false);
-
-      if (localMap) {
-        localMap.remove();
-      }
-
-      overlayRef.current = null;
-      measurementLayerRef.current = null;
-      mapRef.current = null;
-      leafletRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map) {
-      return;
-    }
-
-    if (fitToData && !initialViewState) {
-      const dataBounds = getBoundsFromPoints(deferredPoints);
-
-      if (dataBounds) {
-        map.fitBounds(
-          [
-            [dataBounds[1], dataBounds[0]],
-            [dataBounds[3], dataBounds[2]],
-          ],
-          {
-            animate: false,
-            padding: [fitBoundsPadding, fitBoundsPadding],
-          },
-        );
-      }
-    }
-
-    syncSource();
-  }, [deferredPoints, features, fitBoundsPadding, fitToData, initialViewState, isMeasuring, syncSource]);
-
-  return (
-    <div
-      aria-label={mapLabel}
-      className={joinClassNames("mb-maps", isMeasuring && "mb-maps--measuring", className)}
-      data-map-ready={isReady ? "true" : "false"}
-      style={{
-        minHeight: 480,
-        width: "100%",
-        ...style,
-      }}
-    >
-      <div ref={containerRef} className="mb-maps__canvas" />
-    </div>
-  );
+  return <PointMap {...props} mapDisplay="flat" />;
 }
 
 export function GlobePointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
@@ -765,58 +579,6 @@ function GlobePointFeature<TProperties extends Record<string, unknown>>({
       <title>{feature.point.label}</title>
     </circle>
   );
-}
-
-function renderPointOverlay<TProperties extends Record<string, unknown>>({
-  features,
-  getPointColor,
-  getPointRadius,
-  handleClick,
-  isMeasuring,
-  leaflet,
-  map,
-  overlay,
-  pointColor,
-  pointRadius,
-}: {
-  features: readonly PointMapFeature<TProperties>[];
-  getPointColor?: (feature: PointMapFeature<TProperties>) => string;
-  getPointRadius?: (feature: PointMapFeature<TProperties>) => number;
-  handleClick: (feature: PointMapFeature<TProperties> | null) => void;
-  isMeasuring: boolean;
-  leaflet: typeof import("leaflet");
-  map: LeafletMap;
-  overlay: LayerGroup;
-  pointColor: string;
-  pointRadius: number;
-}) {
-  overlay.clearLayers();
-
-  for (const feature of features) {
-    const marker = leaflet.circleMarker(toLeafletLatLng(feature.coordinates), {
-      className: "mb-maps__point-marker",
-      color: "#ffffff",
-      fillColor: getPointColor?.(feature) ?? pointColor,
-      fillOpacity: 0.92,
-      interactive: !isMeasuring,
-      opacity: 1,
-      radius: Math.max(0, getPointRadius?.(feature) ?? pointRadius),
-      weight: 2,
-    });
-
-    if (!isMeasuring) {
-      marker.on("click", () => {
-        handleClick(feature);
-      });
-      marker.on("mouseover", () => {
-        map.getContainer().style.cursor = "pointer";
-      });
-      marker.on("mouseout", () => {
-        map.getContainer().style.cursor = "";
-      });
-    }
-    marker.addTo(overlay);
-  }
 }
 
 function useBubbleMapPointProps<TProperties extends Record<string, unknown>>(

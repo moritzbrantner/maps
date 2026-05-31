@@ -9,7 +9,7 @@ import {
   type TemporalMapTrack,
 } from ".";
 
-const leafletMock = vi.hoisted(() => {
+const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   type Layer = {
     latLng?: [number, number];
@@ -168,14 +168,14 @@ const leafletMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("leaflet", () => leafletMock);
+vi.mock("flat", () => flatMock);
 
 afterEach(() => {
-  leafletMock.reset();
+  flatMock.reset();
 });
 
 function getRenderedLayersByType(type: string) {
-  return leafletMock
+  return flatMock
     .getLayerGroups()
     .flatMap((group) => group.layers)
     .filter((layer) => layer.type === type);
@@ -210,7 +210,7 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
     expect(map.getAttribute("data-map-ready")).toBe("true");
     expect(map.querySelector(".mb-maps__globe")).toBeTruthy();
     expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
-    expect(leafletMock.getMaps()).toHaveLength(0);
+    expect(flatMock.getMaps()).toHaveLength(0);
   });
 
   test("renders timeline controls and slices track points into the map overlay", async () => {
@@ -267,7 +267,7 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
       expect(screen.getByLabelText("Courier timeline").getAttribute("data-map-ready")).toBe("true");
     });
 
-    const pointMarker = leafletMock
+    const pointMarker = flatMock
       .getLayerGroups()[0]
       ?.layers.find((layer) => layer.options?.className === "mb-maps__point-marker");
 
@@ -322,7 +322,7 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
       expect(controller).not.toBeNull();
     });
 
-    expect(leafletMock.getFitBoundsCallCount()).toBe(0);
+    expect(flatMock.getFitBoundsCallCount()).toBe(0);
 
     fireEvent.change(screen.getByRole("slider", { name: "Timeline" }), {
       target: {
@@ -334,14 +334,14 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
       "70",
     );
     await waitFor(() => {
-      const pointMarker = leafletMock
+      const pointMarker = flatMock
         .getLayerGroups()[0]
         ?.layers.find((layer) => layer.options?.className === "mb-maps__point-marker");
 
       expect(pointMarker?.latLng?.[0]).toBeCloseTo(56.25, 6);
       expect(pointMarker?.latLng?.[1]).toBeCloseTo(13.958333, 6);
     });
-    expect(leafletMock.getFitBoundsCallCount()).toBe(0);
+    expect(flatMock.getFitBoundsCallCount()).toBe(0);
 
     act(() => {
       controller!.setViewState({ center: [9, 52], zoom: 5 }, "programmatic");
@@ -403,7 +403,7 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
     });
 
     expect(
-      leafletMock
+      flatMock
         .getLayerGroups()
         .flatMap((group) => group.layers)
         .map((layer) => layer.type),

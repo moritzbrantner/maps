@@ -2,7 +2,7 @@
 
 import { useContext, useDeferredValue, useEffect, useId, useMemo, type ReactNode } from "react";
 
-import { createVisibleSvgPath, joinClassNames, toLeafletLatLng } from "./map-display";
+import { createVisibleSvgPath, joinClassNames, toLatLng } from "./map-display";
 import {
   createFlatGeometryLayers,
   getGeometryCenter,
@@ -10,7 +10,7 @@ import {
   projectGeometryCenter,
   resolveFeatureStyle,
   type FlatGeometryLayer,
-  type LeafletFeaturePointerEvent,
+  type FlatFeaturePointerEvent,
 } from "./geojson-rendering";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-view";
@@ -85,7 +85,7 @@ export function GeoJsonLayer<
 
     return surface.registerFlatLayer(
       resolvedLayerId,
-      ({ interactionMode, layer, leaflet, map }) => {
+      ({ interactionMode, layer, flat, map }) => {
         layer.clearLayers();
 
         for (const feature of features) {
@@ -101,7 +101,7 @@ export function GeoJsonLayer<
             bubblingMouseEvents: false,
             className,
             interactive: interactionMode === "none",
-            leaflet,
+            flat,
             selected,
             style,
           });
@@ -395,7 +395,7 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
   layer: FlatGeometryLayer,
   options: {
     feature: GeoJsonLayerFeature<TProperties>;
-    getPosition: (event: LeafletFeaturePointerEvent) => { x: number; y: number };
+    getPosition: (event: FlatFeaturePointerEvent) => { x: number; y: number };
     map: { getContainer: () => { style: { cursor: string } } };
     onFeatureContextMenu?: (feature: GeoJsonLayerFeature<TProperties>) => void;
     onFeatureHover?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
@@ -411,13 +411,13 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
     surface: MapSurfaceContextValue;
   },
 ) {
-  layer.on("click", (event: LeafletFeaturePointerEvent = {}) => {
+  layer.on("click", (event: FlatFeaturePointerEvent = {}) => {
     options.surface.handleFeatureClick(options.feature, options.getPosition(event), {
       onFeatureSelect: options.onFeatureSelect,
       renderFeaturePopup: options.renderFeaturePopup,
     });
   });
-  layer.on("contextmenu", (event: LeafletFeaturePointerEvent = {}) => {
+  layer.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
     suppressNativeContextMenu(event);
     options.surface.handleFeatureContextMenu(options.feature, options.getPosition(event), {
       coordinates: getGeometryCenter(options.feature.geometry),
@@ -427,14 +427,14 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
       renderFeaturePopup: options.renderFeaturePopup,
     });
   });
-  layer.on("mouseover", (event: LeafletFeaturePointerEvent = {}) => {
+  layer.on("mouseover", (event: FlatFeaturePointerEvent = {}) => {
     options.map.getContainer().style.cursor = "pointer";
     options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
       onFeatureHover: options.onFeatureHover,
       renderFeatureTooltip: options.renderFeatureTooltip,
     });
   });
-  layer.on("mousemove", (event: LeafletFeaturePointerEvent = {}) => {
+  layer.on("mousemove", (event: FlatFeaturePointerEvent = {}) => {
     options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
       onFeatureHover: options.onFeatureHover,
       renderFeatureTooltip: options.renderFeatureTooltip,
@@ -452,14 +452,14 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
 function getFlatFeaturePosition(
   map: { latLngToContainerPoint?: (latLng: [number, number]) => { x: number; y: number } },
   geometry: TemporalGeoJsonSupportedGeometry,
-  event: LeafletFeaturePointerEvent,
+  event: FlatFeaturePointerEvent,
 ) {
   if (event.containerPoint) {
     return event.containerPoint;
   }
 
   return (
-    map.latLngToContainerPoint?.(toLeafletLatLng(getGeometryCenter(geometry))) ?? { x: 0, y: 0 }
+    map.latLngToContainerPoint?.(toLatLng(getGeometryCenter(geometry))) ?? { x: 0, y: 0 }
   );
 }
 
@@ -474,6 +474,6 @@ function createGeoJsonLayerFeatureId<TProperties extends Record<string, unknown>
   return partIndex === undefined ? String(baseId) : `${String(baseId)}:part-${partIndex}`;
 }
 
-function suppressNativeContextMenu(event: LeafletFeaturePointerEvent) {
+function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
   event.originalEvent?.preventDefault?.();
 }

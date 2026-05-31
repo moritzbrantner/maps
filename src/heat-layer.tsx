@@ -11,7 +11,8 @@ import {
   type PointAggregationIndexOptions,
   type ViewportAggregationQuery,
 } from "./aggregation";
-import { toLeafletLatLng } from "./map-display";
+import { toLatLng } from "./map-display";
+import type { FlatLayer, FlatLayerFactory, FlatLayerGroup, FlatMapAdapter } from "./maplibre-compat";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 import {
@@ -346,7 +347,9 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     }
 
     const flatRenderState = flatRenderStateRef.current;
-    const unregister = surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, leaflet, map }) => {
+    const unregister = surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
+      flatRenderState.surfaceLayer = null;
+      flatRenderState.surfaceClassName = null;
       clearHeatLayerManagedLayers(layer, flatRenderState.dataLayers);
       clearHeatLayerManagedLayers(layer, flatRenderState.contourLayers);
 
@@ -360,7 +363,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
           renderHeatLayerFieldSurface({
             image: fieldImage,
             layer,
-            leaflet,
+            flat,
             opacity: fieldOpacity ?? heatmapOpacity,
             state: flatRenderState,
           });
@@ -373,7 +376,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
             collection: fieldContourCollection,
             isMeasuring,
             layer,
-            leaflet,
+            flat,
             lineColor: fieldContourColor,
             lineOpacity: fieldContourOpacity ?? fieldOpacity ?? heatmapOpacity,
             lineWidth: fieldContourLineWidth,
@@ -391,7 +394,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
             formatValue: dataPointValueFormat,
             isMeasuring,
             layer,
-            leaflet,
+            flat,
             opacity: dataPointOpacity,
             radius: dataPointRadius,
             state: flatRenderState,
@@ -412,7 +415,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         data,
         intensity: heatmapIntensity,
         layer,
-        leaflet,
+        flat,
         map,
         mode: heatmapSurfaceMode,
         opacity: heatmapOpacity,
@@ -427,7 +430,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
           formatValue: dataPointValueFormat,
           isMeasuring,
           layer,
-          leaflet,
+          flat,
           opacity: dataPointOpacity,
           radius: dataPointRadius,
           state: flatRenderState,
@@ -760,13 +763,13 @@ function getHeatLayerValueDomain(values: readonly number[]): [min: number, max: 
 function renderHeatLayerFieldSurface({
   image,
   layer,
-  leaflet,
+  flat,
   opacity,
   state,
 }: {
   image: HeatFieldImage | null;
-  layer: import("leaflet").LayerGroup;
-  leaflet: typeof import("leaflet");
+  layer: FlatLayerGroup;
+  flat: FlatLayerFactory;
   opacity: number;
   state: HeatLayerFlatRenderState;
 }) {
@@ -784,7 +787,7 @@ function renderHeatLayerFieldSurface({
     ],
     className: "mb-maps__heat-surface mb-maps__heat-surface--field",
     layer,
-    leaflet,
+    flat,
     opacity,
     state,
     url: image.url,
@@ -795,7 +798,7 @@ function renderHeatLayerContourSurface({
   collection,
   isMeasuring,
   layer,
-  leaflet,
+  flat,
   lineColor,
   lineOpacity,
   lineWidth,
@@ -803,8 +806,8 @@ function renderHeatLayerContourSurface({
 }: {
   collection: HeatFieldContourFeatureCollection | null;
   isMeasuring: boolean;
-  layer: import("leaflet").LayerGroup;
-  leaflet: typeof import("leaflet");
+  layer: FlatLayerGroup;
+  flat: FlatLayerFactory;
   lineColor?: string;
   lineOpacity: number;
   lineWidth?: number;
@@ -832,8 +835,8 @@ function renderHeatLayerContourSurface({
       continue;
     }
 
-    const polyline = leaflet.polyline(
-      lines.map((line) => line.map(toLeafletLatLng)),
+    const polyline = flat.polyline(
+      lines.map((line) => line.map(toLatLng)),
       {
         bubblingMouseEvents: false,
         className: "mb-maps__heat-contour",
@@ -856,7 +859,7 @@ function renderHeatLayerDataPoints({
   formatValue,
   isMeasuring,
   layer,
-  leaflet,
+  flat,
   opacity,
   radius,
   state,
@@ -867,8 +870,8 @@ function renderHeatLayerDataPoints({
   data: HeatLayerFeatureCollection;
   formatValue?: (value: number) => string;
   isMeasuring: boolean;
-  layer: import("leaflet").LayerGroup;
-  leaflet: typeof import("leaflet");
+  layer: FlatLayerGroup;
+  flat: FlatLayerFactory;
   opacity: number;
   radius: number;
   state: HeatLayerFlatRenderState;
@@ -877,7 +880,7 @@ function renderHeatLayerDataPoints({
 }) {
   for (const feature of data.features) {
     const [longitude, latitude] = feature.geometry.coordinates;
-    const marker = leaflet.circleMarker(toLeafletLatLng([longitude, latitude]), {
+    const marker = flat.circleMarker(toLatLng([longitude, latitude]), {
       bubblingMouseEvents: false,
       className: "mb-maps__heat-data-point",
       color: strokeColor,
@@ -948,7 +951,7 @@ function renderHeatLayerSurface({
   data,
   intensity,
   layer,
-  leaflet,
+  flat,
   map,
   mode,
   opacity,
@@ -958,9 +961,9 @@ function renderHeatLayerSurface({
   colorRamp: PreparedHeatLayerColorRamp;
   data: HeatLayerFeatureCollection;
   intensity: number;
-  layer: import("leaflet").LayerGroup;
-  leaflet: typeof import("leaflet");
-  map: import("leaflet").Map;
+  layer: FlatLayerGroup;
+  flat: FlatLayerFactory;
+  map: FlatMapAdapter;
   mode: HeatLayerSurfaceMode;
   opacity: number;
   radius: HeatLayerRadius;
@@ -973,7 +976,7 @@ function renderHeatLayerSurface({
   const sources = data.features
     .map((feature) => {
       const [longitude, latitude] = feature.geometry.coordinates;
-      const point = map.latLngToContainerPoint(toLeafletLatLng([longitude, latitude]));
+      const point = map.latLngToContainerPoint(toLatLng([longitude, latitude]));
       const baseRadius =
         resolveHeatLayerProjectedRadius(radius, feature.geometry.coordinates, map) *
         Math.max(0, intensity);
@@ -1054,7 +1057,7 @@ function renderHeatLayerSurface({
     ],
     className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
     layer,
-    leaflet,
+    flat,
     opacity: safeOpacity,
     state,
     url,
@@ -1125,15 +1128,15 @@ function renderOrUpdateHeatLayerImageOverlay({
   bounds,
   className,
   layer,
-  leaflet,
+  flat,
   opacity,
   state,
   url,
 }: {
   bounds: [[number, number], [number, number]];
   className: string;
-  layer: import("leaflet").LayerGroup;
-  leaflet: typeof import("leaflet");
+  layer: FlatLayerGroup;
+  flat: FlatLayerFactory;
   opacity: number;
   state: HeatLayerFlatRenderState;
   url: string;
@@ -1142,7 +1145,7 @@ function renderOrUpdateHeatLayerImageOverlay({
 
   if (!state.surfaceLayer || state.surfaceClassName !== className) {
     removeHeatLayerSurfaceLayer(layer, state);
-    state.surfaceLayer = leaflet
+    state.surfaceLayer = flat
       .imageOverlay(url, bounds, {
         className,
         interactive: false,
@@ -1195,7 +1198,7 @@ function updateHeatLayerImageOverlay(
 }
 
 function removeHeatLayerSurfaceLayer(
-  parent: import("leaflet").LayerGroup,
+  parent: FlatLayerGroup,
   state: HeatLayerFlatRenderState,
 ) {
   if (!state.surfaceLayer) {
@@ -1208,7 +1211,7 @@ function removeHeatLayerSurfaceLayer(
 }
 
 function clearHeatLayerManagedLayers(
-  parent: import("leaflet").LayerGroup,
+  parent: FlatLayerGroup,
   layers: HeatLayerManagedLayer[],
 ) {
   for (const layer of layers) {
@@ -1219,15 +1222,15 @@ function clearHeatLayerManagedLayers(
 }
 
 function removeHeatLayerManagedLayer(
-  parent: import("leaflet").LayerGroup,
+  parent: FlatLayerGroup,
   layer: HeatLayerManagedLayer,
 ) {
-  const removableParent = parent as import("leaflet").LayerGroup & {
+  const removableParent = parent as FlatLayerGroup & {
     layers?: unknown[];
   };
 
   if (typeof removableParent.removeLayer === "function") {
-    removableParent.removeLayer(layer as import("leaflet").Layer);
+    removableParent.removeLayer(layer as FlatLayer);
     return;
   }
 
@@ -1307,11 +1310,11 @@ function resolveHeatLayerPointWeight<TProperties>(
 function resolveHeatLayerProjectedRadius(
   radius: HeatLayerRadius,
   coordinate: [longitude: number, latitude: number],
-  map: import("leaflet").Map,
+  map: FlatMapAdapter,
 ) {
   if (typeof radius === "object" && "meters" in radius) {
     return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
-      map.latLngToContainerPoint(toLeafletLatLng(nextCoordinate)),
+      map.latLngToContainerPoint(toLatLng(nextCoordinate)),
     );
   }
 
@@ -1327,7 +1330,7 @@ function getHeatLayerDataInfluenceRadius(radius: HeatLayerRadius, intensity: num
 }
 
 function getHeatLayerPaddedBounds(
-  map: import("leaflet").Map,
+  map: FlatMapAdapter,
   radius: HeatLayerRadius,
   intensity: number,
 ): [west: number, south: number, east: number, north: number] {
@@ -1350,7 +1353,7 @@ function getHeatLayerPaddedBounds(
 }
 
 function getHeatLayerViewportBounds(
-  map: import("leaflet").Map,
+  map: FlatMapAdapter,
 ): [west: number, south: number, east: number, north: number] {
   const bounds = map.getBounds();
 
