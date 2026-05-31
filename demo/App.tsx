@@ -39,6 +39,7 @@ import {
   type MapFlow,
   type FlowMapFeature,
   type MapPoint,
+  type RasterMapStyle,
   type HeatFieldRenderMode,
   type PointMapFeature,
   type MapViewState,
@@ -54,6 +55,11 @@ import {
   type TemporalMapTrack,
   moveGeoJsonGeometry,
 } from "@moritzbrantner/maps";
+
+const demoMapStyle: RasterMapStyle | undefined =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
+    ? { tiles: false }
+    : undefined;
 
 type DemoPointProperties = {
   city: string;
@@ -1527,6 +1533,7 @@ function renderMap(
           draggable
           fitToData={false}
           initialViewState={{ center: [9.8, 50.8], zoom: 5 }}
+          mapStyle={demoMapStyle}
           onFeatureDragEnd={editablePoints.onMovePoint}
           onFeatureSelect={editablePoints.onSelectPoint}
           onMapContextMenu={() => {
@@ -1590,6 +1597,7 @@ function renderMap(
           interpolationK={10}
           interpolationPower={2}
           mapLabel="Europe temperature surface"
+          mapStyle={demoMapStyle}
           onViewStateChange={setViewport}
           points={demoTemperaturePoints}
           showDataPoints={showHeatDataPoints}
@@ -1607,6 +1615,7 @@ function renderMap(
           flowColor="#b45309"
           flowShape="arc"
           flows={demoFlows}
+          mapStyle={demoMapStyle}
           maxWidth={18}
           onFeatureSelect={(feature) => setSelectedFlowId(feature?.flow.id ?? null)}
           onViewStateChange={setViewport}
@@ -1623,6 +1632,7 @@ function renderMap(
       return (
         <MapView
           defaultViewState={{ center: [9.8, 50.8], zoom: 5 }}
+          mapStyle={demoMapStyle}
           onViewStateChange={setViewport}
           style={{ minHeight: 620 }}
         >
@@ -1648,6 +1658,7 @@ function renderMap(
           initialViewState={demoTimelineViewState}
           loopPlayback
           mapLabel="European logistics timeline"
+          mapStyle={demoMapStyle}
           onTimeChange={setTemporalTime}
           onViewStateChange={setViewport}
           playbackRate={6}
@@ -1665,6 +1676,7 @@ function renderMap(
           {...sharedMeasurementProps}
           bubbleColor="#0f766e"
           mapDisplay="globe"
+          mapStyle={demoMapStyle}
           onViewStateChange={setViewport}
           points={points}
           renderFeatureTooltip={(feature) => feature.point.label}
@@ -1682,6 +1694,7 @@ function renderMap(
           geoJson={editableGeoJson}
           getFeatureId={getDemoFeatureId}
           initialViewState={{ center: [8.4, 50.4], zoom: 4.4 }}
+          mapStyle={demoMapStyle}
           onEditModeChange={setEditMode}
           onEditorSelectionChange={setGeoJsonSelection}
           onFeatureCollectionChange={(next) => setEditableGeoJson(next)}
@@ -1704,6 +1717,7 @@ function renderMap(
         <ClusteredMap
           {...sharedMeasurementProps}
           clusterRadius={76}
+          mapStyle={demoMapStyle}
           onViewStateChange={setViewport}
           points={points}
           renderFeaturePopup={(feature) =>
@@ -2134,6 +2148,7 @@ function GeoJsonInterpolationWorkbench() {
           defaultViewState={{ center: [6.5, 48.5], zoom: 4.2 }}
           fitBoundsPadding={72}
           mapLabel="GeoJSON interpolation preview"
+          mapStyle={demoMapStyle}
           style={{ minHeight: 620 }}
         >
           <GeoJsonLayer
@@ -3224,6 +3239,7 @@ function GeoJsonGeometryExample() {
         defaultViewState={{ center: [8.4, 50.4], zoom: 4.4 }}
         fitToData={false}
         mapLabel="Rendered GeoJSON geometries"
+        mapStyle={demoMapStyle}
         style={{ minHeight: 620 }}
       >
         <HeatLayer

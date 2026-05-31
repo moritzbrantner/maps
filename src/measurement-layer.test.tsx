@@ -451,6 +451,9 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
       />,
     );
     const clusteredMap = await waitForReadyMap("Interactive timeline map");
+    await waitForMeasurementHandlers(clusteredMap);
+
+    const clusteredClickHandlerCount = clusteredMap.handlers.get("click")?.length ?? 0;
 
     act(() => {
       clusteredMap.fire("click", { latlng: { lat: 10, lng: 20 } });
@@ -458,10 +461,11 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
     });
 
     expect(clusteredCreate).toHaveBeenCalledTimes(1);
+    expect(clusteredMap.handlers.get("click")).toHaveLength(clusteredClickHandlerCount);
     clustered.unmount();
     flatMock.reset();
 
-    render(
+    const heat = render(
       <TemporalHeatMap
         measurementMode="bee-line"
         onMeasurementCreate={heatCreate}
@@ -470,6 +474,9 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
       />,
     );
     const heatMap = await waitForReadyMap("Interactive temporal heat map");
+    await waitForMeasurementHandlers(heatMap);
+
+    const heatClickHandlerCount = heatMap.handlers.get("click")?.length ?? 0;
 
     act(() => {
       heatMap.fire("click", { latlng: { lat: 10, lng: 20 } });
@@ -477,6 +484,8 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
     });
 
     expect(heatCreate).toHaveBeenCalledTimes(1);
+    expect(heatMap.handlers.get("click")).toHaveLength(heatClickHandlerCount);
+    heat.unmount();
   });
 });
 
@@ -486,4 +495,11 @@ async function waitForReadyMap(label: string) {
   });
 
   return flatMock.getMaps().at(-1)!;
+}
+
+async function waitForMeasurementHandlers(map: Awaited<ReturnType<typeof waitForReadyMap>>) {
+  await waitFor(() => {
+    expect(map.handlers.get("click")?.length ?? 0).toBeGreaterThan(1);
+    expect(map.handlers.get("mousemove")?.length ?? 0).toBeGreaterThan(0);
+  });
 }

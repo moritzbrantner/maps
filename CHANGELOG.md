@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.4
+
 ### Patch Changes
 
 - Added controlled bee-line measurement props for flat Leaflet maps.

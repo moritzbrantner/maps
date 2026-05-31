@@ -12,6 +12,9 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
+        launchOptions: {
+          args: ["--enable-unsafe-swiftshader", "--use-gl=swiftshader"],
+        },
         viewport: { height: 1000, width: 1440 },
       },
     },

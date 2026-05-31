@@ -330,8 +330,11 @@ function addEndpoint(
     .addTo(layer);
 }
 
-function getEventCoordinate(event: { latlng?: { lat?: number; lng?: number } }) {
-  const { latlng } = event;
+function getEventCoordinate(event: {
+  latlng?: { lat?: number; lng?: number };
+  lngLat?: { lat?: number; lng?: number };
+}) {
+  const latlng = event.latlng ?? event.lngLat;
 
   return normalizeMapCoordinate([latlng?.lng ?? Number.NaN, latlng?.lat ?? Number.NaN]);
 }

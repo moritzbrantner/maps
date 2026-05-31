@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useId, useState } from "react";
+import { useContext, useEffect, useEffectEvent, useId, useState } from "react";
 
 import { toLatLng } from "./map-display";
 import type { FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
@@ -35,33 +35,47 @@ export function BeeLineMeasurementLayer({
   onMeasurementSelect,
 }: BeeLineMeasurementLayerProps) {
   const surface = useContext(MapSurfaceContext);
+  const display = surface?.display;
+  const flatMap = surface?.flatMap;
+  const getGlobePointerCoordinate = surface?.getGlobePointerCoordinate;
+  const registerFlatLayer = surface?.registerFlatLayer;
+  const setMeasurementActive = surface?.setMeasurementActive;
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `measurement-layer-${generatedLayerId}`;
   const [draft, setDraft] = useState<MapBeeLineMeasurementDraft | null>(null);
   const isMeasuring = measurementMode === "bee-line";
   const draftLineColor = measurementDraftLineColor ?? measurementLineColor;
+  const emitCreate = useEffectEvent((measurement: MapBeeLineMeasurementResult) => {
+    onMeasurementCreate?.(measurement);
+  });
+  const emitDraftChange = useEffectEvent((nextDraft: MapBeeLineMeasurementDraft | null) => {
+    onMeasurementDraftChange?.(nextDraft);
+  });
+  const emitSelect = useEffectEvent((measurement: MapBeeLineMeasurement | null) => {
+    onMeasurementSelect?.(measurement);
+  });
 
   useEffect(() => {
-    surface?.setMeasurementActive(isMeasuring);
+    setMeasurementActive?.(isMeasuring);
 
     return () => {
-      surface?.setMeasurementActive(false);
+      setMeasurementActive?.(false);
     };
-  }, [isMeasuring, surface]);
+  }, [isMeasuring, setMeasurementActive]);
 
   useEffect(() => {
     if (!isMeasuring && draft) {
       setDraft(null);
-      onMeasurementDraftChange?.(null);
+      emitDraftChange(null);
     }
-  }, [draft, isMeasuring, onMeasurementDraftChange]);
+  }, [draft, isMeasuring]);
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat") {
+    if (!registerFlatLayer || display !== "flat") {
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
+    return registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
       layer.clearLayers();
 
       for (const measurement of measurements) {
@@ -71,7 +85,7 @@ export function BeeLineMeasurementLayer({
           measurement,
           measurementDistanceFormat,
           measurementLineColor,
-          onSelect: onMeasurementSelect,
+          onSelect: emitSelect,
         });
       }
 
@@ -99,23 +113,23 @@ export function BeeLineMeasurementLayer({
     measurementDistanceFormat,
     measurementLineColor,
     measurements,
-    onMeasurementSelect,
+    display,
+    registerFlatLayer,
     resolvedLayerId,
-    surface,
   ]);
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat" || !surface.flatMap || !isMeasuring) {
+    if (display !== "flat" || !flatMap || !isMeasuring) {
       return;
     }
 
-    const map = surface.flatMap;
+    const map = flatMap;
     let draftFrom: MapCoordinate | null = null;
 
     function clearDraft() {
       draftFrom = null;
       setDraft(null);
-      onMeasurementDraftChange?.(null);
+      emitDraftChange(null);
     }
 
     function handleClick(event: { latlng?: { lat?: number; lng?: number } }) {
@@ -130,7 +144,7 @@ export function BeeLineMeasurementLayer({
         const nextDraft = { from: nextCoordinate };
 
         setDraft(nextDraft);
-        onMeasurementDraftChange?.(nextDraft);
+        emitDraftChange(nextDraft);
         return;
       }
 
@@ -145,7 +159,7 @@ export function BeeLineMeasurementLayer({
         return;
       }
 
-      onMeasurementCreate?.(result);
+      emitCreate(result);
       clearDraft();
     }
 
@@ -171,7 +185,7 @@ export function BeeLineMeasurementLayer({
       };
 
       setDraft(nextDraft);
-      onMeasurementDraftChange?.(nextDraft);
+      emitDraftChange(nextDraft);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -191,21 +205,20 @@ export function BeeLineMeasurementLayer({
       clearDraft();
     };
   }, [
+    display,
+    flatMap,
     isMeasuring,
     measurementDistanceFormat,
-    onMeasurementCreate,
-    onMeasurementDraftChange,
-    surface,
   ]);
 
   useEffect(() => {
-    if (!surface || surface.display !== "globe" || !isMeasuring) {
+    if (display !== "globe" || !isMeasuring) {
       return;
     }
 
     function clearDraft() {
       setDraft(null);
-      onMeasurementDraftChange?.(null);
+      emitDraftChange(null);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -219,9 +232,9 @@ export function BeeLineMeasurementLayer({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [draft, isMeasuring, onMeasurementDraftChange, surface]);
+  }, [display, draft, isMeasuring]);
 
-  if (!surface || surface.display !== "globe") {
+  if (!surface || display !== "globe") {
     return null;
   }
 
@@ -234,7 +247,9 @@ export function BeeLineMeasurementLayer({
         }
 
         event.stopPropagation();
-        const coordinate = surface.getGlobePointerCoordinate(event as unknown as React.PointerEvent<SVGSVGElement>);
+        const coordinate = getGlobePointerCoordinate?.(
+          event as unknown as React.PointerEvent<SVGSVGElement>,
+        );
 
         if (!coordinate) {
           return;
@@ -262,7 +277,9 @@ export function BeeLineMeasurementLayer({
           return;
         }
 
-        const coordinate = surface.getGlobePointerCoordinate(event as unknown as React.PointerEvent<SVGSVGElement>);
+        const coordinate = getGlobePointerCoordinate?.(
+          event as unknown as React.PointerEvent<SVGSVGElement>,
+        );
         const result = coordinate
           ? createMeasurementResult(draft.from, coordinate, measurementDistanceFormat)
           : null;
@@ -498,8 +515,11 @@ function addEndpoint(
     .addTo(layer);
 }
 
-function getEventCoordinate(event: { latlng?: { lat?: number; lng?: number } }) {
-  const { latlng } = event;
+function getEventCoordinate(event: {
+  latlng?: { lat?: number; lng?: number };
+  lngLat?: { lat?: number; lng?: number };
+}) {
+  const latlng = event.latlng ?? event.lngLat;
 
   return normalizeMapCoordinate([latlng?.lng ?? Number.NaN, latlng?.lat ?? Number.NaN]);
 }

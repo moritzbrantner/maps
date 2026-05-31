@@ -2435,6 +2435,10 @@ function getEventCoordinate(
     return [event.latlng.lng, event.latlng.lat];
   }
 
+  if (event.lngLat) {
+    return [event.lngLat.lng, event.lngLat.lat];
+  }
+
   if (event.containerPoint && map.containerPointToLatLng) {
     const latlng = map.containerPointToLatLng([event.containerPoint.x, event.containerPoint.y]);
 

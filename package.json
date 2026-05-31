@@ -1,6 +1,6 @@
 {
   "name": "@moritzbrantner/maps",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": false,
   "description": "React map components and temporal geo utilities backed by density-aware aggregation.",
   "license": "UNLICENSED",

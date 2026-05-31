@@ -13,6 +13,7 @@ export type MapLibreMapStyle = string | StyleSpecification;
 export type FlatPointerEvent = {
   containerPoint?: { x: number; y: number };
   latlng?: { lat: number; lng: number };
+  lngLat?: { lat: number; lng: number };
   originalEvent?: {
     defaultPrevented?: boolean;
     preventDefault?: () => void;
