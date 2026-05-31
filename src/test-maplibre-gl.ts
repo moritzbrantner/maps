@@ -325,6 +325,7 @@ export class Map {
   }
 
   removeLayer(id: string) {
+    (this.mockLayers.get(id) as { remove?: () => void } | undefined)?.remove?.();
     this.layers.delete(id);
     this.mockLayers.delete(id);
   }

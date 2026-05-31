@@ -20,6 +20,7 @@ const METERS_PER_DEGREE_AT_EQUATOR = 111_320;
 const TILE_SIZE = 256;
 const MAX_WEB_MERCATOR_LATITUDE = 85.05112878;
 const LARGE_SURFACE_PAYLOAD_KIB = 512;
+const MAX_STABLE_RASTER_PIXELS = 512_000;
 const COLOR_RAMP = prepareHeatLayerColorRamp([
   [0, "rgba(15, 23, 42, 0)"],
   [0.15, "#67e8f9"],
@@ -42,6 +43,12 @@ for (const viewportOptions of VIEWPORTS) {
     bounds: getPaddedViewportBounds(viewport, HEATMAP_RADIUS, HEATMAP_INTENSITY),
     zoom: viewportOptions.zoom,
   };
+  const stableCoverageBounds = getStableCoverageBounds(
+    viewport,
+    HEATMAP_RADIUS,
+    HEATMAP_INTENSITY,
+    1,
+  );
 
   console.log(`\nViewport ${viewportOptions.width}x${viewportOptions.height} zoom=${viewportOptions.zoom}`);
 
@@ -52,6 +59,11 @@ for (const viewportOptions of VIEWPORTS) {
     const data = index.getFeatureCollection(query);
     const sources = createSurfaceSources(data, viewport);
     const maxInfluenceRadius = Math.max(0, ...sources.map((source) => source.influenceRadius));
+    const stableData = index.getFeatureCollection({
+      bounds: stableCoverageBounds,
+      zoom: viewportOptions.zoom,
+    });
+    const stablePlan = createStableSurfacePlan(stableData, stableCoverageBounds, viewport);
     const dataSurfaceUrl =
       maxInfluenceRadius > 0
         ? createHeatLayerDataSurfaceDataUrl({
@@ -59,6 +71,17 @@ for (const viewportOptions of VIEWPORTS) {
             height: viewport.height,
             sources,
             width: viewport.width,
+          })
+        : "";
+    const stableSurfaceUrl =
+      stablePlan.maxInfluenceRadius > 0
+        ? createHeatLayerInterpolatedSurfaceDataUrl({
+            colorRamp: COLOR_RAMP,
+            height: stablePlan.height,
+            maxInfluenceRadius: stablePlan.maxInfluenceRadius,
+            metricProjection: stablePlan.metricProjection,
+            sources: stablePlan.sources,
+            width: stablePlan.width,
           })
         : "";
     const interpolatedSurfaceUrl =
@@ -104,6 +127,23 @@ for (const viewportOptions of VIEWPORTS) {
         width: viewport.width,
       });
       sink += url.length;
+    }, iterations);
+    const stableSurfaceMs = measureStats(() => {
+      const measuredStablePlan = createStableSurfacePlan(stableData, stableCoverageBounds, viewport);
+      const url = createHeatLayerInterpolatedSurfaceDataUrl({
+        colorRamp: COLOR_RAMP,
+        height: measuredStablePlan.height,
+        maxInfluenceRadius: measuredStablePlan.maxInfluenceRadius,
+        metricProjection: measuredStablePlan.metricProjection,
+        sources: measuredStablePlan.sources,
+        width: measuredStablePlan.width,
+      });
+      sink += url.length;
+    }, iterations);
+    const stableCacheHitMs = measureStats(() => {
+      const cacheReusable =
+        containsBounds(stableCoverageBounds, query.bounds) && stableSurfaceUrl.length > 0;
+      sink += cacheReusable ? 1 : 0;
     }, iterations);
     const moveUpdateMs = measureStats(() => {
       const measuredData = index.getFeatureCollection(query);
@@ -154,6 +194,8 @@ for (const viewportOptions of VIEWPORTS) {
       pointCount,
       projectSourcesMs,
       sourceCount: sources.length,
+      stableCacheHitMs,
+      stableSurfaceMs,
       viewport: viewportOptions,
       viewportQueryMs,
     };
@@ -170,6 +212,8 @@ for (const viewportOptions of VIEWPORTS) {
         `project=${formatStats(projectSourcesMs)}`,
         `dataSurface=${formatStats(dataSurfaceMs)}`,
         `interpolatedSurface=${formatStats(interpolatedSurfaceMs)}`,
+        `stableSurface=${formatStats(stableSurfaceMs)}`,
+        `stableHit=${formatStats(stableCacheHitMs)}`,
         `moveUpdate=${formatStats(moveUpdateMs)}`,
         `coldUpdate=${formatStats(coldUpdateMs)}`,
         `payloadKiB=${dataPayloadKiB.toFixed(1)}/${interpolatedPayloadKiB.toFixed(1)}`,
@@ -273,6 +317,131 @@ function createMetricProjection(viewport) {
       return coordinateToMetricPoint(viewport.pointToCoordinate({ x: viewport.width / 2, y })).y;
     },
   };
+}
+
+function createStableSurfacePlan(data, bounds, viewport) {
+  const dimensions = resolveStableRasterDimensions(bounds, viewport);
+  const metricBounds = getMetricBounds(bounds);
+  const dataInfluenceRadius = HEATMAP_RADIUS.meters * 2.6 * Math.max(0, HEATMAP_INTENSITY);
+  const metersPerPixel = Math.max(
+    (metricBounds.east - metricBounds.west) / Math.max(1, dimensions.width),
+    (metricBounds.north - metricBounds.south) / Math.max(1, dimensions.height),
+  );
+  const influenceRadius = dataInfluenceRadius / Math.max(1, metersPerPixel);
+  const sources = data.features
+    .map((feature) => {
+      const metricPoint = coordinateToMetricPoint(feature.geometry.coordinates);
+
+      return {
+        coordinate: feature.geometry.coordinates,
+        dataInfluenceRadius,
+        influenceRadius,
+        metricPoint,
+        point: {
+          x:
+            ((metricPoint.x - metricBounds.west) /
+              Math.max(Number.EPSILON, metricBounds.east - metricBounds.west)) *
+            dimensions.width,
+          y:
+            ((metricBounds.north - metricPoint.y) /
+              Math.max(Number.EPSILON, metricBounds.north - metricBounds.south)) *
+            dimensions.height,
+        },
+        weight: clamp(feature.properties.weight, 0, Number.POSITIVE_INFINITY),
+      };
+    })
+    .filter((source) => source.weight > 0 && source.influenceRadius > 0);
+
+  return {
+    height: dimensions.height,
+    maxInfluenceRadius: Math.max(0, ...sources.map((source) => source.influenceRadius)),
+    metricProjection: createStableMetricProjection(bounds, dimensions),
+    sources,
+    width: dimensions.width,
+  };
+}
+
+function createStableMetricProjection(bounds, dimensions) {
+  const metricBounds = getMetricBounds(bounds);
+
+  return {
+    getMetricPoint(x, y) {
+      return {
+        x:
+          metricBounds.west +
+          (x / Math.max(1, dimensions.width)) * (metricBounds.east - metricBounds.west),
+        y:
+          metricBounds.north -
+          (y / Math.max(1, dimensions.height)) * (metricBounds.north - metricBounds.south),
+      };
+    },
+    getMetricX(x) {
+      return metricBounds.west + (x / Math.max(1, dimensions.width)) * (metricBounds.east - metricBounds.west);
+    },
+    getMetricY(y) {
+      return metricBounds.north - (y / Math.max(1, dimensions.height)) * (metricBounds.north - metricBounds.south);
+    },
+  };
+}
+
+function resolveStableRasterDimensions(bounds, viewport) {
+  const metricBounds = getMetricBounds(bounds);
+  const aspectRatio = Math.max(
+    0.05,
+    (metricBounds.east - metricBounds.west) / Math.max(1, metricBounds.north - metricBounds.south),
+  );
+  const targetPixels = Math.min(MAX_STABLE_RASTER_PIXELS, Math.max(1, viewport.width * viewport.height));
+  const width = Math.max(1, Math.round(Math.sqrt(targetPixels * aspectRatio)));
+  const height = Math.max(1, Math.round(width / aspectRatio));
+
+  if (width * height <= MAX_STABLE_RASTER_PIXELS) {
+    return { height, width };
+  }
+
+  const scale = Math.sqrt(MAX_STABLE_RASTER_PIXELS / (width * height));
+
+  return {
+    height: Math.max(1, Math.floor(height * scale)),
+    width: Math.max(1, Math.floor(width * scale)),
+  };
+}
+
+function getStableCoverageBounds(viewport, radius, intensity, overscanRatio) {
+  const padding =
+    Math.max(viewport.width, viewport.height) * Math.max(0, overscanRatio) +
+    getProjectedMetersRadius(radius.meters, viewport.center, (coordinate) =>
+      viewport.coordinateToPoint(coordinate),
+    ) *
+      2.6 *
+      Math.max(0, intensity);
+  const northWest = viewport.pointToCoordinate({ x: -padding, y: -padding });
+  const southEast = viewport.pointToCoordinate({
+    x: viewport.width + padding,
+    y: viewport.height + padding,
+  });
+
+  return [
+    clamp(Math.min(northWest[0], southEast[0]), -180, 180),
+    clamp(Math.min(northWest[1], southEast[1]), -90, 90),
+    clamp(Math.max(northWest[0], southEast[0]), -180, 180),
+    clamp(Math.max(northWest[1], southEast[1]), -90, 90),
+  ];
+}
+
+function getMetricBounds(bounds) {
+  const southWest = coordinateToMetricPoint([bounds[0], bounds[1]]);
+  const northEast = coordinateToMetricPoint([bounds[2], bounds[3]]);
+
+  return {
+    east: Math.max(southWest.x, northEast.x),
+    north: Math.max(southWest.y, northEast.y),
+    south: Math.min(southWest.y, northEast.y),
+    west: Math.min(southWest.x, northEast.x),
+  };
+}
+
+function containsBounds(outer, inner) {
+  return outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3];
 }
 
 function createViewport({ height, width, zoom }) {

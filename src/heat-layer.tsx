@@ -32,16 +32,22 @@ import {
 } from "./scalar-field-render";
 import {
   createHeatLayerDataSurfaceDataUrl,
+  createHeatLayerDataSurfaceImage,
   createHeatLayerInterpolatedSurfaceDataUrl,
+  createHeatLayerInterpolatedSurfaceImage,
   prepareHeatLayerColorRamp,
   resolveHeatLayerColor,
   type HeatLayerMetricPoint,
+  type HeatLayerSurfaceImage,
   type HeatLayerSurfaceSource,
   type PreparedHeatLayerColorRamp,
 } from "./heat-surface";
 
 const HEAT_MAP_WEIGHT_METRIC = "__moritzbrantnerHeatMapWeight";
 const DEFAULT_HEAT_LAYER_RADIUS_METERS = 50_000;
+const DEFAULT_HEAT_LAYER_MAX_RASTER_PIXELS = 512_000;
+const DEFAULT_HEAT_LAYER_MIN_ZOOM_DELTA_FOR_REBUILD = 1;
+const DEFAULT_HEAT_LAYER_OVERSCAN_RATIO = 1;
 const METERS_PER_DEGREE_AT_EQUATOR = 111_320;
 
 export type HeatLayerWeightAccessor<TProperties = Record<string, unknown>> = (
@@ -53,6 +59,8 @@ export type HeatLayerColorStop = readonly [density: number, color: string];
 export type HeatFieldRenderMode = "raster" | "contours" | "raster-contours";
 
 export type HeatLayerSurfaceMode = "data" | "interpolated" | "field";
+
+export type HeatLayerRenderStrategy = "auto" | "stable-raster" | "viewport-raster";
 
 export type HeatLayerRadius =
   | number
@@ -113,10 +121,15 @@ export type HeatLayerProps<TProperties = Record<string, unknown>> =
     heatmapAggregationRadius?: PointAggregationIndexOptions<TProperties>["radius"];
     heatmapColorRamp?: readonly HeatLayerColorStop[];
     heatmapIntensity?: number;
+    heatmapAsyncRender?: boolean;
+    heatmapMaxRasterPixels?: number;
     heatmapMaxZoom?: number;
+    heatmapMinZoomDeltaForRebuild?: number;
     heatmapSurfaceMode?: HeatLayerSurfaceMode;
     heatmapOpacity?: number;
+    heatmapOverscanRatio?: number;
     heatmapRadius?: HeatLayerRadius;
+    heatmapRenderStrategy?: HeatLayerRenderStrategy;
     interpolationEpsilonMeters?: HeatFieldOptions<TProperties>["interpolationEpsilonMeters"];
     interpolationExtrapolate?: HeatFieldOptions<TProperties>["interpolationExtrapolate"];
     interpolationK?: HeatFieldOptions<TProperties>["interpolationK"];
@@ -162,14 +175,23 @@ type HeatLayerImageOverlay = HeatLayerManagedLayer & {
 type HeatLayerFlatRenderState = {
   contourLayers: HeatLayerManagedLayer[];
   dataLayers: HeatLayerManagedLayer[];
+  renderRequestId: number;
   surfaceCache: HeatLayerSurfaceCache | null;
   surfaceClassName: string | null;
   surfaceLayer: HeatLayerImageOverlay | null;
 };
 
 type HeatLayerSurfaceCache = {
+  bounds: [west: number, south: number, east: number, north: number];
+  coverageBounds: [west: number, south: number, east: number, north: number];
+  dataSignature: string;
   key: string;
+  objectUrl: boolean;
+  rasterHeight: number;
+  rasterWidth: number;
+  strategy: Exclude<HeatLayerRenderStrategy, "auto">;
   url: string;
+  zoomBucket: number;
 };
 
 export function HeatLayer<TProperties = Record<string, unknown>>({
@@ -193,13 +215,18 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   heatmapAggregationMaxZoom,
   heatmapAggregationMinZoom,
   heatmapAggregationRadius = 56,
+  heatmapAsyncRender = canUseAsyncHeatLayerRender(),
   heatmapColorRamp = defaultHeatLayerColorRamp,
   heatmapIntensity = 1,
+  heatmapMaxRasterPixels = DEFAULT_HEAT_LAYER_MAX_RASTER_PIXELS,
   heatmapMaxZoom = 16,
+  heatmapMinZoomDeltaForRebuild = DEFAULT_HEAT_LAYER_MIN_ZOOM_DELTA_FOR_REBUILD,
   heatmapOpacity = 0.84,
+  heatmapOverscanRatio = DEFAULT_HEAT_LAYER_OVERSCAN_RATIO,
   heatmapRadius = {
     meters: DEFAULT_HEAT_LAYER_RADIUS_METERS,
   },
+  heatmapRenderStrategy = "auto",
   heatmapSurfaceMode = "interpolated",
   interpolationEpsilonMeters,
   interpolationExtrapolate,
@@ -340,18 +367,19 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   );
   const renderVersion =
     heatmapAggregationMaxZoom ?? heatmapAggregationMinZoom ?? heatmapAggregationRadius ?? null;
+  const surfaceDisplay = surface?.display;
+  const registerFlatLayer = surface?.registerFlatLayer;
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat") {
+    if (!registerFlatLayer || surfaceDisplay !== "flat") {
       return;
     }
 
     const flatRenderState = flatRenderStateRef.current;
-    const unregister = surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
-      flatRenderState.surfaceLayer = null;
-      flatRenderState.surfaceClassName = null;
+    const unregister = registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
       clearHeatLayerManagedLayers(layer, flatRenderState.dataLayers);
       clearHeatLayerManagedLayers(layer, flatRenderState.contourLayers);
+      clearHeatLayerNonSurfaceLayers(layer, flatRenderState);
 
       if (map.getZoom() > heatmapMaxZoom) {
         removeHeatLayerSurfaceLayer(layer, flatRenderState);
@@ -407,20 +435,34 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       }
 
       const data = heatIndex.getFeatureCollection(
-        getHeatLayerPaddedBounds(map, heatmapRadius, heatmapIntensity),
+        getHeatLayerSurfaceQueryBounds({
+          intensity: heatmapIntensity,
+          map,
+          maxRasterPixels: heatmapMaxRasterPixels,
+          minZoomDeltaForRebuild: heatmapMinZoomDeltaForRebuild,
+          overscanRatio: heatmapOverscanRatio,
+          radius: heatmapRadius,
+          state: flatRenderState,
+          strategy: heatmapRenderStrategy,
+        }),
       );
 
       renderHeatLayerSurface({
+        asyncRender: heatmapAsyncRender,
         colorRamp: preparedHeatmapColorRamp,
         data,
         intensity: heatmapIntensity,
         layer,
         flat,
         map,
+        maxRasterPixels: heatmapMaxRasterPixels,
+        minZoomDeltaForRebuild: heatmapMinZoomDeltaForRebuild,
         mode: heatmapSurfaceMode,
         opacity: heatmapOpacity,
+        overscanRatio: heatmapOverscanRatio,
         radius: heatmapRadius,
         state: flatRenderState,
+        strategy: heatmapRenderStrategy,
       });
 
       if (showDataPoints) {
@@ -438,7 +480,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
           strokeWidth: dataPointStrokeWidth,
         });
       }
-    });
+    }, { preserveOnRender: true });
 
     return () => {
       resetHeatLayerFlatRenderState(flatRenderState);
@@ -459,17 +501,23 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     fieldImage,
     fieldOpacity,
     fieldRenderMode,
+    heatmapAsyncRender,
     heatIndex,
     heatmapIntensity,
+    heatmapMaxRasterPixels,
     heatmapMaxZoom,
+    heatmapMinZoomDeltaForRebuild,
     heatmapOpacity,
+    heatmapOverscanRatio,
     heatmapRadius,
+    heatmapRenderStrategy,
     heatmapSurfaceMode,
     preparedHeatmapColorRamp,
     renderVersion,
     resolvedLayerId,
     showDataPoints,
-    surface,
+    registerFlatLayer,
+    surfaceDisplay,
   ]);
 
   if (!surface || surface.display !== "globe") {
@@ -947,47 +995,198 @@ function formatHeatLayerValue(value: number) {
 }
 
 function renderHeatLayerSurface({
+  asyncRender,
   colorRamp,
   data,
   intensity,
   layer,
   flat,
   map,
+  maxRasterPixels,
+  minZoomDeltaForRebuild,
   mode,
   opacity,
+  overscanRatio,
   radius,
   state,
+  strategy,
 }: {
+  asyncRender: boolean;
   colorRamp: PreparedHeatLayerColorRamp;
   data: HeatLayerFeatureCollection;
   intensity: number;
   layer: FlatLayerGroup;
   flat: FlatLayerFactory;
   map: FlatMapAdapter;
+  maxRasterPixels: number;
+  minZoomDeltaForRebuild: number;
   mode: HeatLayerSurfaceMode;
   opacity: number;
+  overscanRatio: number;
   radius: HeatLayerRadius;
   state: HeatLayerFlatRenderState;
+  strategy: HeatLayerRenderStrategy;
 }) {
   const viewport = map.getContainer();
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;
   const safeOpacity = clamp(opacity, 0, 1);
+  const resolvedStrategy = resolveHeatLayerRenderStrategy(strategy, radius);
+  const renderOptions =
+    resolvedStrategy === "stable-raster" && isMeterHeatLayerRadius(radius)
+      ? createStableHeatLayerSurfaceRenderOptions({
+          colorRamp,
+          data,
+          height,
+          intensity,
+          map,
+          maxRasterPixels,
+          minZoomDeltaForRebuild,
+          mode,
+          overscanRatio,
+          radius,
+          state,
+          width,
+        })
+      : createViewportHeatLayerSurfaceRenderOptions({
+          colorRamp,
+          data,
+          height,
+          intensity,
+          map,
+          mode,
+          radius,
+          width,
+        });
+
+  if (!renderOptions) {
+    removeHeatLayerSurfaceLayer(layer, state);
+    return;
+  }
+
+  const cachedUrl = state.surfaceCache?.key === renderOptions.cacheKey ? state.surfaceCache.url : null;
+
+  if (cachedUrl) {
+    renderOrUpdateHeatLayerImageOverlay({
+      bounds: heatLayerBoundsToLatLngBounds(renderOptions.overlayBounds),
+      className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
+      layer,
+      flat,
+      opacity: safeOpacity,
+      state,
+      url: cachedUrl,
+    });
+    return;
+  }
+
+  state.renderRequestId += 1;
+  const requestId = state.renderRequestId;
+  const cacheMetadata = {
+    bounds: renderOptions.overlayBounds,
+    coverageBounds: renderOptions.coverageBounds,
+    dataSignature: renderOptions.dataSignature,
+    key: renderOptions.cacheKey,
+    rasterHeight: renderOptions.height,
+    rasterWidth: renderOptions.width,
+    strategy: resolvedStrategy,
+    zoomBucket: renderOptions.zoomBucket,
+  };
+
+  if (asyncRender) {
+    createHeatLayerSurfaceImage(renderOptions).then((image) => {
+      if (state.renderRequestId !== requestId) {
+        revokeHeatLayerSurfaceImage(image);
+        return;
+      }
+
+      setHeatLayerSurfaceCache(state, {
+        ...cacheMetadata,
+        objectUrl: image.objectUrl,
+        url: image.url,
+      });
+
+      renderOrUpdateHeatLayerImageOverlay({
+        bounds: heatLayerBoundsToLatLngBounds(renderOptions.overlayBounds),
+        className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
+        layer,
+        flat,
+        opacity: safeOpacity,
+        state,
+        url: image.url,
+      });
+    });
+    return;
+  }
+
+  const image = createHeatLayerSurfaceDataImage(renderOptions);
+
+  setHeatLayerSurfaceCache(state, {
+    ...cacheMetadata,
+    objectUrl: image.objectUrl,
+    url: image.url,
+  });
+
+  renderOrUpdateHeatLayerImageOverlay({
+    bounds: heatLayerBoundsToLatLngBounds(renderOptions.overlayBounds),
+    className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
+    layer,
+    flat,
+    opacity: safeOpacity,
+    state,
+    url: image.url,
+  });
+}
+
+type HeatLayerSurfaceRenderOptions = {
+  cacheKey: string;
+  colorRamp: PreparedHeatLayerColorRamp;
+  coverageBounds: [west: number, south: number, east: number, north: number];
+  dataSignature: string;
+  height: number;
+  maxInfluenceRadius: number;
+  metricProjection: {
+    getMetricPoint: (x: number, y: number) => HeatLayerMetricPoint;
+    getMetricX?: (x: number) => number;
+    getMetricY?: (y: number) => number;
+  };
+  mode: Exclude<HeatLayerSurfaceMode, "field">;
+  overlayBounds: [west: number, south: number, east: number, north: number];
+  sources: readonly HeatLayerSurfaceSource[];
+  width: number;
+  zoomBucket: number;
+};
+
+function createViewportHeatLayerSurfaceRenderOptions({
+  colorRamp,
+  data,
+  height,
+  intensity,
+  map,
+  mode,
+  radius,
+  width,
+}: {
+  colorRamp: PreparedHeatLayerColorRamp;
+  data: HeatLayerFeatureCollection;
+  height: number;
+  intensity: number;
+  map: FlatMapAdapter;
+  mode: HeatLayerSurfaceMode;
+  radius: HeatLayerRadius;
+  width: number;
+}): HeatLayerSurfaceRenderOptions | null {
   const sources = data.features
     .map((feature) => {
-      const [longitude, latitude] = feature.geometry.coordinates;
-      const point = map.latLngToContainerPoint(toLatLng([longitude, latitude]));
+      const point = map.latLngToContainerPoint(toLatLng(feature.geometry.coordinates));
       const baseRadius =
         resolveHeatLayerProjectedRadius(radius, feature.geometry.coordinates, map) *
         Math.max(0, intensity);
-      const metricPoint = coordinateToHeatLayerMetricPoint(feature.geometry.coordinates);
-      const dataInfluenceRadius = getHeatLayerDataInfluenceRadius(radius, intensity);
 
       return {
         coordinate: feature.geometry.coordinates,
-        dataInfluenceRadius,
+        dataInfluenceRadius: getHeatLayerDataInfluenceRadius(radius, intensity),
         influenceRadius: baseRadius * 2.6,
-        metricPoint,
+        metricPoint: coordinateToHeatLayerMetricPoint(feature.geometry.coordinates),
         point,
         weight: clamp(feature.properties.weight, 0, Number.POSITIVE_INFINITY),
       };
@@ -996,110 +1195,450 @@ function renderHeatLayerSurface({
   const maxInfluenceRadius = Math.max(0, ...sources.map((source) => source.influenceRadius));
 
   if (width <= 0 || height <= 0 || sources.length === 0 || maxInfluenceRadius <= 0) {
-    removeHeatLayerSurfaceLayer(layer, state);
-    return;
+    return null;
   }
 
   const northWest = map.containerPointToLatLng([0, 0]);
   const southEast = map.containerPointToLatLng([width, height]);
-  const surfaceCacheKey = createHeatLayerSurfaceCacheKey({
+  const overlayBounds = [
+    Math.min(northWest.lng, southEast.lng),
+    Math.min(northWest.lat, southEast.lat),
+    Math.max(northWest.lng, southEast.lng),
+    Math.max(northWest.lat, southEast.lat),
+  ] as [number, number, number, number];
+  const dataSignature = createHeatLayerSurfaceDataSignature(sources);
+  const cacheKey = createHeatLayerSurfaceCacheKey({
     colorRamp,
+    dataSignature,
     height,
     maxInfluenceRadius,
     mode,
+    overlayBounds,
+    strategy: "viewport-raster",
+    width,
+    zoomBucket: Number.NaN,
+  });
+
+  return {
+    cacheKey,
+    colorRamp,
+    coverageBounds: overlayBounds,
+    dataSignature,
+    height,
+    maxInfluenceRadius,
+    metricProjection: {
+      getMetricPoint(x, y) {
+        const coordinate = map.containerPointToLatLng([x, y]);
+
+        return coordinateToHeatLayerMetricPoint([coordinate.lng, coordinate.lat]);
+      },
+      getMetricX(x) {
+        const coordinate = map.containerPointToLatLng([x, height / 2]);
+
+        return coordinateToHeatLayerMetricPoint([coordinate.lng, coordinate.lat]).x;
+      },
+      getMetricY(y) {
+        const coordinate = map.containerPointToLatLng([width / 2, y]);
+
+        return coordinateToHeatLayerMetricPoint([coordinate.lng, coordinate.lat]).y;
+      },
+    },
+    mode: mode as Exclude<HeatLayerSurfaceMode, "field">,
+    overlayBounds,
     sources,
     width,
-  });
-  const cachedUrl = state.surfaceCache?.key === surfaceCacheKey ? state.surfaceCache.url : null;
-  const url =
-    cachedUrl ??
-    (mode === "data"
-      ? createHeatLayerDataSurfaceDataUrl({
-          colorRamp,
-          height,
-          sources,
-          width,
-        })
-      : createHeatLayerInterpolatedSurfaceDataUrl({
-          colorRamp,
-          height,
-          maxInfluenceRadius,
-          metricProjection: {
-            getMetricPoint(x, y) {
-              const coordinate = map.containerPointToLatLng([x, y]);
-
-              return coordinateToHeatLayerMetricPoint([coordinate.lng, coordinate.lat]);
-            },
-            getMetricX(x) {
-              const coordinate = map.containerPointToLatLng([x, height / 2]);
-
-              return coordinateToHeatLayerMetricPoint([coordinate.lng, coordinate.lat]).x;
-            },
-            getMetricY(y) {
-              const coordinate = map.containerPointToLatLng([width / 2, y]);
-
-              return coordinateToHeatLayerMetricPoint([coordinate.lng, coordinate.lat]).y;
-            },
-          },
-          sources,
-          width,
-        }));
-
-  state.surfaceCache = {
-    key: surfaceCacheKey,
-    url,
+    zoomBucket: Number.NaN,
   };
+}
 
-  renderOrUpdateHeatLayerImageOverlay({
-    bounds: [
-      [southEast.lat, northWest.lng],
-      [northWest.lat, southEast.lng],
-    ],
-    className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
-    layer,
-    flat,
-    opacity: safeOpacity,
-    state,
-    url,
+function createStableHeatLayerSurfaceRenderOptions({
+  colorRamp,
+  data,
+  height,
+  intensity,
+  map,
+  maxRasterPixels,
+  minZoomDeltaForRebuild,
+  mode,
+  overscanRatio,
+  radius,
+  state,
+  width,
+}: {
+  colorRamp: PreparedHeatLayerColorRamp;
+  data: HeatLayerFeatureCollection;
+  height: number;
+  intensity: number;
+  map: FlatMapAdapter;
+  maxRasterPixels: number;
+  minZoomDeltaForRebuild: number;
+  mode: HeatLayerSurfaceMode;
+  overscanRatio: number;
+  radius: { meters: number };
+  state: HeatLayerFlatRenderState;
+  width: number;
+}): HeatLayerSurfaceRenderOptions | null {
+  const coverageBounds = getHeatLayerStableCoverageBounds(map, radius, intensity, overscanRatio);
+  const zoomBucket = getHeatLayerZoomBucket(map.getZoom(), minZoomDeltaForRebuild);
+  const dimensions = resolveStableHeatLayerRasterDimensions({
+    bounds: coverageBounds,
+    maxRasterPixels,
+    viewportHeight: height,
+    viewportWidth: width,
   });
+
+  if (dimensions.width <= 0 || dimensions.height <= 0) {
+    return null;
+  }
+
+  if (
+    state.surfaceCache &&
+    state.surfaceCache.strategy === "stable-raster" &&
+    state.surfaceCache.zoomBucket === zoomBucket &&
+    heatLayerBoundsContain(state.surfaceCache.coverageBounds, getHeatLayerPaddedBounds(map, radius, intensity))
+  ) {
+    return {
+      cacheKey: state.surfaceCache.key,
+      colorRamp,
+      coverageBounds: state.surfaceCache.coverageBounds,
+      dataSignature: state.surfaceCache.dataSignature,
+      height: state.surfaceCache.rasterHeight,
+      maxInfluenceRadius: 1,
+      metricProjection: createStableHeatLayerMetricProjection(state.surfaceCache.coverageBounds, {
+        height: state.surfaceCache.rasterHeight,
+        width: state.surfaceCache.rasterWidth,
+      }),
+      mode: mode as Exclude<HeatLayerSurfaceMode, "field">,
+      overlayBounds: state.surfaceCache.bounds,
+      sources: [],
+      width: state.surfaceCache.rasterWidth,
+      zoomBucket,
+    };
+  }
+
+  const metricBounds = getHeatLayerMetricBounds(coverageBounds);
+  const metersPerPixel = Math.max(
+    (metricBounds.east - metricBounds.west) / Math.max(1, dimensions.width),
+    (metricBounds.north - metricBounds.south) / Math.max(1, dimensions.height),
+  );
+  const dataInfluenceRadius = getHeatLayerDataInfluenceRadius(radius, intensity) ?? 0;
+  const influenceRadius = dataInfluenceRadius / Math.max(1, metersPerPixel);
+  const sources = data.features
+    .map((feature) => {
+      const metricPoint = coordinateToHeatLayerMetricPoint(feature.geometry.coordinates);
+
+      return {
+        coordinate: feature.geometry.coordinates,
+        dataInfluenceRadius,
+        influenceRadius,
+        metricPoint,
+        point: {
+          x:
+            ((metricPoint.x - metricBounds.west) /
+              Math.max(Number.EPSILON, metricBounds.east - metricBounds.west)) *
+            dimensions.width,
+          y:
+            ((metricBounds.north - metricPoint.y) /
+              Math.max(Number.EPSILON, metricBounds.north - metricBounds.south)) *
+            dimensions.height,
+        },
+        weight: clamp(feature.properties.weight, 0, Number.POSITIVE_INFINITY),
+      };
+    })
+    .filter((source) => source.weight > 0 && source.influenceRadius > 0);
+  const maxInfluenceRadius = Math.max(0, ...sources.map((source) => source.influenceRadius));
+
+  if (sources.length === 0 || maxInfluenceRadius <= 0) {
+    return null;
+  }
+
+  const dataSignature = createHeatLayerSurfaceDataSignature(sources);
+  const cacheKey = createHeatLayerSurfaceCacheKey({
+    colorRamp,
+    dataSignature,
+    height: dimensions.height,
+    maxInfluenceRadius,
+    mode,
+    overlayBounds: coverageBounds,
+    strategy: "stable-raster",
+    width: dimensions.width,
+    zoomBucket,
+  });
+
+  return {
+    cacheKey,
+    colorRamp,
+    coverageBounds,
+    dataSignature,
+    height: dimensions.height,
+    maxInfluenceRadius,
+    metricProjection: createStableHeatLayerMetricProjection(coverageBounds, dimensions),
+    mode: mode as Exclude<HeatLayerSurfaceMode, "field">,
+    overlayBounds: coverageBounds,
+    sources,
+    width: dimensions.width,
+    zoomBucket,
+  };
+}
+
+function createHeatLayerSurfaceDataImage(options: HeatLayerSurfaceRenderOptions): HeatLayerSurfaceImage {
+  return {
+    objectUrl: false,
+    url:
+      options.mode === "data"
+        ? createHeatLayerDataSurfaceDataUrl(options)
+        : createHeatLayerInterpolatedSurfaceDataUrl(options),
+  };
+}
+
+function createHeatLayerSurfaceImage(options: HeatLayerSurfaceRenderOptions) {
+  return options.mode === "data"
+    ? createHeatLayerDataSurfaceImage(options)
+    : createHeatLayerInterpolatedSurfaceImage(options);
 }
 
 function createHeatLayerSurfaceCacheKey({
   colorRamp,
+  dataSignature,
   height,
   maxInfluenceRadius,
   mode,
-  sources,
+  overlayBounds,
+  strategy,
   width,
+  zoomBucket,
 }: {
   colorRamp: PreparedHeatLayerColorRamp;
+  dataSignature: string;
   height: number;
   maxInfluenceRadius: number;
   mode: HeatLayerSurfaceMode;
-  sources: readonly HeatLayerSurfaceSource[];
+  overlayBounds: [west: number, south: number, east: number, north: number];
+  strategy: Exclude<HeatLayerRenderStrategy, "auto">;
   width: number;
+  zoomBucket: number;
 }) {
   return [
+    strategy,
     mode,
     roundHeatLayerCacheNumber(width),
     roundHeatLayerCacheNumber(height),
+    roundHeatLayerCacheNumber(zoomBucket),
     roundHeatLayerCacheNumber(maxInfluenceRadius),
+    overlayBounds.map(roundHeatLayerCacheNumber).join(","),
     colorRamp.stops
       .map((stop) => `${roundHeatLayerCacheNumber(stop.density)}:${stop.color}`)
       .join(","),
-    ...sources.map(
-      (source) =>
-        [
-          roundHeatLayerCacheNumber(source.point.x),
-          roundHeatLayerCacheNumber(source.point.y),
-          roundHeatLayerCacheNumber(source.metricPoint.x),
-          roundHeatLayerCacheNumber(source.metricPoint.y),
-          roundHeatLayerCacheNumber(source.influenceRadius),
-          roundHeatLayerCacheNumber(source.dataInfluenceRadius ?? -1),
-          roundHeatLayerCacheNumber(source.weight),
-        ].join(","),
-    ),
+    dataSignature,
   ].join("|");
+}
+
+function createHeatLayerSurfaceDataSignature(sources: readonly HeatLayerSurfaceSource[]) {
+  return sources
+    .map((source) =>
+      [
+        roundHeatLayerCacheNumber(source.coordinate[0]),
+        roundHeatLayerCacheNumber(source.coordinate[1]),
+        roundHeatLayerCacheNumber(source.influenceRadius),
+        roundHeatLayerCacheNumber(source.dataInfluenceRadius ?? -1),
+        roundHeatLayerCacheNumber(source.weight),
+      ].join(","),
+    )
+    .join("|");
+}
+
+function getHeatLayerSurfaceQueryBounds({
+  intensity,
+  map,
+  maxRasterPixels,
+  minZoomDeltaForRebuild,
+  overscanRatio,
+  radius,
+  state,
+  strategy,
+}: {
+  intensity: number;
+  map: FlatMapAdapter;
+  maxRasterPixels: number;
+  minZoomDeltaForRebuild: number;
+  overscanRatio: number;
+  radius: HeatLayerRadius;
+  state: HeatLayerFlatRenderState;
+  strategy: HeatLayerRenderStrategy;
+}) {
+  const resolvedStrategy = resolveHeatLayerRenderStrategy(strategy, radius);
+
+  if (resolvedStrategy !== "stable-raster" || !isMeterHeatLayerRadius(radius)) {
+    return getHeatLayerPaddedBounds(map, radius, intensity);
+  }
+
+  const zoomBucket = getHeatLayerZoomBucket(map.getZoom(), minZoomDeltaForRebuild);
+  const paddedBounds = getHeatLayerPaddedBounds(map, radius, intensity);
+
+  if (
+    state.surfaceCache &&
+    state.surfaceCache.strategy === "stable-raster" &&
+    state.surfaceCache.zoomBucket === zoomBucket &&
+    heatLayerBoundsContain(state.surfaceCache.coverageBounds, paddedBounds)
+  ) {
+    return state.surfaceCache.coverageBounds;
+  }
+
+  void maxRasterPixels;
+
+  return getHeatLayerStableCoverageBounds(map, radius, intensity, overscanRatio);
+}
+
+function resolveHeatLayerRenderStrategy(
+  strategy: HeatLayerRenderStrategy,
+  radius: HeatLayerRadius,
+): Exclude<HeatLayerRenderStrategy, "auto"> {
+  if (strategy !== "auto") {
+    return strategy;
+  }
+
+  return isMeterHeatLayerRadius(radius) ? "stable-raster" : "viewport-raster";
+}
+
+function isMeterHeatLayerRadius(radius: HeatLayerRadius): radius is { meters: number } {
+  return typeof radius === "object" && "meters" in radius;
+}
+
+function getHeatLayerStableCoverageBounds(
+  map: FlatMapAdapter,
+  radius: { meters: number },
+  intensity: number,
+  overscanRatio: number,
+): [west: number, south: number, east: number, north: number] {
+  const viewport = map.getContainer();
+  const width = viewport.clientWidth;
+  const height = viewport.clientHeight;
+  const center = map.containerPointToLatLng([width / 2, height / 2]);
+  const paddingPixels =
+    Math.max(width, height) * Math.max(0, overscanRatio) +
+    resolveHeatLayerProjectedRadius(radius, [center.lng, center.lat], map) * 2.6 * Math.max(0, intensity);
+  const northWest = map.containerPointToLatLng([-paddingPixels, -paddingPixels]);
+  const southEast = map.containerPointToLatLng([width + paddingPixels, height + paddingPixels]);
+
+  return normalizeHeatLayerBounds([
+    Math.min(northWest.lng, southEast.lng),
+    Math.min(northWest.lat, southEast.lat),
+    Math.max(northWest.lng, southEast.lng),
+    Math.max(northWest.lat, southEast.lat),
+  ]);
+}
+
+function normalizeHeatLayerBounds(
+  bounds: [west: number, south: number, east: number, north: number],
+): [west: number, south: number, east: number, north: number] {
+  return [
+    clamp(bounds[0], -180, 180),
+    clamp(bounds[1], -90, 90),
+    clamp(bounds[2], -180, 180),
+    clamp(bounds[3], -90, 90),
+  ];
+}
+
+function heatLayerBoundsContain(
+  outer: [west: number, south: number, east: number, north: number],
+  inner: [west: number, south: number, east: number, north: number],
+) {
+  return outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3];
+}
+
+function heatLayerBoundsToLatLngBounds([
+  west,
+  south,
+  east,
+  north,
+]: [west: number, south: number, east: number, north: number]): [[number, number], [number, number]] {
+  return [
+    [south, west],
+    [north, east],
+  ];
+}
+
+function resolveStableHeatLayerRasterDimensions({
+  bounds,
+  maxRasterPixels,
+  viewportHeight,
+  viewportWidth,
+}: {
+  bounds: [west: number, south: number, east: number, north: number];
+  maxRasterPixels: number;
+  viewportHeight: number;
+  viewportWidth: number;
+}) {
+  const metricBounds = getHeatLayerMetricBounds(bounds);
+  const aspectRatio = Math.max(
+    0.05,
+    (metricBounds.east - metricBounds.west) / Math.max(1, metricBounds.north - metricBounds.south),
+  );
+  const safeMaxPixels = Math.max(1, Math.floor(maxRasterPixels));
+  const viewportPixels = Math.max(1, viewportWidth * viewportHeight);
+  const targetPixels = Math.min(safeMaxPixels, Math.max(1, viewportPixels));
+  const width = Math.max(1, Math.round(Math.sqrt(targetPixels * aspectRatio)));
+  const height = Math.max(1, Math.round(width / aspectRatio));
+
+  if (width * height <= safeMaxPixels) {
+    return { height, width };
+  }
+
+  const scale = Math.sqrt(safeMaxPixels / (width * height));
+
+  return {
+    height: Math.max(1, Math.floor(height * scale)),
+    width: Math.max(1, Math.floor(width * scale)),
+  };
+}
+
+function createStableHeatLayerMetricProjection(
+  bounds: [west: number, south: number, east: number, north: number],
+  dimensions: { height: number; width: number },
+) {
+  const metricBounds = getHeatLayerMetricBounds(bounds);
+
+  return {
+    getMetricPoint(x: number, y: number) {
+      return {
+        x:
+          metricBounds.west +
+          (x / Math.max(1, dimensions.width)) * (metricBounds.east - metricBounds.west),
+        y:
+          metricBounds.north -
+          (y / Math.max(1, dimensions.height)) * (metricBounds.north - metricBounds.south),
+      };
+    },
+    getMetricX(x: number) {
+      return metricBounds.west + (x / Math.max(1, dimensions.width)) * (metricBounds.east - metricBounds.west);
+    },
+    getMetricY(y: number) {
+      return metricBounds.north - (y / Math.max(1, dimensions.height)) * (metricBounds.north - metricBounds.south);
+    },
+  };
+}
+
+function getHeatLayerMetricBounds([
+  west,
+  south,
+  east,
+  north,
+]: [west: number, south: number, east: number, north: number]) {
+  const southWest = coordinateToHeatLayerMetricPoint([west, south]);
+  const northEast = coordinateToHeatLayerMetricPoint([east, north]);
+
+  return {
+    east: Math.max(southWest.x, northEast.x),
+    north: Math.max(southWest.y, northEast.y),
+    south: Math.min(southWest.y, northEast.y),
+    west: Math.min(southWest.x, northEast.x),
+  };
+}
+
+function getHeatLayerZoomBucket(zoom: number, minZoomDeltaForRebuild: number) {
+  const interval = Math.max(0.000001, minZoomDeltaForRebuild);
+
+  return Math.floor((Number.isFinite(zoom) ? zoom : 0) / interval);
 }
 
 function roundHeatLayerCacheNumber(value: number) {
@@ -1110,6 +1649,7 @@ function createHeatLayerFlatRenderState(): HeatLayerFlatRenderState {
   return {
     contourLayers: [],
     dataLayers: [],
+    renderRequestId: 0,
     surfaceCache: null,
     surfaceClassName: null,
     surfaceLayer: null,
@@ -1117,11 +1657,41 @@ function createHeatLayerFlatRenderState(): HeatLayerFlatRenderState {
 }
 
 function resetHeatLayerFlatRenderState(state: HeatLayerFlatRenderState) {
+  state.renderRequestId += 1;
   state.contourLayers = [];
   state.dataLayers = [];
+  revokeHeatLayerSurfaceCache(state.surfaceCache);
   state.surfaceCache = null;
   state.surfaceClassName = null;
   state.surfaceLayer = null;
+}
+
+function setHeatLayerSurfaceCache(state: HeatLayerFlatRenderState, cache: HeatLayerSurfaceCache) {
+  if (state.surfaceCache?.url !== cache.url) {
+    revokeHeatLayerSurfaceCache(state.surfaceCache);
+  }
+
+  state.surfaceCache = cache;
+}
+
+function revokeHeatLayerSurfaceCache(cache: HeatLayerSurfaceCache | null) {
+  if (!cache?.objectUrl) {
+    return;
+  }
+
+  revokeHeatLayerSurfaceObjectUrl(cache.url);
+}
+
+function revokeHeatLayerSurfaceImage(image: HeatLayerSurfaceImage) {
+  if (image.objectUrl) {
+    revokeHeatLayerSurfaceObjectUrl(image.url);
+  }
+}
+
+function revokeHeatLayerSurfaceObjectUrl(url: string) {
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function renderOrUpdateHeatLayerImageOverlay({
@@ -1243,6 +1813,20 @@ function removeHeatLayerManagedLayer(
 
     if (index >= 0) {
       removableParent.layers.splice(index, 1);
+    }
+  }
+}
+
+function clearHeatLayerNonSurfaceLayers(parent: FlatLayerGroup, state: HeatLayerFlatRenderState) {
+  const layers = (parent as FlatLayerGroup & { layers?: HeatLayerManagedLayer[] }).layers;
+
+  if (!Array.isArray(layers)) {
+    return;
+  }
+
+  for (const layer of [...layers]) {
+    if (layer !== state.surfaceLayer) {
+      removeHeatLayerManagedLayer(parent, layer);
     }
   }
 }
@@ -1486,4 +2070,12 @@ function clamp(value: number, min: number, max: number) {
 
 function isDefined<T>(value: T | null): value is T {
   return value !== null;
+}
+
+function canUseAsyncHeatLayerRender() {
+  return (
+    typeof document !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    !/jsdom/i.test(navigator.userAgent)
+  );
 }

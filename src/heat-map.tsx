@@ -53,7 +53,12 @@ import {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
-import { HeatLayer, type HeatFieldRenderMode, type HeatLayerSurfaceMode } from "./heat-layer";
+import {
+  HeatLayer,
+  type HeatFieldRenderMode,
+  type HeatLayerRenderStrategy,
+  type HeatLayerSurfaceMode,
+} from "./heat-layer";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
@@ -173,11 +178,16 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
     heatmapAggregationMaxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
     heatmapAggregationMinZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
     heatmapAggregationRadius?: PointAggregationIndexOptions<TProperties>["radius"];
+    heatmapAsyncRender?: boolean;
     heatmapColorRamp?: readonly HeatMapColorStop[];
     heatmapIntensity?: number;
+    heatmapMaxRasterPixels?: number;
     heatmapMaxZoom?: number;
+    heatmapMinZoomDeltaForRebuild?: number;
     heatmapOpacity?: number;
+    heatmapOverscanRatio?: number;
     heatmapRadius?: HeatMapRadius;
+    heatmapRenderStrategy?: HeatLayerRenderStrategy;
     heatmapSurfaceMode?: HeatMapSurfaceMode;
     getValue?: HeatFieldOptions<TProperties>["getValue"];
     initialViewState?: MapViewState;

@@ -28,6 +28,11 @@ export type PreparedHeatLayerColorRamp = {
   stops: PreparedHeatLayerColorStop[];
 };
 
+export type HeatLayerSurfaceImage = {
+  objectUrl: boolean;
+  url: string;
+};
+
 type PreparedHeatLayerColorStop = {
   color: string;
   density: number;
@@ -152,6 +157,22 @@ export function createHeatLayerDataSurfaceDataUrl(options: HeatLayerDataSurfaceO
   return canvasUrl ?? createSvgDataUrl(createHeatLayerDataSurfaceSvg(options));
 }
 
+export async function createHeatLayerDataSurfaceImage(
+  options: HeatLayerDataSurfaceOptions,
+): Promise<HeatLayerSurfaceImage> {
+  const maxInfluenceRadius = Math.max(
+    0,
+    ...options.sources.map((source) => source.influenceRadius),
+  );
+  const blur = Math.max(1, maxInfluenceRadius * 0.16);
+  const canvasImage = await createHeatLayerDataSurfaceCanvasImage({ ...options, blur });
+
+  return canvasImage ?? {
+    objectUrl: false,
+    url: createSvgDataUrl(createHeatLayerDataSurfaceSvg(options)),
+  };
+}
+
 export function createHeatLayerInterpolatedSurfaceSvg({
   colorRamp,
   densityMode = "indexed",
@@ -200,6 +221,30 @@ export function createHeatLayerInterpolatedSurfaceDataUrl(
       }),
     )
   );
+}
+
+export async function createHeatLayerInterpolatedSurfaceImage(
+  options: HeatLayerInterpolatedSurfaceOptions,
+): Promise<HeatLayerSurfaceImage> {
+  const sampledSurface = createHeatLayerInterpolatedSurfaceSamples(options);
+  const canvasImage = await createHeatLayerSampledSurfaceCanvasImage({
+    ...sampledSurface,
+    colorRamp: options.colorRamp,
+    height: options.height,
+    width: options.width,
+  });
+
+  return canvasImage ?? {
+    objectUrl: false,
+    url: createSvgDataUrl(
+      createHeatLayerSampledSurfaceSvg({
+        ...sampledSurface,
+        colorRamp: options.colorRamp,
+        height: options.height,
+        width: options.width,
+      }),
+    ),
+  };
 }
 
 function createHeatLayerInterpolatedSurfaceSamples({
@@ -897,6 +942,38 @@ function createHeatLayerDataSurfaceCanvasDataUrl({
   });
 }
 
+function createHeatLayerDataSurfaceCanvasImage({
+  blur,
+  colorRamp,
+  height,
+  sources,
+  width,
+}: HeatLayerDataSurfaceOptions & {
+  blur: number;
+}) {
+  return createHeatLayerCanvasImage({
+    blur,
+    draw(context) {
+      for (const source of sources) {
+        const normalizedWeight = clamp(source.weight, 0, 1);
+        const radius = source.influenceRadius * (0.42 + Math.sqrt(normalizedWeight) * 0.5);
+        const opacity = Math.min(1, 0.22 + normalizedWeight * 0.78);
+
+        drawHeatLayerCanvasCircle(
+          context,
+          source.point.x,
+          source.point.y,
+          radius,
+          resolveHeatLayerInterpolatedColor(colorRamp, normalizedWeight),
+          opacity,
+        );
+      }
+    },
+    height,
+    width,
+  });
+}
+
 function createHeatLayerSampledSurfaceCanvasDataUrl({
   cellSize,
   cells,
@@ -912,6 +989,42 @@ function createHeatLayerSampledSurfaceCanvasDataUrl({
   width: number;
 }) {
   return createHeatLayerCanvasDataUrl({
+    blur: 0,
+    draw(context) {
+      for (const cell of cells) {
+        const normalizedDensity = resolveHeatLayerAbsoluteDensity(cell.density);
+        const opacity = Math.min(1, 0.28 + normalizedDensity * 0.72);
+
+        context.globalAlpha = opacity;
+        context.fillStyle = resolveHeatLayerInterpolatedColor(colorRamp, normalizedDensity);
+        context.fillRect(
+          cell.x - cellSize * 0.65,
+          cell.y - cellSize * 0.65,
+          cellSize * 1.3,
+          cellSize * 1.3,
+        );
+      }
+    },
+    height,
+    width,
+  });
+}
+
+function createHeatLayerSampledSurfaceCanvasImage({
+  cellSize,
+  cells,
+  colorRamp,
+  height,
+  width,
+}: {
+  blur: number;
+  cellSize: number;
+  cells: readonly HeatLayerSurfaceCell[];
+  colorRamp: PreparedHeatLayerColorRamp;
+  height: number;
+  width: number;
+}) {
+  return createHeatLayerCanvasImage({
     blur: 0,
     draw(context) {
       for (const cell of cells) {
@@ -964,6 +1077,82 @@ function createHeatLayerCanvasDataUrl({
   context.restore();
 
   return canvas.toDataURL("image/png");
+}
+
+async function createHeatLayerCanvasImage(options: {
+  blur: number;
+  draw: (context: CanvasRenderingContext2D) => void;
+  height: number;
+  width: number;
+}): Promise<HeatLayerSurfaceImage | null> {
+  const canvas = createHeatLayerCanvas(options);
+
+  if (!canvas) {
+    return null;
+  }
+
+  const objectUrl = await createHeatLayerCanvasObjectUrl(canvas);
+
+  if (objectUrl) {
+    return {
+      objectUrl: true,
+      url: objectUrl,
+    };
+  }
+
+  return {
+    objectUrl: false,
+    url: canvas.toDataURL("image/png"),
+  };
+}
+
+function createHeatLayerCanvas({
+  blur,
+  draw,
+  height,
+  width,
+}: {
+  blur: number;
+  draw: (context: CanvasRenderingContext2D) => void;
+  height: number;
+  width: number;
+}) {
+  if (!canUseHeatLayerCanvas()) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return null;
+  }
+
+  canvas.width = Math.max(1, Math.ceil(width));
+  canvas.height = Math.max(1, Math.ceil(height));
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.save();
+  context.filter = `blur(${roundSvgNumber(Math.max(0, blur))}px)`;
+  draw(context);
+  context.restore();
+
+  return canvas;
+}
+
+function createHeatLayerCanvasObjectUrl(canvas: HTMLCanvasElement) {
+  if (
+    typeof URL === "undefined" ||
+    typeof URL.createObjectURL !== "function" ||
+    typeof canvas.toBlob !== "function"
+  ) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise<string | null>((resolve) => {
+    canvas.toBlob((blob) => {
+      resolve(blob ? URL.createObjectURL(blob) : null);
+    }, "image/png");
+  });
 }
 
 function drawHeatLayerCanvasCircle(

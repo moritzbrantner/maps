@@ -139,11 +139,13 @@ const flatMock = vi.hoisted(() => {
     const layer: Layer & {
       addTo: (group: MockLayerGroup) => typeof layer;
       bindTooltip: (content: string, options?: Record<string, unknown>) => typeof layer;
+      remove: () => typeof layer;
     } = {
       latLng,
       options,
       type,
       addTo(group: MockLayerGroup) {
+        (this as typeof layer & { group?: MockLayerGroup }).group = group;
         group.addLayer(this);
         return this;
       },
@@ -152,6 +154,15 @@ const flatMock = vi.hoisted(() => {
           content,
           options,
         };
+        return this;
+      },
+      remove() {
+        const group = (this as typeof layer & { group?: MockLayerGroup }).group;
+
+        if (group) {
+          group.layers = group.layers.filter((candidate) => candidate !== this);
+        }
+
         return this;
       },
     };
@@ -404,6 +415,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     render(
       <HeatMap
         heatmapRadius={{ meters: 100_000 }}
+        heatmapRenderStrategy="viewport-raster"
         mapLabel="Normalized heat map"
         points={[
           {
@@ -893,13 +905,14 @@ describe("@moritzbrantner/maps heat maps", () => {
     render(
       <HeatMap
         heatmapRadius={{ meters: 100_000 }}
+        heatmapRenderStrategy="viewport-raster"
         heatmapSurfaceMode="data"
         mapLabel="Data-radius heat map"
         points={[
           {
             id: "a",
             latitude: 0,
-            longitude: 0,
+            longitude: 20,
             metrics: {
               demand: 6,
             },
@@ -943,10 +956,107 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(zoomedRadius / farZoomRadius).toBeCloseTo(2, 1);
   });
 
+  test("reuses a stable meter-radius heat raster across fractional zoom changes", async () => {
+    render(
+      <HeatMap
+        defaultViewState={{ center: [0, 0], zoom: 6 }}
+        fitToData={false}
+        heatmapRadius={{ meters: 100_000 }}
+        heatmapSurfaceMode="data"
+        mapLabel="Stable cached heat map"
+        points={[
+          {
+            id: "a",
+            latitude: 0,
+            longitude: 20,
+            metrics: {
+              demand: 6,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Stable cached heat map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const layerGroup = flatMock.getLayerGroups()[0];
+    const map = flatMock.getMaps()[0]!;
+    const initialSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
+    );
+    const initialUrl = initialSurface?.url;
+
+    map.zoom = 2.4;
+    await act(async () => {
+      map.handlers.get("moveend")?.[0]?.();
+    });
+
+    const surfaces = layerGroup?.layers.filter(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
+    );
+    const zoomedSurface = surfaces?.[0];
+
+    expect(surfaces).toHaveLength(1);
+    expect(zoomedSurface?.url).toBe(initialUrl);
+  });
+
+  test("keeps pixel-radius heat maps on the viewport raster path", async () => {
+    render(
+      <HeatMap
+        defaultViewState={{ center: [0, 0], zoom: 4 }}
+        fitToData={false}
+        heatmapRadius={24}
+        heatmapSurfaceMode="data"
+        mapLabel="Pixel heat map"
+        points={[
+          {
+            id: "a",
+            latitude: 0,
+            longitude: 20,
+            metrics: {
+              demand: 6,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+        weightMetric="demand"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Pixel heat map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const layerGroup = flatMock.getLayerGroups()[0];
+    const map = flatMock.getMaps()[0]!;
+    const initialSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
+    );
+    const initialUrl = initialSurface?.url;
+
+    map.zoom = 5;
+    await act(async () => {
+      map.handlers.get("moveend")?.[0]?.();
+    });
+
+    const changedSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--data",
+    );
+
+    expect(changedSurface?.url).not.toBe(initialUrl);
+  });
+
   test("keeps interpolated heat intensity absolute to data weights", async () => {
     render(
       <HeatMap
         heatmapRadius={{ meters: 500_000 }}
+        heatmapRenderStrategy="viewport-raster"
         mapLabel="Absolute-intensity heat map"
         points={[
           {
