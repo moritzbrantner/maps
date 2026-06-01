@@ -820,7 +820,7 @@ class MapLibreDomMarkerLayer implements FlatLayer {
 
     this.marker = new this.maplibre.Marker({
       element,
-      offset: icon?.iconAnchor ? [-icon.iconAnchor[0], -icon.iconAnchor[1]] : undefined,
+      offset: resolveMapLibreMarkerOffset(icon),
     })
       .setLngLat(this.coordinates as LngLatLike)
       .addTo(this.map);
@@ -844,6 +844,19 @@ class MapLibreDomMarkerLayer implements FlatLayer {
     this.marker?.remove();
     this.marker = null;
   }
+}
+
+export function resolveMapLibreMarkerOffset(
+  icon: FlatDivIconOptions | undefined,
+): [number, number] | undefined {
+  if (!icon?.iconAnchor) {
+    return undefined;
+  }
+
+  const [anchorX, anchorY] = icon.iconAnchor;
+  const [width, height] = icon.iconSize ?? [0, 0];
+
+  return [width / 2 - anchorX, height / 2 - anchorY];
 }
 
 function normalizeLineCoordinates(latLngs: unknown): GeoJSON.Position[][] {
