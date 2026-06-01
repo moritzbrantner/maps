@@ -247,6 +247,7 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
     );
 
     const map = await waitForReadyMap("Interactive point map");
+    await waitForMeasurementHandlers(map);
 
     act(() => {
       map.fire("click", { latlng: { lat: 52.52, lng: 13.405 } });
@@ -275,6 +276,7 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
     );
 
     const map = await waitForReadyMap("Interactive point map");
+    await waitForMeasurementHandlers(map);
 
     act(() => {
       map.fire("click", { latlng: { lat: 10, lng: 20 } });
@@ -331,6 +333,7 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
     );
 
     const map = await waitForReadyMap("Interactive point map");
+    await waitForMeasurementHandlers(map);
 
     act(() => {
       map.fire("click", { latlng: { lat: 10, lng: 20 } });
