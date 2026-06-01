@@ -20,6 +20,7 @@ export {
 export {
   defaultRasterMapStyle,
   type GlobeBasemapMode,
+  type MapBounds,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,

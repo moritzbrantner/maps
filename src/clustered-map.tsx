@@ -57,6 +57,7 @@ import {
   toLatLng,
   type GlobeBasemapMode,
   type GlobeViewState,
+  type MapBounds,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,
@@ -101,7 +102,7 @@ export type ClusteredMapProps<TProperties extends Record<string, unknown> = Reco
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
 } & MapMeasurementProps &
-  MapViewportProps &
+  Omit<MapViewportProps, "maxZoom"> &
   MapFeatureInteractionProps<AggregatedMapFeature<TProperties>>;
 
 const MAX_CLUSTER_AREA_FEATURES = 160;
@@ -122,6 +123,7 @@ export {
   defaultRasterMapStyle,
   type MapDisplayMode,
   type GlobeBasemapMode,
+  type MapBounds,
   type MapSurfaceController,
   type MapViewState,
   type MapViewStateChangeContext,
@@ -157,6 +159,7 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
     geoJsonOverlayCollection,
     geoJsonOverlayProps,
     globeBasemapMode,
+    maxBounds,
     showAttributionControl = true,
     style,
     viewState,
@@ -191,6 +194,7 @@ export function ClusteredMap<TProperties extends Record<string, unknown> = Recor
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
       onMapControllerReady={onMapControllerReady}
       onMapReady={onMapReady}
       onViewStateChange={onViewStateChange}

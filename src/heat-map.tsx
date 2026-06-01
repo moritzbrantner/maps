@@ -36,9 +36,9 @@ import {
   createInitialGlobeViewState,
   createVisibleSvgPath,
   defaultRasterMapStyle,
+  getBoundedGlobeZoom,
   getGlobeDragCenter,
   getGlobeRadius,
-  getGlobeZoom,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
@@ -235,6 +235,8 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
   initialViewState,
   mapLabel = "Interactive heat map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   measurementDistanceFormat,
   measurementDraftLineColor,
   measurementLineColor,
@@ -284,6 +286,8 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
+      maxZoom={maxZoom}
       onMapControllerReady={onMapControllerReady}
       onMapReady={onMapReady}
       onViewStateChange={onViewStateChange}
@@ -372,6 +376,7 @@ export function GlobeHeatMap<TProperties extends Record<string, unknown> = Recor
   },
   initialViewState,
   mapLabel = "Interactive heat map",
+  maxZoom,
   measurementDistanceFormat: _measurementDistanceFormat,
   measurementDraftLineColor: _measurementDraftLineColor,
   measurementLineColor: _measurementLineColor,
@@ -494,7 +499,7 @@ export function GlobeHeatMap<TProperties extends Record<string, unknown> = Recor
           event.preventDefault();
           setViewState((current) => ({
             ...current,
-            zoom: getGlobeZoom(current.zoom, event.deltaY),
+            zoom: getBoundedGlobeZoom(current.zoom, event.deltaY, maxZoom),
           }));
         }}
       >

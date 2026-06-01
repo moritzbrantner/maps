@@ -1609,6 +1609,8 @@ function renderMap(
           interpolationPower={2}
           mapLabel="Europe temperature surface"
           mapStyle={demoMapStyle}
+          maxBounds={demoTemperatureDomainBounds}
+          maxZoom={6}
           onViewStateChange={setViewport}
           points={demoTemperaturePoints}
           showDataPoints={showHeatDataPoints}
@@ -1624,7 +1626,7 @@ function renderMap(
         <FlowMap
           {...sharedMeasurementProps}
           flowColor="#b45309"
-          flowShape="arc"
+          flowShape={{ type: "s-curve", bend: 0.34, direction: "auto", segments: 40 }}
           flows={demoFlows}
           mapStyle={demoMapStyle}
           maxWidth={18}

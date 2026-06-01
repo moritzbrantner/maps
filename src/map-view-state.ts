@@ -8,6 +8,7 @@ import type {
   MapViewStateChangeReason,
   MapViewportProps,
 } from "./map-display";
+import { constrainMapViewState } from "./map-display";
 
 const fallbackViewState: MapViewState = {
   center: [12, 25],
@@ -21,17 +22,29 @@ export function useControllableMapViewState({
   viewState,
   defaultViewState,
   initialViewState,
+  maxBounds,
+  maxZoom,
+  minZoom,
 }: MapViewportProps & {
   display: MapDisplayMode;
   fallback?: MapViewState;
+  minZoom?: number;
 }) {
   const controlled = viewState !== undefined;
   const initial = useMemo(
-    () => defaultViewState ?? initialViewState ?? fallback ?? fallbackViewState,
+    () =>
+      constrainMapViewState(
+        defaultViewState ?? initialViewState ?? fallback ?? fallbackViewState,
+        { maxBounds, maxZoom, minZoom },
+      ),
     [],
   );
   const [uncontrolledViewState, setUncontrolledViewState] = useState<MapViewState>(initial);
-  const latestViewState = viewState ?? uncontrolledViewState;
+  const latestViewState = constrainMapViewState(viewState ?? uncontrolledViewState, {
+    maxBounds,
+    maxZoom,
+    minZoom,
+  });
   const lastEmissionRef = useRef<string | null>(null);
   const onViewStateChangeRef = useRef(onViewStateChange);
 
@@ -39,20 +52,30 @@ export function useControllableMapViewState({
     onViewStateChangeRef.current = onViewStateChange;
   }, [onViewStateChange]);
 
+  useEffect(() => {
+    if (controlled || areMapViewStatesEqual(uncontrolledViewState, latestViewState)) {
+      return;
+    }
+
+    setUncontrolledViewState(latestViewState);
+  }, [controlled, latestViewState, uncontrolledViewState]);
+
   const setViewState = useCallback(
     (next: MapViewState, reason: MapViewStateChangeReason = "programmatic") => {
+      const constrainedNext = constrainMapViewState(next, { maxBounds, maxZoom, minZoom });
+
       if (!controlled) {
-        setUncontrolledViewState(next);
+        setUncontrolledViewState(constrainedNext);
       }
 
-      const emissionKey = `${reason}:${serializeMapViewState(next)}`;
+      const emissionKey = `${reason}:${serializeMapViewState(constrainedNext)}`;
 
       if (lastEmissionRef.current !== emissionKey) {
         lastEmissionRef.current = emissionKey;
-        onViewStateChangeRef.current?.(next, { display, reason });
+        onViewStateChangeRef.current?.(constrainedNext, { display, reason });
       }
     },
-    [controlled, display],
+    [controlled, display, maxBounds, maxZoom, minZoom],
   );
 
   return {

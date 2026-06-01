@@ -1302,6 +1302,8 @@ export function EditableGeoJsonMap<
   mapDisplay = "flat",
   mapLabel = "Editable GeoJSON map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   measurementDistanceFormat,
   measurementDraftLineColor,
   measurementLineColor,
@@ -1378,6 +1380,8 @@ export function EditableGeoJsonMap<
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
+      maxZoom={maxZoom}
       onMapControllerReady={onMapControllerReady}
       onMapContextMenu={onMapContextMenu}
       onMapReady={onMapReady}

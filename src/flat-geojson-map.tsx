@@ -6,6 +6,7 @@ import { getBoundsFromGeoJson, type GeoJsonMapSource } from "./geojson-source";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import {
   defaultRasterMapStyle,
+  type MapBounds,
   type MapViewState,
   type RasterMapStyle,
 } from "./map-display";
@@ -29,6 +30,8 @@ export type FlatGeoJsonMapProps<
   initialViewState?: MapViewState;
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;
+  maxBounds?: MapBounds;
+  maxZoom?: number;
   onMapReady?: (map: MapLibreMap) => void;
   showAttributionControl?: boolean;
   style?: React.CSSProperties;
@@ -44,6 +47,8 @@ export function FlatGeoJsonMap<
   initialViewState,
   mapLabel = "Interactive GeoJSON map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   onMapReady,
   showAttributionControl = true,
   style,
@@ -59,6 +64,8 @@ export function FlatGeoJsonMap<
       mapDisplay="flat"
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
+      maxZoom={maxZoom}
       onMapReady={onMapReady}
       showAttributionControl={showAttributionControl}
       style={style}

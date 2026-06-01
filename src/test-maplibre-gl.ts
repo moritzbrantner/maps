@@ -22,6 +22,8 @@ export class Map {
   private fallbackLayerGroup: unknown = null;
   private layers = new globalThis.Map<string, unknown>();
   private mockLayers = new globalThis.Map<string, unknown>();
+  private maxBounds: [[number, number], [number, number]] | null = null;
+  private minZoom = 0;
   private sources = new globalThis.Map<
     string,
     {
@@ -40,6 +42,8 @@ export class Map {
   constructor(options: {
     center?: [number, number];
     container?: HTMLElement;
+    maxBounds?: [[number, number], [number, number]];
+    minZoom?: number;
     zoom?: number;
   }) {
     const baseMap = flatRuntime.map();
@@ -49,6 +53,8 @@ export class Map {
       lat: options.center?.[1] ?? 25,
       lng: options.center?.[0] ?? 12,
     };
+    this.maxBounds = options.maxBounds ?? null;
+    this.minZoom = options.minZoom ?? this.minZoom;
     this.zoom = options.zoom ?? this.zoom;
 
     queueMicrotask(() => {
@@ -268,6 +274,14 @@ export class Map {
     return (this.baseMap as unknown as { getZoom?: () => number }).getZoom?.() ?? this.zoom;
   }
 
+  getMaxBounds() {
+    return this.maxBounds;
+  }
+
+  getMinZoom() {
+    return this.minZoom;
+  }
+
   getLayer(id: string) {
     return this.layers.get(id);
   }
@@ -291,11 +305,23 @@ export class Map {
     }
 
     if (typeof options.zoom === "number") {
-      this.zoom = options.zoom;
+      this.zoom = Math.max(this.minZoom, options.zoom);
     }
   }
 
   fitBounds() {}
+
+  cameraForBounds(bounds: [[number, number], [number, number]]) {
+    const west = bounds[0][0];
+    const south = bounds[0][1];
+    const east = bounds[1][0];
+    const north = bounds[1][1];
+    const longitudeSpan = Math.max(1e-6, Math.abs(east - west));
+    const latitudeSpan = Math.max(1e-6, Math.abs(north - south));
+    const zoom = Math.max(0, Math.log2(Math.min(360 / longitudeSpan, 180 / latitudeSpan)));
+
+    return { zoom };
+  }
 
   moveLayer() {}
 
@@ -358,6 +384,15 @@ export class Map {
   }
 
   setPaintProperty() {}
+
+  setMaxBounds(bounds: [[number, number], [number, number]] | null) {
+    this.maxBounds = bounds;
+  }
+
+  setMinZoom(zoom: number) {
+    this.minZoom = zoom;
+    this.zoom = Math.max(this.zoom, zoom);
+  }
 
   unproject(point: [number, number]) {
     return this.baseMap.containerPointToLatLng(point);

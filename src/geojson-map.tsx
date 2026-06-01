@@ -57,6 +57,8 @@ export function GeoJsonMap<
   mapDisplay = "flat",
   mapLabel = "Interactive GeoJSON map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   measurementDistanceFormat,
   measurementDraftLineColor,
   measurementLineColor,
@@ -88,6 +90,8 @@ export function GeoJsonMap<
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
+      maxZoom={maxZoom}
       onMapControllerReady={onMapControllerReady}
       onMapContextMenu={onMapContextMenu}
       onMapReady={onMapReady}

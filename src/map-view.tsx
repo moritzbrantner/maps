@@ -23,11 +23,13 @@ import {
 import { splitMapViewChildren } from "./map-components";
 import {
   defaultRasterMapStyle,
+  getBoundedGlobeZoom,
   getGlobeDragCenter,
-  getGlobeZoom,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
+  normalizeMapBounds,
+  normalizeMapMaxZoom,
   projectGlobeCoordinate,
   resolveMapLibreStyle,
   toMapLibreBounds,
@@ -35,6 +37,7 @@ import {
   type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
+  type MapBounds,
   type MapSurfaceController,
   type MapViewState,
   type MapViewStateChangeReason,
@@ -188,6 +191,8 @@ export function MapView({
   mapDisplay = "flat",
   mapLabel = "Interactive map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   onMapControllerReady,
   onMapContextMenu,
   onMapReady,
@@ -230,14 +235,20 @@ export function MapView({
   const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
   const [popup, setPopup] = useState<FeatureOverlayState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuOverlayState | null>(null);
+  const [boundsMinZoom, setBoundsMinZoom] = useState<number | undefined>(undefined);
+  const resolvedMaxBounds = normalizeMapBounds(maxBounds);
   const { controlled, setViewState, viewState: currentViewState } = useControllableMapViewState({
     defaultViewState,
     display: mapDisplay,
     fallback: { center: [12, 25], zoom: mapDisplay === "globe" ? 1.35 : 1.6 },
     initialViewState,
+    maxBounds: resolvedMaxBounds ?? undefined,
+    maxZoom,
+    minZoom: boundsMinZoom,
     onViewStateChange,
     viewState,
   });
+  const resolvedMaxZoom = normalizeMapMaxZoom(maxZoom);
   const currentViewStateKey = serializeMapViewState(currentViewState);
   const flatRenderKey = [
     controlled ? "controlled" : "uncontrolled",
@@ -246,6 +257,7 @@ export function MapView({
     interactionMode,
     isMeasuring ? "measuring" : "idle",
     mapDisplay,
+    resolvedMaxBounds?.join(",") ?? "unbounded",
     renderVersion,
   ].join(":");
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
@@ -343,14 +355,51 @@ export function MapView({
       return;
     }
 
-    map.fitBounds(toMapLibreBounds(dataBounds), {
+    const fitOptions = {
       animate: false,
       padding: fitBoundsPadding,
-    });
+      ...(resolvedMaxZoom === undefined ? {} : { maxZoom: resolvedMaxZoom }),
+    };
+
+    map.fitBounds(toMapLibreBounds(dataBounds), fitOptions);
     const next = getMapLibreViewState(map);
 
     lastCommittedFlatStateRef.current = next;
     setViewState(next, "fit-to-data");
+  });
+
+  const syncFlatBoundsConstraints = useEffectEvent(() => {
+    const map = mapRef.current;
+
+    if (!map || mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+      return;
+    }
+
+    const bounds = resolvedMaxBounds;
+
+    map.setMaxBounds?.(bounds ? toMapLibreBounds(bounds) : null);
+
+    if (!bounds) {
+      map.setMinZoom?.(0);
+      setBoundsMinZoom(undefined);
+      return;
+    }
+
+    const camera = map.cameraForBounds?.(toMapLibreBounds(bounds), {
+      padding: 0,
+    });
+    const nextMinZoom = typeof camera?.zoom === "number" && Number.isFinite(camera.zoom)
+      ? Math.max(0, camera.zoom)
+      : undefined;
+
+    if (nextMinZoom !== undefined) {
+      map.setMinZoom?.(nextMinZoom);
+      setBoundsMinZoom(nextMinZoom);
+
+      if (map.getZoom() < nextMinZoom) {
+        map.jumpTo({ zoom: nextMinZoom });
+      }
+    }
   });
 
   const fitGlobeToData = useEffectEvent(() => {
@@ -452,6 +501,8 @@ export function MapView({
         attributionControl: showAttributionControl ? {} : false,
         center: currentViewState.center,
         container: containerRef.current,
+        ...(resolvedMaxBounds ? { maxBounds: toMapLibreBounds(resolvedMaxBounds) } : {}),
+        ...(resolvedMaxZoom === undefined ? {} : { maxZoom: resolvedMaxZoom }),
         style: resolveMapLibreStyle(mapStyle),
         zoom: currentViewState.zoom,
       });
@@ -466,6 +517,7 @@ export function MapView({
       localMap.on("movestart", clearFeatureHover);
       localMap.on("zoomstart", clearFeatureHover);
       localMap.on("dragstart", clearFeatureHover);
+      localMap.on("resize", syncFlatBoundsConstraints);
       localMap.on("click", () => {
         clearFeatureHover();
         setPopup(null);
@@ -486,6 +538,7 @@ export function MapView({
         }
 
         isFlatStyleReadyRef.current = true;
+        syncFlatBoundsConstraints();
         renderFlatLayers();
         setIsReady(true);
         handleMapReady(localMap);
@@ -510,6 +563,7 @@ export function MapView({
         localMap.off("movestart", clearFeatureHover);
         localMap.off("zoomstart", clearFeatureHover);
         localMap.off("dragstart", clearFeatureHover);
+        localMap.off("resize", syncFlatBoundsConstraints);
         localMap.remove();
       }
 
@@ -520,6 +574,22 @@ export function MapView({
       isFlatStyleReadyRef.current = false;
     };
   }, [flatRuntime, mapDisplay]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map || mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+      return;
+    }
+
+    map.setMaxZoom?.(resolvedMaxZoom ?? 22);
+    syncFlatBoundsConstraints();
+
+    if (map.getZoom() > currentViewState.zoom) {
+      lastCommittedFlatStateRef.current = currentViewState;
+      map.jumpTo({ zoom: currentViewState.zoom });
+    }
+  }, [currentViewState, flatRuntime, mapDisplay, resolvedMaxZoom, syncFlatBoundsConstraints]);
 
   useEffect(() => {
     if (mapDisplay !== "flat" || flatRuntime !== "maplibre") {
@@ -892,6 +962,8 @@ export function MapView({
         {mapDisplay === "flat" && flatRuntime === "webgl" ? (
           <WebGlFlatRuntime
             mapStyle={mapStyle}
+            maxBounds={resolvedMaxBounds ?? undefined}
+            maxZoom={resolvedMaxZoom}
             viewState={currentViewState}
             onContextMenu={(context) => {
               handleMapContextMenu(context, {
@@ -958,7 +1030,7 @@ export function MapView({
                 setViewState(
                   {
                     ...currentViewState,
-                    zoom: getGlobeZoom(currentViewState.zoom, event.deltaY),
+                    zoom: getBoundedGlobeZoom(currentViewState.zoom, event.deltaY, resolvedMaxZoom),
                   },
                   "zoom",
                 );
@@ -1114,6 +1186,7 @@ export type {
 
 export type {
   MapSurfaceController,
+  MapBounds,
   MapViewportProps,
   MapViewStateChangeContext,
   MapViewStateChangeReason,

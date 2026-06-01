@@ -45,12 +45,15 @@ import {
   buildWebGlFlatTileUrl,
   coordinateToWebGlFlatWorldPoint,
   getVisibleWebGlFlatTiles,
+  getWebGlFlatBoundsMinZoom,
   getWebGlFlatViewport,
   getWebGlFlatZoom,
   panWebGlFlatViewState,
   resolveWebGlFlatTileSource,
   webGlFlatWorldPointToCoordinate,
 } from "./webgl-flat-runtime";
+import { createFlowPathCoordinates } from "./flow-layer";
+import type { FlowLayerFeature } from "./flow-layer";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -340,6 +343,33 @@ describe("@moritzbrantner/maps additional map kinds", () => {
         width: 10,
       },
     ]);
+  });
+
+  test("creates configurable flow path curves", () => {
+    const feature: FlowLayerFeature = {
+      flow: {
+        from: [-74, 40],
+        id: "nyc-boston",
+        label: "NYC to Boston",
+        metrics: {},
+        properties: {},
+        to: [-71, 42],
+      },
+      rawValue: 9,
+      value: 1,
+      width: 8,
+    };
+    const path = createFlowPathCoordinates(feature, {
+      bend: 0.34,
+      direction: "clockwise",
+      segments: 12,
+      type: "s-curve",
+    });
+
+    expect(path).toHaveLength(12);
+    expect(path[0]).toEqual([-74, 40]);
+    expect(path.at(-1)).toEqual([-71, 42]);
+    expect(path[3]?.[0]).not.toBeCloseTo(-74 + (3 / 11) * 3);
   });
 
   test("creates renderable GeoJSON layer features from supported geometries", () => {
@@ -1560,6 +1590,72 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(panned.center[0]).toBeLessThan(initial.center[0]);
     expect(panned.center[1]).toBeLessThan(initial.center[1]);
     expect(getWebGlFlatZoom(4, -1000)).toBeGreaterThan(4);
+    expect(getWebGlFlatZoom(4, -1000, 5)).toBe(5);
+    expect(
+      getWebGlFlatBoundsMinZoom([-25, 34, 35, 66], {
+        height: 620,
+        width: 960,
+      }),
+    ).toBeGreaterThan(3);
+  });
+
+  test("clamps MapView view state to maxZoom", async () => {
+    let controller: import("./map-display").MapSurfaceController | null = null;
+
+    render(
+      <MapView
+        defaultViewState={{ center: [13.405, 52.52], zoom: 8 }}
+        fitToData={false}
+        mapLabel="Capped map"
+        mapStyle={{ tiles: false }}
+        maxZoom={6}
+        onMapControllerReady={(nextController) => {
+          controller = nextController;
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Capped map").getAttribute("data-map-ready")).toBe("true");
+      expect(controller?.getViewState().zoom).toBe(6);
+    });
+  });
+
+  test("constrains MapView to maxBounds and derives a minimum zoom", async () => {
+    let controller: import("./map-display").MapSurfaceController | null = null;
+    let map:
+      | (import("maplibre-gl").Map & {
+          getMaxBounds?: () => [[number, number], [number, number]] | null;
+          getMinZoom?: () => number;
+        })
+      | null = null;
+
+    render(
+      <MapView
+        defaultViewState={{ center: [120, 80], zoom: 1 }}
+        fitToData={false}
+        mapLabel="Bounded map"
+        mapStyle={{ tiles: false }}
+        maxBounds={[-25, 34, 35, 66]}
+        onMapControllerReady={(nextController) => {
+          controller = nextController;
+        }}
+        onMapReady={(nextMap) => {
+          map = nextMap as NonNullable<typeof map>;
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Bounded map").getAttribute("data-map-ready")).toBe("true");
+      expect(map?.getMaxBounds?.()).toEqual([
+        [-25, 34],
+        [35, 66],
+      ]);
+      expect(map?.getMinZoom?.()).toBeGreaterThan(0);
+      expect(controller?.getViewState().center).toEqual([35, 66]);
+      expect(controller?.getViewState().zoom).toBeGreaterThan(1);
+    });
   });
 
   test("mounts WebGL flat MapView without creating a Flat map", async () => {

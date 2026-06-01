@@ -17,6 +17,8 @@ export type MapViewState = {
   zoom: number;
 };
 
+export type MapBounds = [west: number, south: number, east: number, north: number];
+
 export type MapViewStateChangeReason =
   | "initial"
   | "fit-to-data"
@@ -35,6 +37,8 @@ export type MapViewportProps = {
   viewState?: MapViewState;
   defaultViewState?: MapViewState;
   initialViewState?: MapViewState;
+  maxBounds?: MapBounds;
+  maxZoom?: number;
   onViewStateChange?: (
     viewState: MapViewState,
     context: MapViewStateChangeContext,
@@ -241,6 +245,92 @@ export function getGlobeDragCenter(
 
 export function getGlobeZoom(currentZoom: number, deltaY: number) {
   return clamp(currentZoom - deltaY * 0.0025, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM);
+}
+
+export function getBoundedGlobeZoom(currentZoom: number, deltaY: number, maxZoom?: number) {
+  const effectiveMaxZoom = normalizeMapMaxZoom(maxZoom);
+
+  return clamp(
+    currentZoom - deltaY * 0.0025,
+    GLOBE_MIN_ZOOM,
+    effectiveMaxZoom === undefined
+      ? GLOBE_MAX_ZOOM
+      : clamp(effectiveMaxZoom, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM),
+  );
+}
+
+export function constrainMapViewState(
+  viewState: MapViewState,
+  options: {
+    maxBounds?: MapBounds | null;
+    maxZoom?: number;
+    minZoom?: number;
+  },
+): MapViewState {
+  const maxZoom = normalizeMapMaxZoom(options.maxZoom);
+  const minZoom = normalizeMapMinZoom(options.minZoom);
+  const maxBounds = normalizeMapBounds(options.maxBounds);
+  const effectiveMaxZoom =
+    maxZoom === undefined || (minZoom !== undefined && maxZoom < minZoom) ? undefined : maxZoom;
+  const zoom =
+    effectiveMaxZoom === undefined
+      ? Math.max(minZoom ?? Number.NEGATIVE_INFINITY, viewState.zoom)
+      : clamp(viewState.zoom, minZoom ?? Number.NEGATIVE_INFINITY, effectiveMaxZoom);
+  const center = maxBounds ? constrainMapCenterToBounds(viewState.center, maxBounds) : viewState.center;
+
+  if (viewState.zoom === zoom && center === viewState.center) {
+    return viewState;
+  }
+
+  return {
+    ...viewState,
+    center,
+    zoom,
+  };
+}
+
+export function normalizeMapMaxZoom(maxZoom?: number) {
+  return typeof maxZoom === "number" && Number.isFinite(maxZoom) ? Math.max(0, maxZoom) : undefined;
+}
+
+export function normalizeMapMinZoom(minZoom?: number) {
+  return typeof minZoom === "number" && Number.isFinite(minZoom) ? Math.max(0, minZoom) : undefined;
+}
+
+export function normalizeMapBounds(bounds?: MapBounds | null): MapBounds | null {
+  if (!bounds) {
+    return null;
+  }
+
+  const [west, south, east, north] = bounds;
+
+  if (
+    !Number.isFinite(west) ||
+    !Number.isFinite(south) ||
+    !Number.isFinite(east) ||
+    !Number.isFinite(north)
+  ) {
+    return null;
+  }
+
+  return [
+    Math.min(west, east),
+    clamp(Math.min(south, north), -90, 90),
+    Math.max(west, east),
+    clamp(Math.max(south, north), -90, 90),
+  ];
+}
+
+export function constrainMapCenterToBounds(
+  center: [longitude: number, latitude: number],
+  bounds: MapBounds,
+) {
+  const longitude = clamp(center[0], bounds[0], bounds[2]);
+  const latitude = clamp(center[1], bounds[1], bounds[3]);
+
+  return longitude === center[0] && latitude === center[1]
+    ? center
+    : ([longitude, latitude] as [longitude: number, latitude: number]);
 }
 
 export function getGlobeSphereRotation(viewState: GlobeViewState) {

@@ -4,6 +4,9 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
 import {
+  constrainMapViewState,
+  normalizeMapBounds,
+  type MapBounds,
   resolveMapLibreStyle,
   type MapViewState,
   type MapViewStateChangeReason,
@@ -37,6 +40,8 @@ export type WebGlFlatTile = {
 
 type WebGlFlatRuntimeProps = {
   mapStyle: RasterMapStyle;
+  maxBounds?: MapBounds;
+  maxZoom?: number;
   onContextMenu?: (context: {
     coordinates: [longitude: number, latitude: number];
     position: { x: number; y: number };
@@ -60,6 +65,8 @@ const RAD_TO_DEG = 180 / Math.PI;
 
 export function WebGlFlatRuntime({
   mapStyle,
+  maxBounds,
+  maxZoom,
   onContextMenu,
   onReady,
   onViewStateChange,
@@ -154,7 +161,11 @@ export function WebGlFlatRuntime({
         }
 
         onViewStateChange(
-          panWebGlFlatViewState(drag.center, drag.zoom, event.clientX - drag.x, event.clientY - drag.y),
+          constrainWebGlFlatViewState(
+            panWebGlFlatViewState(drag.center, drag.zoom, event.clientX - drag.x, event.clientY - drag.y),
+            containerRef.current,
+            { maxBounds, maxZoom },
+          ),
           "pan",
         );
       }}
@@ -166,10 +177,14 @@ export function WebGlFlatRuntime({
       onWheel={(event) => {
         event.preventDefault();
         onViewStateChange(
-          {
-            ...viewStateRef.current,
-            zoom: getWebGlFlatZoom(viewStateRef.current.zoom, event.deltaY),
-          },
+          constrainWebGlFlatViewState(
+            {
+              ...viewStateRef.current,
+              zoom: getWebGlFlatZoom(viewStateRef.current.zoom, event.deltaY, maxZoom),
+            },
+            containerRef.current,
+            { maxBounds, maxZoom },
+          ),
           "zoom",
         );
       }}
@@ -351,8 +366,82 @@ export function panWebGlFlatViewState(
   };
 }
 
-export function getWebGlFlatZoom(currentZoom: number, deltaY: number) {
-  return clamp(currentZoom - deltaY * 0.0025, MIN_FLAT_ZOOM, MAX_FLAT_ZOOM);
+export function getWebGlFlatZoom(currentZoom: number, deltaY: number, maxZoom?: number) {
+  const effectiveMaxZoom =
+    typeof maxZoom === "number" && Number.isFinite(maxZoom)
+      ? clamp(maxZoom, MIN_FLAT_ZOOM, MAX_FLAT_ZOOM)
+      : MAX_FLAT_ZOOM;
+
+  return clamp(currentZoom - deltaY * 0.0025, MIN_FLAT_ZOOM, effectiveMaxZoom);
+}
+
+export function getWebGlFlatBoundsMinZoom(
+  bounds: MapBounds,
+  size: { height: number; width: number },
+) {
+  const westNorth = coordinateToWebGlFlatWorldPoint([bounds[0], bounds[3]], 0);
+  const eastSouth = coordinateToWebGlFlatWorldPoint([bounds[2], bounds[1]], 0);
+  const worldWidth = Math.max(1e-6, eastSouth.x - westNorth.x);
+  const worldHeight = Math.max(1e-6, eastSouth.y - westNorth.y);
+  const scale = Math.max(size.width / worldWidth, size.height / worldHeight);
+
+  return clamp(Math.log2(scale), MIN_FLAT_ZOOM, MAX_FLAT_ZOOM);
+}
+
+function constrainWebGlFlatViewState(
+  viewState: MapViewState,
+  container: HTMLDivElement | null,
+  options: {
+    maxBounds?: MapBounds;
+    maxZoom?: number;
+  },
+) {
+  const bounds = normalizeMapBounds(options.maxBounds);
+  const size = container ? getContainerSize(container) : { height: 0, width: 0 };
+  const minZoom = bounds && size.height > 0 && size.width > 0
+    ? getWebGlFlatBoundsMinZoom(bounds, size)
+    : undefined;
+  const constrained = constrainMapViewState(viewState, {
+    maxBounds: bounds,
+    maxZoom: options.maxZoom,
+    minZoom,
+  });
+
+  if (!bounds || size.height <= 0 || size.width <= 0) {
+    return constrained;
+  }
+
+  return constrainWebGlFlatViewStateToBounds(constrained, bounds, size);
+}
+
+function constrainWebGlFlatViewStateToBounds(
+  viewState: MapViewState,
+  bounds: MapBounds,
+  size: { height: number; width: number },
+): MapViewState {
+  const westNorth = coordinateToWebGlFlatWorldPoint([bounds[0], bounds[3]], viewState.zoom);
+  const eastSouth = coordinateToWebGlFlatWorldPoint([bounds[2], bounds[1]], viewState.zoom);
+  const center = coordinateToWebGlFlatWorldPoint(viewState.center, viewState.zoom);
+  const halfWidth = size.width / 2;
+  const halfHeight = size.height / 2;
+  const minCenterX = westNorth.x + halfWidth;
+  const maxCenterX = eastSouth.x - halfWidth;
+  const minCenterY = westNorth.y + halfHeight;
+  const maxCenterY = eastSouth.y - halfHeight;
+  const x = minCenterX <= maxCenterX
+    ? clamp(center.x, minCenterX, maxCenterX)
+    : (westNorth.x + eastSouth.x) / 2;
+  const y = minCenterY <= maxCenterY
+    ? clamp(center.y, minCenterY, maxCenterY)
+    : (westNorth.y + eastSouth.y) / 2;
+  const nextCenter = webGlFlatWorldPointToCoordinate({ x, y }, viewState.zoom);
+
+  return nextCenter[0] === viewState.center[0] && nextCenter[1] === viewState.center[1]
+    ? viewState
+    : {
+        ...viewState,
+        center: nextCenter,
+      };
 }
 
 function createWebGlFlatRuntime({

@@ -30,9 +30,9 @@ import {
   createGlobeGraticuleLines,
   createVisibleSvgPath,
   defaultRasterMapStyle,
+  getBoundedGlobeZoom,
   getGlobeDragCenter,
   getGlobeRadius,
-  getGlobeZoom,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
@@ -147,6 +147,8 @@ export function PointMap<TProperties extends Record<string, unknown> = Record<st
   initialViewState,
   mapLabel = "Interactive point map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   measurementDistanceFormat,
   measurementDraftLineColor,
   measurementLineColor,
@@ -191,6 +193,8 @@ export function PointMap<TProperties extends Record<string, unknown> = Record<st
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
+      maxZoom={maxZoom}
       onMapControllerReady={onMapControllerReady}
       onMapContextMenu={onMapContextMenu}
       onMapReady={onMapReady}
@@ -235,6 +239,8 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
   initialViewState,
   mapLabel = "Interactive point map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   measurementDistanceFormat,
   measurementDraftLineColor,
   measurementLineColor,
@@ -279,6 +285,8 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
+      maxZoom={maxZoom}
       onMapControllerReady={onMapControllerReady}
       onMapContextMenu={onMapContextMenu}
       onMapReady={onMapReady}
@@ -384,6 +392,7 @@ export function GlobePointMap<TProperties extends Record<string, unknown> = Reco
   getPointRadius,
   initialViewState,
   mapLabel = "Interactive point map",
+  maxZoom,
   measurementDistanceFormat: _measurementDistanceFormat,
   measurementDraftLineColor: _measurementDraftLineColor,
   measurementLineColor: _measurementLineColor,
@@ -481,7 +490,7 @@ export function GlobePointMap<TProperties extends Record<string, unknown> = Reco
           event.preventDefault();
           setViewState((current) => ({
             ...current,
-            zoom: getGlobeZoom(current.zoom, event.deltaY),
+            zoom: getBoundedGlobeZoom(current.zoom, event.deltaY, maxZoom),
           }));
         }}
       >

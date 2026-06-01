@@ -16,9 +16,9 @@ import {
   createGlobeGraticuleLines,
   createVisibleSvgPath,
   defaultRasterMapStyle,
+  getBoundedGlobeZoom,
   getGlobeDragCenter,
   getGlobeRadius,
-  getGlobeZoom,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
@@ -134,6 +134,8 @@ export function FlowMap<TProperties extends Record<string, unknown> = Record<str
   initialViewState,
   mapLabel = "Interactive flow map",
   mapStyle = defaultRasterMapStyle,
+  maxBounds,
+  maxZoom,
   measurementDistanceFormat,
   measurementDraftLineColor,
   measurementLineColor,
@@ -176,6 +178,8 @@ export function FlowMap<TProperties extends Record<string, unknown> = Record<str
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
       mapStyle={mapStyle}
+      maxBounds={maxBounds}
+      maxZoom={maxZoom}
       onMapControllerReady={onMapControllerReady}
       onMapReady={onMapReady}
       onViewStateChange={onViewStateChange}
@@ -252,11 +256,13 @@ export function GlobeFlowMap<TProperties extends Record<string, unknown> = Recor
   className,
   fitToData = true,
   flowColor = "#0f766e",
+  flowShape = "straight",
   flows = [],
   getFlowColor,
   getWeight,
   initialViewState,
   mapLabel = "Interactive flow map",
+  maxZoom,
   measurementDistanceFormat: _measurementDistanceFormat,
   measurementDraftLineColor: _measurementDraftLineColor,
   measurementLineColor: _measurementLineColor,
@@ -363,7 +369,7 @@ export function GlobeFlowMap<TProperties extends Record<string, unknown> = Recor
           event.preventDefault();
           setViewState((current) => ({
             ...current,
-            zoom: getGlobeZoom(current.zoom, event.deltaY),
+            zoom: getBoundedGlobeZoom(current.zoom, event.deltaY, maxZoom),
           }));
         }}
       >
@@ -373,6 +379,7 @@ export function GlobeFlowMap<TProperties extends Record<string, unknown> = Recor
             <GlobeFlowFeature
               feature={feature}
               flowColor={flowColor}
+              flowShape={flowShape}
               getFlowColor={getFlowColor}
               key={feature.flow.id}
               onClick={handleFeatureClick}
@@ -424,6 +431,7 @@ function FlowGlobeBase({ viewState }: { viewState: GlobeViewState }) {
 function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
   feature,
   flowColor,
+  flowShape,
   getFlowColor,
   onClick,
   showEndpoints,
@@ -431,6 +439,7 @@ function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
 }: {
   feature: FlowMapFeature<TProperties>;
   flowColor: string;
+  flowShape: FlowShape;
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
   onClick: (feature: FlowMapFeature<TProperties>) => void;
   showEndpoints: boolean;
@@ -445,6 +454,14 @@ function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
 
   const color = getFlowColor?.(feature) ?? flowColor;
   const opacity = clamp(0.28 + Math.min(from.scale, to.scale) * 0.72, 0.18, 0.92);
+  const projectedPath = createFlowPathCoordinates(feature, flowShape)
+    .map((coordinate, index) => {
+      const projected = projectGlobeCoordinate(coordinate, viewState);
+      const command = index === 0 ? "M" : "L";
+
+      return `${command}${projected.x.toFixed(2)} ${projected.y.toFixed(2)}`;
+    })
+    .join("");
 
   return (
     <g
@@ -456,7 +473,7 @@ function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
       style={{ opacity }}
     >
       <path
-        d={`M${from.x.toFixed(2)} ${from.y.toFixed(2)}L${to.x.toFixed(2)} ${to.y.toFixed(2)}`}
+        d={projectedPath}
         stroke={color}
         strokeWidth={feature.width}
       >

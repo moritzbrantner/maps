@@ -41,6 +41,7 @@ export {
   defaultRasterMapStyle,
   type ClusteredMapProps,
   type GlobeBasemapMode,
+  type MapBounds,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,

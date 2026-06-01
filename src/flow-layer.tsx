@@ -36,7 +36,16 @@ export type FlowLayerWeightAccessor<TProperties = Record<string, unknown>> = (
   flow: IndexedMapFlow<TProperties>,
 ) => number;
 
-export type FlowShape = "straight" | "arc";
+export type FlowShape =
+  | "straight"
+  | "arc"
+  | "s-curve"
+  | {
+      bend?: number;
+      direction?: "auto" | "clockwise" | "counterclockwise";
+      segments?: number;
+      type?: "straight" | "arc" | "s-curve";
+    };
 
 export type FlowDirectionMarker = "arrow" | "none";
 
@@ -271,6 +280,10 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             ? inactiveFlowOpacity
             : baseOpacity;
         const position = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+        const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
+        const projectedCoordinates = flowCoordinates.map((coordinate) =>
+          surface.projectGlobeCoordinate(coordinate, surface.viewState),
+        );
         const title = formatFlowTitle(feature, getFlowLabel, flowValueFormat);
 
         return (
@@ -317,7 +330,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             style={{ opacity }}
           >
             <path
-              d={`M${from.x.toFixed(2)} ${from.y.toFixed(2)}L${to.x.toFixed(2)} ${to.y.toFixed(2)}`}
+              d={createProjectedFlowPath(projectedCoordinates)}
               stroke={color}
               strokeWidth={selected ? feature.width + 1.5 : feature.width}
             >
@@ -425,8 +438,9 @@ export function createFlowPathCoordinates<TProperties>(
 ): Array<[longitude: number, latitude: number]> {
   const from = feature.flow.from;
   const to = feature.flow.to;
+  const options = resolveFlowShapeOptions(feature, shape);
 
-  if (shape !== "arc") {
+  if (options.type === "straight") {
     return [from, to];
   }
 
@@ -438,16 +452,51 @@ export function createFlowPathCoordinates<TProperties>(
     return [from, to];
   }
 
-  const offset = clamp(distance * 0.22, 0, 4);
-  const direction = getFlowArcDirection(feature.flow.id);
-  const control: [number, number] = [
-    (from[0] + to[0]) / 2 + (-deltaLatitude / distance) * offset * direction,
-    (from[1] + to[1]) / 2 + (deltaLongitude / distance) * offset * direction,
+  const offset = clamp(distance * options.bend, 0, distance * 0.85);
+  const direction = options.direction;
+  const segments = options.segments;
+  const perpendicular: [number, number] = [
+    (-deltaLatitude / distance) * offset * direction,
+    (deltaLongitude / distance) * offset * direction,
   ];
   const coordinates: Array<[longitude: number, latitude: number]> = [];
 
-  for (let index = 0; index < 24; index += 1) {
-    const t = index / 23;
+  if (options.type === "s-curve") {
+    const controlA: [number, number] = [
+      from[0] + deltaLongitude * 0.32 + perpendicular[0],
+      from[1] + deltaLatitude * 0.32 + perpendicular[1],
+    ];
+    const controlB: [number, number] = [
+      from[0] + deltaLongitude * 0.68 - perpendicular[0],
+      from[1] + deltaLatitude * 0.68 - perpendicular[1],
+    ];
+
+    for (let index = 0; index < segments; index += 1) {
+      const t = index / (segments - 1);
+      const inverse = 1 - t;
+
+      coordinates.push([
+        inverse ** 3 * from[0] +
+          3 * inverse * inverse * t * controlA[0] +
+          3 * inverse * t * t * controlB[0] +
+          t ** 3 * to[0],
+        inverse ** 3 * from[1] +
+          3 * inverse * inverse * t * controlA[1] +
+          3 * inverse * t * t * controlB[1] +
+          t ** 3 * to[1],
+      ]);
+    }
+
+    return coordinates;
+  }
+
+  const control: [number, number] = [
+    (from[0] + to[0]) / 2 + perpendicular[0],
+    (from[1] + to[1]) / 2 + perpendicular[1],
+  ];
+
+  for (let index = 0; index < segments; index += 1) {
+    const t = index / (segments - 1);
     const inverse = 1 - t;
 
     coordinates.push([
@@ -457,6 +506,44 @@ export function createFlowPathCoordinates<TProperties>(
   }
 
   return coordinates;
+}
+
+function createProjectedFlowPath(
+  coordinates: Array<{
+    x: number;
+    y: number;
+  }>,
+) {
+  return coordinates
+    .map((coordinate, index) => {
+      const command = index === 0 ? "M" : "L";
+
+      return `${command}${coordinate.x.toFixed(2)} ${coordinate.y.toFixed(2)}`;
+    })
+    .join("");
+}
+
+function resolveFlowShapeOptions<TProperties>(
+  feature: FlowLayerFeature<TProperties>,
+  shape: FlowShape,
+) {
+  const type = typeof shape === "string" ? shape : shape.type ?? "arc";
+  const rawBend = typeof shape === "string" ? undefined : shape.bend;
+  const rawSegments = typeof shape === "string" ? undefined : shape.segments;
+  const rawDirection = typeof shape === "string" ? "auto" : shape.direction ?? "auto";
+  const direction =
+    rawDirection === "clockwise"
+      ? 1
+      : rawDirection === "counterclockwise"
+        ? -1
+        : getFlowArcDirection(feature.flow.id);
+
+  return {
+    bend: clamp(rawBend ?? (type === "s-curve" ? 0.28 : 0.22), 0, 1),
+    direction,
+    segments: Math.max(2, Math.min(96, Math.round(rawSegments ?? 24))),
+    type,
+  };
 }
 
 export function addFlowArrowMarker<TProperties>({
