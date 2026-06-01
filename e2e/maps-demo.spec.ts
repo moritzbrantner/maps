@@ -121,6 +121,8 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
   await expect(slider).toBeVisible();
   await expect(page.getByText("08:00").first()).toBeVisible();
 
+  await page.getByRole("button", { name: "Jump to start" }).click();
+
   const nextButton = page.getByRole("button", { name: "Next time step" });
 
   const initialTime = await page.locator(".mb-temporal-map__current-time").textContent();
