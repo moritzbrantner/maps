@@ -23,8 +23,7 @@ stylesheet, because map controls use shared UI primitives.
 
 ## Clustered maps
 
-Use `ClusteredMap` for interactive point maps backed by the shared
-`@moritzbrantner/data-density` geo aggregation layer.
+Use `ClusteredMap` for interactive point maps backed by built-in geo aggregation.
 
 ```tsx
 import { ClusteredMap, type MapPoint } from "@moritzbrantner/maps";
@@ -729,5 +728,5 @@ export function GeoJsonOperationsMap() {
 ## Notes
 
 - Import `@moritzbrantner/maps/styles.css` once in the consuming app to load the package styles.
-- Keep `@moritzbrantner/data-density` and `@moritzbrantner/ui` as published external dependencies.
+- Keep `@moritzbrantner/ui` as a published external dependency.
 - Run `bun run verify:release` before publishing a release.

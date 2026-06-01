@@ -174,6 +174,102 @@ describe("@moritzbrantner/maps aggregation", () => {
 
     expect(bounds).toEqual([18, 9, 22, 14]);
   });
+
+  test("ignores non-finite point coordinates in bounds and aggregation", () => {
+    const index = createPointAggregationIndex([
+      { id: "valid", latitude: 10, longitude: 20, metrics: { count: 1 } },
+      { id: "invalid-latitude", latitude: Number.NaN, longitude: 18, metrics: { count: 100 } },
+      { id: "invalid-longitude", latitude: 9, longitude: Number.POSITIVE_INFINITY, metrics: { count: 100 } },
+    ]);
+    const aggregation = index.getViewportAggregation({
+      bounds: [-180, -85, 180, 85],
+      zoom: 12,
+    });
+
+    expect(getBoundsFromPoints([
+      { latitude: Number.NaN, longitude: 1 },
+      { latitude: 10, longitude: 20 },
+      { latitude: 12, longitude: Number.POSITIVE_INFINITY },
+    ])).toEqual([20, 10, 20, 10]);
+    expect(aggregation.summary.visiblePointCount).toBe(1);
+    expect(aggregation.summary.metrics.count).toBe(1);
+    expect(index.getPointById("invalid-latitude")).toBeNull();
+  });
+
+  test("normalizes missing point fields and stringifies generated ids", () => {
+    const index = createPointAggregationIndex([{ latitude: 52.52, longitude: 13.405 }]);
+    const point = index.getPointById("0");
+
+    expect(point).toMatchObject({
+      id: "0",
+      label: "",
+      latitude: 52.52,
+      longitude: 13.405,
+      metrics: {},
+      properties: {},
+    });
+  });
+
+  test("drops non-finite metric values from summaries", () => {
+    const index = createPointAggregationIndex([
+      {
+        id: "a",
+        latitude: 52.52,
+        longitude: 13.405,
+        metrics: { invalid: Number.NaN, orders: 2 },
+      },
+      {
+        id: "b",
+        latitude: 52.5201,
+        longitude: 13.4051,
+        metrics: { invalid: Number.POSITIVE_INFINITY, orders: 3 },
+      },
+    ]);
+    const aggregation = index.getViewportAggregation({
+      bounds: [13.3, 52.4, 13.6, 52.7],
+      zoom: 4,
+    });
+
+    expect(aggregation.summary.metrics).toEqual({ orders: 5 });
+    expect(createMapDensityViewportSummary(aggregation).metricKeys).toEqual(["orders"]);
+  });
+
+  test("deduplicates antimeridian-crossing viewport features", () => {
+    const index = createPointAggregationIndex([
+      { id: "east", latitude: 0, longitude: 179.8, metrics: { count: 1 } },
+      { id: "west", latitude: 0, longitude: -179.8, metrics: { count: 1 } },
+    ]);
+    const aggregation = index.getViewportAggregation({
+      bounds: [170, -10, -170, 10],
+      zoom: 12,
+    });
+    const pointIds = aggregation.features
+      .filter((feature) => feature.kind === "point")
+      .map((feature) => feature.point.id)
+      .sort();
+
+    expect(aggregation.summary.visiblePointCount).toBe(2);
+    expect(pointIds).toEqual(["east", "west"]);
+  });
+
+  test("uses visible point count for viewport summary item count", () => {
+    const index = createPointAggregationIndex(
+      Array.from({ length: 25 }, (_, index) => ({
+        id: `point-${index}`,
+        latitude: 52.52 + index * 0.0001,
+        longitude: 13.405 + index * 0.0001,
+        metrics: { orders: 1 },
+      })),
+    );
+    const aggregation = index.getViewportAggregation({
+      bounds: [13.3, 52.4, 13.6, 52.7],
+      zoom: 4,
+    });
+    const summary = createMapDensityViewportSummary(aggregation);
+
+    expect(aggregation.features.length).toBeLessThan(summary.itemCount);
+    expect(summary.itemCount).toBe(25);
+  });
 });
 
 function createSyntheticPoints(count: number): TestPoint[] {
