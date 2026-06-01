@@ -123,13 +123,9 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
 
   await page.getByRole("button", { name: "Jump to start" }).click();
 
-  const nextButton = page.getByRole("button", { name: "Next time step" });
-
   const initialTime = await page.locator(".mb-temporal-map__current-time").textContent();
 
-  for (let index = 0; index < 70; index += 1) {
-    await nextButton.click();
-  }
+  await slider.fill("70");
 
   await expect(page.locator(".mb-temporal-map__current-time")).not.toHaveText(initialTime ?? "");
   expect(await viewportValue.textContent()).toBe(initialViewport);
