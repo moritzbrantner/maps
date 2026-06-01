@@ -9,6 +9,7 @@ import {
   createHeatMapFeatureCollection,
   createScalarFieldGrid,
   getTemporalHeatMapMaxWeight,
+  resolveHeatFieldColor,
   type MapPoint,
   type TemporalMapTrack,
 } from ".";
@@ -641,6 +642,201 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(changedSurface?.bounds).toEqual(surface?.bounds);
   });
 
+  test("does not rebuild the field grid for equivalent recreated array props", async () => {
+    const points = [
+      {
+        id: "cold",
+        latitude: 52,
+        longitude: 4,
+        metrics: {
+          temperature: 14,
+        },
+      },
+      {
+        id: "warm",
+        latitude: 42,
+        longitude: 18,
+        metrics: {
+          temperature: 30,
+        },
+      },
+    ];
+    const getValue = vi.fn((point: MapPoint) => point.metrics?.temperature ?? 0);
+    const { rerender } = render(
+      <HeatMap
+        domainBounds={[0, 40, 20, 54]}
+        fieldColorRamp={[[0, "#000000"], [1, "#ffffff"]]}
+        fieldColumns={4}
+        fieldRows={3}
+        fieldValueDomain={[10, 34]}
+        getValue={getValue}
+        heatmapSurfaceMode="field"
+        mapLabel="Stable field props map"
+        points={points}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Stable field props map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    expect(getValue).toHaveBeenCalledTimes(2);
+
+    rerender(
+      <HeatMap
+        domainBounds={[0, 40, 20, 54]}
+        fieldColorRamp={[[0, "#000000"], [1, "#ffffff"]]}
+        fieldColumns={4}
+        fieldRows={3}
+        fieldValueDomain={[10, 34]}
+        getValue={getValue}
+        heatmapSurfaceMode="field"
+        mapLabel="Stable field props map"
+        points={points}
+        showAttributionControl={false}
+      />,
+    );
+
+    expect(getValue).toHaveBeenCalledTimes(2);
+  });
+
+  test("updates field rendering for value-domain changes without rebuilding interpolation", async () => {
+    const points = [
+      {
+        id: "cold",
+        latitude: 52,
+        longitude: 4,
+        metrics: {
+          temperature: 14,
+        },
+      },
+      {
+        id: "warm",
+        latitude: 42,
+        longitude: 18,
+        metrics: {
+          temperature: 30,
+        },
+      },
+    ];
+    const getValue = vi.fn((point: MapPoint) => point.metrics?.temperature ?? 0);
+    const { rerender } = render(
+      <HeatMap
+        domainBounds={[0, 40, 20, 54]}
+        fieldColorRamp={[[0, "#000000"], [1, "#ffffff"]]}
+        fieldColumns={4}
+        fieldRows={3}
+        fieldValueDomain={[0, 100]}
+        getValue={getValue}
+        heatmapSurfaceMode="field"
+        mapLabel="Value-domain field map"
+        points={points}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Value-domain field map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const layerGroup = flatMock.getLayerGroups()[0];
+    const initialSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
+    );
+    const initialUrl = initialSurface?.url;
+
+    expect(getValue).toHaveBeenCalledTimes(2);
+
+    rerender(
+      <HeatMap
+        domainBounds={[0, 40, 20, 54]}
+        fieldColorRamp={[[0, "#000000"], [1, "#ffffff"]]}
+        fieldColumns={4}
+        fieldRows={3}
+        fieldValueDomain={[10, 34]}
+        getValue={getValue}
+        heatmapSurfaceMode="field"
+        mapLabel="Value-domain field map"
+        points={points}
+        showAttributionControl={false}
+      />,
+    );
+
+    const changedSurface = layerGroup?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
+    );
+
+    expect(getValue).toHaveBeenCalledTimes(2);
+    expect(changedSurface?.url).not.toBe(initialUrl);
+  });
+
+  test("fieldAsyncRender eventually renders a field surface and drops stale requests", async () => {
+    const getValue = vi.fn((point: MapPoint) => point.metrics?.temperature ?? 0);
+    const { rerender } = render(
+      <HeatMap
+        domainBounds={[0, 40, 20, 54]}
+        fieldAsyncRender
+        fieldColumns={4}
+        fieldRows={3}
+        getValue={getValue}
+        heatmapSurfaceMode="field"
+        mapLabel="Async field map"
+        points={[
+          {
+            id: "stale",
+            latitude: 52,
+            longitude: 4,
+            metrics: {
+              temperature: 14,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+      />,
+    );
+
+    rerender(
+      <HeatMap
+        domainBounds={[0, 40, 20, 54]}
+        fieldAsyncRender
+        fieldColumns={4}
+        fieldRows={3}
+        getValue={getValue}
+        heatmapSurfaceMode="field"
+        mapLabel="Async field map"
+        points={[
+          {
+            id: "fresh",
+            latitude: 42,
+            longitude: 18,
+            metrics: {
+              temperature: 30,
+            },
+          },
+        ]}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      const surface = flatMock.getLayerGroups()[0]?.layers.find(
+        (layer) =>
+          layer.options?.className === "mb-maps__heat-surface mb-maps__heat-surface--field",
+      );
+
+      expect(surface).toMatchObject({
+        type: "imageOverlay",
+      });
+    });
+
+    expect(getValue.mock.calls.map(([point]) => point.id)).toEqual(["fresh"]);
+  });
+
   test("creates field contours as GeoJSON MultiLineString features", () => {
     const grid = createScalarFieldGrid(
       [
@@ -685,6 +881,21 @@ describe("@moritzbrantner/maps heat maps", () => {
         valueLabel: expect.stringContaining("C"),
       },
       type: "Feature",
+    });
+  });
+
+  test("keeps prepared field color ramp output equivalent to public color resolution", () => {
+    expect(resolveHeatFieldColor([[0, "#000000"], [1, "#ffffff"]], 0.25)).toEqual({
+      alpha: 1,
+      blue: 63.75,
+      green: 63.75,
+      red: 63.75,
+    });
+    expect(resolveHeatFieldColor([[0, "not-a-color"], [1, "#ffffff"]], 0.25)).toEqual({
+      alpha: 1,
+      blue: 255,
+      green: 255,
+      red: 255,
     });
   });
 

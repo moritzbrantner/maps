@@ -13,7 +13,7 @@ export type HeatFieldColorStop = readonly [valueOrNormalized: number, color: str
 export type HeatFieldImageOptions = {
   colorRamp?: readonly HeatFieldColorStop[];
   opacity?: number;
-  valueDomain?: [min: number, max: number];
+  valueDomain?: readonly [min: number, max: number];
 };
 
 export type HeatFieldContourOptions = {
@@ -22,7 +22,7 @@ export type HeatFieldContourOptions = {
   lineWidth?: number;
   opacity?: number;
   valueFormat?: (value: number) => string;
-  valueDomain?: [min: number, max: number];
+  valueDomain?: readonly [min: number, max: number];
 };
 
 export type HeatFieldContourFeatureProperties = {
@@ -45,6 +45,14 @@ export type HeatFieldImage = {
   width: number;
 };
 
+type PreparedHeatFieldColorRamp = {
+  stops: Array<{
+    color: string;
+    parsed: HeatFieldParsedColor | null;
+    value: number;
+  }>;
+};
+
 const defaultHeatFieldColorRamp = [
   [0, "#2563eb"],
   [0.25, "#22c55e"],
@@ -62,6 +70,7 @@ export function createHeatFieldImage(
   }
 
   const colorRamp = options.colorRamp ?? defaultHeatFieldColorRamp;
+  const preparedColorRamp = prepareHeatFieldColorRamp(colorRamp);
   const opacity = clamp(options.opacity ?? 1, 0, 1);
   const valueDomain = options.valueDomain ?? grid.valueDomain;
   const rgba = new Uint8ClampedArray(grid.columns * grid.rows * 4);
@@ -79,7 +88,7 @@ export function createHeatFieldImage(
       continue;
     }
 
-    const color = resolveHeatFieldColor(colorRamp, normalizedValue);
+    const color = resolvePreparedHeatFieldColor(preparedColorRamp, normalizedValue);
     const pixelOffset = index * 4;
 
     rgba[pixelOffset] = Math.round(clamp(color.red, 0, 255));
@@ -114,8 +123,9 @@ export function createHeatFieldContourImage(
   const stroke = escapeSvgAttribute(options.lineColor ?? "#0f172a");
   const strokeWidth = roundSvgNumber(clamp(options.lineWidth ?? 1.35, 0.25, 12));
   const opacity = clamp(options.opacity ?? 1, 0, 1);
-  const paths = levels
-    .flatMap((level) => createHeatFieldContourSegments(grid, level, valueDomain))
+  const segmentsByLevel = createHeatFieldContourSegmentsByLevel(grid, levels, valueDomain);
+  const paths = segmentsByLevel
+    .flat()
     .map((segment) => {
       const [start, end] = segment;
 
@@ -154,9 +164,10 @@ export function createHeatFieldContourFeatureCollection(
 
   const valueDomain = options.valueDomain ?? grid.valueDomain;
   const levels = resolveHeatFieldContourLevels(valueDomain, options.levels);
+  const segmentsByLevel = createHeatFieldContourSegmentsByLevel(grid, levels, valueDomain);
   const features = levels
     .map((level, index) => {
-      const lines = createHeatFieldContourSegments(grid, level, valueDomain).map((segment) =>
+      const lines = (segmentsByLevel[index] ?? []).map((segment) =>
         segment.map((point) => heatFieldContourPointToCoordinate(grid, point)) as [
           GeoJsonPosition,
           GeoJsonPosition,
@@ -200,37 +211,58 @@ export function resolveHeatFieldColor(
   colorRamp: readonly HeatFieldColorStop[],
   normalizedValue: number,
 ): HeatFieldParsedColor {
-  if (colorRamp.length === 0) {
+  return resolvePreparedHeatFieldColor(prepareHeatFieldColorRamp(colorRamp), normalizedValue);
+}
+
+function prepareHeatFieldColorRamp(
+  colorRamp: readonly HeatFieldColorStop[],
+): PreparedHeatFieldColorRamp {
+  return {
+    stops: [...colorRamp]
+      .sort(([left], [right]) => left - right)
+      .map(([value, color]) => ({
+        color,
+        parsed: parseHeatFieldColor(color),
+        value,
+      })),
+  };
+}
+
+function resolvePreparedHeatFieldColor(
+  colorRamp: PreparedHeatFieldColorRamp,
+  normalizedValue: number,
+): HeatFieldParsedColor {
+  if (colorRamp.stops.length === 0) {
     return parseHeatFieldColor("#dc2626")!;
   }
 
-  const sortedRamp = [...colorRamp].sort(([left], [right]) => left - right);
+  const sortedRamp = colorRamp.stops;
   const clampedValue = clamp(normalizedValue, 0, 1);
   const first = sortedRamp[0];
 
-  if (!first || clampedValue <= first[0]) {
-    return parseHeatFieldColor(first?.[1] ?? "#dc2626") ?? parseHeatFieldColor("#dc2626")!;
+  if (!first || clampedValue <= first.value) {
+    return first?.parsed ?? parseHeatFieldColor("#dc2626")!;
   }
 
   for (let index = 1; index < sortedRamp.length; index += 1) {
     const previous = sortedRamp[index - 1]!;
     const next = sortedRamp[index]!;
 
-    if (clampedValue > next[0]) {
+    if (clampedValue > next.value) {
       continue;
     }
 
-    const previousColor = parseHeatFieldColor(previous[1]);
-    const nextColor = parseHeatFieldColor(next[1]);
+    const previousColor = previous.parsed;
+    const nextColor = next.parsed;
 
     if (!previousColor || !nextColor) {
-      return parseHeatFieldColor(next[1]) ?? parseHeatFieldColor("#dc2626")!;
+      return nextColor ?? parseHeatFieldColor("#dc2626")!;
     }
 
     const progress =
-      next[0] <= previous[0]
+      next.value <= previous.value
         ? 1
-        : clamp((clampedValue - previous[0]) / (next[0] - previous[0]), 0, 1);
+        : clamp((clampedValue - previous.value) / (next.value - previous.value), 0, 1);
 
     return {
       alpha: previousColor.alpha + (nextColor.alpha - previousColor.alpha) * progress,
@@ -241,8 +273,7 @@ export function resolveHeatFieldColor(
   }
 
   return (
-    parseHeatFieldColor(sortedRamp[sortedRamp.length - 1]?.[1] ?? "#dc2626") ??
-    parseHeatFieldColor("#dc2626")!
+    sortedRamp[sortedRamp.length - 1]?.parsed ?? parseHeatFieldColor("#dc2626")!
   );
 }
 
@@ -378,7 +409,7 @@ function roundSvgNumber(value: number) {
 }
 
 function resolveHeatFieldContourLevels(
-  valueDomain: [min: number, max: number] | null,
+  valueDomain: readonly [min: number, max: number] | null,
   levels: HeatFieldContourOptions["levels"],
 ) {
   if (!valueDomain) {
@@ -418,12 +449,12 @@ type HeatFieldContourPoint = {
 
 type HeatFieldContourSegment = readonly [HeatFieldContourPoint, HeatFieldContourPoint];
 
-function createHeatFieldContourSegments(
+function createHeatFieldContourSegmentsByLevel(
   grid: ScalarFieldGrid,
-  level: number,
-  valueDomain: [min: number, max: number] | null,
+  levels: readonly number[],
+  valueDomain: readonly [min: number, max: number] | null,
 ) {
-  const segments: HeatFieldContourSegment[] = [];
+  const segmentsByLevel = levels.map((): HeatFieldContourSegment[] => []);
 
   for (let row = 0; row < grid.rows - 1; row += 1) {
     for (let column = 0; column < grid.columns - 1; column += 1) {
@@ -436,51 +467,101 @@ function createHeatFieldContourSegments(
         topLeft === null ||
         topRight === null ||
         bottomRight === null ||
-        bottomLeft === null ||
-        !cellContainsContourLevel([topLeft, topRight, bottomRight, bottomLeft], level)
+        bottomLeft === null
       ) {
         continue;
       }
 
-      const crossings = [
-        getContourEdgeCrossing(
+      const min = Math.min(topLeft, topRight, bottomRight, bottomLeft);
+      const max = Math.max(topLeft, topRight, bottomRight, bottomLeft);
+
+      if (min === max) {
+        continue;
+      }
+
+      for (
+        let levelIndex = findFirstContourLevelIndex(levels, min);
+        levelIndex < levels.length && levels[levelIndex]! <= max;
+        levelIndex += 1
+      ) {
+        const level = levels[levelIndex]!;
+        const crossingTop = getContourEdgeCrossing(
           { value: topLeft, x: column + 0.5, y: row + 0.5 },
           { value: topRight, x: column + 1.5, y: row + 0.5 },
           level,
-        ),
-        getContourEdgeCrossing(
+        );
+        const crossingRight = getContourEdgeCrossing(
           { value: topRight, x: column + 1.5, y: row + 0.5 },
           { value: bottomRight, x: column + 1.5, y: row + 1.5 },
           level,
-        ),
-        getContourEdgeCrossing(
+        );
+        const crossingBottom = getContourEdgeCrossing(
           { value: bottomRight, x: column + 1.5, y: row + 1.5 },
           { value: bottomLeft, x: column + 0.5, y: row + 1.5 },
           level,
-        ),
-        getContourEdgeCrossing(
+        );
+        const crossingLeft = getContourEdgeCrossing(
           { value: bottomLeft, x: column + 0.5, y: row + 1.5 },
           { value: topLeft, x: column + 0.5, y: row + 0.5 },
           level,
-        ),
-      ].filter(isDefined);
+        );
+        const crossingCount =
+          (crossingTop ? 1 : 0) +
+          (crossingRight ? 1 : 0) +
+          (crossingBottom ? 1 : 0) +
+          (crossingLeft ? 1 : 0);
+        const segments = segmentsByLevel[levelIndex]!;
 
-      if (crossings.length === 2) {
-        segments.push([crossings[0]!, crossings[1]!]);
-      } else if (crossings.length === 4) {
-        const centerValue = (topLeft + topRight + bottomRight + bottomLeft) / 4;
-        const normalizedCenter = normalizeScalarFieldValue(centerValue, valueDomain) ?? 0.5;
+        if (crossingCount === 2) {
+          const firstCrossing = crossingTop ?? crossingRight ?? crossingBottom ?? crossingLeft;
+          const secondCrossing =
+            firstCrossing === crossingTop
+              ? crossingRight ?? crossingBottom ?? crossingLeft
+              : firstCrossing === crossingRight
+                ? crossingBottom ?? crossingLeft
+                : crossingLeft;
 
-        if (normalizedCenter >= 0.5) {
-          segments.push([crossings[0]!, crossings[3]!], [crossings[1]!, crossings[2]!]);
-        } else {
-          segments.push([crossings[0]!, crossings[1]!], [crossings[2]!, crossings[3]!]);
+          if (firstCrossing && secondCrossing) {
+            segments.push([firstCrossing, secondCrossing]);
+          }
+        } else if (crossingCount === 4) {
+          const centerValue = (topLeft + topRight + bottomRight + bottomLeft) / 4;
+          const normalizedCenter = normalizeScalarFieldValue(centerValue, valueDomain) ?? 0.5;
+
+          if (
+            crossingTop &&
+            crossingRight &&
+            crossingBottom &&
+            crossingLeft &&
+            normalizedCenter >= 0.5
+          ) {
+            segments.push([crossingTop, crossingLeft], [crossingRight, crossingBottom]);
+          } else if (crossingTop && crossingRight && crossingBottom && crossingLeft) {
+            segments.push([crossingTop, crossingRight], [crossingBottom, crossingLeft]);
+          }
         }
       }
     }
   }
 
-  return segments;
+  return segmentsByLevel;
+}
+
+function findFirstContourLevelIndex(levels: readonly number[], minValue: number) {
+  let low = 0;
+  let high = levels.length;
+
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+
+    if (levels[middle]! < minValue) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+
+  return low;
 }
 
 function heatFieldContourPointToCoordinate(
@@ -498,13 +579,6 @@ function getContourGridValue(grid: ScalarFieldGrid, column: number, row: number)
   const value = grid.values[row * grid.columns + column] ?? null;
 
   return value !== null && Number.isFinite(value) ? value : null;
-}
-
-function cellContainsContourLevel(values: readonly number[], level: number) {
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-
-  return level >= min && level <= max && min !== max;
 }
 
 function getContourEdgeCrossing(

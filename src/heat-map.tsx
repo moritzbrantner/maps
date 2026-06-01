@@ -164,6 +164,7 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
     fieldColorRamp?: readonly HeatFieldColorStop[];
     fieldColumns?: HeatFieldOptions<TProperties>["fieldColumns"];
     fieldOpacity?: HeatFieldOptions<TProperties>["opacity"];
+    fieldAsyncRender?: boolean;
     fieldRenderMode?: HeatFieldRenderMode;
     fieldRows?: HeatFieldOptions<TProperties>["fieldRows"];
     fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];

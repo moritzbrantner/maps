@@ -57,6 +57,7 @@
     "build": "tsup --config tsup.config.ts",
     "bench:heat-map": "bun run ./scripts/benchmark-heat-map.mjs",
     "bench:heat-layer": "bun run ./scripts/benchmark-heat-layer.mjs",
+    "bench:scalar-field": "bun run ./scripts/benchmark-scalar-field.mjs",
     "bench:performance": "bun run ./scripts/benchmark-performance.mjs",
     "bench:geojson-transition": "bun run ./scripts/benchmark-geojson-transition.mjs",
     "bench:temporal-geojson": "bun run ./scripts/benchmark-temporal-geojson.mjs",

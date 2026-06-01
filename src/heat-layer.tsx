@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef } from "react";
+import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   createPointAggregationIndex,
@@ -21,6 +21,7 @@ import {
   resolveScalarFieldValuePoints,
   type HeatFieldMaskGeoJson,
   type HeatFieldOptions,
+  type ScalarFieldGrid,
 } from "./scalar-field";
 import {
   createHeatFieldContourFeatureCollection,
@@ -110,6 +111,7 @@ export type HeatLayerProps<TProperties = Record<string, unknown>> =
     fieldColorRamp?: readonly HeatFieldColorStop[];
     fieldColumns?: HeatFieldOptions<TProperties>["fieldColumns"];
     fieldOpacity?: HeatFieldOptions<TProperties>["opacity"];
+    fieldAsyncRender?: boolean;
     fieldRenderMode?: HeatFieldRenderMode;
     fieldRows?: HeatFieldOptions<TProperties>["fieldRows"];
     fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
@@ -194,6 +196,18 @@ type HeatLayerSurfaceCache = {
   zoomBucket: number;
 };
 
+type HeatLayerFieldArtifacts = {
+  contourCollection: HeatFieldContourFeatureCollection | null;
+  filterPoint: unknown;
+  grid: ScalarFieldGrid;
+  gridKey: string;
+  getValue: unknown;
+  getWeight: unknown;
+  image: HeatFieldImage | null;
+  points: readonly unknown[];
+  renderKey: string;
+};
+
 export function HeatLayer<TProperties = Record<string, unknown>>({
   domainBounds,
   domainPaddingRatio,
@@ -203,6 +217,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   fieldContourLineWidth,
   fieldContourOpacity,
   fieldContourValueFormat,
+  fieldAsyncRender = false,
   fieldColorRamp,
   fieldColumns,
   fieldOpacity,
@@ -266,9 +281,36 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       }),
     [deferredPoints, filterPoint, getWeight, maxWeight, weightMetric],
   );
-  const fieldGrid = useMemo(
+  const domainBoundsKey = createHeatLayerNumberArrayKey(domainBounds);
+  const fieldValueDomainKey = createHeatLayerNumberArrayKey(fieldValueDomain);
+  const fieldColorRampKey = createHeatLayerColorRampKey(fieldColorRamp);
+  const fieldContourLevelsKey = createHeatLayerContourLevelsKey(fieldContourLevels);
+  const fieldGridInputKey = [
+    domainBoundsKey,
+    domainPaddingRatio ?? "",
+    fieldCellSizeMeters ?? "",
+    fieldColumns ?? "",
+    fieldRows ?? "",
+    interpolationEpsilonMeters ?? "",
+    interpolationExtrapolate ?? "",
+    interpolationK ?? "",
+    interpolationMaxDistanceMeters ?? "",
+    interpolationPower ?? "",
+    maskGeoJson ? "mask" : "",
+    valueMetric ?? weightMetric ?? "",
+  ].join("|");
+  const fieldRenderInputKey = [
+    fieldColorRampKey,
+    fieldContourLevelsKey,
+    fieldContourValueFormat ? "format" : "",
+    fieldOpacity ?? heatmapOpacity,
+    fieldRenderMode,
+    fieldValueDomainKey,
+  ].join("|");
+  const shouldRenderFieldAsync = fieldAsyncRender && typeof setTimeout !== "undefined";
+  const syncFieldGrid = useMemo(
     () =>
-      heatmapSurfaceMode === "field"
+      heatmapSurfaceMode === "field" && !shouldRenderFieldAsync
         ? createScalarFieldGrid(deferredPoints, {
             domainBounds,
             domainPaddingRatio,
@@ -283,18 +325,16 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
             interpolationMaxDistanceMeters,
             interpolationPower,
             maskGeoJson,
-            valueDomain: fieldValueDomain,
             valueMetric: valueMetric ?? weightMetric,
           })
         : null,
     [
       deferredPoints,
-      domainBounds,
+      domainBoundsKey,
       domainPaddingRatio,
       fieldCellSizeMeters,
       fieldColumns,
       fieldRows,
-      fieldValueDomain,
       filterPoint,
       getValue,
       getWeight,
@@ -305,48 +345,161 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       interpolationMaxDistanceMeters,
       interpolationPower,
       maskGeoJson,
+      shouldRenderFieldAsync,
       valueMetric,
       weightMetric,
     ],
   );
-  const fieldImage = useMemo(
+  const syncFieldImage = useMemo(
     () =>
-      fieldGrid && isHeatFieldRasterVisible(fieldRenderMode)
-        ? createHeatFieldImage(fieldGrid, {
-              colorRamp: fieldColorRamp,
-              opacity: fieldOpacity ?? heatmapOpacity,
-              valueDomain: fieldValueDomain,
-            })
+      syncFieldGrid && isHeatFieldRasterVisible(fieldRenderMode)
+        ? createHeatFieldImage(syncFieldGrid, {
+            colorRamp: fieldColorRamp,
+            opacity: fieldOpacity ?? heatmapOpacity,
+            valueDomain: fieldValueDomain,
+          })
         : null,
     [
-      fieldColorRamp,
-      fieldGrid,
+      fieldColorRampKey,
       fieldOpacity,
       fieldRenderMode,
-      fieldValueDomain,
+      fieldValueDomainKey,
       heatmapOpacity,
+      syncFieldGrid,
     ],
   );
-  const fieldContourCollection = useMemo(
+  const syncFieldContourCollection = useMemo(
     () =>
-      fieldGrid && isHeatFieldContoursVisible(fieldRenderMode)
-        ? createHeatFieldContourFeatureCollection(fieldGrid, {
+      syncFieldGrid && isHeatFieldContoursVisible(fieldRenderMode)
+        ? createHeatFieldContourFeatureCollection(syncFieldGrid, {
             levels: fieldContourLevels,
             valueDomain: fieldValueDomain,
             valueFormat: fieldContourValueFormat,
           })
         : null,
     [
-      fieldContourLevels,
+      fieldContourLevelsKey,
       fieldContourValueFormat,
-      fieldGrid,
       fieldRenderMode,
-      fieldValueDomain,
+      fieldValueDomainKey,
+      syncFieldGrid,
     ],
   );
+  const [asyncFieldArtifacts, setAsyncFieldArtifacts] = useState<HeatLayerFieldArtifacts | null>(
+    null,
+  );
+  const asyncFieldArtifactsRef = useRef<HeatLayerFieldArtifacts | null>(null);
+  const asyncFieldRequestIdRef = useRef(0);
+  const fieldImage = shouldRenderFieldAsync ? asyncFieldArtifacts?.image ?? null : syncFieldImage;
+  const fieldContourCollection = shouldRenderFieldAsync
+    ? asyncFieldArtifacts?.contourCollection ?? null
+    : syncFieldContourCollection;
+
+  useEffect(() => {
+    asyncFieldArtifactsRef.current = asyncFieldArtifacts;
+  }, [asyncFieldArtifacts]);
+
+  useEffect(() => {
+    if (!shouldRenderFieldAsync || heatmapSurfaceMode !== "field") {
+      return;
+    }
+
+    const requestId = (asyncFieldRequestIdRef.current += 1);
+    const timeout = setTimeout(() => {
+      const previousArtifacts = asyncFieldArtifactsRef.current;
+      const grid =
+        previousArtifacts?.gridKey === fieldGridInputKey &&
+        previousArtifacts.points === deferredPoints &&
+        previousArtifacts.filterPoint === filterPoint &&
+        previousArtifacts.getValue === getValue &&
+        previousArtifacts.getWeight === getWeight
+          ? previousArtifacts.grid
+          : createScalarFieldGrid(deferredPoints, {
+              domainBounds,
+              domainPaddingRatio,
+              fieldCellSizeMeters,
+              fieldColumns,
+              fieldRows,
+              filterPoint,
+              getValue: getValue ?? getWeight,
+              interpolationEpsilonMeters,
+              interpolationExtrapolate,
+              interpolationK,
+              interpolationMaxDistanceMeters,
+              interpolationPower,
+              maskGeoJson,
+              valueMetric: valueMetric ?? weightMetric,
+            });
+      const image =
+        grid && isHeatFieldRasterVisible(fieldRenderMode)
+          ? createHeatFieldImage(grid, {
+              colorRamp: fieldColorRamp,
+              opacity: fieldOpacity ?? heatmapOpacity,
+              valueDomain: fieldValueDomain,
+            })
+          : null;
+      const contourCollection =
+        grid && isHeatFieldContoursVisible(fieldRenderMode)
+          ? createHeatFieldContourFeatureCollection(grid, {
+              levels: fieldContourLevels,
+              valueDomain: fieldValueDomain,
+              valueFormat: fieldContourValueFormat,
+            })
+          : null;
+
+      if (asyncFieldRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setAsyncFieldArtifacts({
+        contourCollection,
+        filterPoint,
+        grid,
+        gridKey: fieldGridInputKey,
+        getValue,
+        getWeight,
+        image,
+        points: deferredPoints,
+        renderKey: fieldRenderInputKey,
+      });
+    }, 0);
+
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [
+    deferredPoints,
+    domainBoundsKey,
+    domainPaddingRatio,
+    fieldCellSizeMeters,
+    fieldColorRampKey,
+    fieldColumns,
+    fieldContourLevelsKey,
+    fieldContourValueFormat,
+    fieldGridInputKey,
+    fieldOpacity,
+    fieldRenderInputKey,
+    fieldRenderMode,
+    fieldRows,
+    fieldValueDomainKey,
+    filterPoint,
+    getValue,
+    getWeight,
+    heatmapOpacity,
+    heatmapSurfaceMode,
+    interpolationEpsilonMeters,
+    interpolationExtrapolate,
+    interpolationK,
+    interpolationMaxDistanceMeters,
+    interpolationPower,
+    maskGeoJson,
+    shouldRenderFieldAsync,
+    valueMetric,
+    weightMetric,
+  ]);
   const fieldDataPointCollection = useMemo(
     () =>
-      heatmapSurfaceMode === "field"
+      heatmapSurfaceMode === "field" && showDataPoints
         ? createHeatLayerValueFeatureCollection(deferredPoints, {
             filterPoint,
             getValue: getValue ?? getWeight,
@@ -356,11 +509,12 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         : null,
     [
       deferredPoints,
-      fieldValueDomain,
+      fieldValueDomainKey,
       filterPoint,
       getValue,
       getWeight,
       heatmapSurfaceMode,
+      showDataPoints,
       valueMetric,
       weightMetric,
     ],
@@ -516,6 +670,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     renderVersion,
     resolvedLayerId,
     showDataPoints,
+    shouldRenderFieldAsync,
     registerFlatLayer,
     surfaceDisplay,
   ]);
@@ -618,6 +773,30 @@ function isHeatFieldRasterVisible(renderMode: HeatFieldRenderMode) {
 
 function isHeatFieldContoursVisible(renderMode: HeatFieldRenderMode) {
   return renderMode === "contours" || renderMode === "raster-contours";
+}
+
+function createHeatLayerNumberArrayKey(values: readonly number[] | null | undefined) {
+  return values?.map(createHeatLayerNumberKey).join(",") ?? "";
+}
+
+function createHeatLayerColorRampKey(colorRamp: readonly HeatFieldColorStop[] | null | undefined) {
+  return (
+    colorRamp
+      ?.map(([value, color]) => `${createHeatLayerNumberKey(value)}:${color}`)
+      .join("|") ?? ""
+  );
+}
+
+function createHeatLayerContourLevelsKey(levels: HeatFieldContourOptions["levels"]) {
+  if (Array.isArray(levels)) {
+    return createHeatLayerNumberArrayKey(levels);
+  }
+
+  return levels ?? "";
+}
+
+function createHeatLayerNumberKey(value: number) {
+  return Number.isFinite(value) ? String(value) : "NaN";
 }
 
 export function createHeatLayerDensityIndex<TProperties = Record<string, unknown>>(

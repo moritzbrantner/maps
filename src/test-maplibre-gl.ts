@@ -22,7 +22,19 @@ export class Map {
   private fallbackLayerGroup: unknown = null;
   private layers = new globalThis.Map<string, unknown>();
   private mockLayers = new globalThis.Map<string, unknown>();
-  private sources = new globalThis.Map<string, { data?: unknown; setData: (data: unknown) => void }>();
+  private sources = new globalThis.Map<
+    string,
+    {
+      coordinates?: Array<[number, number]>;
+      data?: unknown;
+      setData: (data: unknown) => void;
+      updateImage?: (next: {
+        coordinates?: Array<[number, number]>;
+        url: string;
+      }) => void;
+      url?: string;
+    }
+  >();
   private zoom = 5;
 
   constructor(options: {
@@ -214,6 +226,17 @@ export class Map {
 
           this.updateMockLayersForSource(id);
         },
+        updateImage: (next) => {
+          const current = this.sources.get(id);
+
+          if (!current) {
+            return;
+          }
+
+          current.url = next.url;
+          current.coordinates = next.coordinates ?? current.coordinates;
+          this.updateMockLayersForImageSource(id);
+        },
         ...(source as Record<string, unknown>),
       });
   }
@@ -386,6 +409,32 @@ export class Map {
       }
     }
   }
+
+  private updateMockLayersForImageSource(sourceId: string) {
+    const source = this.sources.get(sourceId);
+
+    for (const [layerId, layerDefinition] of this.layers) {
+      const layer = layerDefinition as { source?: string; type?: string };
+
+      if (layer.source !== sourceId || layer.type !== "raster") {
+        continue;
+      }
+
+      const mockLayer = this.mockLayers.get(layerId) as
+        | {
+            bounds?: [[number, number], [number, number]];
+            url?: string;
+          }
+        | undefined;
+
+      if (!mockLayer) {
+        continue;
+      }
+
+      mockLayer.bounds = imageCoordinatesToBounds(source?.coordinates);
+      mockLayer.url = source?.url;
+    }
+  }
 }
 
 function normalizeEventPayload(payload: unknown) {
@@ -432,7 +481,7 @@ function toLatLngCoordinates(coordinates: unknown): unknown {
 
 function imageCoordinatesToBounds(coordinates: Array<[number, number]> | undefined) {
   if (!coordinates || coordinates.length < 4) {
-    return [];
+    return undefined;
   }
 
   const longitudes = coordinates.map((coordinate) => coordinate[0]);

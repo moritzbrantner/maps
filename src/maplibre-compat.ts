@@ -1,7 +1,9 @@
 "use client";
 
 import type {
+  Coordinates,
   GeoJSONSource,
+  ImageSource,
   LngLatLike,
   Map as MapLibreMap,
   Marker as MapLibreMarker,
@@ -715,18 +717,34 @@ class MapLibreImageLayer extends MapLibreSourceLayer {
   }
 
   private renderImageSource() {
+    const coordinates = this.getImageCoordinates();
+    const source = this.map.getSource(this.sourceId) as ImageSource | undefined;
+
+    if (source && typeof source.updateImage === "function") {
+      source.updateImage({
+        coordinates,
+        url: this.url,
+      });
+      return;
+    }
+
     removeMapLibreSourceIfExists(this.map, this.sourceId);
-    const [[south, west], [north, east]] = this.bounds;
     this.map.addSource(this.sourceId, {
-      coordinates: [
-        [west, north],
-        [east, north],
-        [east, south],
-        [west, south],
-      ],
+      coordinates,
       type: "image",
       url: this.url,
     } as never);
+  }
+
+  private getImageCoordinates(): Coordinates {
+    const [[south, west], [north, east]] = this.bounds;
+
+    return [
+      [west, north],
+      [east, north],
+      [east, south],
+      [west, south],
+    ];
   }
 
   private updateFlatImageOverlay(next: {

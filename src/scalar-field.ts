@@ -7,6 +7,7 @@ const DEFAULT_INTERPOLATION_POWER = 2;
 const DEFAULT_DOMAIN_PADDING_RATIO = 0.08;
 const DEFAULT_EPSILON_METERS = 1;
 const MAX_EXPLICIT_FIELD_SIZE = 2_048;
+const MAX_FAST_GRID_VALUE_POINTS = 256;
 const DEFAULT_GEO_VIZ_WASM_PACKAGE = "@mb-rust/geo-viz-wasm";
 
 export type HeatFieldInterpolation = "idw";
@@ -18,7 +19,7 @@ export type HeatFieldMaskGeoJson = {
 
 export type HeatFieldOptions<TProperties = Record<string, unknown>> = {
   colorRamp?: readonly [valueOrNormalized: number, color: string][];
-  domainBounds?: [west: number, south: number, east: number, north: number];
+  domainBounds?: readonly [west: number, south: number, east: number, north: number];
   domainPaddingRatio?: number;
   fieldCellSizeMeters?: number;
   fieldColumns?: number;
@@ -35,7 +36,7 @@ export type HeatFieldOptions<TProperties = Record<string, unknown>> = {
   // intentionally keeps the core IDW path unmasked and deterministic.
   maskGeoJson?: HeatFieldMaskGeoJson | null;
   opacity?: number;
-  valueDomain?: [min: number, max: number];
+  valueDomain?: readonly [min: number, max: number];
   valueMetric?: string;
 };
 
@@ -100,7 +101,7 @@ type DistanceCandidate<TProperties = Record<string, unknown>> = {
 
 type SpatialGrid<TProperties = Record<string, unknown>> = {
   cellSizeMeters: number;
-  cells: Map<string, Array<ProjectedValuePoint<TProperties>>>;
+  cells: Map<number, Array<ProjectedValuePoint<TProperties>>>;
   maxColumn: number;
   maxRow: number;
   minColumn: number;
@@ -183,6 +184,10 @@ function createScalarFieldGridTypeScript<TProperties = Record<string, unknown>>(
     };
   }
 
+  if (canUseFastScalarFieldGrid(valuePoints, dimensions, options)) {
+    return createScalarFieldGridFastIdw(valuePoints, bounds, dimensions, options);
+  }
+
   const interpolator = createIdwInterpolatorFromValuePoints(valuePoints, bounds, options);
   const values: Array<number | null> = [];
   const [west, south, east, north] = bounds;
@@ -205,6 +210,280 @@ function createScalarFieldGridTypeScript<TProperties = Record<string, unknown>>(
     valueDomain: resolveValueDomain(valuePoints, values, options.valueDomain),
     values,
   };
+}
+
+function createScalarFieldGridFastIdw<TProperties = Record<string, unknown>>(
+  valuePoints: readonly ScalarFieldValuePoint<TProperties>[],
+  bounds: [west: number, south: number, east: number, north: number],
+  dimensions: { columns: number; rows: number },
+  options: HeatFieldOptions<TProperties>,
+): ScalarFieldGrid {
+  const valueCount = valuePoints.length;
+  const values: Array<number | null> = new Array(dimensions.columns * dimensions.rows);
+
+  if (valueCount === 0) {
+    values.fill(null);
+    return {
+      bounds,
+      columns: dimensions.columns,
+      rows: dimensions.rows,
+      valueDomain: resolveValueDomain(valuePoints, values, options.valueDomain),
+      values,
+    };
+  }
+
+  const projection = createLocalEquirectangularProjection(bounds);
+  const sourceXs = new Float64Array(valueCount);
+  const sourceYs = new Float64Array(valueCount);
+  const sourceValues = new Float64Array(valueCount);
+  const sourceIndexes = new Int32Array(valueCount);
+  const sourceIds = new Array<string>(valueCount);
+
+  for (let index = 0; index < valueCount; index += 1) {
+    const entry = valuePoints[index]!;
+    const projected = projection.project([entry.point.longitude, entry.point.latitude]);
+
+    sourceXs[index] = projected.x;
+    sourceYs[index] = projected.y;
+    sourceValues[index] = entry.value;
+    sourceIndexes[index] = entry.index;
+    sourceIds[index] = entry.point.id;
+  }
+
+  const [west, south, east, north] = bounds;
+  const longitudeStep = (east - west) / dimensions.columns;
+  const latitudeStep = (north - south) / dimensions.rows;
+  const sampleXs = new Float64Array(dimensions.columns);
+  const sampleYs = new Float64Array(dimensions.rows);
+
+  for (let column = 0; column < dimensions.columns; column += 1) {
+    sampleXs[column] = projection.project([west + longitudeStep * (column + 0.5), south]).x;
+  }
+
+  for (let row = 0; row < dimensions.rows; row += 1) {
+    sampleYs[row] = projection.project([west, north - latitudeStep * (row + 0.5)]).y;
+  }
+
+  const kNearest = Math.min(
+    valueCount,
+    Math.max(1, Math.floor(getPositiveFinite(options.interpolationK, DEFAULT_INTERPOLATION_K))),
+  );
+  const power = getPositiveFinite(options.interpolationPower, DEFAULT_INTERPOLATION_POWER);
+  const epsilonMeters = Math.max(
+    0,
+    getPositiveFinite(options.interpolationEpsilonMeters, DEFAULT_EPSILON_METERS),
+  );
+  const epsilonSquared = epsilonMeters * epsilonMeters;
+  const maxDistanceMeters =
+    Number.isFinite(options.interpolationMaxDistanceMeters) &&
+    (options.interpolationMaxDistanceMeters ?? 0) > 0
+      ? options.interpolationMaxDistanceMeters!
+      : null;
+  const maxDistanceSquared = maxDistanceMeters === null ? null : maxDistanceMeters * maxDistanceMeters;
+  const extrapolate = options.interpolationExtrapolate ?? true;
+  const topDistanceSquared = new Float64Array(kNearest);
+  const topSourceIndexes = new Int32Array(kNearest);
+
+  for (let row = 0; row < dimensions.rows; row += 1) {
+    const y = sampleYs[row]!;
+
+    for (let column = 0; column < dimensions.columns; column += 1) {
+      const x = sampleXs[column]!;
+      let value = interpolateFastIdwCell({
+        epsilonSquared,
+        kNearest,
+        maxDistanceSquared,
+        power,
+        sourceIds,
+        sourceIndexes,
+        sourceValues,
+        sourceXs,
+        sourceYs,
+        topDistanceSquared,
+        topSourceIndexes,
+        x,
+        y,
+      });
+
+      if (value === null && maxDistanceSquared !== null && extrapolate) {
+        value = interpolateFastIdwCell({
+          epsilonSquared,
+          kNearest,
+          maxDistanceSquared: null,
+          power,
+          sourceIds,
+          sourceIndexes,
+          sourceValues,
+          sourceXs,
+          sourceYs,
+          topDistanceSquared,
+          topSourceIndexes,
+          x,
+          y,
+        });
+      }
+
+      values[row * dimensions.columns + column] = value;
+    }
+  }
+
+  return {
+    bounds,
+    columns: dimensions.columns,
+    rows: dimensions.rows,
+    valueDomain: resolveValueDomain(valuePoints, values, options.valueDomain),
+    values,
+  };
+}
+
+function interpolateFastIdwCell({
+  epsilonSquared,
+  kNearest,
+  maxDistanceSquared,
+  power,
+  sourceIds,
+  sourceIndexes,
+  sourceValues,
+  sourceXs,
+  sourceYs,
+  topDistanceSquared,
+  topSourceIndexes,
+  x,
+  y,
+}: {
+  epsilonSquared: number;
+  kNearest: number;
+  maxDistanceSquared: number | null;
+  power: number;
+  sourceIds: readonly string[];
+  sourceIndexes: Int32Array;
+  sourceValues: Float64Array;
+  sourceXs: Float64Array;
+  sourceYs: Float64Array;
+  topDistanceSquared: Float64Array;
+  topSourceIndexes: Int32Array;
+  x: number;
+  y: number;
+}) {
+  let candidateCount = 0;
+
+  for (let sourceIndex = 0; sourceIndex < sourceValues.length; sourceIndex += 1) {
+    const dx = sourceXs[sourceIndex]! - x;
+    const dy = sourceYs[sourceIndex]! - y;
+    const distanceSquared = dx * dx + dy * dy;
+
+    if (maxDistanceSquared !== null && distanceSquared > maxDistanceSquared) {
+      continue;
+    }
+
+    if (
+      candidateCount < kNearest ||
+      compareFastScalarFieldCandidate(
+        distanceSquared,
+        sourceIndex,
+        topDistanceSquared[candidateCount - 1]!,
+        topSourceIndexes[candidateCount - 1]!,
+        sourceIndexes,
+        sourceIds,
+      ) < 0
+    ) {
+      const insertIndex = findFastScalarFieldCandidateInsertIndex({
+        candidateCount,
+        distanceSquared,
+        sourceIds,
+        sourceIndex,
+        sourceIndexes,
+        topDistanceSquared,
+        topSourceIndexes,
+      });
+      const endIndex = Math.min(candidateCount, kNearest - 1);
+
+      for (let index = endIndex; index > insertIndex; index -= 1) {
+        topDistanceSquared[index] = topDistanceSquared[index - 1]!;
+        topSourceIndexes[index] = topSourceIndexes[index - 1]!;
+      }
+
+      topDistanceSquared[insertIndex] = distanceSquared;
+      topSourceIndexes[insertIndex] = sourceIndex;
+      candidateCount = Math.min(candidateCount + 1, kNearest);
+    }
+  }
+
+  if (candidateCount === 0) {
+    return null;
+  }
+
+  if (topDistanceSquared[0]! <= epsilonSquared) {
+    return sourceValues[topSourceIndexes[0]!]!;
+  }
+
+  let weightedValue = 0;
+  let totalWeight = 0;
+
+  for (let index = 0; index < candidateCount; index += 1) {
+    const sourceIndex = topSourceIndexes[index]!;
+    const distanceMeters = Math.sqrt(topDistanceSquared[index]!);
+
+    if (distanceMeters <= 0) {
+      return sourceValues[sourceIndex]!;
+    }
+
+    const weight = 1 / distanceMeters ** power;
+    weightedValue += weight * sourceValues[sourceIndex]!;
+    totalWeight += weight;
+  }
+
+  return totalWeight > 0 ? weightedValue / totalWeight : null;
+}
+
+function findFastScalarFieldCandidateInsertIndex({
+  candidateCount,
+  distanceSquared,
+  sourceIds,
+  sourceIndex,
+  sourceIndexes,
+  topDistanceSquared,
+  topSourceIndexes,
+}: {
+  candidateCount: number;
+  distanceSquared: number;
+  sourceIds: readonly string[];
+  sourceIndex: number;
+  sourceIndexes: Int32Array;
+  topDistanceSquared: Float64Array;
+  topSourceIndexes: Int32Array;
+}) {
+  for (let index = 0; index < candidateCount; index += 1) {
+    if (
+      compareFastScalarFieldCandidate(
+        distanceSquared,
+        sourceIndex,
+        topDistanceSquared[index]!,
+        topSourceIndexes[index]!,
+        sourceIndexes,
+        sourceIds,
+      ) < 0
+    ) {
+      return index;
+    }
+  }
+
+  return candidateCount;
+}
+
+function compareFastScalarFieldCandidate(
+  leftDistanceSquared: number,
+  leftSourceIndex: number,
+  rightDistanceSquared: number,
+  rightSourceIndex: number,
+  sourceIndexes: Int32Array,
+  sourceIds: readonly string[],
+) {
+  return (
+    leftDistanceSquared - rightDistanceSquared ||
+    sourceIndexes[leftSourceIndex]! - sourceIndexes[rightSourceIndex]! ||
+    sourceIds[leftSourceIndex]!.localeCompare(sourceIds[rightSourceIndex]!)
+  );
 }
 
 export function createIdwInterpolator<TProperties = Record<string, unknown>>(
@@ -230,7 +509,7 @@ export function getScalarFieldValueAtCoordinate(
 
 export function normalizeScalarFieldValue(
   value: number,
-  valueDomain: [min: number, max: number] | null,
+  valueDomain: readonly [min: number, max: number] | null,
 ) {
   if (!valueDomain || !Number.isFinite(value)) {
     return null;
@@ -328,8 +607,6 @@ function createIdwInterpolatorFromValuePoints<TProperties = Record<string, unkno
       if (candidates.length === 0) {
         return null;
       }
-
-      candidates.sort(compareDistanceCandidates);
 
       const exact = candidates.find((candidate) => candidate.distanceMeters <= epsilonMeters);
 
@@ -477,7 +754,7 @@ function resolveScalarFieldBounds<TProperties>(
 }
 
 function normalizeBounds(
-  bounds: [west: number, south: number, east: number, north: number],
+  bounds: readonly [west: number, south: number, east: number, north: number],
 ): [west: number, south: number, east: number, north: number] | null {
   if (!bounds.every(Number.isFinite)) {
     return null;
@@ -589,7 +866,7 @@ function createMetricSpatialGrid<TProperties>(
     (options.interpolationMaxDistanceMeters ?? 0) > 0
       ? Math.max(1, options.interpolationMaxDistanceMeters!)
       : defaultCellSize;
-  const cells = new Map<string, Array<ProjectedValuePoint<TProperties>>>();
+  const cells = new Map<number, Array<ProjectedValuePoint<TProperties>>>();
   let minColumn = Number.POSITIVE_INFINITY;
   let minRow = Number.POSITIVE_INFINITY;
   let maxColumn = Number.NEGATIVE_INFINITY;
@@ -733,7 +1010,12 @@ function forEachSpatialGridRingCell(
 }
 
 function getSpatialGridCellKey(column: number, row: number) {
-  return `${column}:${row}`;
+  const unsignedColumn = column >= 0 ? column * 2 : -column * 2 - 1;
+  const unsignedRow = row >= 0 ? row * 2 : -row * 2 - 1;
+
+  return unsignedColumn >= unsignedRow
+    ? unsignedColumn * unsignedColumn + unsignedColumn + unsignedRow
+    : unsignedColumn + unsignedRow * unsignedRow;
 }
 
 function compareDistanceCandidates<TProperties>(
@@ -750,10 +1032,12 @@ function compareDistanceCandidates<TProperties>(
 function resolveValueDomain<TProperties>(
   valuePoints: readonly ScalarFieldValuePoint<TProperties>[],
   gridValues: ReadonlyArray<number | null>,
-  valueDomain?: [min: number, max: number],
+  valueDomain?: readonly [min: number, max: number],
 ): [min: number, max: number] | null {
   if (valueDomain?.every(Number.isFinite)) {
-    return valueDomain[0] <= valueDomain[1] ? valueDomain : [valueDomain[1], valueDomain[0]];
+    return valueDomain[0] <= valueDomain[1]
+      ? [valueDomain[0], valueDomain[1]]
+      : [valueDomain[1], valueDomain[0]];
   }
 
   const values = gridValues.some((value) => value !== null)
@@ -803,6 +1087,19 @@ function clamp(value: number, min: number, max: number) {
 
 function isDefined<T>(value: T | null): value is T {
   return value !== null;
+}
+
+function canUseFastScalarFieldGrid<TProperties>(
+  valuePoints: readonly ScalarFieldValuePoint<TProperties>[],
+  dimensions: { columns: number; rows: number },
+  options: HeatFieldOptions<TProperties>,
+) {
+  return (
+    (!options.interpolation || options.interpolation === "idw") &&
+    dimensions.columns > 0 &&
+    dimensions.rows > 0 &&
+    valuePoints.length <= MAX_FAST_GRID_VALUE_POINTS
+  );
 }
 
 function canUseWasmScalarFieldGrid<TProperties>(options: HeatFieldOptions<TProperties>) {

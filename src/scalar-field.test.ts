@@ -148,6 +148,54 @@ describe("scalar-field IDW interpolation", () => {
     );
   });
 
+  test("matches the public IDW interpolator at regular grid sample centers", () => {
+    const points = [
+      point("a", 0, 0, 0),
+      point("b", 3, 0, 30),
+      point("c", 1, 2, 12),
+      point("d", 2, 3, 24),
+    ];
+    const options = {
+      domainBounds: [-1, -1, 4, 4] as [number, number, number, number],
+      fieldColumns: 5,
+      fieldRows: 4,
+      interpolationK: 3,
+      interpolationPower: 1.7,
+      valueMetric: "temperature",
+    };
+    const grid = createScalarFieldGrid(points, options);
+    const interpolator = createIdwInterpolator(points, options);
+    const [west, south, east, north] = grid.bounds;
+    const longitudeStep = (east - west) / grid.columns;
+    const latitudeStep = (north - south) / grid.rows;
+
+    for (let row = 0; row < grid.rows; row += 1) {
+      for (let column = 0; column < grid.columns; column += 1) {
+        const longitude = west + longitudeStep * (column + 0.5);
+        const latitude = north - latitudeStep * (row + 0.5);
+        const expected = interpolator.getValueAtCoordinate([longitude, latitude]);
+
+        expect(grid.values[row * grid.columns + column]).toBeCloseTo(expected ?? Number.NaN, 10);
+      }
+    }
+  });
+
+  test("applies grid interpolation options on the fast path", () => {
+    const grid = createScalarFieldGrid(
+      [point("near", 0, 0, 0), point("far", 2, 0, 100), point("farther", 4, 0, 100)],
+      {
+        domainBounds: [0, -1, 2, 1],
+        fieldColumns: 1,
+        fieldRows: 1,
+        interpolationK: 1,
+        interpolationPower: 3,
+        valueMetric: "temperature",
+      },
+    );
+
+    expect(grid.values[0]).toBe(0);
+  });
+
   test("returns null outside max distance when extrapolation is disabled", () => {
     const interpolator = createIdwInterpolator([point("a", 0, 0, 12)], {
       domainBounds: [-10, -10, 10, 10],
@@ -157,6 +205,19 @@ describe("scalar-field IDW interpolation", () => {
     });
 
     expect(getScalarFieldValueAtCoordinate(interpolator, [5, 5])).toBeNull();
+  });
+
+  test("returns null grid cells outside max distance when extrapolation is disabled", () => {
+    const grid = createScalarFieldGrid([point("a", 0, 0, 12)], {
+      domainBounds: [4, 4, 6, 6],
+      fieldColumns: 1,
+      fieldRows: 1,
+      interpolationExtrapolate: false,
+      interpolationMaxDistanceMeters: 1_000,
+      valueMetric: "temperature",
+    });
+
+    expect(grid.values).toEqual([null]);
   });
 
   test("delegates compatible grids to an initialized WASM scalar field runtime", () => {

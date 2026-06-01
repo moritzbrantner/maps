@@ -265,6 +265,16 @@ const demoTemperaturePoints: Array<MapPoint<DemoPointProperties>> = [
   temperaturePoint("minsk", "Minsk", "East", 53.9006, 27.559, 19.6),
   temperaturePoint("valletta", "Valletta", "South", 35.8989, 14.5146, 28.2),
 ];
+const demoTemperatureDomainBounds = [-25, 34, 35, 66] as const;
+const demoTemperatureValueDomain = [12, 34] as const;
+const demoTemperatureFieldColorRamp = [
+  [0, "#1d4ed8"],
+  [0.22, "#38bdf8"],
+  [0.42, "#22c55e"],
+  [0.62, "#fde047"],
+  [0.8, "#fb923c"],
+  [1, "#dc2626"],
+] as const;
 const demoPoints = createDenseDemoPoints(demoPointHubs);
 
 const demoFlowFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties> =
@@ -1583,12 +1593,13 @@ function renderMap(
       return (
         <HeatMap
           {...sharedMeasurementProps}
-          domainBounds={[-25, 34, 35, 66]}
-          fieldColumns={420}
-          fieldColorRamp={getTemperatureFieldColorRamp()}
-          fieldRows={260}
+          domainBounds={demoTemperatureDomainBounds}
+          fieldAsyncRender
+          fieldColumns={320}
+          fieldColorRamp={demoTemperatureFieldColorRamp}
+          fieldRows={200}
           fieldRenderMode={heatFieldRenderMode}
-          fieldValueDomain={[12, 34]}
+          fieldValueDomain={demoTemperatureValueDomain}
           fieldContourColor="#111827"
           fieldContourLevels={11}
           fieldContourLineWidth={heatFieldContourLineWidth}
@@ -3421,17 +3432,6 @@ function getHeatLayerColorRamp(color: string) {
     [0, "rgba(15, 23, 42, 0)"],
     [0.18, "#67e8f9"],
     [0.58, color],
-    [1, "#dc2626"],
-  ] as const;
-}
-
-function getTemperatureFieldColorRamp() {
-  return [
-    [0, "#1d4ed8"],
-    [0.22, "#38bdf8"],
-    [0.42, "#22c55e"],
-    [0.62, "#fde047"],
-    [0.8, "#fb923c"],
     [1, "#dc2626"],
   ] as const;
 }
