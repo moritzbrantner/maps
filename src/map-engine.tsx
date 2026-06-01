@@ -168,6 +168,7 @@ export function useMapFrame(layer: EngineGeoLayer): VizRenderFrame | null {
 
     try {
       return engine.computeFrame({
+        frameFormat: "objects",
         viewport: {
           bounds: [-180, -90, 180, 90],
           center: surface.viewState.center,
@@ -327,6 +328,7 @@ function computeEngineLayerForMap(
     return (
       engine
         .computeFrame({
+          frameFormat: "objects",
           viewport: {
             bounds: [
               bounds.getWest(),
@@ -358,6 +360,7 @@ function computeEngineLayerForGlobe(engine: VizEngine, layer: EngineGeoLayer) {
     return (
       engine
         .computeFrame({
+          frameFormat: "objects",
           viewport: {
             bounds: [-180, -90, 180, 90],
             center: [0, 0],

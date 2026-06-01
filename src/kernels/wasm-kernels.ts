@@ -7,11 +7,11 @@ type MapsKernelsWasmModule = {
   resampleRingFlat: (coordinates: Float64Array, coordinateCount: number) => Float64Array;
 };
 
-const DEFAULT_WASM_PACKAGE = "@mb-rust/maps-kernels-wasm";
+export async function loadMapsWasmKernelRuntime(packageName?: string): Promise<MapsKernelRuntime> {
+  if (!packageName) {
+    throw new Error("No public WASM kernel package configured.");
+  }
 
-export async function loadMapsWasmKernelRuntime(
-  packageName = DEFAULT_WASM_PACKAGE,
-): Promise<MapsKernelRuntime> {
   const wasmModule = await importOptionalWasmModule(packageName);
 
   await wasmModule.default?.();

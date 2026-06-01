@@ -4,7 +4,6 @@
 @source "./dist/**/*.{js,mjs}";
 @source "./src/**/*.{ts,tsx}";
 @source "./node_modules/@moritzbrantner/timeline-editor/dist/**/*.{js,mjs}";
-@source "../timeline-editor/src/**/*.{ts,tsx}";
 
 @layer components {
   .mb-maps {

@@ -1,4 +1,11 @@
 import type { IndexedMapPoint, MapPoint, MapPointFilter } from "./aggregation";
+import type {
+  createVizEngine,
+  VizEngine,
+  VizGeoPoint,
+  VizGeoScalarFieldOptions,
+  VizRenderLayer,
+} from "@moritzbrantner/viz-engine";
 
 const EARTH_RADIUS_METERS = 6_371_008.8;
 const DEFAULT_FIELD_COLUMNS = 256;
@@ -8,7 +15,7 @@ const DEFAULT_DOMAIN_PADDING_RATIO = 0.08;
 const DEFAULT_EPSILON_METERS = 1;
 const MAX_EXPLICIT_FIELD_SIZE = 2_048;
 const MAX_FAST_GRID_VALUE_POINTS = 256;
-const DEFAULT_GEO_VIZ_WASM_PACKAGE = "@mb-rust/geo-viz-wasm";
+const DEFAULT_VIZ_ENGINE_PACKAGE = "@moritzbrantner/viz-engine";
 
 export type HeatFieldInterpolation = "idw";
 
@@ -68,12 +75,8 @@ export type MapsScalarFieldWasmRuntime = {
   ): ScalarFieldGrid;
 };
 
-type GeoVizWasmModule = {
-  createScalarFieldGrid: (
-    points: readonly unknown[],
-    options: Record<string, unknown>,
-  ) => ScalarFieldGrid;
-  init?: () => Promise<unknown>;
+type VizEngineModule = {
+  createVizEngine: typeof createVizEngine;
 };
 
 type MetricProjection = {
@@ -111,16 +114,11 @@ type SpatialGrid<TProperties = Record<string, unknown>> = {
 let scalarFieldWasmRuntime: MapsScalarFieldWasmRuntime | null = null;
 let scalarFieldWasmLoadError: unknown = null;
 
-export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_GEO_VIZ_WASM_PACKAGE) {
+export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_VIZ_ENGINE_PACKAGE) {
   try {
-    const wasmModule = await importOptionalGeoVizWasmModule(packageName);
+    const vizEngineModule = await importOptionalVizEngineModule(packageName);
 
-    await wasmModule.init?.();
-    scalarFieldWasmRuntime = {
-      createScalarFieldGrid(points, options) {
-        return wasmModule.createScalarFieldGrid(points, toGeoVizScalarFieldOptions(options));
-      },
-    };
+    scalarFieldWasmRuntime = createVizEngineScalarFieldRuntime(vizEngineModule);
     scalarFieldWasmLoadError = null;
     return true;
   } catch (error) {
@@ -1103,32 +1101,108 @@ function canUseFastScalarFieldGrid<TProperties>(
 }
 
 function canUseWasmScalarFieldGrid<TProperties>(options: HeatFieldOptions<TProperties>) {
-  return !options.filterPoint && !options.getValue && !options.maskGeoJson;
+  return (
+    !options.filterPoint &&
+    !options.getValue &&
+    options.interpolationEpsilonMeters === undefined &&
+    !options.maskGeoJson
+  );
 }
 
 function toGeoVizScalarFieldOptions<TProperties>(
   options: HeatFieldOptions<TProperties>,
-): Record<string, unknown> {
+): VizGeoScalarFieldOptions {
   return {
-    domainBounds: options.domainBounds,
-    domainPaddingRatio: options.domainPaddingRatio,
     fieldCellSizeMeters: options.fieldCellSizeMeters,
     fieldColumns: options.fieldColumns,
     fieldRows: options.fieldRows,
-    interpolationEpsilonMeters: options.interpolationEpsilonMeters,
     interpolationExtrapolate: options.interpolationExtrapolate,
     interpolationK: options.interpolationK,
     interpolationMaxDistanceMeters: options.interpolationMaxDistanceMeters,
     interpolationPower: options.interpolationPower,
-    valueDomain: options.valueDomain,
+    valueDomain: options.valueDomain ? [options.valueDomain[0], options.valueDomain[1]] : undefined,
     valueMetric: options.valueMetric,
   };
 }
 
-async function importOptionalGeoVizWasmModule(packageName: string): Promise<GeoVizWasmModule> {
+function createVizEngineScalarFieldRuntime({
+  createVizEngine,
+}: VizEngineModule): MapsScalarFieldWasmRuntime {
+  return {
+    createScalarFieldGrid(points, options) {
+      return createVizEngineScalarFieldGrid(createVizEngine, points, options);
+    },
+  };
+}
+
+function createVizEngineScalarFieldGrid<TProperties = Record<string, unknown>>(
+  createEngine: typeof createVizEngine,
+  points: readonly MapPoint<TProperties>[],
+  options: HeatFieldOptions<TProperties>,
+): ScalarFieldGrid {
+  const valuePoints = resolveScalarFieldValuePoints(points, options);
+  const bounds = resolveScalarFieldBounds(valuePoints, options);
+
+  if (!bounds) {
+    return createScalarFieldGridTypeScript(points, options);
+  }
+
+  const engine = createEngine<TProperties>({ backend: "auto" });
+  const datasetId = engine.addDataset({
+    kind: "geo-points",
+    points: valuePoints.map(({ point }) => toVizGeoPoint(point)),
+  });
+  const layerId = engine.addLayer({
+    ...toGeoVizScalarFieldOptions(options),
+    datasetId,
+    kind: "geo-scalar-field",
+  } as Parameters<VizEngine<TProperties>["addLayer"]>[0]);
+
+  try {
+    const frame = engine.computeFrame({
+      frameFormat: "objects",
+      viewport: {
+        bounds,
+        center: [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2],
+        display: "flat",
+        height: 1,
+        kind: "geo",
+        width: 1,
+        zoom: 0,
+      },
+    });
+    const scalarLayer = frame.layers.find(isScalarFieldRenderLayer);
+
+    return scalarLayer?.grid ?? createScalarFieldGridTypeScript(points, options);
+  } finally {
+    engine.removeLayer(layerId);
+    engine.removeDataset(datasetId);
+  }
+}
+
+function toVizGeoPoint<TProperties>(
+  point: IndexedMapPoint<TProperties>,
+): VizGeoPoint<TProperties> {
+  return {
+    id: point.id,
+    label: point.label,
+    latitude: point.latitude,
+    longitude: point.longitude,
+    metrics: point.metrics,
+    properties: point.properties,
+  };
+}
+
+function isScalarFieldRenderLayer<TProperties>(
+  layer: VizRenderLayer<TProperties>,
+): layer is Extract<VizRenderLayer<TProperties>, { kind: "geo-scalar-field" }> {
+  return layer.kind === "geo-scalar-field";
+}
+
+async function importOptionalVizEngineModule(packageName: string): Promise<VizEngineModule> {
   const dynamicImport = new Function("specifier", "return import(specifier)") as (
     specifier: string,
-  ) => Promise<GeoVizWasmModule>;
+  ) => Promise<VizEngineModule>;
 
   return dynamicImport(packageName);
 }
