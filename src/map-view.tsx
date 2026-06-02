@@ -57,10 +57,7 @@ import {
   useControllableMapViewState,
 } from "./map-view-state";
 import { WebGlFlatRuntime, type FlatMapRuntime } from "./webgl-flat-runtime";
-import type {
-  MapContextMenuContext,
-  MapFeatureContextMenuContext,
-} from "./map-interaction";
+import type { MapContextMenuContext, MapFeatureContextMenuContext } from "./map-interaction";
 import {
   MapSurfaceContext,
   type FlatLayerRegistrationOptions,
@@ -68,6 +65,15 @@ import {
   type MapInteractionMode,
   type MapSurfaceContextValue,
 } from "./map-surface-context";
+import {
+  getFeatureCoordinate,
+  getFlatContextMenuContext,
+  getMapLibreViewState,
+  isBlockedHoverPosition,
+  isMapLibreOriginalEventPrevented,
+  suppressNativeContextMenu,
+  type MapLibreMapContextMenuEvent,
+} from "./map-view-utils";
 
 export {
   MapSurfaceContext,
@@ -173,7 +179,11 @@ export function MapView({
   const [contextMenu, setContextMenu] = useState<ContextMenuOverlayState | null>(null);
   const [boundsMinZoom, setBoundsMinZoom] = useState<number | undefined>(undefined);
   const resolvedMaxBounds = normalizeMapBounds(maxBounds);
-  const { controlled, setViewState, viewState: currentViewState } = useControllableMapViewState({
+  const {
+    controlled,
+    setViewState,
+    viewState: currentViewState,
+  } = useControllableMapViewState({
     defaultViewState,
     display: mapDisplay,
     fallback: { center: [12, 25], zoom: mapDisplay === "globe" ? 1.35 : 1.6 },
@@ -332,9 +342,10 @@ export function MapView({
     const camera = map.cameraForBounds?.(toMapLibreBounds(bounds), {
       padding: 0,
     });
-    const nextMinZoom = typeof camera?.zoom === "number" && Number.isFinite(camera.zoom)
-      ? Math.max(0, camera.zoom)
-      : undefined;
+    const nextMinZoom =
+      typeof camera?.zoom === "number" && Number.isFinite(camera.zoom)
+        ? Math.max(0, camera.zoom)
+        : undefined;
 
     if (nextMinZoom !== undefined) {
       map.setMinZoom?.(nextMinZoom);
@@ -397,8 +408,7 @@ export function MapView({
 
     const next = getMapLibreViewState(map);
     const previous = lastFlatMoveStateRef.current;
-    const reason =
-      previous && Math.abs(previous.zoom - next.zoom) > 1e-8 ? "zoom" : "pan";
+    const reason = previous && Math.abs(previous.zoom - next.zoom) > 1e-8 ? "zoom" : "pan";
 
     lastFlatMoveStateRef.current = next;
 
@@ -473,7 +483,10 @@ export function MapView({
         }
 
         suppressNativeContextMenu(event);
-        handleMapContextMenu(getFlatContextMenuContext(localMap!, event), mapContextMenuOptionsRef.current);
+        handleMapContextMenu(
+          getFlatContextMenuContext(localMap!, event),
+          mapContextMenuOptionsRef.current,
+        );
       });
 
       localMap.once("load", () => {
@@ -580,7 +593,16 @@ export function MapView({
 
     lastFitBoundsKeyRef.current = boundsKey;
     fitToDataNow();
-  }, [controlled, dataBounds, defaultViewState, fitToData, fitToDataNow, initialViewState, isReady, viewState]);
+  }, [
+    controlled,
+    dataBounds,
+    defaultViewState,
+    fitToData,
+    fitToDataNow,
+    initialViewState,
+    isReady,
+    viewState,
+  ]);
 
   useEffect(() => {
     const controller: MapSurfaceController = {
@@ -602,7 +624,8 @@ export function MapView({
       const maplibre = maplibreRef.current;
       const maplibreMap = mapRef.current;
       const previous = layersRef.current.get(id);
-      const group = previous?.group ?? (flat && maplibreMap ? flat.layerGroup().addTo(maplibreMap) : null);
+      const group =
+        previous?.group ?? (flat && maplibreMap ? flat.layerGroup().addTo(maplibreMap) : null);
       const preserveOnRender = options.preserveOnRender === true;
       const renderOnViewStateChange = options.renderOnViewStateChange !== false;
 
@@ -1058,94 +1081,7 @@ export function MapView({
   );
 }
 
-type MapLibreMapContextMenuEvent = {
-  lngLat?: { lat: number; lng: number };
-  originalEvent?: {
-    defaultPrevented?: boolean;
-    preventDefault?: () => void;
-    stopPropagation?: () => void;
-  };
-  point?: { x: number; y: number };
-};
-
-function getFlatContextMenuContext(
-  map: MapLibreMap,
-  event: MapLibreMapContextMenuEvent,
-) {
-  const position = event.point ?? { x: 0, y: 0 };
-  const lngLat = event.lngLat ?? map.unproject([position.x, position.y]) ?? map.getCenter?.() ?? { lat: 25, lng: 12 };
-
-  return {
-    coordinates: [lngLat.lng, lngLat.lat] as [number, number],
-    position,
-  };
-}
-
-function getFeatureCoordinate(feature: unknown): [longitude: number, latitude: number] {
-  if (feature && typeof feature === "object") {
-    const record = feature as Record<string, unknown>;
-    const coordinates = record.coordinates;
-
-    if (isCoordinate(coordinates)) {
-      return coordinates;
-    }
-
-    const point = record.point as Record<string, unknown> | undefined;
-    const flow = record.flow as Record<string, unknown> | undefined;
-
-    if (typeof point?.longitude === "number" && typeof point.latitude === "number") {
-      return [point.longitude, point.latitude];
-    }
-
-    if (isCoordinate(flow?.from) && isCoordinate(flow?.to)) {
-      return [(flow.from[0] + flow.to[0]) / 2, (flow.from[1] + flow.to[1]) / 2];
-    }
-  }
-
-  return [0, 0];
-}
-
-function isBlockedHoverPosition(
-  blocked: { x: number; y: number } | null,
-  position: { x: number; y: number },
-) {
-  return Boolean(
-    blocked &&
-      Math.abs(blocked.x - position.x) <= 1 &&
-      Math.abs(blocked.y - position.y) <= 1,
-  );
-}
-
-function isCoordinate(value: unknown): value is [number, number] {
-  return (
-    Array.isArray(value) &&
-    value.length >= 2 &&
-    typeof value[0] === "number" &&
-    typeof value[1] === "number"
-  );
-}
-
-function isMapLibreOriginalEventPrevented(event: MapLibreMapContextMenuEvent) {
-  return event.originalEvent?.defaultPrevented === true;
-}
-
-function suppressNativeContextMenu(event: MapLibreMapContextMenuEvent) {
-  event.originalEvent?.preventDefault?.();
-  event.originalEvent?.stopPropagation?.();
-}
-
-function getMapLibreViewState(map: MapLibreMap): MapViewState {
-  const center = map.getCenter?.() ?? { lat: 25, lng: 12 };
-
-  return {
-    center: [center.lng, center.lat],
-    zoom: map.getZoom(),
-  };
-}
-
-export type {
-  FlatMapRuntime,
-} from "./webgl-flat-runtime";
+export type { FlatMapRuntime } from "./webgl-flat-runtime";
 
 export type {
   MapSurfaceController,

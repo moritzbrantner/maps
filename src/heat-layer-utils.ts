@@ -1,0 +1,9 @@
+"use client";
+
+export function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+export function roundHeatLayerCacheNumber(value: number) {
+  return Number.isFinite(value) ? value.toFixed(3) : "0";
+}
