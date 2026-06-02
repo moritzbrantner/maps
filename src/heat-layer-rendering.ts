@@ -495,7 +495,7 @@ export function clearHeatLayerNonSurfaceLayers(
     return;
   }
 
-  for (const layer of [...layers]) {
+  for (const layer of layers.slice()) {
     if (layer !== state.surfaceLayer) {
       removeHeatLayerManagedLayer(parent, layer);
     }

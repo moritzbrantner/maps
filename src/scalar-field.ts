@@ -223,10 +223,12 @@ function createScalarFieldGridFastIdw<TProperties = Record<string, unknown>>(
   options: HeatFieldOptions<TProperties>,
 ): ScalarFieldGrid {
   const valueCount = valuePoints.length;
-  const values: Array<number | null> = new Array(dimensions.columns * dimensions.rows);
+  const values: Array<number | null> = Array.from(
+    { length: dimensions.columns * dimensions.rows },
+    () => null,
+  );
 
   if (valueCount === 0) {
-    values.fill(null);
     return {
       bounds,
       columns: dimensions.columns,
@@ -241,7 +243,7 @@ function createScalarFieldGridFastIdw<TProperties = Record<string, unknown>>(
   const sourceYs = new Float64Array(valueCount);
   const sourceValues = new Float64Array(valueCount);
   const sourceIndexes = new Int32Array(valueCount);
-  const sourceIds = new Array<string>(valueCount);
+  const sourceIds = Array.from({ length: valueCount }, () => "");
 
   for (let index = 0; index < valueCount; index += 1) {
     const entry = valuePoints[index]!;

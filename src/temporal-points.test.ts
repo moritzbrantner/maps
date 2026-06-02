@@ -102,7 +102,7 @@ describe("@moritzbrantner/maps temporal points", () => {
         status: "dispatching",
       },
     });
-    expect(point?.latitude).toBeCloseTo(43.672700000000005);
+    expect(point?.latitude).toBeCloseTo(43.6727);
     expect(point?.longitude).toBeCloseTo(-113.6612);
   });
 

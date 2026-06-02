@@ -6,7 +6,6 @@ import {
   canUseAsyncHeatLayerRender,
   createHeatLayerColorRampKey,
   createHeatLayerContourLevelsKey,
-  createHeatLayerDensityIndex,
   createHeatLayerNumberArrayKey,
   createHeatLayerSourceIndex,
   createHeatLayerValueFeatureCollection,
@@ -21,15 +20,7 @@ import {
   DEFAULT_HEAT_LAYER_OVERSCAN_RATIO,
   DEFAULT_HEAT_LAYER_RADIUS_METERS,
   defaultHeatLayerColorRamp,
-  type HeatFieldRenderMode,
-  type HeatLayerColorStop,
-  type HeatLayerFeature,
-  type HeatLayerFeatureCollection,
   type HeatLayerProps,
-  type HeatLayerRadius,
-  type HeatLayerRenderStrategy,
-  type HeatLayerSurfaceMode,
-  type HeatLayerWeightAccessor,
 } from "./heat-layer-types";
 import {
   clearHeatLayerManagedLayers,

@@ -27,6 +27,9 @@ export type FlatGeoJsonMapProps<
   fitBoundsPadding?: number;
   fitToData?: boolean;
   geoJson: GeoJsonMapSource<TProperties>;
+  /**
+   * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
+   */
   initialViewState?: MapViewState;
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;

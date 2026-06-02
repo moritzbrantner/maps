@@ -255,5 +255,5 @@ function readProperties<TProperties extends TemporalGeoJsonProperties, TTrackPro
     return customProperties;
   }
 
-  return { ...(feature.properties ?? {}) } as TTrackProperties;
+  return { ...feature.properties } as TTrackProperties;
 }

@@ -136,8 +136,8 @@ export function mergeMetrics(
   frameMetrics: MapMetricRecord | undefined,
 ): MapMetricRecord {
   return {
-    ...(baseMetrics ?? {}),
-    ...(frameMetrics ?? {}),
+    ...baseMetrics,
+    ...frameMetrics,
   };
 }
 

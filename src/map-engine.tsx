@@ -20,7 +20,6 @@ import {
   type VizGeoHeatFeature,
   type VizGeoJsonFeatureCollection,
   type VizGeoPoint,
-  type VizGeoAggregationFeature,
   type VizRenderFrame,
   type VizRenderLayer,
   type VizEngine,

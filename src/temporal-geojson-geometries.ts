@@ -582,5 +582,5 @@ function readProperties<TProperties extends Record<string, unknown>, TTrackPrope
     return customProperties;
   }
 
-  return { ...(feature.properties ?? {}) } as TTrackProperties;
+  return { ...feature.properties } as TTrackProperties;
 }

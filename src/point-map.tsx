@@ -50,12 +50,16 @@ import { MapView } from "./map-view";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import type { MapMeasurementProps } from "./measurement";
-import { BubbleLayer, PointLayer } from "./point-layer";
+import {
+  BubbleLayer,
+  PointLayer,
+  type BubbleLayerFeature,
+  type BubbleLayerWeightAccessor,
+  type PointLayerFeature,
+} from "./point-layer";
 
-export type PointMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
-  coordinates: [longitude: number, latitude: number];
-  point: IndexedMapPoint<TProperties>;
-};
+export type PointMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  PointLayerFeature<TProperties>;
 
 export type PointMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   children?: React.ReactNode;
@@ -71,6 +75,9 @@ export type PointMapProps<TProperties extends Record<string, unknown> = Record<s
   getPointColor?: (feature: PointMapFeature<TProperties>) => string;
   getPointRadius?: (feature: PointMapFeature<TProperties>) => number;
   globeBasemapMode?: GlobeBasemapMode;
+  /**
+   * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
+   */
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -97,15 +104,11 @@ export type PointMapProps<TProperties extends Record<string, unknown> = Record<s
   MapViewportProps &
   MapFeatureInteractionProps<PointMapFeature<TProperties>>;
 
-export type BubbleMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> = (
-  point: IndexedMapPoint<TProperties>,
-) => number;
+export type BubbleMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  BubbleLayerWeightAccessor<TProperties>;
 
-export type BubbleMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> = PointMapFeature<TProperties> & {
-  rawValue: number;
-  radius: number;
-  value: number;
-};
+export type BubbleMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  BubbleLayerFeature<TProperties>;
 
 export type BubbleMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = Omit<
   PointMapProps<TProperties>,

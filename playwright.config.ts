@@ -10,6 +10,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      grepInvert: /@mobile/,
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: {
@@ -18,9 +19,21 @@ export default defineConfig({
         viewport: { height: 1000, width: 1440 },
       },
     },
+    {
+      name: "mobile-chromium",
+      grep: /@mobile/,
+      use: {
+        ...devices["Pixel 5"],
+        launchOptions: {
+          args: ["--enable-unsafe-swiftshader", "--use-gl=swiftshader"],
+        },
+        viewport: { height: 844, width: 390 },
+      },
+    },
   ],
   reporter: [["list"], ["html", { open: "never" }]],
   snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}{ext}",
+  timeout: 60_000,
   testDir: "e2e",
   use: {
     baseURL: "http://127.0.0.1:5181",

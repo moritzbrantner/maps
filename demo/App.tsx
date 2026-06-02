@@ -37,9 +37,7 @@ import {
   type MapBeeLineMeasurement,
   type MapBeeLineMeasurementResult,
   type MapFlow,
-  type FlowMapFeature,
   type MapPoint,
-  type RasterMapStyle,
   type HeatFieldRenderMode,
   type PointMapFeature,
   type MapViewState,
@@ -55,117 +53,29 @@ import {
   type TemporalMapTrack,
   moveGeoJsonGeometry,
 } from "@moritzbrantner/maps";
-
-const demoMapStyle: RasterMapStyle | undefined =
-  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
-    ? { tiles: false }
-    : undefined;
-
-type DemoPointProperties = {
-  city: string;
-  region: string;
-};
-
-type DemoPointGeoJsonProperties = DemoPointProperties & {
-  demand: number;
-  label: string;
-};
-
-type DemoFlowGeoJsonProperties = {
-  label: string;
-  trips: number;
-};
-
-type DemoGeoJsonProperties = {
-  groupId?: string;
-  kind: string;
-  label: string;
-  time: number;
-  trackId: string;
-  visible?: boolean;
-};
-
-type DemoTimelineProperties = {
-  corridor: string;
-  status: "loading" | "in-transit" | "handoff" | "arrived";
-};
-
-type DemoTimelineStop = {
-  city: string;
-  demand: number;
-  delayMinutes: number;
-  latitude: number;
-  longitude: number;
-  status: DemoTimelineProperties["status"];
-  time: number;
-};
-
-type DemoView =
-  | "clusters"
-  | "points"
-  | "heat"
-  | "flows"
-  | "composed"
-  | "temporal"
-  | "interpolation"
-  | "globe"
-  | "geojson"
-  | "editor";
-type DemoInterpolationGeometryType = TemporalGeoJsonSupportedGeometry["type"];
-type DemoInterpolationKeyframeId = "start" | "end";
-type DemoInterpolationGeometryPair = Record<
-  DemoInterpolationKeyframeId,
-  TemporalGeoJsonSupportedGeometry
->;
-type DemoGeometryInterpolationExample = {
-  defaultStrategy: TemporalGeoJsonInterpolationStrategy;
-  description: string;
-  geometryType: DemoInterpolationGeometryType;
-  id: string;
-  kind?: "geometry";
-  label: string;
-  pair: DemoInterpolationGeometryPair;
-};
-type DemoTopologyInterpolationExample = {
-  description: string;
-  endCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>;
-  geometryType: "Polygon";
-  id: string;
-  kind: "topology";
-  label: string;
-  startCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>;
-};
-type DemoInterpolationExample = DemoGeometryInterpolationExample | DemoTopologyInterpolationExample;
-type DemoInterpolationHandle = {
-  label: string;
-  path: number[];
-};
-type DemoLayerKind = "clusters" | "points" | "bubbles" | "heat" | "flows";
-
-type DemoLayerConfig = {
-  color: string;
-  enabled: boolean;
-  id: string;
-  kind: DemoLayerKind;
-  name: string;
-};
-
-type DemoDataset = {
-  points: Array<MapPoint<DemoPointProperties>>;
-  regions: string[];
-};
-
-type EditablePointContext = {
-  onCreatePoint: (coordinates: [longitude: number, latitude: number]) => void;
-  onDeletePoint: (feature: PointMapFeature<DemoPointProperties>) => void;
-  onMovePoint: (
-    feature: PointMapFeature<DemoPointProperties>,
-    coordinates: [longitude: number, latitude: number],
-  ) => void;
-  onSelectPoint: (feature: PointMapFeature<DemoPointProperties> | null) => void;
-  points: Array<MapPoint<DemoPointProperties>>;
-  selectedPointId: string | null;
-};
+import {
+  FlowVolumeLegend,
+  renderDemoFlowPopup,
+  renderDemoFlowTooltip,
+} from "./components/FlowVolumeLegend";
+import { demoMapStyle } from "./data/map-style";
+import { formatTemperatureValue, getHeatLayerColorRamp } from "./lib/format";
+import type {
+  DemoDataset,
+  DemoFlowGeoJsonProperties,
+  DemoGeoJsonProperties,
+  DemoInterpolationExample,
+  DemoInterpolationGeometryPair,
+  DemoInterpolationHandle,
+  DemoLayerConfig,
+  DemoLayerKind,
+  DemoPointGeoJsonProperties,
+  DemoPointProperties,
+  DemoTimelineProperties,
+  DemoTimelineStop,
+  DemoView,
+  EditablePointContext,
+} from "./types";
 
 const demoPointFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties> =
   {
@@ -3444,91 +3354,8 @@ function renderComposedLayer(layer: DemoLayerConfig, points: Array<MapPoint<Demo
   }
 }
 
-function FlowVolumeLegend({ flows }: { flows: MapFlow[] }) {
-  const values = getDemoFlowLegendValues(flows);
-
-  return (
-    <div className="demo-flow-legend" aria-label="Flow volume">
-      <div className="demo-layer-manager__header">
-        <h2>Flow volume</h2>
-      </div>
-      <div className="demo-flow-legend__rows">
-        {values.map((item) => (
-          <div className="demo-flow-legend__row" key={item.label}>
-            <span className="demo-flow-legend__sample" aria-hidden="true">
-              <span style={{ height: item.strokeWidth }} />
-            </span>
-            <span className="demo-flow-legend__label">
-              <span>{item.label}</span>
-              <strong>{item.value.toLocaleString()} trips</strong>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function renderDemoFlowTooltip(feature: FlowMapFeature) {
-  return (
-    <div className="demo-popup">
-      <strong>{feature.flow.label}</strong>
-      <span>{feature.rawValue.toLocaleString()} trips</span>
-    </div>
-  );
-}
-
-function renderDemoFlowPopup(feature: FlowMapFeature) {
-  return (
-    <div className="demo-popup">
-      <strong>{feature.flow.label}</strong>
-      <span>{feature.rawValue.toLocaleString()} trips</span>
-      <span>From {formatDemoCoordinate(feature.flow.from)}</span>
-      <span>To {formatDemoCoordinate(feature.flow.to)}</span>
-    </div>
-  );
-}
-
-function getDemoFlowLegendValues(flows: MapFlow[]) {
-  const values = flows
-    .map((item) => item.metrics?.trips ?? 0)
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .sort((a, b) => a - b);
-
-  if (values.length === 0) {
-    return [
-      { label: "Low", strokeWidth: 3, value: 0 },
-      { label: "Medium", strokeWidth: 7, value: 0 },
-      { label: "High", strokeWidth: 12, value: 0 },
-    ];
-  }
-
-  return [
-    { label: "Low", strokeWidth: 3, value: values[0]! },
-    { label: "Medium", strokeWidth: 7, value: values[Math.floor(values.length / 2)]! },
-    { label: "High", strokeWidth: 12, value: values.at(-1)! },
-  ];
-}
-
-function formatDemoCoordinate([longitude, latitude]: [longitude: number, latitude: number]) {
-  return `${longitude.toFixed(2)}, ${latitude.toFixed(2)}`;
-}
-
 function getLayerKindLabel(kind: DemoLayerKind) {
   return layerKinds.find((item) => item.id === kind)?.label ?? "Layer";
-}
-
-function getHeatLayerColorRamp(color: string) {
-  return [
-    [0, "rgba(15, 23, 42, 0)"],
-    [0.18, "#67e8f9"],
-    [0.58, color],
-    [1, "#dc2626"],
-  ] as const;
-}
-
-function formatTemperatureValue(value: number) {
-  return `${value.toFixed(1)} C`;
 }
 
 function getGeoJsonFeatureStyle(geometryType: string) {

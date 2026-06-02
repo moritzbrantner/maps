@@ -3,16 +3,12 @@ import {
   type AggregatedMapFeature,
   type IndexedMapPoint,
   type MapPoint,
-  type PointAggregationIndexOptions,
-  type ViewportAggregationQuery,
 } from "./aggregation";
 import type {
   HeatMapDensityIndex,
   HeatMapDensityIndexOptions,
-  HeatMapFeature,
   HeatMapFeatureCollection,
   HeatMapFeatureProperties,
-  HeatMapWeightAccessor,
   HeatMapWeightOptions,
 } from "./heat-map";
 

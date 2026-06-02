@@ -424,7 +424,7 @@ function materializePreparedPositions(
   coordinates: PreparedFlatCoordinates,
   progress: number,
 ): GeoJsonPosition[] {
-  const positions = new Array<GeoJsonPosition>(coordinates.coordinateCount);
+  const positions = Array.from({ length: coordinates.coordinateCount }, () => [0, 0] as GeoJsonPosition);
 
   for (let index = 0; index < coordinates.coordinateCount; index += 1) {
     const offset = index * 2;
@@ -914,7 +914,7 @@ function positionsToFlatCoordinates(coordinates: readonly GeoJsonPosition[]) {
 }
 
 function flatCoordinatesToPositions(coordinates: Float64Array): GeoJsonPosition[] {
-  const positions = new Array<GeoJsonPosition>(coordinates.length / 2);
+  const positions = Array.from({ length: coordinates.length / 2 }, () => [0, 0] as GeoJsonPosition);
 
   for (let index = 0; index < positions.length; index += 1) {
     const offset = index * 2;

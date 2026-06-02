@@ -360,7 +360,7 @@ function readProperties<
     return customProperties;
   }
 
-  return { ...(feature.properties ?? {}) } as TOutputProperties;
+  return { ...feature.properties } as TOutputProperties;
 }
 
 function filterFiniteMetrics(value: Record<string, unknown>): MapMetricRecord {

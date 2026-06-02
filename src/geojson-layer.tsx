@@ -6,7 +6,6 @@ import { createVisibleSvgPath, joinClassNames, toLatLng } from "./map-display";
 import {
   createFlatGeometryLayers,
   getGeometryCenter,
-  getGeometryPositions,
   projectGeometryCenter,
   resolveFeatureStyle,
   type FlatGeometryLayer,
@@ -73,7 +72,7 @@ export function GeoJsonLayer<
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `geojson-layer-${generatedLayerId}`;
   const surfaceRef = useRef(surface);
-  const flatFeatureCacheRef = useRef<Map<string, FlatGeoJsonCacheEntry<TProperties>>>(new Map());
+  const flatFeatureCacheRef = useRef<Map<string, FlatGeoJsonCacheEntry>>(new Map());
   const deferredFeatureCollection = useDeferredValue(featureCollection);
   const features = useMemo(
     () => createGeoJsonLayerFeatures(deferredFeatureCollection),
@@ -453,7 +452,7 @@ function GlobePolygon({
   ) : null;
 }
 
-type FlatGeoJsonCacheEntry<TProperties extends Record<string, unknown>> = {
+type FlatGeoJsonCacheEntry = {
   geometryKey: string;
   layers: FlatGeometryLayer[];
   signature: string;
@@ -531,9 +530,9 @@ function updateFlatGeoJsonCachedGeometry(
   }
 }
 
-function removeFlatGeoJsonCacheEntry<TProperties extends Record<string, unknown>>(
+function removeFlatGeoJsonCacheEntry(
   layer: { removeLayer: (cachedLayer: FlatGeometryLayer) => unknown },
-  entry: FlatGeoJsonCacheEntry<TProperties>,
+  entry: FlatGeoJsonCacheEntry,
 ) {
   for (const cachedLayer of entry.layers) {
     layer.removeLayer(cachedLayer);

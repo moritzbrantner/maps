@@ -23,7 +23,7 @@ import {
   type HeatLayerFeatureProperties,
   type HeatLayerWeightAccessor,
 } from "./heat-layer-types";
-import { clamp, roundHeatLayerCacheNumber } from "./heat-layer-utils";
+import { roundHeatLayerCacheNumber } from "./heat-layer-utils";
 
 export function isHeatFieldRasterVisible(renderMode: HeatFieldRenderMode) {
   return renderMode === "raster" || renderMode === "raster-contours";

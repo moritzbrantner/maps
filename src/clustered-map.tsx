@@ -8,9 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
 } from "react";
-import type { LayerGroup, Map as FlatMap, PathOptions } from "flat";
 
 import {
   createPointAggregationIndex,
@@ -18,9 +16,7 @@ import {
   type AggregatedMapFeature,
   type MapPointFilter,
   type MapPoint,
-  type PointAggregationIndex,
   type PointAggregationIndexOptions,
-  type ViewportAggregationQuery,
   type VisibleAggregationSummary,
 } from "./aggregation";
 import {
@@ -32,20 +28,12 @@ import {
   type GeoJsonOverlayMode,
   type GeoJsonSourceOptions,
 } from "./geojson-source";
-import { createProjectedClusterVoronoiGeometry } from "./cluster-area";
-import {
-  assignClusterAreaColors,
-  createBoundaryLineColor,
-  createClusterAreaSubjects,
-  getClusterAreaId,
-} from "./cluster-area-visuals";
 import {
   createGlobalViewportQuery,
   createGlobeGraticuleLines,
   createInitialGlobeViewState,
   createVisibleSvgPath,
   defaultRasterMapStyle,
-  escapeHtml,
   getGlobeDragCenter,
   getGlobeRadius,
   getGlobeZoom,
@@ -53,8 +41,6 @@ import {
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
   projectGlobeCoordinate,
-  resolveTileLayerOptions,
-  toLatLng,
   type GlobeBasemapMode,
   type GlobeViewState,
   type MapBounds,
@@ -71,7 +57,6 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
-import { useFlatBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
@@ -88,6 +73,9 @@ export type ClusteredMapProps<TProperties extends Record<string, unknown> = Reco
   geoJsonOverlayCollection?: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
   geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   globeBasemapMode?: GlobeBasemapMode;
+  /**
+   * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
+   */
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -104,20 +92,6 @@ export type ClusteredMapProps<TProperties extends Record<string, unknown> = Reco
 } & MapMeasurementProps &
   Omit<MapViewportProps, "maxZoom"> &
   MapFeatureInteractionProps<AggregatedMapFeature<TProperties>>;
-
-const MAX_CLUSTER_AREA_FEATURES = 160;
-
-type ClusterAreaFeatureResult = {
-  areaFeatures: Array<
-    ReturnType<typeof createClusterAreaFeature> | ReturnType<typeof createClusterAreaBoundaryFeature>
-  >;
-  colorsByAreaId: Map<string, string>;
-};
-
-type ClusterAreaFeatureCache = {
-  key: string;
-  result: ClusterAreaFeatureResult;
-};
 
 export {
   defaultRasterMapStyle,
@@ -478,362 +452,6 @@ function GlobeAggregationFeature<TProperties>({
   );
 }
 
-function renderAggregationOverlay<TProperties>({
-  clusterAreaCache,
-  features,
-  handleClick,
-  index,
-  isMeasuring,
-  flat,
-  map,
-  overlay,
-}: {
-  clusterAreaCache: MutableRefObject<ClusterAreaFeatureCache | null>;
-  features: readonly AggregatedMapFeature<TProperties>[];
-  handleClick: (feature: AggregatedMapFeature<TProperties> | null) => void;
-  index: PointAggregationIndex<TProperties>;
-  isMeasuring: boolean;
-  flat: typeof import("flat");
-  map: FlatMap;
-  overlay: LayerGroup;
-}) {
-  overlay.clearLayers();
-
-  const areaFeatures = createClusterAreaFeatures(features, index, map, clusterAreaCache);
-
-  for (const areaFeature of areaFeatures.areaFeatures) {
-    addClusterAreaLayer(areaFeature, isMeasuring, flat, overlay);
-  }
-
-  for (const feature of features) {
-    const clusterColor = areaFeatures.colorsByAreaId.get(getClusterAreaId(feature)) ?? null;
-
-    if (feature.kind === "cluster") {
-      addClusterMarker(feature, clusterColor, isMeasuring, flat, map, overlay, handleClick);
-      continue;
-    }
-
-    addPointMarker(feature, clusterColor, isMeasuring, flat, map, overlay, handleClick);
-  }
-}
-
-function addClusterMarker<TProperties>(
-  feature: Extract<AggregatedMapFeature<TProperties>, { kind: "cluster" }>,
-  clusterColor: string | null,
-  isMeasuring: boolean,
-  flat: typeof import("flat"),
-  map: FlatMap,
-  overlay: LayerGroup,
-  handleClick: (feature: AggregatedMapFeature<TProperties>) => void,
-) {
-  const marker = flat.circleMarker(toLatLng(feature.coordinates), {
-    className: "mb-maps__cluster-marker",
-    color: "#ffffff",
-    fillColor: clusterColor ?? getClusterColor(feature.pointCount),
-    fillOpacity: 0.9,
-    interactive: !isMeasuring,
-    opacity: 1,
-    radius: getClusterRadius(feature.pointCount),
-    weight: 2,
-  });
-
-  if (!isMeasuring) {
-    marker.on("click", () => {
-      map.setView(toLatLng(feature.coordinates), feature.expansionZoom);
-      handleClick(feature);
-    });
-    marker.on("mouseover", () => {
-      map.getContainer().style.cursor = "pointer";
-    });
-    marker.on("mouseout", () => {
-      map.getContainer().style.cursor = "";
-    });
-  }
-  marker.addTo(overlay);
-
-  flat
-    .marker(toLatLng(feature.coordinates), {
-      icon: flat.divIcon({
-        className: "mb-maps__cluster-count",
-        html: escapeHtml(feature.pointCountAbbreviated),
-        iconAnchor: [18, 18],
-        iconSize: [36, 36],
-      }),
-      interactive: false,
-    })
-    .addTo(overlay);
-}
-
-function addPointMarker<TProperties>(
-  feature: Extract<AggregatedMapFeature<TProperties>, { kind: "point" }>,
-  clusterColor: string | null,
-  isMeasuring: boolean,
-  flat: typeof import("flat"),
-  map: FlatMap,
-  overlay: LayerGroup,
-  handleClick: (feature: AggregatedMapFeature<TProperties>) => void,
-) {
-  const marker = flat.circleMarker(toLatLng(feature.coordinates), {
-    className: "mb-maps__point-marker",
-    color: "#ffffff",
-    fillColor: clusterColor ?? "#0f172a",
-    fillOpacity: 0.92,
-    interactive: !isMeasuring,
-    opacity: 1,
-    radius: 6,
-    weight: 2,
-  });
-
-  if (!isMeasuring) {
-    marker.on("click", () => {
-      handleClick(feature);
-    });
-    marker.on("mouseover", () => {
-      map.getContainer().style.cursor = "pointer";
-    });
-    marker.on("mouseout", () => {
-      map.getContainer().style.cursor = "";
-    });
-  }
-  marker.addTo(overlay);
-}
-
-function addClusterAreaLayer(
-  feature:
-    | ReturnType<typeof createClusterAreaFeature>
-    | ReturnType<typeof createClusterAreaBoundaryFeature>,
-  isMeasuring: boolean,
-  flat: typeof import("flat"),
-  overlay: LayerGroup,
-) {
-  if ("lineColor" in feature.properties) {
-    const coordinates = feature.geometry.coordinates as Array<[number, number]>;
-
-    flat
-      .polyline(coordinates.map(toLatLng), {
-        className: "mb-maps__cluster-area-boundary",
-        color: feature.properties.lineColor,
-        interactive: !isMeasuring,
-        opacity: 0.9,
-        weight: 2,
-      })
-      .addTo(overlay);
-    return;
-  }
-
-  const areaFeature = feature as ReturnType<typeof createClusterAreaFeature>;
-  const options: PathOptions = {
-    className: "mb-maps__cluster-area",
-    color: "transparent",
-    fillColor: areaFeature.properties.clusterColor,
-    fillOpacity: 0.56,
-    interactive: false,
-    weight: 0,
-  };
-
-  if (areaFeature.geometry.type === "MultiPolygon") {
-    flat
-      .polygon(
-        areaFeature.geometry.coordinates.map((polygon) =>
-          polygon.map((ring) => ring.map(toLatLng)),
-        ),
-        options,
-      )
-      .addTo(overlay);
-    return;
-  }
-
-  flat
-    .polygon(
-      areaFeature.geometry.coordinates.map((ring) => ring.map(toLatLng)),
-      options,
-    )
-    .addTo(overlay);
-}
-
-function createClusterAreaFeatures<TProperties>(
-  features: readonly AggregatedMapFeature<TProperties>[],
-  index: PointAggregationIndex<TProperties>,
-  map: FlatMap,
-  cache: MutableRefObject<ClusterAreaFeatureCache | null>,
-): ClusterAreaFeatureResult {
-  const viewportWidth = map.getContainer().clientWidth;
-  const viewportHeight = map.getContainer().clientHeight;
-
-  if (viewportWidth <= 0 || viewportHeight <= 0) {
-    return { areaFeatures: [], colorsByAreaId: new Map<string, string>() };
-  }
-
-  if (features.length > MAX_CLUSTER_AREA_FEATURES) {
-    return { areaFeatures: [], colorsByAreaId: new Map<string, string>() };
-  }
-
-  const cacheKey = serializeClusterAreaFeatureCacheKey(features, map, viewportWidth, viewportHeight);
-  const cached = cache.current;
-
-  if (cached?.key === cacheKey) {
-    return cached.result;
-  }
-
-  const subjects = createClusterAreaSubjects(features, index);
-
-  if (subjects.length === 0) {
-    return { areaFeatures: [], colorsByAreaId: new Map<string, string>() };
-  }
-
-  const subjectByAreaId = new globalThis.Map(
-    subjects.map((subject) => [subject.areaId, subject] as const),
-  );
-  const projectedInputs = subjects.flatMap((subject) =>
-    subject.sampleCoordinates.map((coordinates) => ({
-      clusterId: subject.areaId,
-      coordinates,
-    })),
-  );
-  const geometry = createProjectedClusterVoronoiGeometry(projectedInputs, {
-    includeOuterEdges: false,
-    project(coordinate) {
-      const point = map.latLngToContainerPoint(toLatLng(coordinate));
-      return [point.x, point.y];
-    },
-    unproject(coordinate) {
-      const point = map.containerPointToLatLng(coordinate);
-      return [point.lng, point.lat];
-    },
-    viewportBounds: [-24, -24, viewportWidth + 24, viewportHeight + 24],
-  });
-  const colorsByAreaId = assignClusterAreaColors(
-    subjects.map((subject) => subject.areaId),
-    geometry.boundarySegments,
-  );
-  const areaFeatures = geometry.regions
-    .map((region) => {
-      const subject = subjectByAreaId.get(String(region.clusterId));
-
-      if (!subject || region.polygons.length === 0) {
-        return null;
-      }
-
-      return createClusterAreaFeature(
-        subject,
-        region.polygons,
-        colorsByAreaId.get(subject.areaId) ?? "#2563eb",
-      );
-    })
-    .filter(isDefined);
-  const boundaryFeatures = geometry.boundarySegments.map((segment) =>
-    createClusterAreaBoundaryFeature(
-      segment.coordinates,
-      segment.clusterIds
-        .filter((clusterId): clusterId is string => typeof clusterId === "string")
-        .map((clusterId) => subjectByAreaId.get(clusterId)?.pointCount ?? 0),
-      createBoundaryLineColor(segment.clusterIds, colorsByAreaId),
-    ),
-  );
-
-  const result = {
-    areaFeatures: [...areaFeatures, ...boundaryFeatures],
-    colorsByAreaId,
-  };
-
-  cache.current = {
-    key: cacheKey,
-    result,
-  };
-
-  return result;
-}
-
-function serializeClusterAreaFeatureCacheKey<TProperties>(
-  features: readonly AggregatedMapFeature<TProperties>[],
-  map: FlatMap,
-  viewportWidth: number,
-  viewportHeight: number,
-) {
-  return JSON.stringify({
-    features: features.map((feature) => {
-      if (feature.kind === "cluster") {
-        return [
-          "cluster",
-          feature.clusterId,
-          Number(feature.coordinates[0].toFixed(6)),
-          Number(feature.coordinates[1].toFixed(6)),
-          feature.pointCount,
-          feature.expansionZoom,
-        ];
-      }
-
-      return [
-        "point",
-        feature.point.id,
-        Number(feature.coordinates[0].toFixed(6)),
-        Number(feature.coordinates[1].toFixed(6)),
-      ];
-    }),
-    viewportHeight,
-    viewportWidth,
-    zoom: Number(map.getZoom().toFixed(6)),
-  });
-}
-
-function createClusterAreaFeature(
-  feature: {
-    areaId: string;
-    pointCount: number;
-  },
-  polygons: Array<Array<Array<[number, number]>>>,
-  clusterColor: string,
-) {
-  if (polygons.length > 1) {
-    return {
-      type: "Feature" as const,
-      properties: {
-        kind: "cluster-area",
-        clusterColor,
-        clusterId: feature.areaId,
-        pointCount: feature.pointCount,
-      },
-      geometry: {
-        type: "MultiPolygon" as const,
-        coordinates: polygons,
-      },
-    };
-  }
-
-  return {
-    type: "Feature" as const,
-    properties: {
-      kind: "cluster-area",
-      clusterColor,
-      clusterId: feature.areaId,
-      pointCount: feature.pointCount,
-    },
-    geometry: {
-      type: "Polygon" as const,
-      coordinates: polygons[0]!,
-    },
-  };
-}
-
-function createClusterAreaBoundaryFeature(
-  coordinates: Array<[number, number]>,
-  pointCounts: readonly number[],
-  lineColor: string,
-) {
-  return {
-    type: "Feature" as const,
-    properties: {
-      kind: "cluster-area-boundary",
-      lineColor,
-      pointCount: Math.max(...pointCounts, 0),
-    },
-    geometry: {
-      type: "LineString" as const,
-      coordinates,
-    },
-  };
-}
-
 function getClusterColor(pointCount: number) {
   if (pointCount >= 2_500) {
     return "#ea580c";
@@ -864,10 +482,6 @@ function getClusterRadius(pointCount: number) {
   }
 
   return 18;
-}
-
-function isDefined<T>(value: T | null): value is T {
-  return value !== null;
 }
 
 function serializeVisibleAggregationSummary(summary: VisibleAggregationSummary) {

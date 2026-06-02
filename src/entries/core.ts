@@ -41,6 +41,13 @@ export {
   type GeoJsonOverlayTarget,
   type GeoJsonSourceOptions,
 } from "../geojson-source";
+export {
+  validateGeoJsonMapSource,
+  type GeoJsonValidationIssue,
+  type GeoJsonValidationOptions,
+  type GeoJsonValidationResult,
+  type GeoJsonValidationSeverity,
+} from "../geojson-validation";
 export { createPointMapFeatures, createBubbleMapFeatures } from "../point-core";
 export {
   type BubbleMapFeature,

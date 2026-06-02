@@ -389,18 +389,6 @@ function getSignedArea(loop: readonly Coordinate[]) {
   return area / 2;
 }
 
-function removeClosingPoint(points: readonly Coordinate[]) {
-  if (points.length >= 2 && samePoint(points[0]!, points.at(-1)!)) {
-    return points.slice(0, -1);
-  }
-
-  return [...points];
-}
-
-function samePoint(left: Coordinate, right: Coordinate) {
-  return left[0] === right[0] && left[1] === right[1];
-}
-
 function buildConvexHull(points: readonly Coordinate[]) {
   const sorted = [...points].sort((left, right) =>
     left[0] === right[0] ? left[1] - right[1] : left[0] - right[0],

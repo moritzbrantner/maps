@@ -10,7 +10,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { LayerGroup, Map as FlatMap } from "flat";
 
 import {
   createGlobeGraticuleLines,
@@ -23,8 +22,6 @@ import {
   GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
   projectGlobeCoordinate,
-  resolveTileLayerOptions,
-  toLatLng,
   type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
@@ -35,10 +32,13 @@ import {
 } from "./map-display";
 import {
   FlowLayer,
-  addFlowArrowMarker,
   createFlowPathCoordinates,
   type FlowDirectionMarker,
+  type FlowLayerFeature,
+  type FlowLayerWeightAccessor,
   type FlowShape,
+  type IndexedMapFlow as LayerIndexedMapFlow,
+  type MapFlow as LayerMapFlow,
 } from "./flow-layer";
 import {
   createGeoJsonOverlayFeatureCollection,
@@ -52,37 +52,19 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapView } from "./map-view";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
-import { useFlatBeeLineMeasurementLayer } from "./measurement-layer";
 import type { MapMeasurementProps } from "./measurement";
 
-export type MapFlow<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
-  from: [longitude: number, latitude: number];
-  id: string;
-  label?: string;
-  metrics?: Record<string, number>;
-  properties?: TProperties;
-  to: [longitude: number, latitude: number];
-};
+export type MapFlow<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  LayerMapFlow<TProperties>;
 
-export type IndexedMapFlow<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
-  from: [longitude: number, latitude: number];
-  id: string;
-  label: string;
-  metrics: Record<string, number>;
-  properties: TProperties;
-  to: [longitude: number, latitude: number];
-};
+export type IndexedMapFlow<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  LayerIndexedMapFlow<TProperties>;
 
-export type FlowMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
-  flow: IndexedMapFlow<TProperties>;
-  rawValue: number;
-  value: number;
-  width: number;
-};
+export type FlowMapFeature<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  FlowLayerFeature<TProperties>;
 
-export type FlowMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> = (
-  flow: IndexedMapFlow<TProperties>,
-) => number;
+export type FlowMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  FlowLayerWeightAccessor<TProperties>;
 
 export type FlowMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   children?: ReactNode;
@@ -104,6 +86,9 @@ export type FlowMapProps<TProperties extends Record<string, unknown> = Record<st
   globeBasemapMode?: GlobeBasemapMode;
   hoveredFlowOpacity?: number;
   inactiveFlowOpacity?: number;
+  /**
+   * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
+   */
   initialViewState?: MapViewState;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
@@ -487,100 +472,6 @@ function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
       ) : null}
     </g>
   );
-}
-
-function renderFlowOverlay<TProperties extends Record<string, unknown>>({
-  directionMarker,
-  features,
-  flowColor,
-  flowShape,
-  getFlowColor,
-  handleClick,
-  isMeasuring,
-  flat,
-  map,
-  overlay,
-  showDirection,
-  showEndpoints,
-}: {
-  directionMarker: FlowDirectionMarker;
-  features: readonly FlowMapFeature<TProperties>[];
-  flowColor: string;
-  flowShape: FlowShape;
-  getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
-  handleClick: (feature: FlowMapFeature<TProperties> | null) => void;
-  isMeasuring: boolean;
-  flat: typeof import("flat");
-  map: FlatMap;
-  overlay: LayerGroup;
-  showDirection: boolean;
-  showEndpoints: boolean;
-}) {
-  overlay.clearLayers();
-
-  for (const feature of features) {
-    const color = getFlowColor?.(feature) ?? flowColor;
-    const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
-    const line = flat.polyline(flowCoordinates.map(toLatLng), {
-      className: "mb-maps__flow-line",
-      color,
-      interactive: !isMeasuring,
-      opacity: 0.72,
-      weight: feature.width,
-    });
-
-    if (!isMeasuring) {
-      line.on("click", () => {
-        handleClick(feature);
-      });
-      line.on("mouseover", () => {
-        map.getContainer().style.cursor = "pointer";
-      });
-      line.on("mouseout", () => {
-        map.getContainer().style.cursor = "";
-      });
-    }
-    line.addTo(overlay);
-
-    if (showDirection && directionMarker === "arrow") {
-      addFlowArrowMarker({
-        color,
-        feature,
-        flowCoordinates,
-        flat,
-        map,
-        opacity: 0.72,
-        overlay,
-      });
-    }
-
-    if (showEndpoints) {
-      flat
-        .circleMarker(toLatLng(feature.flow.from), {
-          className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--from",
-          color: "#ffffff",
-          fillColor: color,
-          fillOpacity: 0.9,
-          interactive: false,
-          opacity: 1,
-          radius: Math.max(3, feature.width * 0.55),
-          weight: 1.5,
-        })
-        .addTo(overlay);
-      flat
-        .circleMarker(toLatLng(feature.flow.to), {
-          className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--to",
-          color: "#ffffff",
-          fillColor: color,
-          fillOpacity: 0.95,
-          interactive: false,
-          opacity: 1,
-          radius: Math.max(4, feature.width * 0.75),
-          weight: 1.5,
-        })
-        .addTo(overlay);
-    }
-  }
 }
 
 function createInitialFlowGlobeViewState<TProperties extends Record<string, unknown>>({

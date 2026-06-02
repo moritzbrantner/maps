@@ -4,12 +4,9 @@ import { createContext, type ReactNode } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import type {
-  GlobeBasemapMode,
   MapDisplayMode,
-  MapSurfaceController,
   MapViewState,
   MapViewStateChangeReason,
-  RasterMapStyle,
   projectGlobeCoordinate,
 } from "./map-display";
 import type {
@@ -17,10 +14,7 @@ import type {
   FlatLayerGroup,
   FlatMapAdapter,
 } from "./maplibre-compat";
-import type {
-  MapContextMenuContext,
-  MapFeatureContextMenuContext,
-} from "./map-interaction";
+import type { MapFeatureContextMenuContext } from "./map-interaction";
 import type { MapCoordinate } from "./measurement";
 
 export type FlatLayerRender = (context: {

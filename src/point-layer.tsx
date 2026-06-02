@@ -101,7 +101,6 @@ export function PointLayer<TProperties = Record<string, unknown>>({
   renderFeatureTooltip,
   selectedFeatureId,
 }: PointLayerProps<TProperties>) {
-  const surface = useContext(MapSurfaceContext);
   const deferredPoints = useDeferredValue(points);
   const features = useMemo(
     () => createPointLayerFeatures(deferredPoints, { filterPoint }),
@@ -174,7 +173,7 @@ function PointFeatureLayer<
   const resolvedLayerId = layerId ?? `point-layer-${generatedLayerId}`;
   const isFlatSurface = surface?.display === "flat";
   const surfaceRef = useRef(surface);
-  const flatMarkerCacheRef = useRef<Map<string, FlatPointCacheEntry<TFeature>>>(new Map());
+  const flatMarkerCacheRef = useRef<Map<string, FlatPointCacheEntry>>(new Map());
   const globeDragRef = useRef<{
     feature: TFeature;
     pointerId: number;
@@ -210,7 +209,6 @@ function PointFeatureLayer<
           const fillColor = getPointColor?.(feature) ?? pointColor;
           const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius);
           const signature = createFlatPointSignature({
-            feature,
             featureDraggable,
             fillColor,
             hovered,
@@ -649,7 +647,10 @@ function bindFlatPointDrag<TFeature>(
     options.map.off?.("mousemove", handleMove);
     options.map.off?.("mouseup", handleUp);
     options.map.dragging?.enable?.();
-    options.map.getContainer?.().style && (options.map.getContainer().style.cursor = "");
+    const container = options.map.getContainer?.();
+    if (container) {
+      container.style.cursor = "";
+    }
 
     if (coordinates) {
       marker.setLatLng?.(toLatLng(coordinates));
@@ -673,7 +674,10 @@ function bindFlatPointDrag<TFeature>(
     lastCoordinates = options.coordinates;
     marker.bringToFront?.();
     options.map.dragging?.disable?.();
-    options.map.getContainer?.().style && (options.map.getContainer().style.cursor = "grabbing");
+    const container = options.map.getContainer?.();
+    if (container) {
+      container.style.cursor = "grabbing";
+    }
     options.map.on?.("mousemove", handleMove);
     options.map.on?.("mouseup", handleUp);
   });
@@ -734,7 +738,7 @@ type FlatDragEvent = FlatFeaturePointerEvent & {
   latlng?: { lat: number; lng: number };
 };
 
-type FlatPointCacheEntry<TFeature> = {
+type FlatPointCacheEntry = {
   coordinatesKey: string;
   layers: FlatLayer[];
   signature: string;
@@ -807,8 +811,7 @@ function createFlatPointCoordinatesKey(coordinates: [longitude: number, latitude
   return coordinates.join(",");
 }
 
-function createFlatPointSignature<TFeature>({
-  feature,
+function createFlatPointSignature({
   featureDraggable,
   fillColor,
   hovered,
@@ -816,9 +819,6 @@ function createFlatPointSignature<TFeature>({
   radius,
   selected,
 }: {
-  feature: TFeature & {
-    coordinates: [longitude: number, latitude: number];
-  };
   featureDraggable: boolean;
   fillColor: string;
   hovered: boolean;
@@ -836,10 +836,7 @@ function createFlatPointSignature<TFeature>({
   });
 }
 
-function removeFlatPointCacheEntry<TFeature>(
-  layer: FlatLayerGroup,
-  entry: FlatPointCacheEntry<TFeature>,
-) {
+function removeFlatPointCacheEntry(layer: FlatLayerGroup, entry: FlatPointCacheEntry) {
   for (const cachedLayer of entry.layers) {
     layer.removeLayer(cachedLayer);
   }

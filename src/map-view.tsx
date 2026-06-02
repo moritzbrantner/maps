@@ -36,10 +36,8 @@ import {
   type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
-  type MapBounds,
   type MapSurfaceController,
   type MapViewState,
-  type MapViewStateChangeReason,
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";

@@ -43,6 +43,9 @@ export type MapViewStateChangeContext = {
 export type MapViewportProps = {
   viewState?: MapViewState;
   defaultViewState?: MapViewState;
+  /**
+   * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
+   */
   initialViewState?: MapViewState;
   maxBounds?: MapBounds;
   maxZoom?: number;

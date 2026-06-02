@@ -310,9 +310,9 @@ function buildDissolvedPolygons(loops: readonly Coordinate[][]) {
         removeClosingPoint(right.loop)[0]!,
       );
     });
-  const polygonIndexes = new Array<number>(nodes.length).fill(-1);
+  const polygonIndexes = Array.from({ length: nodes.length }, () => -1);
   const polygons: Coordinate[][][] = [];
-  const depths = new Array<number>(nodes.length).fill(0);
+  const depths = Array.from({ length: nodes.length }, () => 0);
 
   for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
     const representative = removeClosingPoint(nodes[nodeIndex]!.loop)[0]!;
@@ -974,10 +974,6 @@ function pointInPolygon(point: Coordinate, polygon: readonly Coordinate[]) {
   }
 
   return isInside;
-}
-
-function ensureCounterClockwise(loop: readonly Coordinate[]) {
-  return getSignedArea(loop) >= 0 ? [...loop] : [...loop].reverse();
 }
 
 function getSignedArea(loop: readonly Coordinate[]) {

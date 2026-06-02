@@ -53,6 +53,7 @@ function writeConsumerFiles(directory, packageTarball, packageJson) {
         type: "module",
         dependencies: {
           "@moritzbrantner/maps": `file:${packageTarball}`,
+          "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
           "@moritzbrantner/ui": version("@moritzbrantner/ui"),
           "@tailwindcss/vite": version("@tailwindcss/vite"),
           "@vitejs/plugin-react": version("@vitejs/plugin-react"),

@@ -243,7 +243,7 @@ class MapLibreLayerGroup implements FlatLayerGroup {
   }
 
   clearLayers() {
-    for (const layer of [...this.layers]) {
+    for (const layer of this.layers) {
       layer.remove?.();
     }
 

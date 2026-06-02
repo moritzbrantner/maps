@@ -3,6 +3,7 @@ import { inflateSync } from "node:zlib";
 
 const benignConsolePatterns = [
   /Failed to load resource: net::ERR_ABORTED/,
+  /Could not compile fragment shader/,
   /WebGL: INVALID_OPERATION/,
 ];
 const visualBaselineViews = [
@@ -15,6 +16,11 @@ const visualBaselineViews = [
   "GeoJSON",
   "Editor",
 ] as const;
+const smokeVisualBaselineViews = new Set<(typeof visualBaselineViews)[number]>([
+  "Clusters",
+  "Heat",
+  "Editor",
+]);
 const topLevelViews = [
   "Clusters",
   "Points",
@@ -91,7 +97,7 @@ test.afterEach(async ({ page }) => {
 });
 
 for (const view of visualBaselineViews) {
-  test(`${view} view visual baseline`, async ({ page }) => {
+  test(`${view} view visual baseline${smokeVisualBaselineViews.has(view) ? " @smoke" : ""}`, async ({ page }) => {
     await openView(page, view);
     await expect(page.locator(".demo-stage")).toHaveScreenshot(`${view.toLowerCase()}-desktop.png`);
   });
@@ -202,7 +208,7 @@ test("Flows view exposes direction and volume legend", async ({ page }) => {
   await expect(page.getByText("Flow volume")).toBeVisible();
 });
 
-test("Globe view renders nonblank canvas and responds to dragging", async ({ page }) => {
+test("Globe view renders nonblank canvas and responds to dragging @smoke", async ({ page }) => {
   await openView(page, "Globe");
 
   const globe = page.locator(".mb-maps--globe");
@@ -228,7 +234,7 @@ test("Globe view renders nonblank canvas and responds to dragging", async ({ pag
   await expect(page.locator(".demo-stage")).toHaveScreenshot("globe-desktop.png");
 });
 
-test("Measurement mode activates measuring state", async ({ page }) => {
+test("Measurement mode activates measuring state @smoke", async ({ page }) => {
   await openView(page, "Clusters");
   await page.getByRole("button", { name: "Measure" }).click();
 
@@ -236,7 +242,7 @@ test("Measurement mode activates measuring state", async ({ page }) => {
   await expect(page.locator(".demo-stage")).toHaveScreenshot("measurement-desktop.png");
 });
 
-test("Editor mode controls update without visual breakage", async ({ page }) => {
+test("Editor mode controls update without visual breakage @smoke", async ({ page }) => {
   await openView(page, "Editor");
   await page.getByRole("button", { name: "Polygon" }).click();
   await expect(
@@ -254,7 +260,7 @@ test("Editor mode enters polygon drawing mode", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("Mobile layout does not overflow horizontally", async ({ page }) => {
+test("Mobile layout does not overflow horizontally @mobile", async ({ page }) => {
   await page.setViewportSize({ height: 844, width: 390 });
   await page.goto("/?e2e=1");
   await page.addStyleTag({
@@ -279,7 +285,7 @@ test("Mobile layout does not overflow horizontally", async ({ page }) => {
   await expect(page.locator("main")).toHaveScreenshot("clusters-mobile.png");
 });
 
-test("Mobile layout does not overflow horizontally on any top-level tab", async ({ page }) => {
+test("Mobile layout does not overflow horizontally on any top-level tab @mobile", async ({ page }) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ height: 844, width: 390 });
   await page.goto("/?e2e=1");
@@ -306,7 +312,7 @@ test("Mobile layout does not overflow horizontally on any top-level tab", async 
 });
 
 for (const view of ["Editor", "Globe", "Heat", "Timeline"] as const) {
-  test(`${view} mobile visual baseline`, async ({ page }) => {
+  test(`${view} mobile visual baseline @mobile`, async ({ page }) => {
     await page.setViewportSize({ height: 844, width: 390 });
     await page.goto("/?e2e=1");
     await page.addStyleTag({

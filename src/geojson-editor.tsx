@@ -57,7 +57,6 @@ import {
   resolveFeatureId,
   setGeoJsonVertex,
   validateEditOperation,
-  validateGeoJsonEditableGeometry,
 } from "./geojson-editor-operations";
 
 export {
@@ -233,6 +232,9 @@ export type EditableGeoJsonMapProps<
     fitToData?: boolean;
     geoJson: GeoJsonMapSource<TProperties>;
     globeBasemapMode?: GlobeBasemapMode;
+    /**
+     * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
+     */
     initialViewState?: MapViewState;
     mapDisplay?: MapDisplayMode;
     mapLabel?: string;

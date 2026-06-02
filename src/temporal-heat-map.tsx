@@ -336,8 +336,8 @@ export function getTemporalHeatMapMaxWeight<TProperties extends Record<string, u
                 latitude: frame.latitude,
                 longitude: frame.longitude,
                 metrics: {
-                  ...(track.metrics ?? {}),
-                  ...(frame.metrics ?? {}),
+                  ...track.metrics,
+                  ...frame.metrics,
                 },
                 properties: {
                   ...(track.properties as Record<string, unknown> | undefined),
