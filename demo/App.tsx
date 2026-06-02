@@ -2011,7 +2011,7 @@ function GeoJsonInterpolationWorkbench() {
   const [geometries, setGeometries] = useState<Record<string, DemoInterpolationGeometryPair>>(() =>
     createDemoInterpolationGeometryExamples(),
   );
-  const geometryPair = isTopologyExample ? null : geometries[example.id] ?? example.pair;
+  const geometryPair = isTopologyExample ? null : (geometries[example.id] ?? example.pair);
   const topologyPair = isTopologyExample
     ? {
         end: example.endCollection,
@@ -2025,53 +2025,50 @@ function GeoJsonInterpolationWorkbench() {
       ? getDemoInterpolationPosition(geometryPair[selectedKeyframe], selectedHandle.path)
       : ([0, 0] as [number, number]);
   const progressTime = progress / 100;
-  const interpolatedCollection = useMemo(
-    () => {
-      if (topologyPair) {
-        if (progressTime <= 0) {
-          return topologyPair.start;
-        }
-
-        if (progressTime >= 1) {
-          return topologyPair.end;
-        }
-
-        return interpolateGeoJsonTransitionPlan(
-          createGeoJsonTransitionPlan(topologyPair.start, topologyPair.end, {
-            algorithm: "topology-plan",
-            topologyStrategy,
-          }),
-          progressTime,
-        );
+  const interpolatedCollection = useMemo(() => {
+    if (topologyPair) {
+      if (progressTime <= 0) {
+        return topologyPair.start;
       }
 
-      return getTemporalGeoJsonFeatureCollectionAtTime(
-        [
-          {
-            id: "interpolation-preview",
-            label: `${geometryType} preview`,
-            frames: [
-              {
-                geometry: geometryPair!.start,
-                time: 0,
-              },
-              {
-                geometry: geometryPair!.end,
-                time: 1,
-              },
-            ],
-          },
-        ],
+      if (progressTime >= 1) {
+        return topologyPair.end;
+      }
+
+      return interpolateGeoJsonTransitionPlan(
+        createGeoJsonTransitionPlan(topologyPair.start, topologyPair.end, {
+          algorithm: "topology-plan",
+          topologyStrategy,
+        }),
         progressTime,
-        {
-          fallback: "hold",
-          minResampleCoordinates: 24,
-          strategy,
-        },
       );
-    },
-    [geometryPair, geometryType, progressTime, strategy, topologyPair, topologyStrategy],
-  );
+    }
+
+    return getTemporalGeoJsonFeatureCollectionAtTime(
+      [
+        {
+          id: "interpolation-preview",
+          label: `${geometryType} preview`,
+          frames: [
+            {
+              geometry: geometryPair!.start,
+              time: 0,
+            },
+            {
+              geometry: geometryPair!.end,
+              time: 1,
+            },
+          ],
+        },
+      ],
+      progressTime,
+      {
+        fallback: "hold",
+        minResampleCoordinates: 24,
+        strategy,
+      },
+    );
+  }, [geometryPair, geometryType, progressTime, strategy, topologyPair, topologyStrategy]);
   const startCollection = topologyPair
     ? topologyPair.start
     : createDemoInterpolationFeatureCollection("start", "Start keyframe", geometryPair!.start);
@@ -2111,17 +2108,21 @@ function GeoJsonInterpolationWorkbench() {
     const nextPosition: [number, number] =
       axis === 0 ? [value, selectedPosition[1]] : [selectedPosition[0], value];
 
-    setGeometries((current) => ({
+    setGeometries((current) => {
+      const currentPair = current[example.id] ?? example.pair;
+
+      return {
         ...current,
         [example.id]: {
-          ...current[example.id],
+          ...currentPair,
           [selectedKeyframe]: setDemoInterpolationPosition(
-            current[example.id]![selectedKeyframe],
-          selectedHandle.path,
-          nextPosition,
-        ),
-      },
-    }));
+            currentPair[selectedKeyframe],
+            selectedHandle.path,
+            nextPosition,
+          ),
+        },
+      };
+    });
   };
   const resetCurrentGeometry = () => {
     if (isTopologyExample) {
@@ -2178,12 +2179,16 @@ function GeoJsonInterpolationWorkbench() {
           />
           <GeoJsonLayer
             featureCollection={interpolatedCollection}
-            getFeatureStyle={(feature) => getDemoInterpolationPreviewLayerStyle(feature, geometryType)}
+            getFeatureStyle={(feature) =>
+              getDemoInterpolationPreviewLayerStyle(feature, geometryType)
+            }
             layerId="interpolation-preview"
             renderFeaturePopup={(feature) => (
               <div className="demo-popup">
                 <strong>{feature.geometry.type} interpolation</strong>
-                <span>{isTopologyExample ? "Topology plan" : strategyDetails?.label ?? strategy}</span>
+                <span>
+                  {isTopologyExample ? "Topology plan" : (strategyDetails?.label ?? strategy)}
+                </span>
                 <span>{progress}% between keyframes</span>
                 <span>{countDemoGeometryPositions(feature.geometry)} coordinates</span>
               </div>
@@ -2232,7 +2237,9 @@ function GeoJsonInterpolationWorkbench() {
             <NativeSelect
               value={topologyStrategy}
               onChange={(event) =>
-                setTopologyStrategy(event.target.value as Exclude<GeoJsonTopologyStrategy, "bounds">)
+                setTopologyStrategy(
+                  event.target.value as Exclude<GeoJsonTopologyStrategy, "bounds">,
+                )
               }
             >
               {demoTopologyStrategies.map((item) => (
@@ -2266,8 +2273,8 @@ function GeoJsonInterpolationWorkbench() {
           <span>
             {isTopologyExample
               ? "Uses collection-level topology planning across all scene features."
-              : strategyDetails?.description ??
-                "Uses the selected temporal GeoJSON interpolation mode."}
+              : (strategyDetails?.description ??
+                "Uses the selected temporal GeoJSON interpolation mode.")}
           </span>
         </div>
 
@@ -2378,7 +2385,9 @@ function GeoJsonInterpolationWorkbench() {
             <>
               <div>
                 <dt>Strategy</dt>
-                <dd>{demoTopologyStrategies.find((item) => item.id === topologyStrategy)?.label}</dd>
+                <dd>
+                  {demoTopologyStrategies.find((item) => item.id === topologyStrategy)?.label}
+                </dd>
               </div>
               <div>
                 <dt>Preview features</dt>
@@ -2701,15 +2710,39 @@ function createDemoTopologySplitCollection(
   return {
     features: [
       demoTopologyFeature("topology-west", "West district", {
-        coordinates: [[[-5.8, 44.4], [-1.3, 44.1], [-1.1, 50.0], [-6.0, 49.5], [-5.8, 44.4]]],
+        coordinates: [
+          [
+            [-5.8, 44.4],
+            [-1.3, 44.1],
+            [-1.1, 50.0],
+            [-6.0, 49.5],
+            [-5.8, 44.4],
+          ],
+        ],
         type: "Polygon",
       }),
       demoTopologyFeature("topology-central", "Central district", {
-        coordinates: [[[-1.0, 44.0], [3.2, 44.5], [3.0, 50.2], [-0.8, 49.8], [-1.0, 44.0]]],
+        coordinates: [
+          [
+            [-1.0, 44.0],
+            [3.2, 44.5],
+            [3.0, 50.2],
+            [-0.8, 49.8],
+            [-1.0, 44.0],
+          ],
+        ],
         type: "Polygon",
       }),
       demoTopologyFeature("topology-east", "East district", {
-        coordinates: [[[3.4, 44.4], [8.1, 44.8], [7.5, 50.3], [3.2, 49.9], [3.4, 44.4]]],
+        coordinates: [
+          [
+            [3.4, 44.4],
+            [8.1, 44.8],
+            [7.5, 50.3],
+            [3.2, 49.9],
+            [3.4, 44.4],
+          ],
+        ],
         type: "Polygon",
       }),
     ],
@@ -2743,15 +2776,39 @@ function createDemoTopologyMergeCollection(
   return {
     features: [
       demoTopologyFeature("topology-west", "West district", {
-        coordinates: [[[-7.2, 43.3], [-2.5, 43.6], [-2.2, 48.8], [-6.8, 49.0], [-7.2, 43.3]]],
+        coordinates: [
+          [
+            [-7.2, 43.3],
+            [-2.5, 43.6],
+            [-2.2, 48.8],
+            [-6.8, 49.0],
+            [-7.2, 43.3],
+          ],
+        ],
         type: "Polygon",
       }),
       demoTopologyFeature("topology-central", "Central district", {
-        coordinates: [[[-2.1, 43.6], [2.3, 43.4], [2.6, 49.0], [-1.8, 48.9], [-2.1, 43.6]]],
+        coordinates: [
+          [
+            [-2.1, 43.6],
+            [2.3, 43.4],
+            [2.6, 49.0],
+            [-1.8, 48.9],
+            [-2.1, 43.6],
+          ],
+        ],
         type: "Polygon",
       }),
       demoTopologyFeature("topology-east", "East district", {
-        coordinates: [[[2.8, 43.7], [6.7, 43.5], [6.9, 49.2], [3.0, 49.0], [2.8, 43.7]]],
+        coordinates: [
+          [
+            [2.8, 43.7],
+            [6.7, 43.5],
+            [6.9, 49.2],
+            [3.0, 49.0],
+            [2.8, 43.7],
+          ],
+        ],
         type: "Polygon",
       }),
     ],
@@ -2766,11 +2823,27 @@ function createDemoTopologyMixedOverlapCollection(
     return {
       features: [
         demoTopologyFeature("topology-northwest", "Northwest area", {
-          coordinates: [[[-6.8, 44.1], [-1.0, 44.3], [-1.3, 49.2], [-6.4, 49.0], [-6.8, 44.1]]],
+          coordinates: [
+            [
+              [-6.8, 44.1],
+              [-1.0, 44.3],
+              [-1.3, 49.2],
+              [-6.4, 49.0],
+              [-6.8, 44.1],
+            ],
+          ],
           type: "Polygon",
         }),
         demoTopologyFeature("topology-southeast", "Southeast area", {
-          coordinates: [[[0.5, 43.7], [5.8, 43.9], [5.4, 48.8], [0.2, 48.5], [0.5, 43.7]]],
+          coordinates: [
+            [
+              [0.5, 43.7],
+              [5.8, 43.9],
+              [5.4, 48.8],
+              [0.2, 48.5],
+              [0.5, 43.7],
+            ],
+          ],
           type: "Polygon",
         }),
       ],
@@ -2781,11 +2854,27 @@ function createDemoTopologyMixedOverlapCollection(
   return {
     features: [
       demoTopologyFeature("topology-west-shift", "Shifted west area", {
-        coordinates: [[[-5.4, 44.8], [0.1, 44.5], [0.0, 49.9], [-5.8, 49.6], [-5.4, 44.8]]],
+        coordinates: [
+          [
+            [-5.4, 44.8],
+            [0.1, 44.5],
+            [0.0, 49.9],
+            [-5.8, 49.6],
+            [-5.4, 44.8],
+          ],
+        ],
         type: "Polygon",
       }),
       demoTopologyFeature("topology-east-new", "New east area", {
-        coordinates: [[[3.4, 44.2], [8.4, 44.8], [7.7, 50.0], [3.1, 49.3], [3.4, 44.2]]],
+        coordinates: [
+          [
+            [3.4, 44.2],
+            [8.4, 44.8],
+            [7.7, 50.0],
+            [3.1, 49.3],
+            [3.4, 44.2],
+          ],
+        ],
         type: "Polygon",
       }),
     ],
