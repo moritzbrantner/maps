@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   BubbleMap,
   ClusteredMap,
+  FlowLayer,
   FlowMap,
   GeoJsonMap,
   GeoJsonLayer,
@@ -769,6 +770,191 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     expect(group?.clearCount).toBe(initialClearCount);
     expect(group?.layers[0]).toBe(marker);
+  });
+
+  test("keeps flat GeoJSON layers mounted after zoom end", async () => {
+    render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Zoomable GeoJSON"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            type: "FeatureCollection",
+            features: [
+              {
+                id: "zone-1",
+                type: "Feature",
+                properties: {},
+                geometry: {
+                  type: "Polygon",
+                  coordinates: [[[-75, 39], [-73, 39], [-73, 41], [-75, 41], [-75, 39]]],
+                },
+              },
+            ],
+          }}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Zoomable GeoJSON").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const map = flatMock.getMaps()[0];
+    const group = flatMock.getLayerGroups()[0];
+    const layer = group?.layers[0];
+    const initialClearCount = group?.clearCount ?? 0;
+
+    await act(async () => {
+      if (map) {
+        map.zoom = 6;
+      }
+      map?.handlers.get("moveend")?.[0]?.();
+    });
+
+    expect(group?.clearCount).toBe(initialClearCount);
+    expect(group?.layers[0]).toBe(layer);
+  });
+
+  test("keeps flat flow layers mounted after zoom end", async () => {
+    render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Zoomable flows"
+        showAttributionControl={false}
+      >
+        <FlowLayer
+          flows={[
+            {
+              from: [-74, 40],
+              id: "route-1",
+              metrics: { trips: 10 },
+              to: [-73, 41],
+            },
+          ]}
+          showEndpoints={false}
+          weightMetric="trips"
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Zoomable flows").getAttribute("data-map-ready")).toBe("true");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const map = flatMock.getMaps()[0];
+    const group = flatMock.getLayerGroups()[0];
+    const layer = group?.layers[0];
+    const initialClearCount = group?.clearCount ?? 0;
+
+    await act(async () => {
+      if (map) {
+        map.zoom = 6;
+      }
+      map?.handlers.get("moveend")?.[0]?.();
+    });
+
+    expect(group?.clearCount).toBe(initialClearCount);
+    expect(group?.layers[0]).toBe(layer);
+  });
+
+  test("keeps equivalent flat point marker rerenders mounted once", async () => {
+    const { rerender } = render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Stable point rerender"
+        showAttributionControl={false}
+      >
+        <PointLayer points={[{ id: "store-1", latitude: 40, longitude: -74 }]} />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Stable point rerender").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const marker = group?.layers[0];
+    const initialClearCount = group?.clearCount ?? 0;
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Stable point rerender"
+        showAttributionControl={false}
+      >
+        <PointLayer points={[{ id: "store-1", latitude: 40, longitude: -74 }]} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.clearCount).toBe(initialClearCount);
+    expect(group?.layers).toHaveLength(1);
+    expect(group?.layers[0]).toBe(marker);
+  });
+
+  test("updates flat point marker coordinates in place", async () => {
+    const { rerender } = render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Moving point rerender"
+        showAttributionControl={false}
+      >
+        <PointLayer points={[{ id: "store-1", latitude: 40, longitude: -74 }]} />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Moving point rerender").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const marker = group?.layers[0];
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Moving point rerender"
+        showAttributionControl={false}
+      >
+        <PointLayer points={[{ id: "store-1", latitude: 41, longitude: -73 }]} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.layers).toHaveLength(1);
+    expect(group?.layers[0]).toBe(marker);
+    expect(group?.layers[0]?.latLng).toEqual([41, -73]);
   });
 
   test("renders multiple flat layers of the same kind independently", async () => {

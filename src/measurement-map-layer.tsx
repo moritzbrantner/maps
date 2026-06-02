@@ -1,9 +1,9 @@
 "use client";
 
-import { useContext, useEffect, useEffectEvent, useId, useState } from "react";
+import { useContext, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 
 import { toLatLng } from "./map-display";
-import type { FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
+import type { FlatLayer, FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
 import { MapSurfaceContext } from "./map-view";
 import {
   formatMapDistance,
@@ -42,6 +42,8 @@ export function BeeLineMeasurementLayer({
   const setMeasurementActive = surface?.setMeasurementActive;
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `measurement-layer-${generatedLayerId}`;
+  const flatMeasurementCacheRef = useRef<Map<string, FlatMeasurementCacheEntry>>(new Map());
+  const flatDraftCacheRef = useRef<FlatMeasurementCacheEntry | null>(null);
   const [draft, setDraft] = useState<MapBeeLineMeasurementDraft | null>(null);
   const isMeasuring = measurementMode === "bee-line";
   const draftLineColor = measurementDraftLineColor ?? measurementLineColor;
@@ -72,14 +74,34 @@ export function BeeLineMeasurementLayer({
 
   useEffect(() => {
     if (!registerFlatLayer || display !== "flat") {
+      flatMeasurementCacheRef.current.clear();
+      flatDraftCacheRef.current = null;
       return;
     }
 
     return registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
-      layer.clearLayers();
+      const cache = flatMeasurementCacheRef.current;
+      const seen = new Set<string>();
 
       for (const measurement of measurements) {
-        renderCompletedFlatMeasurement({
+        const signature = createFlatMeasurementSignature(
+          measurement,
+          measurementDistanceFormat,
+          measurementLineColor,
+        );
+        const cached = cache.get(measurement.id);
+
+        seen.add(measurement.id);
+
+        if (cached?.signature === signature) {
+          continue;
+        }
+
+        if (cached) {
+          removeFlatMeasurementCacheEntry(layer, cached);
+        }
+
+        const layers = renderCompletedFlatMeasurement({
           flat,
           layer,
           measurement,
@@ -87,15 +109,42 @@ export function BeeLineMeasurementLayer({
           measurementLineColor,
           onSelect: emitSelect,
         });
+
+        if (layers.length > 0) {
+          cache.set(measurement.id, { layers, signature });
+        } else {
+          cache.delete(measurement.id);
+        }
+      }
+
+      for (const [measurementId, cached] of cache) {
+        if (seen.has(measurementId)) {
+          continue;
+        }
+
+        removeFlatMeasurementCacheEntry(layer, cached);
+        cache.delete(measurementId);
       }
 
       if (draft?.to && draft.distanceMeters !== undefined) {
-        renderDraftFlatMeasurement({
-          draft,
-          flat,
-          layer,
-          measurementDraftLineColor: draftLineColor,
-        });
+        const signature = createFlatMeasurementDraftSignature(draft, draftLineColor);
+
+        if (flatDraftCacheRef.current?.signature !== signature) {
+          if (flatDraftCacheRef.current) {
+            removeFlatMeasurementCacheEntry(layer, flatDraftCacheRef.current);
+          }
+
+          const layers = renderDraftFlatMeasurement({
+            draft,
+            flat,
+            layer,
+            measurementDraftLineColor: draftLineColor,
+          });
+          flatDraftCacheRef.current = layers.length > 0 ? { layers, signature } : null;
+        }
+      } else if (flatDraftCacheRef.current) {
+        removeFlatMeasurementCacheEntry(layer, flatDraftCacheRef.current);
+        flatDraftCacheRef.current = null;
       }
 
       const container = map.getContainer();
@@ -105,7 +154,7 @@ export function BeeLineMeasurementLayer({
       } else if (container.style.cursor === "crosshair") {
         container.style.cursor = "";
       }
-    });
+    }, { preserveOnRender: true, renderOnViewStateChange: false });
   }, [
     draft,
     draftLineColor,
@@ -432,9 +481,10 @@ function renderCompletedFlatMeasurement({
   const label = getBeeLineMeasurementLabel(measurement, measurementDistanceFormat);
 
   if (!from || !to || !midpoint || !label) {
-    return;
+    return [];
   }
 
+  const layers: FlatLayer[] = [];
   const line = flat.polyline([toLatLng(from), toLatLng(to)], {
     className: "mb-maps__measurement-line",
     color: measurementLineColor,
@@ -452,9 +502,12 @@ function renderCompletedFlatMeasurement({
     onSelect?.(measurement);
   });
   line.addTo(layer);
+  layers.push(line);
 
-  addEndpoint(flat, layer, from, measurementLineColor);
-  addEndpoint(flat, layer, to, measurementLineColor);
+  layers.push(addEndpoint(flat, layer, from, measurementLineColor));
+  layers.push(addEndpoint(flat, layer, to, measurementLineColor));
+
+  return layers;
 }
 
 function renderDraftFlatMeasurement({
@@ -473,10 +526,11 @@ function renderDraftFlatMeasurement({
   const midpoint = getBeeLineMidpoint(draft.from, draft.to);
 
   if (!from || !to || !midpoint || !draft.formattedDistance) {
-    return;
+    return [];
   }
 
-  flat
+  const layers: FlatLayer[] = [];
+  const line = flat
     .polyline([toLatLng(from), toLatLng(to)], {
       className: "mb-maps__measurement-line mb-maps__measurement-line--draft",
       color: measurementDraftLineColor,
@@ -491,8 +545,11 @@ function renderDraftFlatMeasurement({
     .openTooltip(toLatLng(midpoint))
     .addTo(layer);
 
-  addEndpoint(flat, layer, from, measurementDraftLineColor);
-  addEndpoint(flat, layer, to, measurementDraftLineColor);
+  layers.push(line);
+  layers.push(addEndpoint(flat, layer, from, measurementDraftLineColor));
+  layers.push(addEndpoint(flat, layer, to, measurementDraftLineColor));
+
+  return layers;
 }
 
 function addEndpoint(
@@ -501,7 +558,7 @@ function addEndpoint(
   coordinate: MapCoordinate,
   color: string,
 ) {
-  flat
+  return flat
     .circleMarker(toLatLng(coordinate), {
       className: "mb-maps__measurement-endpoint",
       color: "#ffffff",
@@ -513,6 +570,42 @@ function addEndpoint(
       weight: 1.5,
     })
     .addTo(layer);
+}
+
+type FlatMeasurementCacheEntry = {
+  layers: FlatLayer[];
+  signature: string;
+};
+
+function createFlatMeasurementSignature(
+  measurement: MapBeeLineMeasurement,
+  measurementDistanceFormat: MapDistanceFormat,
+  measurementLineColor: string,
+) {
+  return JSON.stringify({
+    label: getBeeLineMeasurementLabel(measurement, measurementDistanceFormat),
+    measurement,
+    measurementLineColor,
+  });
+}
+
+function createFlatMeasurementDraftSignature(
+  draft: MapBeeLineMeasurementDraft,
+  measurementDraftLineColor: string,
+) {
+  return JSON.stringify({
+    draft,
+    measurementDraftLineColor,
+  });
+}
+
+function removeFlatMeasurementCacheEntry(
+  layer: { removeLayer: (cachedLayer: FlatLayer) => unknown },
+  entry: FlatMeasurementCacheEntry,
+) {
+  for (const cachedLayer of entry.layers) {
+    layer.removeLayer(cachedLayer);
+  }
 }
 
 function getEventCoordinate(event: {

@@ -73,8 +73,6 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    flatFeatureCacheRef.current.clear();
-
     return surfaceRef.current?.registerFlatLayer(
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
@@ -99,6 +97,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
         const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
         const featureKey = getFlatClusterFeatureKey(feature, getFeatureId);
+        const coordinatesKey = createFlatClusterCoordinatesKey(feature.coordinates);
         const signature = createFlatClusterSignature({
           feature,
           hovered,
@@ -110,6 +109,12 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         seen.add(featureKey);
 
         if (cached?.signature === signature) {
+          if (cached.coordinatesKey !== coordinatesKey) {
+            for (const cachedLayer of cached.layers) {
+              cachedLayer.setLatLng?.(toLatLng(feature.coordinates));
+            }
+            cached.coordinatesKey = coordinatesKey;
+          }
           continue;
         }
 
@@ -184,6 +189,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             })
             .addTo(layer);
           cache.set(featureKey, {
+            coordinatesKey,
             layers: [marker, countMarker],
             signature,
           });
@@ -237,6 +243,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
         marker.addTo(layer);
         cache.set(featureKey, {
+          coordinatesKey,
           layers: [marker],
           signature,
         });
@@ -452,6 +459,7 @@ type FlatFeaturePointerEvent = {
 };
 
 type FlatClusterCacheEntry = {
+  coordinatesKey: string;
   layers: FlatLayer[];
   signature: string;
 };
@@ -515,6 +523,10 @@ function getFlatClusterFeatureKey<TProperties>(
   );
 }
 
+function createFlatClusterCoordinatesKey(coordinates: [longitude: number, latitude: number]) {
+  return coordinates.join(",");
+}
+
 function createFlatClusterSignature<TProperties>({
   feature,
   hovered,
@@ -527,7 +539,6 @@ function createFlatClusterSignature<TProperties>({
   selected: boolean;
 }) {
   return JSON.stringify({
-    coordinates: feature.coordinates,
     fillColor: feature.kind === "cluster" ? getClusterColor(feature.pointCount) : "#0f172a",
     hovered,
     interactive: !isMeasuring,

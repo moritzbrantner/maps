@@ -313,6 +313,9 @@ export function GeoJsonEditorLayer<
   validateEdit,
 }: GeoJsonEditorLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
+  const surfaceDisplay = surface?.display;
+  const flatMap = surface?.flatMap;
+  const registerFlatLayer = surface?.registerFlatLayer;
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `geojson-editor-layer-${generatedLayerId}`;
   const [draft, setDraft] = useState<GeoJsonPosition[]>([]);
@@ -550,11 +553,11 @@ export function GeoJsonEditorLayer<
   }, [mode, selectedFeatureId]);
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat") {
+    if (!registerFlatLayer || surfaceDisplay !== "flat") {
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
+    return registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
       layer.clearLayers();
 
       if (mode === "none") {
@@ -617,9 +620,10 @@ export function GeoJsonEditorLayer<
       }
 
       renderDraft(layer, flat, draftRef.current, draftPreviewRef.current, mode);
-    });
+    }, { renderOnViewStateChange: false });
   }, [
     features,
+    flatMap,
     groupOptions,
     handleColor,
     midpointHandleColor,
@@ -629,7 +633,8 @@ export function GeoJsonEditorLayer<
     selectedFeatureIdSet,
     selectedStyle,
     style,
-    surface,
+    registerFlatLayer,
+    surfaceDisplay,
   ]);
 
   function completeDraft() {
@@ -1149,7 +1154,7 @@ export function GeoJsonEditorLayer<
 
   function handleDragEnd(event: FlatFeaturePointerEvent = {}) {
     const drag = dragRef.current;
-    const map = surface?.flatMap;
+    const map = flatMap;
 
     if (!drag || !map) {
       return;

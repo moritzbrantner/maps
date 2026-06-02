@@ -190,8 +190,6 @@ function PointFeatureLayer<
       return;
     }
 
-    flatMarkerCacheRef.current.clear();
-
     return surfaceRef.current?.registerFlatLayer(
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
@@ -203,26 +201,71 @@ function PointFeatureLayer<
 
         const cache = flatMarkerCacheRef.current;
         const seen = new Set<string>();
-
-        for (const feature of features) {
+        const preparedFeatures = features.map((feature) => {
           const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
           const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
           const featureDraggable = isFeatureDraggable(feature, draggable);
           const featureKey = getFlatPointFeatureKey(feature, getFeatureId);
+          const coordinatesKey = createFlatPointCoordinatesKey(feature.coordinates);
+          const fillColor = getPointColor?.(feature) ?? pointColor;
+          const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius);
           const signature = createFlatPointSignature({
             feature,
             featureDraggable,
-            fillColor: getPointColor?.(feature) ?? pointColor,
+            fillColor,
             hovered,
             isMeasuring,
-            radius: Math.max(0, getPointRadius?.(feature) ?? pointRadius),
+            radius,
             selected,
           });
+
+          return {
+            coordinatesKey,
+            feature,
+            featureDraggable,
+            featureKey,
+            fillColor,
+            hovered,
+            radius,
+            selected,
+            signature,
+          };
+        });
+
+        if (
+          (cache.size === 0 && layer.layers.length > 0) ||
+          preparedFeatures.some((entry) => {
+            const cached = cache.get(entry.featureKey);
+
+            return cached && cached.signature !== entry.signature;
+          })
+        ) {
+          layer.clearLayers();
+          cache.clear();
+        }
+
+        for (const {
+          coordinatesKey,
+          feature,
+          featureDraggable,
+          featureKey,
+          fillColor,
+          hovered,
+          radius,
+          selected,
+          signature,
+        } of preparedFeatures) {
           const cached = cache.get(featureKey);
 
           seen.add(featureKey);
 
           if (cached?.signature === signature) {
+            if (cached.coordinatesKey !== coordinatesKey) {
+              for (const cachedLayer of cached.layers) {
+                cachedLayer.setLatLng?.(toLatLng(feature.coordinates));
+              }
+              cached.coordinatesKey = coordinatesKey;
+            }
             continue;
           }
 
@@ -239,11 +282,11 @@ function PointFeatureLayer<
               selected && "mb-maps__feature--selected",
             ),
             color: "#ffffff",
-            fillColor: getPointColor?.(feature) ?? pointColor,
+            fillColor,
             fillOpacity: 0.92,
             interactive: !isMeasuring,
             opacity: 1,
-            radius: Math.max(0, getPointRadius?.(feature) ?? pointRadius),
+            radius,
             weight: selected ? 3 : 2,
           });
 
@@ -294,6 +337,7 @@ function PointFeatureLayer<
 
           marker.addTo(layer);
           cache.set(featureKey, {
+            coordinatesKey,
             layers: [marker],
             signature,
           });
@@ -308,7 +352,7 @@ function PointFeatureLayer<
           cache.delete(featureKey);
         }
       },
-      { preserveOnRender: true },
+      { preserveOnRender: true, renderOnViewStateChange: false },
     );
   }, [
     features,
@@ -691,6 +735,7 @@ type FlatDragEvent = FlatFeaturePointerEvent & {
 };
 
 type FlatPointCacheEntry<TFeature> = {
+  coordinatesKey: string;
   layers: FlatLayer[];
   signature: string;
 };
@@ -758,6 +803,10 @@ function getFlatPointFeatureKey<TFeature>(
   return getFeatureId?.(feature) || feature.point.id || feature.coordinates.join(",");
 }
 
+function createFlatPointCoordinatesKey(coordinates: [longitude: number, latitude: number]) {
+  return coordinates.join(",");
+}
+
 function createFlatPointSignature<TFeature>({
   feature,
   featureDraggable,
@@ -778,7 +827,6 @@ function createFlatPointSignature<TFeature>({
   selected: boolean;
 }) {
   return JSON.stringify({
-    coordinates: feature.coordinates,
     featureDraggable,
     fillColor,
     hovered,

@@ -84,6 +84,7 @@ export type FlatLayerRender = (context: {
 
 export type FlatLayerRegistrationOptions = {
   preserveOnRender?: boolean;
+  renderOnViewStateChange?: boolean;
 };
 
 export type MapInteractionMode = "none" | "measurement" | "editing";
@@ -174,6 +175,7 @@ type RegisteredFlatLayer = {
   group: FlatLayerGroup | null;
   preserveOnRender: boolean;
   render: FlatLayerRender;
+  renderOnViewStateChange: boolean;
 };
 
 export const MapSurfaceContext = createContext<MapSurfaceContextValue | null>(null);
@@ -222,7 +224,8 @@ export function MapView({
   const lastCommittedFlatStateRef = useRef<MapViewState | null>(null);
   const lastFlatMoveStateRef = useRef<MapViewState | null>(null);
   const lastFitBoundsKeyRef = useRef<string | null>(null);
-  const lastFlatRenderKeyRef = useRef<string | null>(null);
+  const lastFlatFullRenderKeyRef = useRef<string | null>(null);
+  const lastFlatViewportRenderKeyRef = useRef<string | null>(null);
   const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const isFlatStyleReadyRef = useRef(false);
   const [isReady, setIsReady] = useState(mapDisplay === "globe");
@@ -250,9 +253,13 @@ export function MapView({
   });
   const resolvedMaxZoom = normalizeMapMaxZoom(maxZoom);
   const currentViewStateKey = serializeMapViewState(currentViewState);
-  const flatRenderKey = [
+  const flatViewportRenderKey = [
     controlled ? "controlled" : "uncontrolled",
     currentViewStateKey,
+    flatRuntime,
+    mapDisplay,
+  ].join(":");
+  const flatFullRenderKey = [
     flatRuntime,
     interactionMode,
     isMeasuring ? "measuring" : "idle",
@@ -310,7 +317,7 @@ export function MapView({
     };
   }, [onMapContextMenu, renderMapContextMenu]);
 
-  const renderFlatLayers = useEffectEvent(() => {
+  const renderFlatLayers = useEffectEvent((options: { viewportOnly: boolean }) => {
     const flat = flatLayerFactoryRef.current;
     const map = flatMapAdapterRef.current;
     const maplibre = maplibreRef.current;
@@ -321,6 +328,10 @@ export function MapView({
     }
 
     for (const layer of layersRef.current.values()) {
+      if (options.viewportOnly && !layer.renderOnViewStateChange) {
+        continue;
+      }
+
       if (!layer.group) {
         layer.group = flat.layerGroup().addTo(maplibreMap);
       }
@@ -539,7 +550,7 @@ export function MapView({
 
         isFlatStyleReadyRef.current = true;
         syncFlatBoundsConstraints();
-        renderFlatLayers();
+        renderFlatLayers({ viewportOnly: false });
         setIsReady(true);
         handleMapReady(localMap);
       });
@@ -596,18 +607,32 @@ export function MapView({
       return;
     }
 
-    if (lastFlatRenderKeyRef.current === flatRenderKey) {
+    if (lastFlatFullRenderKeyRef.current === flatFullRenderKey) {
       return;
     }
 
-    lastFlatRenderKeyRef.current = flatRenderKey;
+    lastFlatFullRenderKeyRef.current = flatFullRenderKey;
+
+    renderFlatLayers({ viewportOnly: false });
+  }, [flatFullRenderKey, flatRuntime, mapDisplay]);
+
+  useEffect(() => {
+    if (mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+      return;
+    }
+
+    if (lastFlatViewportRenderKeyRef.current === flatViewportRenderKey) {
+      return;
+    }
+
+    lastFlatViewportRenderKeyRef.current = flatViewportRenderKey;
 
     if (controlled) {
       syncFlatControlledView();
     }
 
-    renderFlatLayers();
-  }, [controlled, flatRenderKey, flatRuntime, mapDisplay]);
+    renderFlatLayers({ viewportOnly: true });
+  }, [controlled, flatRuntime, flatViewportRenderKey, mapDisplay]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -646,6 +671,7 @@ export function MapView({
       const previous = layersRef.current.get(id);
       const group = previous?.group ?? (flat && maplibreMap ? flat.layerGroup().addTo(maplibreMap) : null);
       const preserveOnRender = options.preserveOnRender === true;
+      const renderOnViewStateChange = options.renderOnViewStateChange !== false;
 
       layersRef.current.set(id, {
         cleanup: previous?.cleanup ?? null,
@@ -653,11 +679,14 @@ export function MapView({
         group,
         preserveOnRender,
         render,
+        renderOnViewStateChange,
       });
 
       if (flat && map && maplibre && maplibreMap && group && isFlatStyleReadyRef.current) {
         previous?.cleanup?.();
-        group.clearLayers();
+        if (!preserveOnRender) {
+          group.clearLayers();
+        }
         render({ flat, interactionMode, isMeasuring, layer: group, map, maplibre, maplibreMap });
       }
 
@@ -679,6 +708,7 @@ export function MapView({
           cleanup: null,
           preserveOnRender: false,
           render: clearRender,
+          renderOnViewStateChange: false,
         });
 
         queueMicrotask(() => {

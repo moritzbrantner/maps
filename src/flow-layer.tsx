@@ -1,9 +1,9 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useId, useMemo, type ReactNode } from "react";
+import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 
 import { joinClassNames, toLatLng } from "./map-display";
-import type { FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
+import type { FlatLayer, FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 
@@ -103,6 +103,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   const surface = useContext(MapSurfaceContext);
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `flow-layer-${generatedLayerId}`;
+  const surfaceRef = useRef(surface);
+  const flatFlowCacheRef = useRef<Map<string, FlatFlowCacheEntry>>(new Map());
   const deferredFlows = useDeferredValue(flows);
   const features = useMemo(
     () =>
@@ -115,21 +117,34 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
       }),
     [deferredFlows, getWeight, maxWeight, maxWidth, minWidth, weightMetric],
   );
+  const surfaceDisplay = surface?.display;
+  const registerFlatLayer = surface?.registerFlatLayer;
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat") {
+    surfaceRef.current = surface;
+  });
+
+  useEffect(() => {
+    if (!registerFlatLayer || surfaceDisplay !== "flat") {
+      flatFlowCacheRef.current.clear();
       return;
     }
 
-    return surface.registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
-      layer.clearLayers();
+    return registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
+      const currentSurface = surfaceRef.current;
 
-      const hasHoveredFlow = features.some((feature) => surface.isFeatureHovered(feature, getFeatureId));
+      if (!currentSurface) {
+        return;
+      }
+
+      const cache = flatFlowCacheRef.current;
+      const seen = new Set<string>();
+      const hasHoveredFlow = features.some((feature) => currentSurface.isFeatureHovered(feature, getFeatureId));
 
       for (const feature of features) {
         const color = getFlowColor?.(feature) ?? flowColor;
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
+        const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+        const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
         const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
         const flowLatLngs = flowCoordinates.map(toLatLng);
         const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
@@ -141,6 +156,40 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
           : hasActiveFlow
             ? inactiveFlowOpacity
             : 0.72;
+        const featureKey = getFlatFlowFeatureKey(feature, getFeatureId);
+        const geometryKey = createFlatFlowGeometryKey(feature, flowCoordinates);
+        const signature = createFlatFlowSignature({
+          color,
+          directionMarker,
+          feature,
+          hasActiveFlow,
+          hovered,
+          isMeasuring,
+          opacity,
+          selected,
+          showDirection,
+          showEndpoints,
+        });
+        const cached = cache.get(featureKey);
+
+        seen.add(featureKey);
+
+        if (cached?.signature === signature) {
+          if (cached.geometryKey !== geometryKey) {
+            if (updateFlatFlowCachedGeometry(cached, feature, flowCoordinates)) {
+              cached.geometryKey = geometryKey;
+              continue;
+            }
+
+            removeFlatFlowCacheEntry(layer, cached);
+            cache.delete(featureKey);
+          } else {
+            continue;
+          }
+        } else if (cached) {
+          removeFlatFlowCacheEntry(layer, cached);
+        }
+
         const line = flat.polyline(flowLatLngs, {
           className: joinClassNames(
             "mb-maps__flow-line",
@@ -157,14 +206,14 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
 
         if (!isMeasuring) {
           line.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            surface.handleFeatureClick(feature, getFlowPosition(map, feature, event), {
+            currentSurface.handleFeatureClick(feature, getFlowPosition(map, feature, event), {
               onFeatureSelect,
               renderFeaturePopup,
             });
           });
           line.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
             suppressNativeContextMenu(event);
-            surface.handleFeatureContextMenu(feature, getFlowPosition(map, feature, event), {
+            currentSurface.handleFeatureContextMenu(feature, getFlowPosition(map, feature, event), {
               coordinates: getFlowCenter(feature),
               onFeatureContextMenu,
               onFeatureSelect,
@@ -174,21 +223,25 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
           });
           line.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             map.getContainer().style.cursor = "pointer";
-            surface.handleFeatureHover(feature, getFlowPosition(map, feature, event), {
+            currentSurface.handleFeatureHover(feature, getFlowPosition(map, feature, event), {
               onFeatureHover,
               renderFeatureTooltip,
             });
           });
           line.on("mouseout", () => {
             map.getContainer().style.cursor = "";
-            surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+            currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
           });
         }
 
         line.addTo(layer);
+        const layers: FlatLayer[] = [line];
+        let arrowLayer: FlatLayer | null = null;
+        let fromEndpointLayer: FlatLayer | null = null;
+        let toEndpointLayer: FlatLayer | null = null;
 
         if (showDirection && directionMarker === "arrow") {
-          addFlowArrowMarker({
+          arrowLayer = addFlowArrowMarker({
             color,
             feature,
             flowCoordinates,
@@ -196,11 +249,14 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             map,
             opacity,
             overlay: layer,
-          });
+          }) ?? null;
+          if (arrowLayer) {
+            layers.push(arrowLayer);
+          }
         }
 
         if (showEndpoints) {
-          flat
+          fromEndpointLayer = flat
             .circleMarker(toLatLng(feature.flow.from), {
               className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--from",
               color: "#ffffff",
@@ -212,7 +268,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
               weight: 1.5,
             })
             .addTo(layer);
-          flat
+          layers.push(fromEndpointLayer);
+          toEndpointLayer = flat
             .circleMarker(toLatLng(feature.flow.to), {
               className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--to",
               color: "#ffffff",
@@ -224,9 +281,29 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
               weight: 1.5,
             })
             .addTo(layer);
+          layers.push(toEndpointLayer);
         }
+
+        cache.set(featureKey, {
+          arrowLayer,
+          fromEndpointLayer,
+          geometryKey,
+          layers,
+          lineLayer: line,
+          signature,
+          toEndpointLayer,
+        });
       }
-    });
+
+      for (const [featureKey, cached] of cache) {
+        if (seen.has(featureKey)) {
+          continue;
+        }
+
+        removeFlatFlowCacheEntry(layer, cached);
+        cache.delete(featureKey);
+      }
+    }, { preserveOnRender: true, renderOnViewStateChange: false });
   }, [
     directionMarker,
     features,
@@ -247,7 +324,8 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     selectedFlowOpacity,
     showDirection,
     showEndpoints,
-    surface,
+    registerFlatLayer,
+    surfaceDisplay,
   ]);
 
   if (!surface || surface.display !== "globe") {
@@ -392,6 +470,107 @@ export function createFlowLayerFeatures<TProperties = Record<string, unknown>>(
       width: minWidth + Math.sqrt(value) * (maxWidth - minWidth),
     };
   });
+}
+
+type FlatFlowCacheEntry = {
+  arrowLayer: FlatLayer | null;
+  fromEndpointLayer: FlatLayer | null;
+  geometryKey: string;
+  layers: FlatLayer[];
+  lineLayer: FlatLayer;
+  signature: string;
+  toEndpointLayer: FlatLayer | null;
+};
+
+function getFlatFlowFeatureKey<TProperties>(
+  feature: FlowLayerFeature<TProperties>,
+  getFeatureId?: (feature: FlowLayerFeature<TProperties>) => string,
+) {
+  return getFeatureId?.(feature) || feature.flow.id;
+}
+
+function createFlatFlowGeometryKey<TProperties>(
+  feature: FlowLayerFeature<TProperties>,
+  flowCoordinates: Array<[longitude: number, latitude: number]>,
+) {
+  return JSON.stringify({
+    flowCoordinates,
+    from: feature.flow.from,
+    to: feature.flow.to,
+  });
+}
+
+function createFlatFlowSignature<TProperties>({
+  color,
+  directionMarker,
+  feature,
+  hasActiveFlow,
+  hovered,
+  isMeasuring,
+  opacity,
+  selected,
+  showDirection,
+  showEndpoints,
+}: {
+  color: string;
+  directionMarker: FlowDirectionMarker;
+  feature: FlowLayerFeature<TProperties>;
+  hasActiveFlow: boolean;
+  hovered: boolean;
+  isMeasuring: boolean;
+  opacity: number;
+  selected: boolean;
+  showDirection: boolean;
+  showEndpoints: boolean;
+}) {
+  return JSON.stringify({
+    color,
+    directionMarker,
+    flow: {
+      id: feature.flow.id,
+      label: feature.flow.label,
+      metrics: feature.flow.metrics,
+      properties: feature.flow.properties,
+    },
+    hasActiveFlow,
+    hovered,
+    interactive: !isMeasuring,
+    opacity,
+    rawValue: feature.rawValue,
+    selected,
+    showDirection,
+    showEndpoints,
+    value: feature.value,
+    width: selected ? feature.width + 1.5 : feature.width,
+  });
+}
+
+function updateFlatFlowCachedGeometry<TProperties>(
+  entry: FlatFlowCacheEntry,
+  feature: FlowLayerFeature<TProperties>,
+  flowCoordinates: Array<[longitude: number, latitude: number]>,
+) {
+  if (entry.arrowLayer) {
+    return false;
+  }
+
+  if (!entry.lineLayer.setLatLngs?.(flowCoordinates.map(toLatLng))) {
+    return false;
+  }
+
+  entry.fromEndpointLayer?.setLatLng?.(toLatLng(feature.flow.from));
+  entry.toEndpointLayer?.setLatLng?.(toLatLng(feature.flow.to));
+
+  return true;
+}
+
+function removeFlatFlowCacheEntry(
+  layer: { removeLayer: (cachedLayer: FlatLayer) => unknown },
+  entry: FlatFlowCacheEntry,
+) {
+  for (const cachedLayer of entry.layers) {
+    layer.removeLayer(cachedLayer);
+  }
 }
 
 export function getBoundsFromFlows<TProperties>(flows: readonly MapFlow<TProperties>[]) {
@@ -587,7 +766,7 @@ export function addFlowArrowMarker<TProperties>({
     iconSize: [size, size],
   });
 
-  flat
+  return flat
     .marker(toLatLng(to), {
       icon,
       interactive: false,

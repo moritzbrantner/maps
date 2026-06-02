@@ -844,6 +844,13 @@ class MapLibreDomMarkerLayer implements FlatLayer {
     this.marker?.remove();
     this.marker = null;
   }
+
+  setLatLng(latLng: [number, number]) {
+    this.coordinates = latLngToLngLat(latLng);
+    this.marker?.setLngLat(this.coordinates as LngLatLike);
+
+    return this;
+  }
 }
 
 export function resolveMapLibreMarkerOffset(

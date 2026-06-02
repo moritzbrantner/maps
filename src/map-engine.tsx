@@ -273,13 +273,15 @@ function EngineGeoLayerRenderer(
   const { engine, getDatasetId, version } = useMapEngine();
   const resolvedDatasetId = getDatasetId(props.datasetId);
   const registeredLayerId = props.layerId ?? `${props.kind}-${props.datasetId}`;
+  const surfaceDisplay = surface?.display;
+  const registerFlatLayer = surface?.registerFlatLayer;
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat" || !resolvedDatasetId) {
+    if (!registerFlatLayer || surfaceDisplay !== "flat" || !resolvedDatasetId) {
       return;
     }
 
-    return surface.registerFlatLayer(
+    return registerFlatLayer(
       registeredLayerId,
       ({ layer, flat, map }) => {
         layer.clearLayers();
@@ -295,8 +297,11 @@ function EngineGeoLayerRenderer(
 
         renderFlatEngineLayer(frameLayer, flat, layer);
       },
+      {
+        renderOnViewStateChange: props.kind === "geo-clusters" || props.kind === "geo-heat",
+      },
     );
-  }, [engine, props, registeredLayerId, resolvedDatasetId, surface, version]);
+  }, [engine, props, registeredLayerId, registerFlatLayer, resolvedDatasetId, surfaceDisplay, version]);
 
   if (!surface || surface.display !== "globe" || !resolvedDatasetId) {
     return null;

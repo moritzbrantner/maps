@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useId, useMemo, type ReactNode } from "react";
+import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 
 import { createVisibleSvgPath, joinClassNames, toLatLng } from "./map-display";
 import {
@@ -72,31 +72,76 @@ export function GeoJsonLayer<
   const surface = useContext(MapSurfaceContext);
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `geojson-layer-${generatedLayerId}`;
+  const surfaceRef = useRef(surface);
+  const flatFeatureCacheRef = useRef<Map<string, FlatGeoJsonCacheEntry<TProperties>>>(new Map());
   const deferredFeatureCollection = useDeferredValue(featureCollection);
   const features = useMemo(
     () => createGeoJsonLayerFeatures(deferredFeatureCollection),
     [deferredFeatureCollection],
   );
+  const surfaceDisplay = surface?.display;
+  const registerFlatLayer = surface?.registerFlatLayer;
 
   useEffect(() => {
-    if (!surface || surface.display !== "flat") {
+    surfaceRef.current = surface;
+  });
+
+  useEffect(() => {
+    if (!registerFlatLayer || surfaceDisplay !== "flat") {
+      flatFeatureCacheRef.current.clear();
       return;
     }
 
-    return surface.registerFlatLayer(
+    return registerFlatLayer(
       resolvedLayerId,
       ({ interactionMode, layer, flat, map }) => {
-        layer.clearLayers();
+        const currentSurface = surfaceRef.current;
+
+        if (!currentSurface) {
+          return;
+        }
+
+        const cache = flatFeatureCacheRef.current;
+        const seen = new Set<string>();
 
         for (const feature of features) {
           const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
-          const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-          const hovered = surface.isFeatureHovered(feature, getFeatureId);
+          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+          const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
           const className = joinClassNames(
             "mb-maps__geojson-feature",
             hovered && "mb-maps__feature--hovered",
             selected && "mb-maps__feature--selected",
           );
+          const featureKey = getFlatGeoJsonFeatureKey(feature, getFeatureId);
+          const geometryKey = createFlatGeoJsonGeometryKey(feature.geometry);
+          const signature = createFlatGeoJsonSignature({
+            className,
+            feature,
+            interactionMode,
+            selected,
+            style,
+          });
+          const cached = cache.get(featureKey);
+
+          seen.add(featureKey);
+
+          if (cached?.signature === signature) {
+            if (cached.geometryKey !== geometryKey) {
+              if (updateFlatGeoJsonCachedGeometry(cached.layers, feature.geometry)) {
+                cached.geometryKey = geometryKey;
+                continue;
+              }
+
+              removeFlatGeoJsonCacheEntry(layer, cached);
+              cache.delete(featureKey);
+            } else {
+              continue;
+            }
+          } else if (cached) {
+            removeFlatGeoJsonCacheEntry(layer, cached);
+          }
+
           const layers = createFlatGeometryLayers(feature.geometry, {
             bubblingMouseEvents: false,
             className,
@@ -118,14 +163,30 @@ export function GeoJsonLayer<
                 renderFeatureContextMenu,
                 renderFeaturePopup,
                 renderFeatureTooltip,
-                surface,
+                surface: currentSurface,
               });
             }
 
             geometryLayer.addTo(layer);
           }
+
+          cache.set(featureKey, {
+            geometryKey,
+            layers,
+            signature,
+          });
+        }
+
+        for (const [featureKey, cached] of cache) {
+          if (seen.has(featureKey)) {
+            continue;
+          }
+
+          removeFlatGeoJsonCacheEntry(layer, cached);
+          cache.delete(featureKey);
         }
       },
+      { preserveOnRender: true, renderOnViewStateChange: false },
     );
   }, [
     featureCollection,
@@ -141,7 +202,8 @@ export function GeoJsonLayer<
     resolvedLayerId,
     selectedFeatureId,
     styleProps,
-    surface,
+    registerFlatLayer,
+    surfaceDisplay,
   ]);
 
   if (!surface || surface.display !== "globe") {
@@ -389,6 +451,93 @@ function GlobePolygon({
       strokeWidth={selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth}
     />
   ) : null;
+}
+
+type FlatGeoJsonCacheEntry<TProperties extends Record<string, unknown>> = {
+  geometryKey: string;
+  layers: FlatGeometryLayer[];
+  signature: string;
+};
+
+function getFlatGeoJsonFeatureKey<TProperties extends Record<string, unknown>>(
+  feature: GeoJsonLayerFeature<TProperties>,
+  getFeatureId?: (feature: GeoJsonLayerFeature<TProperties>) => string,
+) {
+  return getFeatureId?.(feature) || feature.id;
+}
+
+function createFlatGeoJsonGeometryKey(geometry: TemporalGeoJsonSupportedGeometry) {
+  return JSON.stringify(geometry);
+}
+
+function createFlatGeoJsonSignature<TProperties extends Record<string, unknown>>({
+  className,
+  feature,
+  interactionMode,
+  selected,
+  style,
+}: {
+  className: string;
+  feature: GeoJsonLayerFeature<TProperties>;
+  interactionMode: string;
+  selected: boolean;
+  style: Required<GeoJsonLayerStyle>;
+}) {
+  return JSON.stringify({
+    className,
+    feature: {
+      id: feature.id,
+      properties: feature.properties,
+      sourceIndex: feature.sourceIndex,
+    },
+    interactive: interactionMode === "none",
+    selected,
+    style,
+  });
+}
+
+function updateFlatGeoJsonCachedGeometry(
+  layers: FlatGeometryLayer[],
+  geometry: TemporalGeoJsonSupportedGeometry,
+) {
+  switch (geometry.type) {
+    case "Point":
+      return Boolean(layers[0]?.setLatLng?.(toLatLng(geometry.coordinates)));
+    case "MultiPoint":
+      if (layers.length !== geometry.coordinates.length) {
+        return false;
+      }
+      return geometry.coordinates.every((coordinates, index) =>
+        Boolean(layers[index]?.setLatLng?.(toLatLng(coordinates))),
+      );
+    case "LineString":
+      return Boolean(layers[0]?.setLatLngs?.(geometry.coordinates.map(toLatLng)));
+    case "MultiLineString":
+      if (layers.length !== geometry.coordinates.length) {
+        return false;
+      }
+      return geometry.coordinates.every((coordinates, index) =>
+        Boolean(layers[index]?.setLatLngs?.(coordinates.map(toLatLng))),
+      );
+    case "Polygon":
+      return Boolean(layers[0]?.setLatLngs?.(geometry.coordinates.map((ring) => ring.map(toLatLng))));
+    case "MultiPolygon":
+      if (layers.length !== geometry.coordinates.length) {
+        return false;
+      }
+      return geometry.coordinates.every((coordinates, index) =>
+        Boolean(layers[index]?.setLatLngs?.(coordinates.map((ring) => ring.map(toLatLng)))),
+      );
+  }
+}
+
+function removeFlatGeoJsonCacheEntry<TProperties extends Record<string, unknown>>(
+  layer: { removeLayer: (cachedLayer: FlatGeometryLayer) => unknown },
+  entry: FlatGeoJsonCacheEntry<TProperties>,
+) {
+  for (const cachedLayer of entry.layers) {
+    layer.removeLayer(cachedLayer);
+  }
 }
 
 function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
