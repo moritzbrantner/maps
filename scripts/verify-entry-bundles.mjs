@@ -1,12 +1,22 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
 const errors = [];
+const entrySizeBudgets = {
+  "core.js": 16_384,
+  "editor.js": 4_096,
+  "flat.js": 8_192,
+  "globe.js": 4_096,
+  "index.js": 40_960,
+  "layers.js": 4_096,
+  "timeline.js": 4_096,
+};
+const maxSharedChunkBytes = 220_000;
 
 verifyMissingImports("core", [
   "react",
@@ -24,9 +34,10 @@ verifyMissingImports("flat", [
   "topojson-client",
   "@moritzbrantner/timeline-editor",
 ]);
+verifyBundleBudgets();
 
 for (const [exportPath, exportValue] of Object.entries(packageJson.exports ?? {})) {
-  if (exportPath === "./styles.css") {
+  if (exportPath === "./package.json" || exportPath === "./styles.css") {
     continue;
   }
 
@@ -80,5 +91,37 @@ function verifyFile(exportPath) {
 
   if (!existsSync(absolutePath)) {
     errors.push(`${exportPath} is missing`);
+  }
+}
+
+function verifyBundleBudgets() {
+  const distDir = path.join(rootDir, "dist");
+
+  if (!existsSync(distDir)) {
+    errors.push("dist is missing");
+    return;
+  }
+
+  for (const [fileName, maxBytes] of Object.entries(entrySizeBudgets)) {
+    verifyBundleSize(path.join(distDir, fileName), maxBytes, `dist/${fileName}`);
+  }
+
+  for (const fileName of readdirSync(distDir)) {
+    if (/^chunk-.+\.js$/.test(fileName)) {
+      verifyBundleSize(path.join(distDir, fileName), maxSharedChunkBytes, `dist/${fileName}`);
+    }
+  }
+}
+
+function verifyBundleSize(filePath, maxBytes, label) {
+  if (!existsSync(filePath)) {
+    errors.push(`${label} is missing`);
+    return;
+  }
+
+  const size = statSync(filePath).size;
+
+  if (size > maxBytes) {
+    errors.push(`${label} is ${size} bytes, above budget ${maxBytes} bytes`);
   }
 }

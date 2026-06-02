@@ -7,7 +7,9 @@ packages/*/coverage/
 playwright-report/
 packages/*/playwright-report/
 test-results/
+benchmark-results/
 packages/*/test-results/
+packages/*/benchmark-results/
 storybook-static/
 packages/*/storybook-static/
 packages/*/*.tgz

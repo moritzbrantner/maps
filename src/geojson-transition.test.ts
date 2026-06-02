@@ -278,6 +278,58 @@ describe("@moritzbrantner/maps GeoJSON transitions", () => {
     expectGeometriesAreFiniteAndClosed(frame);
   });
 
+  test("topology-plan handles empty scene transitions deterministically", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(collection([]), collection([]), {
+        algorithm: "topology-plan",
+      }),
+      0.5,
+    );
+
+    expect(frame).toEqual({
+      features: [],
+      type: "FeatureCollection",
+    });
+  });
+
+  test("resample transition keeps extreme-latitude and date-line-like coordinates finite", () => {
+    const from = collection([
+      feature("route", {
+        coordinates: [
+          [-179.5, 84.8],
+          [0, 85],
+          [179.5, 84.9],
+        ],
+        type: "LineString",
+      }),
+    ]);
+    const to = collection([
+      feature("route", {
+        coordinates: [
+          [-178.5, 83.8],
+          [179.25, 83.9],
+        ],
+        type: "LineString",
+      }),
+    ]);
+
+    for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
+      const frame = interpolateGeoJsonTransitionPlan(
+        createGeoJsonTransitionPlan(from, to, {
+          algorithm: "resample",
+          minCoordinatesPerLine: 4,
+        }),
+        progress,
+      );
+
+      expect(
+        flattenNumbers(
+          (frame.features[0]?.geometry as { coordinates?: unknown } | undefined)?.coordinates,
+        ).every(Number.isFinite),
+      ).toBe(true);
+    }
+  });
+
   test("topology-plan splits to a target polygon with a hole", () => {
     const withHole = {
       coordinates: [squareRing(5, 0, 10, 5), squareRing(6, 1, 8, 3)],

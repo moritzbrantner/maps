@@ -1,16 +1,15 @@
-name: Publish
+name: Benchmarks
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
 
 jobs:
-  publish:
+  benchmark:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
@@ -22,16 +21,15 @@ jobs:
       - uses: actions/setup-node@v6.4.0
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install Playwright browser
-        run: bunx playwright install --with-deps chromium
+      - name: Run benchmark guardrails
+        run: bun run verify:benchmarks
 
-      - name: Verify release contract
-        run: bun run verify:release
+      - name: Run detailed benchmarks
+        run: bun run bench:temporal-geojson && bun run bench:performance
 
       - name: Upload benchmark summary
         if: always()
@@ -40,8 +38,3 @@ jobs:
           name: benchmark-results
           path: benchmark-results/
           if-no-files-found: ignore
-
-      - name: Publish package
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

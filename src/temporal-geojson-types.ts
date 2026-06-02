@@ -99,6 +99,12 @@ export type TemporalGeoJsonInterpolationOptions = {
   strategy?: TemporalGeoJsonInterpolationStrategy;
 };
 
+/**
+ * Preparation options for repeated temporal GeoJSON playback sampling.
+ *
+ * Dense geometry can be resampled once during index creation so animation
+ * frames avoid repeatedly preparing the same rings and lines.
+ */
 export type TemporalGeoJsonPlaybackIndexOptions = TemporalGeoJsonInterpolationOptions & {
   denseGeometryBehavior?: "preserve" | "resample";
   denseLineThreshold?: number;
@@ -152,6 +158,9 @@ export type TemporalGeoJsonOutputFeatureCollection<TProperties = Record<string, 
   type: "FeatureCollection";
 };
 
+/**
+ * Precomputed temporal GeoJSON sampler for playback loops and animation frames.
+ */
 export type TemporalGeoJsonPlaybackIndex<TProperties = Record<string, unknown>> = {
   getFeatureCollectionAtTime(time: number): TemporalGeoJsonOutputFeatureCollection<TProperties>;
   getTimeRange(): TemporalMapTimeRange | null;

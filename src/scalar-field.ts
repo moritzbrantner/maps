@@ -24,6 +24,12 @@ export type HeatFieldMaskGeoJson = {
   type: string;
 };
 
+/**
+ * Options for building a georeferenced scalar field from scattered point
+ * measurements. The default interpolation is deterministic IDW over the
+ * resolved domain bounds; larger grids improve visual smoothness at higher CPU
+ * and memory cost.
+ */
 export type HeatFieldOptions<TProperties = Record<string, unknown>> = {
   colorRamp?: readonly [valueOrNormalized: number, color: string][];
   domainBounds?: readonly [west: number, south: number, east: number, north: number];

@@ -209,4 +209,55 @@ describe("@moritzbrantner/maps polygon line drawing", () => {
     });
     expect(result.geometry).not.toBe(square);
   });
+
+  test("treats degenerate repeated-point lines as deterministic no-ops", () => {
+    const result = drawLineOnPolygonGeometry(square, [
+      [5, 5],
+      [5, 5],
+      [5, 5],
+    ]);
+
+    expect(result).toEqual({
+      geometry: square,
+      operation: "none",
+    });
+    expect(result.geometry).not.toBe(square);
+  });
+
+  test("splits polygons with antimeridian-like longitudes using planar coordinates", () => {
+    const result = drawLineOnPolygonGeometry(
+      {
+        coordinates: [
+          [
+            [178, -10],
+            [182, -10],
+            [182, 10],
+            [178, 10],
+            [178, -10],
+          ],
+        ],
+        type: "Polygon",
+      },
+      [
+        [180, -12],
+        [180, 12],
+      ],
+    );
+
+    expect(result.operation).toBe("split");
+    expect(result.geometry.type).toBe("MultiPolygon");
+    expect(flattenNumbers(result.geometry.coordinates).every(Number.isFinite)).toBe(true);
+  });
 });
+
+function flattenNumbers(value: unknown): number[] {
+  if (typeof value === "number") {
+    return [value];
+  }
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap(flattenNumbers);
+}

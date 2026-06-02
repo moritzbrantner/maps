@@ -33,6 +33,13 @@ export type MapViewStateChangeContext = {
   reason: MapViewStateChangeReason;
 };
 
+/**
+ * Shared viewport contract for convenience maps and MapView.
+ *
+ * Pass `viewState` with `onViewStateChange` for a controlled viewport. Pass
+ * `defaultViewState` for an uncontrolled initial viewport; `initialViewState`
+ * remains as the legacy alias.
+ */
 export type MapViewportProps = {
   viewState?: MapViewState;
   defaultViewState?: MapViewState;

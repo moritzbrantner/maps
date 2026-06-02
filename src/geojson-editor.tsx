@@ -159,6 +159,13 @@ export type GeoJsonEditOperation<
       type: "batch";
     };
 
+/**
+ * Controlled GeoJSON editor layer contract.
+ *
+ * The layer emits the next feature collection plus an operation descriptor;
+ * consumers own persistence, undo/redo, save/cancel flows, and any surrounding
+ * toolbar UI.
+ */
 export type GeoJsonEditorLayerProps<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 > = {

@@ -26,11 +26,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install Playwright browser
-        run: bunx playwright install --with-deps chromium
-
-      - name: Verify release contract
-        run: bun run verify:release
+      - name: Verify fast contract
+        run: bun run verify:fast
 
       - name: Upload Playwright report
         if: failure()

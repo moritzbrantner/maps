@@ -3,7 +3,7 @@
   "version": "0.1.4",
   "private": false,
   "description": "React map components and temporal geo utilities backed by density-aware aggregation.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/moritzbrantner/maps.git"
@@ -47,6 +47,7 @@
       "types": "./dist/timeline.d.ts",
       "import": "./dist/timeline.js"
     },
+    "./package.json": "./package.json",
     "./styles.css": "./styles.css"
   },
   "publishConfig": {
@@ -69,9 +70,13 @@
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:browser:update": "playwright test --update-snapshots",
+    "verify:api-surface": "node ./scripts/verify-api-surface.mjs",
+    "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
+    "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
-    "verify:release": "bun run check-types && bun run lint && bun run test && bun run build && bun run verify:entry-bundles && bun run test:browser && bun run bench:temporal-geojson && bun run bench:performance && bun run pack:dry"
+    "verify:fast": "bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run pack:dry",
+    "verify:release": "bun run verify:fast && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
   },
   "dependencies": {
     "@moritzbrantner/timeline-editor": "^1.0.0",

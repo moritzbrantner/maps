@@ -2,6 +2,19 @@
 
 React map components, density aggregation helpers, and temporal geo features for interactive spatial views.
 
+## Install
+
+```sh
+bun add @moritzbrantner/maps @moritzbrantner/ui react react-dom
+```
+
+```sh
+npm install @moritzbrantner/maps @moritzbrantner/ui react react-dom
+```
+
+`react` and `react-dom` are peer dependencies. The package ships ESM builds and
+CSS for browser-based React apps.
+
 ## Main APIs
 
 - `PointMap`, `BubbleMap`, `FlowMap`, `ClusteredMap`, `HeatMap`, `TemporalClusteredMap`, and `TemporalHeatMap`
@@ -9,6 +22,22 @@ React map components, density aggregation helpers, and temporal geo features for
 - `createPointAggregationIndex(...)`, `createHeatMapDensityIndex(...)`, and `createTemporalMapTracksFromGeoJson(...)`
 - `createTemporalGeoJsonTracksFromGeoJson(...)`, `getTemporalGeoJsonFeatureCollectionAtTime(...)`, and `createTemporalGeoJsonPlaybackIndex(...)`
 - `drawLineOnPolygonGeometry(...)` for turning drawn lines into polygon holes or splits
+
+## Entry points
+
+| Entry point | Use when |
+| --- | --- |
+| `@moritzbrantner/maps` | You want the full public API from one import path. |
+| `@moritzbrantner/maps/core` | You only need data transforms, aggregation, measurement, heat-field, or temporal GeoJSON helpers. |
+| `@moritzbrantner/maps/layers` | You compose layers inside `MapView` and do not need convenience map wrappers. |
+| `@moritzbrantner/maps/flat` | You only render flat MapLibre-backed map wrappers. |
+| `@moritzbrantner/maps/globe` | You only render globe wrappers or globe basemap helpers. |
+| `@moritzbrantner/maps/editor` | You need GeoJSON editing components and edit-operation helpers. |
+| `@moritzbrantner/maps/timeline` | You need GeoJSON timeline transforms and transition helpers. |
+| `@moritzbrantner/maps/styles.css` | You need the package stylesheet. Import this once in the app shell. |
+
+`@moritzbrantner/maps/package.json` is exported for tooling that needs package
+metadata.
 
 ## Styles
 
@@ -20,6 +49,28 @@ import "@moritzbrantner/maps/styles.css";
 
 The package also expects the consuming app to import one `@moritzbrantner/ui`
 stylesheet, because map controls use shared UI primitives.
+
+The stylesheet imports Tailwind CSS and MapLibre GL CSS. Consumers using Vite
+should include the Tailwind Vite plugin or otherwise run Tailwind over app CSS.
+Tailwind is intentionally a runtime dependency of this package so the shipped
+stylesheet can resolve `@import "tailwindcss";`.
+
+## Runtime environment
+
+All React entry points are client components and start with `"use client"`.
+In Next.js or other SSR frameworks, render map components from client
+components only. Data-only helpers from `@moritzbrantner/maps/core` can be used
+outside React, but browser map rendering depends on DOM APIs, MapLibre GL, and
+WebGL/canvas support.
+
+Scalar field rendering uses the TypeScript implementation by default.
+`initializeMapsScalarFieldWasm(...)` can opt into the optional
+`@moritzbrantner/viz-engine` runtime when it is available; if initialization
+fails, `createScalarFieldGrid(...)` continues through the TypeScript fallback
+and `getMapsScalarFieldWasmLoadError()` exposes the last load failure.
+Temporal geometry resampling kernels also default to TypeScript. Their optional
+WASM runtime is internal and falls back automatically when no public kernel
+package is configured.
 
 ## Clustered maps
 

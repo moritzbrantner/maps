@@ -1229,6 +1229,44 @@ describe("@moritzbrantner/maps temporal GeoJSON geometries", () => {
       getTemporalGeoJsonFeatureCollectionAtTime(tracks, 5),
     );
   });
+
+  test("interpolates extreme geographic coordinates without producing invalid numbers", () => {
+    const geometry = interpolateTemporalGeoJsonGeometry(
+      {
+        coordinates: [
+          [-179.8, 84.7],
+          [0, 85],
+          [179.8, 84.7],
+        ],
+        type: "LineString",
+      },
+      {
+        coordinates: [
+          [-178.4, 83.9],
+          [179.4, 83.8],
+        ],
+        type: "LineString",
+      },
+      0.5,
+      {
+        minResampleCoordinates: 4,
+        strategy: "resample",
+      },
+    );
+
+    expect(geometry?.type).toBe("LineString");
+    expect(flattenNumbers(geometry?.coordinates).every(Number.isFinite)).toBe(true);
+  });
+
+  test("prepared playback index returns deterministic empty output for empty track lists", () => {
+    const index = createTemporalGeoJsonPlaybackIndex([]);
+
+    expect(index.getTimeRange()).toBeNull();
+    expect(index.getFeatureCollectionAtTime(0)).toEqual({
+      features: [],
+      type: "FeatureCollection",
+    });
+  });
 });
 
 function temporalGeometryFeature(
@@ -1264,4 +1302,16 @@ function createDenseRing(pointCount: number, radius: number, offsetX: number, of
   coordinates.push([...coordinates[0]!] as [number, number]);
 
   return coordinates;
+}
+
+function flattenNumbers(value: unknown): number[] {
+  if (typeof value === "number") {
+    return [value];
+  }
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap(flattenNumbers);
 }

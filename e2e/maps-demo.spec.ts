@@ -305,6 +305,33 @@ test("Mobile layout does not overflow horizontally on any top-level tab", async 
   }
 });
 
+for (const view of ["Editor", "Globe", "Heat", "Timeline"] as const) {
+  test(`${view} mobile visual baseline`, async ({ page }) => {
+    await page.setViewportSize({ height: 844, width: 390 });
+    await page.goto("/?e2e=1");
+    await page.addStyleTag({
+      content: `
+        *, *::before, *::after {
+          animation-duration: 0s !important;
+          transition-duration: 0s !important;
+        }
+
+        .flat-tile-pane {
+          opacity: 0 !important;
+        }
+
+        .mb-maps {
+          background: #eef2f7 !important;
+        }
+      `,
+    });
+
+    await openView(page, view, { clickMethod: "keyboard" });
+    await expect(page.getByRole("tab", { name: view })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("main")).toHaveScreenshot(`${view.toLowerCase()}-mobile.png`);
+  });
+}
+
 async function openView(
   page: Page,
   view: string,
