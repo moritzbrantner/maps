@@ -338,7 +338,15 @@ const demoTimelineGeoJsonCollection: TemporalGeoJsonGeometryFeatureCollection<De
         ],
         type: "MultiPoint",
       }),
-      timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 30, {
+      timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 0, {
+        coordinates: [
+          [2.3522, 48.8566],
+          [4.9041, 52.3676],
+          [9.9937, 53.551],
+        ],
+        type: "LineString",
+      }),
+      timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 60, {
         coordinates: [
           [4.9041, 52.3676],
           [9.9937, 53.551],
@@ -347,15 +355,21 @@ const demoTimelineGeoJsonCollection: TemporalGeoJsonGeometryFeatureCollection<De
         ],
         type: "LineString",
       }),
-      timelineGeoJsonFeature("timeline-nordic-corridor", "corridor", "Nordic winter corridor", 90, {
-        coordinates: [
-          [9.9937, 53.551],
-          [12.5683, 55.6761],
-          [18.0686, 59.3293],
-          [24.9384, 60.1699],
-        ],
-        type: "LineString",
-      }),
+      timelineGeoJsonFeature(
+        "timeline-nordic-corridor",
+        "corridor",
+        "Nordic winter corridor",
+        120,
+        {
+          coordinates: [
+            [9.9937, 53.551],
+            [12.5683, 55.6761],
+            [18.0686, 59.3293],
+            [24.9384, 60.1699],
+          ],
+          type: "LineString",
+        },
+      ),
       timelineGeoJsonFeature(
         "timeline-baltic-branches",
         "branch-corridors",
@@ -475,31 +489,156 @@ const demoTimelineGeoJsonCollection: TemporalGeoJsonGeometryFeatureCollection<De
         "timeline-iberia-window",
         "operating-area",
         "Iberian operating window",
-        100,
+        120,
         {
           coordinates: [
             [
               [
-                [-8.8, 37.2],
-                [-2.5, 38.1],
-                [-2.8, 41.6],
-                [-8.7, 40.9],
-                [-8.8, 37.2],
+                [-7.8, 37.0],
+                [-1.6, 38.4],
+                [-2.1, 42.2],
+                [-7.8, 41.4],
+                [-7.8, 37.0],
               ],
             ],
             [
               [
-                [0.0, 40.0],
-                [3.6, 40.5],
-                [3.3, 43.2],
-                [0.2, 42.7],
-                [0.0, 40.0],
+                [0.8, 40.1],
+                [4.4, 40.9],
+                [4.1, 43.7],
+                [0.9, 43.1],
+                [0.8, 40.1],
               ],
             ],
           ],
           type: "MultiPolygon",
         },
-        false,
+      ),
+      timelineGeoJsonFeature("timeline-mobile-depots", "checkpoint", "Mobile depots", 0, {
+        coordinates: [
+          [13.405, 52.52],
+          [11.582, 48.1351],
+          [16.3738, 48.2082],
+        ],
+        type: "MultiPoint",
+      }),
+      timelineGeoJsonFeature("timeline-mobile-depots", "checkpoint", "Mobile depots", 60, {
+        coordinates: [
+          [9.9937, 53.551],
+          [8.5417, 47.3769],
+          [14.4378, 50.0755],
+        ],
+        type: "MultiPoint",
+      }),
+      timelineGeoJsonFeature("timeline-mobile-depots", "checkpoint", "Mobile depots", 120, {
+        coordinates: [
+          [12.5683, 55.6761],
+          [9.19, 45.4642],
+          [19.0402, 47.4979],
+        ],
+        type: "MultiPoint",
+      }),
+      timelineGeoJsonFeature("timeline-rhine-spline", "corridor", "Rhine service spline", 0, {
+        coordinates: [
+          [7.5886, 47.5596],
+          [7.4653, 50.0014],
+          [6.9603, 50.9375],
+        ],
+        type: "LineString",
+      }),
+      timelineGeoJsonFeature("timeline-rhine-spline", "corridor", "Rhine service spline", 60, {
+        coordinates: [
+          [6.1432, 46.2044],
+          [7.7521, 48.5734],
+          [6.9603, 50.9375],
+          [4.9041, 52.3676],
+        ],
+        type: "LineString",
+      }),
+      timelineGeoJsonFeature("timeline-rhine-spline", "corridor", "Rhine service spline", 120, {
+        coordinates: [
+          [5.3698, 43.2965],
+          [4.8357, 45.764],
+          [2.3522, 48.8566],
+          [4.3517, 50.8503],
+          [4.9041, 52.3676],
+        ],
+        type: "LineString",
+      }),
+      timelineGeoJsonFeature(
+        "timeline-central-nested-zone",
+        "operating-area",
+        "Central nested service zone",
+        0,
+        {
+          coordinates: [
+            [
+              [10.0, 48.0],
+              [15.0, 48.2],
+              [15.4, 51.5],
+              [9.6, 51.2],
+              [10.0, 48.0],
+            ],
+            [
+              [11.6, 49.1],
+              [13.0, 49.1],
+              [13.1, 50.0],
+              [11.7, 49.9],
+              [11.6, 49.1],
+            ],
+          ],
+          type: "Polygon",
+        },
+      ),
+      timelineGeoJsonFeature(
+        "timeline-central-nested-zone",
+        "operating-area",
+        "Central nested service zone",
+        60,
+        {
+          coordinates: [
+            [
+              [9.1, 47.6],
+              [15.7, 48.0],
+              [15.2, 52.0],
+              [9.4, 51.4],
+              [9.1, 47.6],
+            ],
+            [
+              [11.1, 49.0],
+              [13.4, 49.3],
+              [12.9, 50.4],
+              [11.2, 50.0],
+              [11.1, 49.0],
+            ],
+          ],
+          type: "Polygon",
+        },
+      ),
+      timelineGeoJsonFeature(
+        "timeline-central-nested-zone",
+        "operating-area",
+        "Central nested service zone",
+        120,
+        {
+          coordinates: [
+            [
+              [8.8, 47.1],
+              [16.4, 47.8],
+              [15.6, 52.4],
+              [9.1, 51.8],
+              [8.8, 47.1],
+            ],
+            [
+              [10.9, 48.9],
+              [13.8, 49.4],
+              [13.2, 50.7],
+              [11.0, 50.2],
+              [10.9, 48.9],
+            ],
+          ],
+          type: "Polygon",
+        },
       ),
     ],
     type: "FeatureCollection",
@@ -1578,6 +1717,10 @@ function renderMap(
             renderFeaturePopup: (feature) => renderDemoTimelineGeoJsonPopup(feature, temporalTime),
             renderFeatureTooltip: renderDemoTimelineGeoJsonTooltip,
           }}
+          geoJsonPlaybackOptions={{
+            minResampleCoordinates: 28,
+            strategy: "resample",
+          }}
           initialViewState={demoTimelineViewState}
           loopPlayback
           mapLabel="European logistics timeline"
@@ -1882,7 +2025,7 @@ function getDemoTimelineInterpolationInfo(trackId: string, activeTime: number) {
       : Math.min(Math.max((activeTime - previous.time) / (next.time - previous.time), 0), 1);
   const method =
     previous.geometryType === next.geometryType
-      ? `Compatible ${previous.geometryType} interpolation`
+      ? `${getDemoTimelineInterpolationMethod(previous.geometryType)} interpolation`
       : `Hold fallback from ${previous.geometryType} to ${next.geometryType}`;
 
   return {
@@ -1891,6 +2034,18 @@ function getDemoTimelineInterpolationInfo(trackId: string, activeTime: number) {
       progress * 100,
     )}%)`,
   };
+}
+
+function getDemoTimelineInterpolationMethod(geometryType: string) {
+  switch (geometryType) {
+    case "LineString":
+    case "MultiLineString":
+    case "Polygon":
+    case "MultiPolygon":
+      return `Resampled ${geometryType}`;
+    default:
+      return `Compatible ${geometryType}`;
+  }
 }
 
 function findPreviousDemoTimelineFrameIndex(frames: Array<{ time: number }>, activeTime: number) {
@@ -2506,6 +2661,33 @@ function createDemoInterpolationExamples(): DemoInterpolationExample[] {
       pair: createDemoConcavePolygonPair(),
     },
     {
+      defaultStrategy: "vertex-union",
+      description:
+        "The shell winds in the opposite direction at the end keyframe, testing ring orientation alignment before blending.",
+      geometryType: "Polygon",
+      id: "polygon-reversed-ring",
+      label: "Polygon: reversed ring",
+      pair: createDemoReversedRingPolygonPair(),
+    },
+    {
+      defaultStrategy: "vertex-union",
+      description:
+        "The end keyframe introduces an interior ring. Vertex union collapses the missing start hole to its centroid.",
+      geometryType: "Polygon",
+      id: "polygon-hole-appears",
+      label: "Polygon: hole appears",
+      pair: createDemoPolygonHoleAppearsPair(),
+    },
+    {
+      defaultStrategy: "centroid-radial",
+      description:
+        "A thin service sliver expands into a broad area, stressing centroid sampling and very uneven edge lengths.",
+      geometryType: "Polygon",
+      id: "polygon-sliver-expansion",
+      label: "Polygon: sliver expansion",
+      pair: createDemoSliverPolygonPair(),
+    },
+    {
       defaultStrategy: "resample",
       description:
         "A route changes point density between keyframes; resample creates matching intermediate points.",
@@ -2516,11 +2698,29 @@ function createDemoInterpolationExamples(): DemoInterpolationExample[] {
     },
     {
       defaultStrategy: "resample",
+      description:
+        "A sparse direct route becomes a long zig-zag corridor, making resampled intermediate vertices visible.",
+      geometryType: "LineString",
+      id: "line-zigzag-growth",
+      label: "LineString: zig-zag growth",
+      pair: createDemoZigZagLinePair(),
+    },
+    {
+      defaultStrategy: "resample",
       description: "Two branch lines stay as two parts, but each branch bends and changes length.",
       geometryType: "MultiLineString",
       id: "multiline-branches",
       label: "MultiLineString: branches",
       pair: createDemoInterpolationGeometryPair("MultiLineString"),
+    },
+    {
+      defaultStrategy: "resample",
+      description:
+        "The end keyframe drops one branch, so multipart line interpolation falls back because part counts differ.",
+      geometryType: "MultiLineString",
+      id: "multiline-missing-branch",
+      label: "MultiLineString: missing branch",
+      pair: createDemoMultiLineMissingBranchPair(),
     },
     {
       defaultStrategy: "compatible",
@@ -2559,6 +2759,18 @@ function createDemoInterpolationExamples(): DemoInterpolationExample[] {
       pair: {
         end: createDemoInterpolationGeometryPair("MultiPolygon").end,
         start: createDemoInterpolationGeometryPair("Polygon").start,
+      },
+    },
+    {
+      defaultStrategy: "hold",
+      description:
+        "The geometry type changes from LineString to MultiLineString, exercising the fallback path for incompatible line primitives.",
+      geometryType: "LineString",
+      id: "line-to-multiline-fallback",
+      label: "Type change: LineString to MultiLineString",
+      pair: {
+        end: createDemoInterpolationGeometryPair("MultiLineString").end,
+        start: createDemoInterpolationGeometryPair("LineString").start,
       },
     },
     {
@@ -3058,6 +3270,90 @@ function createDemoConcavePolygonPair(): DemoInterpolationGeometryPair {
   };
 }
 
+function createDemoReversedRingPolygonPair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [
+          [6.2, 48.9],
+          [13.3, 48.5],
+          [12.4, 45.1],
+          [5.9, 45.6],
+          [6.2, 48.9],
+        ],
+      ],
+      type: "Polygon",
+    },
+    start: createDemoInterpolationGeometryPair("Polygon").start,
+  };
+}
+
+function createDemoPolygonHoleAppearsPair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [
+          [5.6, 45.3],
+          [13.4, 45.4],
+          [13.1, 49.4],
+          [5.9, 49.0],
+          [5.6, 45.3],
+        ],
+        [
+          [8.4, 46.7],
+          [10.8, 46.8],
+          [10.6, 48.0],
+          [8.7, 47.9],
+          [8.4, 46.7],
+        ],
+      ],
+      type: "Polygon",
+    },
+    start: {
+      coordinates: [
+        [
+          [6.4, 45.6],
+          [12.2, 45.6],
+          [12.2, 48.6],
+          [6.4, 48.6],
+          [6.4, 45.6],
+        ],
+      ],
+      type: "Polygon",
+    },
+  };
+}
+
+function createDemoSliverPolygonPair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [
+          [4.8, 44.9],
+          [13.5, 45.8],
+          [14.0, 49.5],
+          [8.8, 48.7],
+          [5.2, 50.2],
+          [4.8, 44.9],
+        ],
+      ],
+      type: "Polygon",
+    },
+    start: {
+      coordinates: [
+        [
+          [6.8, 45.1],
+          [12.8, 45.4],
+          [12.2, 46.0],
+          [6.6, 45.6],
+          [6.8, 45.1],
+        ],
+      ],
+      type: "Polygon",
+    },
+  };
+}
+
 function createDemoLineDensityPair(): DemoInterpolationGeometryPair {
   return {
     end: {
@@ -3079,6 +3375,47 @@ function createDemoLineDensityPair(): DemoInterpolationGeometryPair {
       ],
       type: "LineString",
     },
+  };
+}
+
+function createDemoZigZagLinePair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [-8.9, 39.0],
+        [-5.2, 43.2],
+        [-1.4, 40.6],
+        [2.4, 45.2],
+        [6.8, 42.4],
+        [11.8, 48.8],
+      ],
+      type: "LineString",
+    },
+    start: {
+      coordinates: [
+        [-8.9, 39.0],
+        [2.0, 42.0],
+        [11.8, 48.8],
+      ],
+      type: "LineString",
+    },
+  };
+}
+
+function createDemoMultiLineMissingBranchPair(): DemoInterpolationGeometryPair {
+  return {
+    end: {
+      coordinates: [
+        [
+          [4.9, 52.36],
+          [9.99, 53.55],
+          [12.56, 55.67],
+          [18.06, 59.32],
+        ],
+      ],
+      type: "MultiLineString",
+    },
+    start: createDemoInterpolationGeometryPair("MultiLineString").start,
   };
 }
 
