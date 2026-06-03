@@ -9,9 +9,11 @@ import {
   MapView,
   applyGeoJsonEditOperation,
   createGeoJsonEditFeature,
+  moveGeoJsonGeometry,
   validateGeoJsonEditableGeometry,
   type GeoJsonEditOperation,
   type TemporalGeoJsonGeometryFeatureCollection,
+  type TemporalGeoJsonSupportedGeometry,
 } from ".";
 
 const flatMock = vi.hoisted(() => {
@@ -379,6 +381,46 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
         ],
       ],
       type: "Polygon",
+    });
+  });
+
+  test("clips moved polygons to a polygon constraint", () => {
+    const moved = moveGeoJsonGeometry(
+      {
+        coordinates: [
+          [
+            [0, 0],
+            [4, 0],
+            [4, 4],
+            [0, 4],
+            [0, 0],
+          ],
+        ],
+        type: "Polygon",
+      },
+      1,
+      0,
+      {
+        polygonConstraint: {
+          coordinates: [
+            [
+              [2, -1],
+              [6, -1],
+              [6, 5],
+              [2, 5],
+              [2, -1],
+            ],
+          ],
+          type: "Polygon",
+        },
+      },
+    );
+
+    expect(getGeometryBounds(moved)).toEqual({
+      east: 5,
+      north: 4,
+      south: 0,
+      west: 2,
     });
   });
 
@@ -1007,3 +1049,29 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     expect(onFeatureCollectionChange).not.toHaveBeenCalled();
   });
 });
+
+function getGeometryBounds(geometry: TemporalGeoJsonSupportedGeometry | null) {
+  expect(geometry).not.toBeNull();
+
+  const positions =
+    geometry?.type === "Polygon"
+      ? geometry.coordinates.flat()
+      : geometry?.type === "MultiPolygon"
+        ? geometry.coordinates.flat(2)
+        : [];
+
+  return positions.reduce(
+    (bounds, position) => ({
+      east: Math.max(bounds.east, position[0]),
+      north: Math.max(bounds.north, position[1]),
+      south: Math.min(bounds.south, position[1]),
+      west: Math.min(bounds.west, position[0]),
+    }),
+    {
+      east: Number.NEGATIVE_INFINITY,
+      north: Number.NEGATIVE_INFINITY,
+      south: Number.POSITIVE_INFINITY,
+      west: Number.POSITIVE_INFINITY,
+    },
+  );
+}

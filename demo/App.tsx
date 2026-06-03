@@ -43,7 +43,9 @@ import {
   type MapViewState,
   type GeoJsonEditMode,
   type GeoJsonEditorSelection,
+  type GeoJsonPolygonConstraint,
   createGeoJsonTransitionPlan,
+  constrainGeoJsonGeometryToPolygon,
   interpolateGeoJsonTransitionPlan,
   type GeoJsonTopologyStrategy,
   type TemporalGeoJsonGeometryFeature,
@@ -769,6 +771,44 @@ const demoTopologyStrategies: Array<{
 ];
 
 const demoInterpolationExamples = createDemoInterpolationExamples();
+const demoInterpolationLandmassConstraint = {
+  coordinates: [
+    [
+      [-10.2, 36.5],
+      [-5.5, 36.5],
+      [-2.5, 38.0],
+      [1.0, 40.5],
+      [5.5, 43.4],
+      [10.6, 44.2],
+      [17.6, 47.8],
+      [24.8, 53.5],
+      [21.0, 59.5],
+      [12.0, 61.2],
+      [3.8, 57.8],
+      [-1.5, 54.8],
+      [-6.5, 50.7],
+      [-9.8, 45.2],
+      [-10.2, 36.5],
+    ],
+  ],
+  type: "Polygon",
+} satisfies Extract<TemporalGeoJsonSupportedGeometry, { type: "Polygon" }>;
+const demoInterpolationLandmassCollection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> =
+  {
+    features: [
+      {
+        geometry: demoInterpolationLandmassConstraint,
+        properties: {
+          kind: "interpolation-constraint",
+          label: "Landmass constraint",
+          time: 0,
+          trackId: "interpolation-constraint",
+        },
+        type: "Feature",
+      },
+    ],
+    type: "FeatureCollection",
+  };
 
 const editorModes: Array<{ id: GeoJsonEditMode; label: string }> = [
   { id: "select", label: "Select" },
@@ -2071,6 +2111,7 @@ function GeoJsonInterpolationWorkbench() {
   const [topologyStrategy, setTopologyStrategy] =
     useState<Exclude<GeoJsonTopologyStrategy, "bounds">>("area-overlap");
   const [progress, setProgress] = useState(50);
+  const [constrainToLandmass, setConstrainToLandmass] = useState(false);
   const [selectedKeyframe, setSelectedKeyframe] = useState<DemoInterpolationKeyframeId>("end");
   const [selectedHandleIndex, setSelectedHandleIndex] = useState(0);
   const [geometries, setGeometries] = useState<Record<string, DemoInterpolationGeometryPair>>(() =>
@@ -2090,7 +2131,8 @@ function GeoJsonInterpolationWorkbench() {
       ? getDemoInterpolationPosition(geometryPair[selectedKeyframe], selectedHandle.path)
       : ([0, 0] as [number, number]);
   const progressTime = progress / 100;
-  const interpolatedCollection = useMemo(() => {
+  const canConstrainToLandmass = isDemoPolygonLikeGeometryType(geometryType);
+  const rawInterpolatedCollection = useMemo(() => {
     if (topologyPair) {
       if (progressTime <= 0) {
         return topologyPair.start;
@@ -2134,6 +2176,13 @@ function GeoJsonInterpolationWorkbench() {
       },
     );
   }, [geometryPair, geometryType, progressTime, strategy, topologyPair, topologyStrategy]);
+  const interpolatedCollection =
+    constrainToLandmass && canConstrainToLandmass
+      ? constrainDemoInterpolationCollection(
+          rawInterpolatedCollection,
+          demoInterpolationLandmassConstraint,
+        )
+      : rawInterpolatedCollection;
   const startCollection = topologyPair
     ? topologyPair.start
     : createDemoInterpolationFeatureCollection("start", "Start keyframe", geometryPair!.start);
@@ -2242,6 +2291,14 @@ function GeoJsonInterpolationWorkbench() {
             layerId="interpolation-end"
             renderFeatureTooltip={() => "End keyframe"}
           />
+          {constrainToLandmass && canConstrainToLandmass ? (
+            <GeoJsonLayer
+              featureCollection={demoInterpolationLandmassCollection}
+              getFeatureStyle={() => getDemoInterpolationConstraintLayerStyle()}
+              layerId="interpolation-constraint"
+              renderFeatureTooltip={() => "Constraint polygon"}
+            />
+          ) : null}
           <GeoJsonLayer
             featureCollection={interpolatedCollection}
             getFeatureStyle={(feature) =>
@@ -2342,6 +2399,19 @@ function GeoJsonInterpolationWorkbench() {
                 "Uses the selected temporal GeoJSON interpolation mode.")}
           </span>
         </div>
+
+        <label
+          className="demo-interpolation-toggle"
+          aria-disabled={!canConstrainToLandmass}
+        >
+          <input
+            checked={constrainToLandmass && canConstrainToLandmass}
+            disabled={!canConstrainToLandmass}
+            type="checkbox"
+            onChange={(event) => setConstrainToLandmass(event.target.checked)}
+          />
+          <span>Constrain to landmass</span>
+        </label>
 
         <label className="demo-interpolation-range">
           <span>
@@ -2527,6 +2597,15 @@ function getDemoInterpolationLayerStyle(
   };
 }
 
+function getDemoInterpolationConstraintLayerStyle() {
+  return {
+    polygonFillColor: "#0f766e",
+    polygonFillOpacity: 0.08,
+    polygonStrokeColor: "#0f766e",
+    polygonStrokeWidth: 2,
+  };
+}
+
 function getDemoInterpolationPreviewLayerStyle(
   feature: GeoJsonLayerFeature<DemoGeoJsonProperties>,
   geometryType: DemoInterpolationGeometryType,
@@ -2579,6 +2658,31 @@ function getDemoInterpolationPreviewLayerStyle(
   }
 
   return getDemoInterpolationLayerStyle("preview", geometryType);
+}
+
+function constrainDemoInterpolationCollection(
+  collection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
+  constraint: GeoJsonPolygonConstraint,
+): TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> {
+  return {
+    ...collection,
+    features: collection.features.flatMap((feature) => {
+      const constrainedGeometry = constrainGeoJsonGeometryToPolygon(feature.geometry, constraint);
+
+      return constrainedGeometry
+        ? [
+            {
+              ...feature,
+              geometry: constrainedGeometry,
+            },
+          ]
+        : [];
+    }),
+  };
+}
+
+function isDemoPolygonLikeGeometryType(geometryType: DemoInterpolationGeometryType) {
+  return geometryType === "Polygon" || geometryType === "MultiPolygon";
 }
 
 function readDemoTransitionKind(properties: unknown) {

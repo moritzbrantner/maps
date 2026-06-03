@@ -6,6 +6,7 @@ import {
   getGeoJsonTimelineSceneAtTime,
   setGeoJsonTimelineFeatureTransform,
   type TemporalGeoJsonGeometryFeatureCollection,
+  type TemporalGeoJsonSupportedGeometry,
 } from ".";
 
 const collection = {
@@ -62,6 +63,43 @@ describe("@moritzbrantner/maps GeoJSON timeline", () => {
     expect(collection.features[0]?.geometry).toEqual({
       coordinates: [10, 50],
       type: "Point",
+    });
+  });
+
+  test("clips polygon timeline transforms to a polygon constraint", () => {
+    const polygonCollection = {
+      features: [sceneFeature("land-use", 0, 4_000, square(0, 0, 4, 4))],
+      type: "FeatureCollection",
+    } satisfies TemporalGeoJsonGeometryFeatureCollection;
+    const document = setGeoJsonTimelineFeatureTransform(
+      createGeoJsonTimelineDocument(polygonCollection, { durationMs: 4_000 }),
+      "land-use",
+      {
+        points: [
+          { offsetMs: 0, values: { longitudeOffset: 0 } },
+          { offsetMs: 4_000, values: { longitudeOffset: 2 } },
+        ],
+      },
+    );
+
+    const transformed = getGeoJsonTimelineFeatureCollectionAtTime(
+      polygonCollection,
+      document,
+      2_000,
+      {
+        polygonConstraint: square(2, -1, 6, 5),
+      },
+    );
+
+    expect(
+      getGeometryBounds(
+        (transformed.features[0]?.geometry ?? null) as TemporalGeoJsonSupportedGeometry | null,
+      ),
+    ).toEqual({
+      east: 5,
+      north: 4,
+      south: 0,
+      west: 2,
     });
   });
 
@@ -346,7 +384,12 @@ function sceneFeature(
   };
 }
 
-function square(west: number, south: number, east: number, north: number) {
+function square(
+  west: number,
+  south: number,
+  east: number,
+  north: number,
+): Extract<TemporalGeoJsonSupportedGeometry, { type: "Polygon" }> {
   return {
     coordinates: [
       [
@@ -379,6 +422,32 @@ function expectGeometriesAreFiniteAndClosed(collection: TemporalGeoJsonGeometryF
       }
     }
   }
+}
+
+function getGeometryBounds(geometry: TemporalGeoJsonSupportedGeometry | null) {
+  expect(geometry).not.toBeNull();
+
+  const positions =
+    geometry?.type === "Polygon"
+      ? geometry.coordinates.flat()
+      : geometry?.type === "MultiPolygon"
+        ? geometry.coordinates.flat(2)
+        : [];
+
+  return positions.reduce(
+    (bounds, position) => ({
+      east: Math.max(bounds.east, position[0]),
+      north: Math.max(bounds.north, position[1]),
+      south: Math.min(bounds.south, position[1]),
+      west: Math.min(bounds.west, position[0]),
+    }),
+    {
+      east: Number.NEGATIVE_INFINITY,
+      north: Number.NEGATIVE_INFINITY,
+      south: Number.POSITIVE_INFINITY,
+      west: Number.POSITIVE_INFINITY,
+    },
+  );
 }
 
 function flattenNumbers(value: unknown): number[] {

@@ -49,6 +49,7 @@ import {
   applyGeoJsonEditOperationWithResolver,
   arePositionsEqual,
   cloneFeature,
+  constrainGeoJsonGeometryToPolygon,
   createGeoJsonEditFeature,
   insertGeoJsonVertex,
   moveGeoJsonGeometry,
@@ -57,16 +58,20 @@ import {
   resolveFeatureId,
   setGeoJsonVertex,
   validateEditOperation,
+  type GeoJsonPolygonConstraint,
 } from "./geojson-editor-operations";
 
 export {
   applyGeoJsonEditOperation,
+  constrainGeoJsonGeometryToPolygon,
   createGeoJsonEditFeature,
   insertGeoJsonVertex,
   moveGeoJsonGeometry,
   removeGeoJsonVertex,
   setGeoJsonVertex,
   validateGeoJsonEditableGeometry,
+  type GeoJsonGeometryTransformOptions,
+  type GeoJsonPolygonConstraint,
 } from "./geojson-editor-operations";
 
 export type GeoJsonEditMode =
@@ -208,6 +213,7 @@ export type GeoJsonEditorLayerProps<
     operation: GeoJsonEditOperation<TProperties>,
   ) => void;
   onSelectionChange?: (featureId: string | null) => void;
+  polygonConstraint?: GeoJsonPolygonConstraint;
   selectedFeatureIds?: readonly string[];
   selectedFeatureId?: string | null;
   selection?: GeoJsonEditorSelection;
@@ -329,6 +335,7 @@ export function GeoJsonEditorLayer<
   onEditorSelectionChange,
   onFeatureCollectionChange,
   onSelectionChange,
+  polygonConstraint,
   selectedFeatureIds,
   selectedFeatureId,
   selection,
@@ -364,6 +371,7 @@ export function GeoJsonEditorLayer<
     onEditorSelectionChange,
     onFeatureCollectionChange,
     onSelectionChange,
+    polygonConstraint,
     resolvedSelection: EMPTY_EDITOR_SELECTION,
     selectedFeatureId,
     selectedFeatureIds,
@@ -412,6 +420,7 @@ export function GeoJsonEditorLayer<
       onEditorSelectionChange,
       onFeatureCollectionChange,
       onSelectionChange,
+      polygonConstraint,
       resolvedSelection,
       selectedFeatureId,
       selectedFeatureIds,
@@ -431,6 +440,7 @@ export function GeoJsonEditorLayer<
     onEditorSelectionChange,
     onFeatureCollectionChange,
     onSelectionChange,
+    polygonConstraint,
     resolvedSelection,
     selectedFeatureId,
     selectedFeatureIds,
@@ -736,8 +746,16 @@ export function GeoJsonEditorLayer<
             type: "create",
           } satisfies GeoJsonEditOperation<TProperties>)
         : (operationOrFeature as GeoJsonEditOperation<TProperties>);
+    const constrainedOperation = applyPolygonConstraintToEditOperation(
+      operation,
+      current.polygonConstraint,
+    );
 
-    const validation = validateEditOperation(operation, current.validateEdit);
+    if (!constrainedOperation) {
+      return;
+    }
+
+    const validation = validateEditOperation(constrainedOperation, current.validateEdit);
 
     if (!validation.valid) {
       return;
@@ -745,20 +763,22 @@ export function GeoJsonEditorLayer<
 
     const next = applyGeoJsonEditOperationWithResolver(
       current.featureCollection,
-      operation,
+      constrainedOperation,
       current.getFeatureId,
     );
 
-    current.onFeatureCollectionChange?.(next, operation);
+    current.onFeatureCollectionChange?.(next, constrainedOperation);
 
     if (nextSelection) {
       emitEditorSelection(nextSelection);
       return;
     }
 
-    if (operation.type === "create" || operation.type === "update") {
-      emitEditorSelection(createEditorSelection([operation.featureId], operation.featureId));
-    } else if (operation.type === "delete") {
+    if (constrainedOperation.type === "create" || constrainedOperation.type === "update") {
+      emitEditorSelection(
+        createEditorSelection([constrainedOperation.featureId], constrainedOperation.featureId),
+      );
+    } else if (constrainedOperation.type === "delete") {
       emitEditorSelection(EMPTY_EDITOR_SELECTION);
     }
   }
@@ -1106,6 +1126,47 @@ export function GeoJsonEditorLayer<
     return {
       ...latestRef.current.resolvedSelection,
       vertexHandle: null,
+    };
+  }
+
+  function applyPolygonConstraintToEditOperation(
+    operation: GeoJsonEditOperation<TProperties>,
+    constraint: GeoJsonPolygonConstraint,
+  ): GeoJsonEditOperation<TProperties> | null {
+    if (!constraint || operation.type === "delete") {
+      return operation;
+    }
+
+    if (operation.type === "batch") {
+      const operations = operation.operations.flatMap((childOperation) => {
+        const constrainedChild = applyPolygonConstraintToEditOperation(childOperation, constraint);
+
+        return constrainedChild ? [constrainedChild] : [];
+      });
+
+      return operations.length > 0
+        ? {
+            ...operation,
+            operations,
+          }
+        : null;
+    }
+
+    const geometry = normalizeSupportedGeometry(operation.feature.geometry);
+    const constrainedGeometry = geometry
+      ? constrainGeoJsonGeometryToPolygon(geometry, constraint)
+      : null;
+
+    if (!constrainedGeometry) {
+      return null;
+    }
+
+    return {
+      ...operation,
+      feature: {
+        ...cloneFeature(operation.feature),
+        geometry: constrainedGeometry,
+      },
     };
   }
 

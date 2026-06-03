@@ -144,6 +144,12 @@ test("Interpolation view exposes algorithm and keyframe controls", async ({ page
   const interpolationPanel = page.locator(".demo-interpolation-panel");
 
   await expect(page.getByLabel("GeoJSON interpolation preview")).toBeVisible();
+  const landmassToggle = interpolationPanel.getByLabel("Constrain to landmass");
+  await expect(landmassToggle).toBeEnabled();
+  await landmassToggle.check();
+  await expect(landmassToggle).toBeChecked();
+  await interpolationPanel.getByLabel("Example").selectOption("line-density-change");
+  await expect(landmassToggle).toBeDisabled();
   await interpolationPanel.getByLabel("Example").selectOption("multipolygon-added-part");
   await expect(page.getByText("polygon count is incompatible")).toBeVisible();
   await interpolationPanel.getByLabel("Algorithm").selectOption("centroid-radial");

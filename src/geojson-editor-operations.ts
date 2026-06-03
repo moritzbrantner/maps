@@ -6,6 +6,11 @@ import {
   closeRing,
   normalizeSupportedGeometry,
 } from "./temporal-geojson-geometry";
+import {
+  intersectPolygonLike,
+  unionPolygonLikes,
+  type PolygonLikeGeometry,
+} from "./geojson-topology";
 import type {
   GeoJsonPosition,
   TemporalGeoJsonGeometryFeature,
@@ -17,6 +22,16 @@ import type {
   GeoJsonEditValidationResult,
   GeoJsonVertexHandle,
 } from "./geojson-editor";
+
+export type GeoJsonPolygonConstraint =
+  | PolygonLikeGeometry
+  | readonly PolygonLikeGeometry[]
+  | null
+  | undefined;
+
+export type GeoJsonGeometryTransformOptions = {
+  polygonConstraint?: GeoJsonPolygonConstraint;
+};
 
 export function applyGeoJsonEditOperation<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
@@ -147,11 +162,44 @@ export function moveGeoJsonGeometry(
   geometry: TemporalGeoJsonSupportedGeometry,
   deltaLongitude: number,
   deltaLatitude: number,
-): TemporalGeoJsonSupportedGeometry {
-  return mapGeometryPositions(geometry, ([longitude, latitude]) => [
+): TemporalGeoJsonSupportedGeometry;
+export function moveGeoJsonGeometry(
+  geometry: TemporalGeoJsonSupportedGeometry,
+  deltaLongitude: number,
+  deltaLatitude: number,
+  options: GeoJsonGeometryTransformOptions,
+): TemporalGeoJsonSupportedGeometry | null;
+export function moveGeoJsonGeometry(
+  geometry: TemporalGeoJsonSupportedGeometry,
+  deltaLongitude: number,
+  deltaLatitude: number,
+  options: GeoJsonGeometryTransformOptions = {},
+): TemporalGeoJsonSupportedGeometry | null {
+  const moved = mapGeometryPositions(geometry, ([longitude, latitude]) => [
     longitude + deltaLongitude,
     latitude + deltaLatitude,
   ]);
+
+  return constrainGeoJsonGeometryToPolygon(moved, options.polygonConstraint);
+}
+
+export function constrainGeoJsonGeometryToPolygon(
+  geometry: TemporalGeoJsonSupportedGeometry,
+  constraint: GeoJsonPolygonConstraint,
+): TemporalGeoJsonSupportedGeometry | null {
+  if (!constraint || !isPolygonLikeGeometry(geometry)) {
+    return cloneGeometry(geometry);
+  }
+
+  const mask = resolvePolygonConstraint(constraint);
+
+  if (!mask) {
+    return null;
+  }
+
+  const constrained = intersectPolygonLike(geometry, mask);
+
+  return constrained && validateSupportedGeometry(constrained).valid ? constrained : null;
 }
 
 export function setGeoJsonVertex(
@@ -373,6 +421,30 @@ export function removeClosingPosition(ring: readonly GeoJsonPosition[]) {
   }
 
   return ring.map(clonePosition);
+}
+
+function resolvePolygonConstraint(constraint: GeoJsonPolygonConstraint): PolygonLikeGeometry | null {
+  if (!constraint) {
+    return null;
+  }
+
+  if (isPolygonConstraintList(constraint)) {
+    return unionPolygonLikes([...constraint]);
+  }
+
+  return cloneGeometry(constraint) as PolygonLikeGeometry;
+}
+
+function isPolygonConstraintList(
+  constraint: GeoJsonPolygonConstraint,
+): constraint is readonly PolygonLikeGeometry[] {
+  return Array.isArray(constraint);
+}
+
+function isPolygonLikeGeometry(
+  geometry: TemporalGeoJsonSupportedGeometry,
+): geometry is PolygonLikeGeometry {
+  return geometry.type === "Polygon" || geometry.type === "MultiPolygon";
 }
 
 function resolveFeatureIdWithGetter<TProperties extends Record<string, unknown>>(

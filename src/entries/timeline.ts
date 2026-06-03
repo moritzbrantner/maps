@@ -29,3 +29,7 @@ export {
   type GeoJsonTimelineTrackData,
   type GeoJsonTimelineTransformValues,
 } from "../geojson-timeline";
+export {
+  type GeoJsonGeometryTransformOptions,
+  type GeoJsonPolygonConstraint,
+} from "../geojson-editor";

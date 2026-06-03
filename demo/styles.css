@@ -540,6 +540,30 @@ select {
   font-size: 0.88rem;
 }
 
+.demo-interpolation-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  color: #101827;
+  font-size: 0.84rem;
+  font-weight: 760;
+}
+
+.demo-interpolation-toggle[aria-disabled="true"] {
+  color: #8b9aaa;
+}
+
+.demo-interpolation-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #0f766e;
+}
+
 .demo-interpolation-range {
   display: grid;
   gap: 10px;

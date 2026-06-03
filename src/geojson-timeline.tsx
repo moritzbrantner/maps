@@ -25,6 +25,11 @@ import {
   type GeoJsonTransitionOptions,
 } from "./geojson-transition";
 import { cloneGeometry, normalizeSupportedGeometry } from "./temporal-geojson-geometry";
+import {
+  constrainGeoJsonGeometryToPolygon,
+  type GeoJsonGeometryTransformOptions,
+  type GeoJsonPolygonConstraint,
+} from "./geojson-editor-operations";
 import type {
   GeoJsonPosition,
   TemporalGeoJsonGeometryFeature,
@@ -101,6 +106,7 @@ export type GeoJsonTimelineApplyOptions<
 > = {
   getFeatureId?: (feature: TemporalGeoJsonGeometryFeature<TProperties>, index: number) => string;
   outsideItemBehavior?: "none" | "hold";
+  polygonConstraint?: GeoJsonPolygonConstraint;
 };
 
 export type GeoJsonTimelineTransitionSpec = GeoJsonTransitionOptions & {
@@ -354,19 +360,19 @@ export function getGeoJsonTimelineFeatureCollectionAtTime<
 
   return {
     ...collection,
-    features: collection.features.map((feature, index) => {
+    features: collection.features.flatMap((feature, index) => {
       const featureId = resolveTimelineFeatureId(feature, index, options.getFeatureId);
       const item = itemsByFeatureId.get(featureId);
       const geometry = normalizeSupportedGeometry(feature.geometry);
 
       if (!item || !geometry) {
-        return cloneTimelineFeature(feature);
+        return [cloneTimelineFeature(feature)];
       }
 
       const active = timeMs >= item.startMs && timeMs <= item.startMs + item.durationMs;
 
       if (!active && options.outsideItemBehavior !== "hold") {
-        return cloneTimelineFeature(feature);
+        return [cloneTimelineFeature(feature)];
       }
 
       const sampleTime = active
@@ -375,11 +381,18 @@ export function getGeoJsonTimelineFeatureCollectionAtTime<
           ? item.startMs
           : item.startMs + item.durationMs;
       const values = getTimelineEditorItemTransformValuesAt(item, sampleTime);
+      const transformedGeometry = applyGeoJsonTimelineTransform(geometry, values, {
+        polygonConstraint: options.polygonConstraint,
+      });
 
-      return {
+      if (!transformedGeometry) {
+        return [];
+      }
+
+      return [{
         ...cloneTimelineFeature(feature),
-        geometry: applyGeoJsonTimelineTransform(geometry, values),
-      };
+        geometry: transformedGeometry,
+      }];
     }),
   };
 }
@@ -594,10 +607,17 @@ function getTransformedFeatureForTimelineItem<
 
   const sampleTime = Math.min(Math.max(timeMs, item.startMs), item.startMs + item.durationMs);
   const values = getTimelineEditorItemTransformValuesAt(item, sampleTime);
+  const transformedGeometry = applyGeoJsonTimelineTransform(geometry, values, {
+    polygonConstraint: options.polygonConstraint,
+  });
+
+  if (!transformedGeometry) {
+    return null;
+  }
 
   return {
     ...cloneTimelineFeature(feature),
-    geometry: applyGeoJsonTimelineTransform(geometry, values),
+    geometry: transformedGeometry,
   };
 }
 
@@ -673,49 +693,65 @@ function getTransitionOptionsWithoutDuration(
 export function applyGeoJsonTimelineTransform(
   geometry: TemporalGeoJsonSupportedGeometry,
   values: Partial<GeoJsonTimelineTransformValues>,
-): TemporalGeoJsonSupportedGeometry {
+): TemporalGeoJsonSupportedGeometry;
+export function applyGeoJsonTimelineTransform(
+  geometry: TemporalGeoJsonSupportedGeometry,
+  values: Partial<GeoJsonTimelineTransformValues>,
+  options: GeoJsonGeometryTransformOptions,
+): TemporalGeoJsonSupportedGeometry | null;
+export function applyGeoJsonTimelineTransform(
+  geometry: TemporalGeoJsonSupportedGeometry,
+  values: Partial<GeoJsonTimelineTransformValues>,
+  options: GeoJsonGeometryTransformOptions = {},
+): TemporalGeoJsonSupportedGeometry | null {
   if (!hasTimelineTransform(values)) {
-    return cloneGeometry(geometry);
+    return constrainGeoJsonGeometryToPolygon(cloneGeometry(geometry), options.polygonConstraint);
   }
 
   const origin = getTransformOrigin(geometry, values);
+  let transformed: TemporalGeoJsonSupportedGeometry;
 
   switch (geometry.type) {
     case "Point":
-      return {
+      transformed = {
         coordinates: transformPosition(geometry.coordinates, values, origin),
         type: "Point",
       };
+      break;
     case "MultiPoint":
-      return {
+      transformed = {
         coordinates: geometry.coordinates.map((position) =>
           transformPosition(position, values, origin),
         ),
         type: "MultiPoint",
       };
+      break;
     case "LineString":
-      return {
+      transformed = {
         coordinates: geometry.coordinates.map((position) =>
           transformPosition(position, values, origin),
         ),
         type: "LineString",
       };
+      break;
     case "MultiLineString":
-      return {
+      transformed = {
         coordinates: geometry.coordinates.map((line) =>
           line.map((position) => transformPosition(position, values, origin)),
         ),
         type: "MultiLineString",
       };
+      break;
     case "Polygon":
-      return {
+      transformed = {
         coordinates: geometry.coordinates.map((ring) =>
           ring.map((position) => transformPosition(position, values, origin)),
         ),
         type: "Polygon",
       };
+      break;
     case "MultiPolygon":
-      return {
+      transformed = {
         coordinates: geometry.coordinates.map((polygon) =>
           polygon.map((ring) =>
             ring.map((position) => transformPosition(position, values, origin)),
@@ -723,7 +759,10 @@ export function applyGeoJsonTimelineTransform(
         ),
         type: "MultiPolygon",
       };
+      break;
   }
+
+  return constrainGeoJsonGeometryToPolygon(transformed, options.polygonConstraint);
 }
 
 export function getGeoJsonTimelineItemId(featureId: string) {
