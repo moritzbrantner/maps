@@ -231,9 +231,9 @@ function createTopologyPlanFragments<TProperties extends Record<string, unknown>
     case "bounds":
       return createBoundsTopologyPlanFragments(from, to);
     case "voronoi-partition":
-      return createAreaOverlapTopologyPlanFragments(from, to, options, true);
+      return createAreaOverlapTopologyPlanFragments(from, to, options);
     case "area-overlap":
-      return createAreaOverlapTopologyPlanFragments(from, to, options, false);
+      return createAreaOverlapTopologyPlanFragments(from, to, options);
   }
 }
 
@@ -307,7 +307,6 @@ function createAreaOverlapTopologyPlanFragments<TProperties extends Record<strin
   from: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   to: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   options: ResolvedGeoJsonTransitionOptions,
-  useVoronoiPartitions: boolean,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
   const fromEntries = createTransitionFeatureEntries(from);
   const toEntries = createTransitionFeatureEntries(to);
@@ -336,6 +335,20 @@ function createAreaOverlapTopologyPlanFragments<TProperties extends Record<strin
     options.topologyMinOverlapRatio,
   );
 
+  if (sourceEntries.length === 1 && targetEntries.length > 1) {
+    return [
+      ...createSplitAreaOverlapFragments(sourceEntries[0]!, targetEntries, edges),
+      ...pairedNonPolygonFragments,
+    ];
+  }
+
+  if (sourceEntries.length > 1 && targetEntries.length === 1) {
+    return [
+      ...createMergeAreaOverlapFragments(sourceEntries, targetEntries[0]!, edges),
+      ...pairedNonPolygonFragments,
+    ];
+  }
+
   return [
     ...createFragmentsForTopologyComponents(
       sourceEntries,
@@ -343,7 +356,6 @@ function createAreaOverlapTopologyPlanFragments<TProperties extends Record<strin
       edges,
       sourceAreas,
       targetAreas,
-      useVoronoiPartitions,
     ),
     ...pairedNonPolygonFragments,
   ];
@@ -402,7 +414,6 @@ function createFragmentsForTopologyComponents<TProperties extends Record<string,
   edges: Array<TopologyOverlapEdge<TProperties>>,
   sourceAreas: Map<string, number>,
   targetAreas: Map<string, number>,
-  useVoronoiPartitions: boolean,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
   const sourceByKey = new Map(sources.map((entry) => [entry.key, entry]));
   const targetByKey = new Map(targets.map((entry) => [entry.key, entry]));
@@ -439,7 +450,6 @@ function createFragmentsForTopologyComponents<TProperties extends Record<string,
         ),
         sourceAreas,
         targetAreas,
-        useVoronoiPartitions,
       ),
     );
   }
@@ -462,7 +472,6 @@ function createFragmentsForTopologyComponent<TProperties extends Record<string, 
   edges: Array<TopologyOverlapEdge<TProperties>>,
   sourceAreas: Map<string, number>,
   targetAreas: Map<string, number>,
-  useVoronoiPartitions: boolean,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
   if (sources.length === 1 && targets.length === 0) {
     return [createDisappearFragment(sources[0]!)];
@@ -477,11 +486,11 @@ function createFragmentsForTopologyComponent<TProperties extends Record<string, 
   }
 
   if (sources.length === 1 && targets.length > 1) {
-    return createSplitAreaOverlapFragments(sources[0]!, targets, edges, useVoronoiPartitions);
+    return createSplitAreaOverlapFragments(sources[0]!, targets, edges);
   }
 
   if (sources.length > 1 && targets.length === 1) {
-    return createMergeAreaOverlapFragments(sources, targets[0]!, edges, useVoronoiPartitions);
+    return createMergeAreaOverlapFragments(sources, targets[0]!, edges);
   }
 
   return createManyToManyAreaOverlapFragments(sources, targets, edges, sourceAreas, targetAreas);
@@ -528,11 +537,8 @@ function createSplitAreaOverlapFragments<TProperties extends Record<string, unkn
   source: TopologyPolygonEntry<TProperties>,
   targets: Array<TopologyPolygonEntry<TProperties>>,
   edges: Array<TopologyOverlapEdge<TProperties>>,
-  useVoronoiPartitions: boolean,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
-  const partitions = useVoronoiPartitions
-    ? createSplitVoronoiPartitions(source, targets)
-    : new Map<string, PolygonLikeGeometry>();
+  const partitions = createSplitGuidedPartitions(source, targets);
 
   return targets.map((target) => {
     const edge = edges.find((item) => item.target.key === target.key);
@@ -560,11 +566,8 @@ function createMergeAreaOverlapFragments<TProperties extends Record<string, unkn
   sources: Array<TopologyPolygonEntry<TProperties>>,
   target: TopologyPolygonEntry<TProperties>,
   edges: Array<TopologyOverlapEdge<TProperties>>,
-  useVoronoiPartitions: boolean,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
-  const partitions = useVoronoiPartitions
-    ? createMergeVoronoiPartitions(sources, target)
-    : new Map<string, PolygonLikeGeometry>();
+  const partitions = createMergeGuidedPartitions(sources, target);
 
   return sources.map((source) => {
     const edge = edges.find((item) => item.source.key === source.key);
@@ -690,43 +693,106 @@ function createDisappearFragment<TProperties extends Record<string, unknown>>(
   };
 }
 
-function createSplitVoronoiPartitions<TProperties extends Record<string, unknown>>(
+function createSplitGuidedPartitions<TProperties extends Record<string, unknown>>(
   source: TopologyPolygonEntry<TProperties>,
   targets: Array<TopologyPolygonEntry<TProperties>>,
 ) {
-  const bounds = createExpandedTopologyBounds([source.geometry, ...targets.map((target) => target.geometry)]);
+  return createGuidedVoronoiPartitions(
+    source.geometry,
+    targets,
+    [source.geometry, ...targets.map((target) => target.geometry)],
+  );
+}
+
+function createMergeGuidedPartitions<TProperties extends Record<string, unknown>>(
+  sources: Array<TopologyPolygonEntry<TProperties>>,
+  target: TopologyPolygonEntry<TProperties>,
+) {
+  return createGuidedVoronoiPartitions(
+    target.geometry,
+    sources,
+    [target.geometry, ...sources.map((source) => source.geometry)],
+  );
+}
+
+function createGuidedVoronoiPartitions<TProperties extends Record<string, unknown>>(
+  subject: PolygonLikeGeometry,
+  seeds: Array<TopologyPolygonEntry<TProperties>>,
+  guideItems: PolygonLikeGeometry[],
+) {
+  const guide = createConvexHullGuideGeometry(guideItems);
+  const bounds = createExpandedTopologyBounds(
+    guide ? [guide] : [subject, ...seeds.map((seed) => seed.geometry)],
+  );
   const cells = createVoronoiCellRings(
-    targets.map((target) => getPolygonLikeCentroid(target.geometry)),
+    seeds.map((seed) => getPolygonLikeCentroid(seed.geometry)),
     bounds,
   );
 
   return new Map(
-    targets.flatMap((target, index) => {
+    seeds.flatMap((seed, index) => {
       const cell = cells[index];
-      const partition = cell ? clipPolygonLikeToVoronoiCell(source.geometry, cell) : null;
+      const partition = cell ? clipPolygonLikeToVoronoiCell(subject, cell) : null;
 
-      return partition && getPolygonLikeArea(partition) > 0 ? [[target.key, partition] as const] : [];
+      return partition && getPolygonLikeArea(partition) > 0 ? [[seed.key, partition] as const] : [];
     }),
   );
 }
 
-function createMergeVoronoiPartitions<TProperties extends Record<string, unknown>>(
-  sources: Array<TopologyPolygonEntry<TProperties>>,
-  target: TopologyPolygonEntry<TProperties>,
-) {
-  const bounds = createExpandedTopologyBounds([target.geometry, ...sources.map((source) => source.geometry)]);
-  const cells = createVoronoiCellRings(
-    sources.map((source) => getPolygonLikeCentroid(source.geometry)),
-    bounds,
+function createConvexHullGuideGeometry(items: PolygonLikeGeometry[]): PolygonLikeGeometry | null {
+  const positionsByKey = new Map<string, GeoJsonPosition>();
+
+  for (const position of items.flatMap(getPolygonLikePositions)) {
+    if (Number.isFinite(position[0]) && Number.isFinite(position[1])) {
+      positionsByKey.set(`${position[0]}:${position[1]}`, [position[0], position[1]]);
+    }
+  }
+
+  const positions = [...positionsByKey.values()].sort(
+    (left, right) => left[0] - right[0] || left[1] - right[1],
   );
 
-  return new Map(
-    sources.flatMap((source, index) => {
-      const cell = cells[index];
-      const partition = cell ? clipPolygonLikeToVoronoiCell(target.geometry, cell) : null;
+  if (positions.length < 3) {
+    return unionPolygonLikes(items);
+  }
 
-      return partition && getPolygonLikeArea(partition) > 0 ? [[source.key, partition] as const] : [];
-    }),
+  const lower: GeoJsonPosition[] = [];
+  for (const position of positions) {
+    while (
+      lower.length >= 2 &&
+      getCrossProduct(lower[lower.length - 2]!, lower[lower.length - 1]!, position) <= 0
+    ) {
+      lower.pop();
+    }
+    lower.push(position);
+  }
+
+  const upper: GeoJsonPosition[] = [];
+  for (let index = positions.length - 1; index >= 0; index -= 1) {
+    const position = positions[index]!;
+    while (
+      upper.length >= 2 &&
+      getCrossProduct(upper[upper.length - 2]!, upper[upper.length - 1]!, position) <= 0
+    ) {
+      upper.pop();
+    }
+    upper.push(position);
+  }
+
+  const hull = [...lower.slice(0, -1), ...upper.slice(0, -1)];
+
+  return hull.length >= 3
+    ? {
+        coordinates: [closeRing(hull)],
+        type: "Polygon",
+      }
+    : unionPolygonLikes(items);
+}
+
+function getCrossProduct(origin: GeoJsonPosition, left: GeoJsonPosition, right: GeoJsonPosition) {
+  return (
+    (left[0] - origin[0]) * (right[1] - origin[1]) -
+    (left[1] - origin[1]) * (right[0] - origin[0])
   );
 }
 

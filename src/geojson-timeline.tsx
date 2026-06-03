@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   TimelineEditor,
@@ -169,6 +169,8 @@ export function GeoJsonTimelineEditor<
   snap,
   viewport,
 }: GeoJsonTimelineEditorProps<TProperties>) {
+  const [uncontrolledViewport, setUncontrolledViewport] = useState<TimelineEditorViewport>();
+  const resolvedViewport = viewport ?? uncontrolledViewport;
   const resolvedSelection = useMemo(
     () =>
       selection ??
@@ -187,11 +189,17 @@ export function GeoJsonTimelineEditor<
         readOnly={readOnly}
         selection={resolvedSelection}
         snap={snap}
-        viewport={viewport}
+        viewport={resolvedViewport}
         onCurrentTimeChange={onCurrentTimeChange}
         onDocumentChange={onDocumentChange}
         onSelectionChange={onSelectionChange}
-        onViewportChange={onViewportChange}
+        onViewportChange={(nextViewport) => {
+          if (!viewport) {
+            setUncontrolledViewport(nextViewport);
+          }
+
+          onViewportChange?.(nextViewport);
+        }}
         renderItem={({ item }) => (
           <span className="mb-geojson-timeline__item-label">{item.label}</span>
         )}

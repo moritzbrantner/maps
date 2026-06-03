@@ -480,6 +480,50 @@ describe("@moritzbrantner/maps GeoJSON transitions", () => {
     expectGeometriesAreFiniteAndClosed(frame);
   });
 
+  test("topology-plan area-overlap splits separated targets with a hull-guided partition", () => {
+    const start = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("source", square(0, 0, 10, 4))]),
+        collection([feature("west", square(-8, 0, -4, 4)), feature("east", square(14, 0, 18, 4))]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      0,
+    );
+    const splitFeatures = start.features.filter((item) => item.properties?.transitionKind === "split");
+    const bounds = splitFeatures.map(getFeatureBounds);
+
+    expect(splitFeatures).toHaveLength(2);
+    expect(splitFeatures.flatMap((item) => readPropertyIds(item, "targetIds")).sort()).toEqual([
+      "east",
+      "west",
+    ]);
+    expect(bounds.some((item) => item.east <= 5.01)).toBe(true);
+    expect(bounds.some((item) => item.west >= 4.99)).toBe(true);
+    expectGeometriesAreFiniteAndClosed(start);
+  });
+
+  test("topology-plan area-overlap merges separated sources with a hull-guided partition", () => {
+    const end = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([feature("west", square(-8, 0, -4, 4)), feature("east", square(14, 0, 18, 4))]),
+        collection([feature("target", square(0, 0, 10, 4))]),
+        { algorithm: "topology-plan", topologyStrategy: "area-overlap" },
+      ),
+      1,
+    );
+    const mergeFeatures = end.features.filter((item) => item.properties?.transitionKind === "merge");
+    const bounds = mergeFeatures.map(getFeatureBounds);
+
+    expect(mergeFeatures).toHaveLength(2);
+    expect(mergeFeatures.flatMap((item) => readPropertyIds(item, "sourceIds")).sort()).toEqual([
+      "east",
+      "west",
+    ]);
+    expect(bounds.some((item) => item.east <= 5.01)).toBe(true);
+    expect(bounds.some((item) => item.west >= 4.99)).toBe(true);
+    expectGeometriesAreFiniteAndClosed(end);
+  });
+
   test("topology-plan area-overlap emits appear for target with no overlap", () => {
     const start = interpolateGeoJsonTransitionPlan(
       createGeoJsonTransitionPlan(
