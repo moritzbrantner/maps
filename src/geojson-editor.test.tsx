@@ -319,13 +319,19 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
 
     const map = flatMock.getMaps()[0];
 
+    await waitFor(() => {
+      expect(map?.handlers.get("click")?.length).toBeGreaterThan(1);
+    });
+
     act(() => {
       map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0.05, lng: 0.05 } });
     });
 
-    expect(onFeatureCollectionChange.mock.calls[0]?.[0].features.at(-1)?.geometry).toEqual({
-      coordinates: [0, 0],
-      type: "Point",
+    await waitFor(() => {
+      expect(onFeatureCollectionChange.mock.calls[0]?.[0].features.at(-1)?.geometry).toEqual({
+        coordinates: [0, 0],
+        type: "Point",
+      });
     });
   });
 
