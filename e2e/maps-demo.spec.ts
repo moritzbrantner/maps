@@ -237,6 +237,8 @@ test("Globe view renders nonblank canvas and responds to dragging @smoke", async
   const after = await globe.screenshot();
 
   expect(Buffer.compare(before, after)).not.toBe(0);
+  await openView(page, "Clusters");
+  await openView(page, "Globe");
   await expect(page.locator(".demo-stage")).toHaveScreenshot("globe-desktop.png");
 });
 
