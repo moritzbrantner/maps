@@ -19,7 +19,5 @@ jobs:
     with:
       bun_version: "1.3.14"
       benchmark_command: bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance
-      upload_artifacts_on: always
-      artifact_name_suffix: -benchmarks
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}

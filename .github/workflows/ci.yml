@@ -52,7 +52,5 @@ jobs:
       pre_command: bunx playwright install --with-deps chromium
       e2e_command: bun run test:browser -- --grep @smoke --project=chromium
       install_playwright: false
-      upload_artifacts_on: failure
-      artifact_name_suffix: -smoke
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
