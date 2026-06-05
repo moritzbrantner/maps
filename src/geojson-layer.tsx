@@ -310,7 +310,7 @@ export function createGeoJsonLayerFeatures<
   });
 }
 
-function renderGlobeGeometry(
+export function renderGlobeGeometry(
   geometry: TemporalGeoJsonSupportedGeometry,
   style: Required<GeoJsonLayerStyle>,
   selected: boolean,

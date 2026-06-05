@@ -11,6 +11,7 @@ export {
   useMapEngine,
   useMapFrame,
   type EngineGeoJsonLayerProps,
+  type EngineGeoJsonLayerFeature,
   type GeoClusterLayerProps,
   type GeoFlowLayerProps,
   type GeoHeatLayerProps,
@@ -349,10 +350,7 @@ export {
   type PolygonLineDrawingOptions,
   type PolygonLineDrawingResult,
 } from "./polygon-line-drawing";
-export {
-  TemporalClusteredMap,
-  type TemporalClusteredMapProps,
-} from "./temporal-map";
+export { TemporalClusteredMap, type TemporalClusteredMapProps } from "./temporal-map";
 export {
   TemporalHeatMap,
   getTemporalHeatMapMaxWeight,

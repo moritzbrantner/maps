@@ -27,6 +27,7 @@ verifyMissingImports("core", [
   "topojson-client",
   "@moritzbrantner/ui",
   "@moritzbrantner/timeline-editor",
+  "@moritzbrantner/viz-engine",
 ]);
 verifyMissingImports("flat", [
   "three",

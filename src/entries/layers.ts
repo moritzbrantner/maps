@@ -7,6 +7,7 @@ export {
   GeoHeatLayer,
   GeoPointLayer,
   type EngineGeoJsonLayerProps,
+  type EngineGeoJsonLayerFeature,
   type GeoClusterLayerProps,
   type GeoFlowLayerProps,
   type GeoHeatLayerProps,

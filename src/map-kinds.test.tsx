@@ -4,11 +4,17 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   BubbleMap,
   ClusteredMap,
+  EngineGeoJsonLayer,
   FlowLayer,
   FlowMap,
+  GeoClusterLayer,
+  GeoFlowLayer,
+  GeoHeatLayer,
   GeoJsonMap,
   GeoJsonLayer,
+  GeoPointLayer,
   HeatMap,
+  MapDataset,
   MapControls,
   MapCategoryLegend,
   MapColorRampLegend,
@@ -16,6 +22,7 @@ import {
   MapLayers,
   MapLegend,
   MapSizeLegend,
+  MapEngineProvider,
   MapView,
   PointLayer,
   PointMap,
@@ -63,6 +70,13 @@ import {
 } from "./webgl-flat-runtime";
 import { createFlowPathCoordinates } from "./flow-layer";
 import type { FlowLayerFeature } from "./flow-layer";
+import type {
+  VizDataset,
+  VizEngine,
+  VizGeoJsonFeatureCollection,
+  VizLayer,
+  VizRenderLayer,
+} from "@moritzbrantner/viz-engine";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -258,6 +272,252 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+type MockVizEngine = VizEngine & {
+  addDataset: ReturnType<typeof vi.fn>;
+  addLayer: ReturnType<typeof vi.fn>;
+  computeFrame: ReturnType<typeof vi.fn>;
+  removeDataset: ReturnType<typeof vi.fn>;
+  removeLayer: ReturnType<typeof vi.fn>;
+  updateLayer: ReturnType<typeof vi.fn>;
+};
+
+function createMockVizEngine(): MockVizEngine {
+  const datasets = new Map<string, VizDataset>();
+  const layers = new Map<string, VizLayer>();
+  let nextDatasetId = 0;
+  let nextLayerId = 0;
+
+  const engine = {
+    addDataset: vi.fn((dataset: VizDataset) => {
+      const datasetId = `dataset-${++nextDatasetId}`;
+
+      datasets.set(datasetId, dataset);
+
+      return datasetId;
+    }),
+    addLayer: vi.fn((layer: VizLayer) => {
+      const layerId = `layer-${++nextLayerId}`;
+
+      layers.set(layerId, layer);
+
+      return layerId;
+    }),
+    clear: vi.fn(() => {
+      datasets.clear();
+      layers.clear();
+    }),
+    computeFrame: vi.fn((options: { layerIds?: readonly string[]; viewport?: unknown }) => {
+      const layerIds = options.layerIds ?? Array.from(layers.keys());
+      const renderedLayers = layerIds.flatMap((layerId) => {
+        const layer = layers.get(layerId);
+        const dataset = layer ? datasets.get(layer.datasetId) : null;
+        const renderedLayer =
+          layer && dataset ? createMockVizRenderLayer(layerId, layer, dataset) : null;
+
+        return renderedLayer ? [renderedLayer] : [];
+      });
+
+      return {
+        layers: renderedLayers,
+        stats: {
+          backend: "js",
+          backendImplementation: "js",
+          computeMs: 0,
+          datasetCount: datasets.size,
+          diagnostics: [],
+          layerCount: layers.size,
+          renderedLayerCount: renderedLayers.length,
+        },
+      };
+    }),
+    getDatasetCount: vi.fn(() => datasets.size),
+    getLayerCount: vi.fn(() => layers.size),
+    hydrateFrame: vi.fn((frame: unknown) => frame),
+    hydrateLayer: vi.fn((layer: unknown) => layer),
+    hitTest: vi.fn(() => null),
+    removeDataset: vi.fn((datasetId: string) => {
+      datasets.delete(datasetId);
+    }),
+    removeLayer: vi.fn((layerId: string) => {
+      layers.delete(layerId);
+    }),
+    updateDataset: vi.fn((datasetId: string, dataset: VizDataset) => {
+      if (!datasets.has(datasetId)) {
+        return false;
+      }
+
+      datasets.set(datasetId, dataset);
+
+      return true;
+    }),
+    updateLayer: vi.fn((layerId: string, layer: VizLayer) => {
+      if (!layers.has(layerId)) {
+        return false;
+      }
+
+      layers.set(layerId, layer);
+
+      return true;
+    }),
+  };
+
+  return engine as unknown as MockVizEngine;
+}
+
+function createMockVizRenderLayer(
+  layerId: string,
+  layer: VizLayer,
+  dataset: VizDataset,
+): VizRenderLayer | null {
+  if (layer.kind === "geo-points" && dataset.kind === "geo-points") {
+    return {
+      bounds: null,
+      datasetId: layer.datasetId,
+      features: dataset.points.map((point, sourceIndex) => ({
+        id: point.id ?? `point-${sourceIndex}`,
+        label: point.label ?? point.id ?? `Point ${sourceIndex + 1}`,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        metrics: point.metrics ?? {},
+        properties: point.properties ?? {},
+        sourceIndex,
+      })),
+      kind: "geo-points",
+      layerId,
+    };
+  }
+
+  if (layer.kind === "geo-clusters" && dataset.kind === "geo-points") {
+    return {
+      aggregation: {
+        features: dataset.points.map((point, sourceIndex) => ({
+          coordinates: [point.longitude, point.latitude],
+          kind: "point",
+          metrics: point.metrics ?? {},
+          point: {
+            id: point.id ?? `point-${sourceIndex}`,
+            label: point.label ?? point.id ?? `Point ${sourceIndex + 1}`,
+            latitude: point.latitude,
+            longitude: point.longitude,
+            metrics: point.metrics ?? {},
+            properties: point.properties ?? {},
+            sourceIndex,
+          },
+        })),
+        summary: {
+          bounds: [-180, -90, 180, 90],
+          metrics: {},
+          visibleClusterCount: 0,
+          visiblePointCount: dataset.points.length,
+          visibleUnclusteredCount: dataset.points.length,
+          zoom: 5,
+        },
+      },
+      bounds: null,
+      datasetId: layer.datasetId,
+      features: dataset.points.map((point, sourceIndex) => ({
+        coordinates: [point.longitude, point.latitude],
+        kind: "point",
+        metrics: point.metrics ?? {},
+        point: {
+          id: point.id ?? `point-${sourceIndex}`,
+          label: point.label ?? point.id ?? `Point ${sourceIndex + 1}`,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          metrics: point.metrics ?? {},
+          properties: point.properties ?? {},
+          sourceIndex,
+        },
+      })),
+      kind: "geo-clusters",
+      layerId,
+    };
+  }
+
+  if (layer.kind === "geo-heat" && dataset.kind === "geo-points") {
+    return {
+      bounds: null,
+      datasetId: layer.datasetId,
+      features: dataset.points.map((point, sourceIndex) => ({
+        coordinates: [point.longitude, point.latitude],
+        id: point.id ?? `heat-${sourceIndex}`,
+        label: point.label ?? point.id ?? `Heat ${sourceIndex + 1}`,
+        metrics: point.metrics ?? {},
+        point: {
+          id: point.id ?? `point-${sourceIndex}`,
+          label: point.label ?? point.id ?? `Point ${sourceIndex + 1}`,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          metrics: point.metrics ?? {},
+          properties: point.properties ?? {},
+          sourceIndex,
+        },
+        pointCount: 1,
+        rawWeight: 1,
+        value: 0.5,
+      })),
+      kind: "geo-heat",
+      layerId,
+      maxWeight: 1,
+    };
+  }
+
+  if (layer.kind === "geo-flows" && dataset.kind === "geo-flows") {
+    return {
+      aggregation: {
+        features: [],
+        summary: {
+          bounds: null,
+          maxWeight: 1,
+          metrics: {},
+          viewportBounds: [-180, -90, 180, 90],
+          visibleFlowCount: dataset.flows.length,
+          zoom: 5,
+        },
+      },
+      bounds: null,
+      datasetId: layer.datasetId,
+      features: dataset.flows.map((flow, sourceIndex) => ({
+        flow: {
+          from: flow.from,
+          id: flow.id ?? `flow-${sourceIndex}`,
+          label: flow.label ?? flow.id ?? `Flow ${sourceIndex + 1}`,
+          metrics: flow.metrics ?? {},
+          properties: flow.properties ?? {},
+          sourceIndex,
+          to: flow.to,
+        },
+        rawWeight: 1,
+        value: 0.5,
+      })),
+      kind: "geo-flows",
+      layerId,
+    };
+  }
+
+  if (layer.kind === "geojson" && dataset.kind === "geojson") {
+    const featureCollection = dataset.featureCollection as VizGeoJsonFeatureCollection;
+
+    return {
+      bounds: null,
+      datasetId: layer.datasetId,
+      featureCollection,
+      featureCount: featureCollection.features.length,
+      kind: "geojson",
+      layerId,
+      viewport: {
+        bounds: null,
+        featureCollection,
+        featureCount: featureCollection.features.length,
+        viewportBounds: [-180, -90, 180, 90],
+        zoom: 5,
+      },
+    };
+  }
+
+  return null;
+}
+
 describe("@moritzbrantner/maps additional map kinds", () => {
   test("creates point-map features from valid points", () => {
     const features = createPointMapFeatures([
@@ -425,7 +685,11 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       type: "FeatureCollection",
     });
 
-    expect(features.map((feature) => feature.geometry.type)).toEqual(["Point", "LineString", "Polygon"]);
+    expect(features.map((feature) => feature.geometry.type)).toEqual([
+      "Point",
+      "LineString",
+      "Polygon",
+    ]);
   });
 
   test("creates map points, flows, bounds, and overlays from GeoJSON", () => {
@@ -651,7 +915,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
           },
         ]}
         renderFeatureTooltip={(feature) =>
-          feature.kind === "cluster" ? `${feature.pointCountAbbreviated} stores` : feature.point.label
+          feature.kind === "cluster"
+            ? `${feature.pointCountAbbreviated} stores`
+            : feature.point.label
         }
         showAttributionControl={false}
       />,
@@ -706,7 +972,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
           },
         ]}
         renderFeatureTooltip={(feature) =>
-          feature.kind === "cluster" ? `${feature.pointCountAbbreviated} stores` : feature.point.label
+          feature.kind === "cluster"
+            ? `${feature.pointCountAbbreviated} stores`
+            : feature.point.label
         }
         showAttributionControl={false}
       />,
@@ -798,7 +1066,15 @@ describe("@moritzbrantner/maps additional map kinds", () => {
                 properties: {},
                 geometry: {
                   type: "Polygon",
-                  coordinates: [[[-75, 39], [-73, 39], [-73, 41], [-75, 41], [-75, 39]]],
+                  coordinates: [
+                    [
+                      [-75, 39],
+                      [-73, 39],
+                      [-73, 41],
+                      [-75, 41],
+                      [-75, 39],
+                    ],
+                  ],
                 },
               },
             ],
@@ -808,9 +1084,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Zoomable GeoJSON").getAttribute("data-map-ready")).toBe(
-        "true",
-      );
+      expect(screen.getByLabelText("Zoomable GeoJSON").getAttribute("data-map-ready")).toBe("true");
     });
     await act(async () => {
       await Promise.resolve();
@@ -1104,7 +1378,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     expect(screen.getByText("Temperature")).toBeTruthy();
-    expect(screen.getByLabelText("Temperature legend").querySelector(".mb-maps__legend-ramp")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Temperature legend").querySelector(".mb-maps__legend-ramp"),
+    ).toBeTruthy();
     expect(screen.getByText("Delayed")).toBeTruthy();
     expect(screen.getByText("Trips")).toBeTruthy();
   });
@@ -1120,10 +1396,14 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Controlled hover map").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Controlled hover map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
     });
 
-    expect(flatMock.getLayerGroups()[0]?.layers[0]?.options?.className).toContain("mb-maps__feature--hovered");
+    expect(flatMock.getLayerGroups()[0]?.layers[0]?.options?.className).toContain(
+      "mb-maps__feature--hovered",
+    );
   });
 
   test("reports controlled hover and selection id changes", async () => {
@@ -1145,7 +1425,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Interactive id map").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Interactive id map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
     });
 
     const marker = flatMock.getLayerGroups()[0]?.layers[0];
@@ -1155,20 +1437,295 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       marker?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
     });
 
-    expect(onFeatureHover).toHaveBeenCalledWith(expect.objectContaining({
-      point: expect.objectContaining({ id: "store-1" }),
-    }));
-    expect(onHoveredFeatureIdChange).toHaveBeenCalledWith("store-1", expect.objectContaining({
-      featureId: "store-1",
-      source: "hover",
-    }));
-    expect(onFeatureSelect).toHaveBeenCalledWith(expect.objectContaining({
-      point: expect.objectContaining({ id: "store-1" }),
-    }));
-    expect(onSelectedFeatureIdChange).toHaveBeenCalledWith("store-1", expect.objectContaining({
-      featureId: "store-1",
-      source: "click",
-    }));
+    expect(onFeatureHover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        point: expect.objectContaining({ id: "store-1" }),
+      }),
+    );
+    expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
+      "store-1",
+      expect.objectContaining({
+        featureId: "store-1",
+        source: "hover",
+      }),
+    );
+    expect(onFeatureSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        point: expect.objectContaining({ id: "store-1" }),
+      }),
+    );
+    expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
+      "store-1",
+      expect.objectContaining({
+        featureId: "store-1",
+        source: "click",
+      }),
+    );
+  });
+
+  test("keeps engine datasets registered when parents re-render with the same data reference", async () => {
+    const engine = createMockVizEngine();
+    const points = [{ id: "store-1", latitude: 40, longitude: -74 }];
+    const { rerender } = render(
+      <MapEngineProvider backend={{ finance: "js", geo: "js", xy: "js" }} engine={engine}>
+        <MapDataset id="stores" kind="geo-points" points={points} />
+      </MapEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(engine.addDataset).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(
+      <MapEngineProvider backend={{ finance: "js", geo: "js", xy: "js" }} engine={engine}>
+        <MapDataset id="stores" kind="geo-points" points={points} />
+      </MapEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(engine.addDataset).toHaveBeenCalledTimes(1);
+    });
+    expect(engine.removeDataset).not.toHaveBeenCalled();
+  });
+
+  test("keeps engine layers registered across flat viewport renders", async () => {
+    const engine = createMockVizEngine();
+    const points = [{ id: "store-1", latitude: 40, longitude: -74 }];
+    let controller: import("./map-display").MapSurfaceController | null = null;
+
+    const { unmount } = render(
+      <MapEngineProvider engine={engine}>
+        <MapView
+          fitToData={false}
+          mapLabel="Engine stable layer map"
+          onMapControllerReady={(nextController) => {
+            controller = nextController;
+          }}
+          showAttributionControl={false}
+        >
+          <MapDataset id="stores" kind="geo-points" points={points} />
+          <GeoPointLayer datasetId="stores" />
+        </MapView>
+      </MapEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Engine stable layer map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+      expect(engine.addLayer).toHaveBeenCalledTimes(1);
+      expect(flatMock.getLayerGroups()[0]?.layers).toHaveLength(1);
+    });
+
+    const computeCount = engine.computeFrame.mock.calls.length;
+
+    act(() => {
+      controller?.setViewState({ center: [-73, 41], zoom: 6 });
+    });
+
+    await waitFor(() => {
+      expect(engine.computeFrame.mock.calls.length).toBeGreaterThan(computeCount);
+    });
+    expect(engine.addLayer).toHaveBeenCalledTimes(1);
+    expect(engine.removeLayer).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(engine.removeLayer).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    {
+      dataset: (
+        <MapDataset
+          id="engine-dataset"
+          kind="geo-points"
+          points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+        />
+      ),
+      layer: <GeoClusterLayer datasetId="engine-dataset" />,
+      label: "clusters",
+    },
+    {
+      dataset: (
+        <MapDataset
+          id="engine-dataset"
+          kind="geo-points"
+          points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+        />
+      ),
+      layer: <GeoPointLayer datasetId="engine-dataset" />,
+      label: "points",
+    },
+    {
+      dataset: (
+        <MapDataset
+          id="engine-dataset"
+          kind="geo-points"
+          points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+        />
+      ),
+      layer: <GeoHeatLayer datasetId="engine-dataset" />,
+      label: "heat",
+    },
+    {
+      dataset: (
+        <MapDataset
+          id="engine-dataset"
+          kind="geo-flows"
+          flows={[{ from: [-74, 40], id: "flow-1", to: [-73, 41] }]}
+        />
+      ),
+      layer: <GeoFlowLayer datasetId="engine-dataset" />,
+      label: "flows",
+    },
+    {
+      dataset: (
+        <MapDataset
+          featureCollection={{
+            features: [
+              {
+                geometry: { coordinates: [-74, 40], type: "Point" },
+                id: "geojson-1",
+                properties: {},
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          }}
+          id="engine-dataset"
+          kind="geojson"
+        />
+      ),
+      layer: <EngineGeoJsonLayer datasetId="engine-dataset" />,
+      label: "geojson",
+    },
+  ])(
+    "re-renders engine-backed flat $label layers on pan and zoom",
+    async ({ dataset, layer, label }) => {
+      const engine = createMockVizEngine();
+      let controller: import("./map-display").MapSurfaceController | null = null;
+
+      render(
+        <MapEngineProvider engine={engine}>
+          <MapView
+            fitToData={false}
+            mapLabel={`Engine ${label} viewport map`}
+            onMapControllerReady={(nextController) => {
+              controller = nextController;
+            }}
+            showAttributionControl={false}
+          >
+            {dataset}
+            {layer}
+          </MapView>
+        </MapEngineProvider>,
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByLabelText(`Engine ${label} viewport map`).getAttribute("data-map-ready"),
+        ).toBe("true");
+        expect(engine.computeFrame).toHaveBeenCalled();
+      });
+
+      const computeCount = engine.computeFrame.mock.calls.length;
+
+      act(() => {
+        controller?.setViewState({ center: [-72, 42], zoom: 7 });
+      });
+
+      await waitFor(() => {
+        expect(engine.computeFrame.mock.calls.length).toBeGreaterThan(computeCount);
+      });
+    },
+  );
+
+  test("routes flat engine point interactions through the map surface", async () => {
+    const engine = createMockVizEngine();
+    const onFeatureContextMenu = vi.fn();
+    const onFeatureHover = vi.fn();
+    const onFeatureSelect = vi.fn();
+
+    render(
+      <MapEngineProvider engine={engine}>
+        <MapView fitToData={false} mapLabel="Engine interactions" showAttributionControl={false}>
+          <MapDataset
+            id="stores"
+            kind="geo-points"
+            points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+          />
+          <GeoPointLayer
+            datasetId="stores"
+            hoveredFeatureId="store-1"
+            onFeatureContextMenu={onFeatureContextMenu}
+            onFeatureHover={onFeatureHover}
+            onFeatureSelect={onFeatureSelect}
+            selectedFeatureId="store-1"
+          />
+        </MapView>
+      </MapEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Engine interactions").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+      expect(flatMock.getLayerGroups()[0]?.layers[0]).toBeTruthy();
+    });
+
+    const marker = flatMock.getLayerGroups()[0]?.layers[0];
+
+    expect(marker?.options?.className).toContain("mb-maps__feature--hovered");
+    expect(marker?.options?.className).toContain("mb-maps__feature--selected");
+
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+      marker?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+      marker?.handlers.get("contextmenu")?.[0]?.({
+        containerPoint: { x: 120, y: 160 },
+        originalEvent: { preventDefault: vi.fn() },
+      });
+      marker?.handlers.get("mouseout")?.[0]?.({});
+    });
+
+    expect(onFeatureHover).toHaveBeenCalledWith(expect.objectContaining({ id: "store-1" }));
+    expect(onFeatureHover).toHaveBeenCalledWith(null);
+    expect(onFeatureSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "store-1" }));
+    expect(onFeatureContextMenu).toHaveBeenCalledWith(expect.objectContaining({ id: "store-1" }));
+  });
+
+  test("uses current globe view state when computing engine globe layers", async () => {
+    const engine = createMockVizEngine();
+
+    render(
+      <MapEngineProvider engine={engine}>
+        <MapView
+          initialViewState={{ center: [9, 48], zoom: 2.4 }}
+          mapDisplay="globe"
+          mapLabel="Engine globe map"
+        >
+          <MapDataset
+            id="stores"
+            kind="geo-points"
+            points={[{ id: "store-1", latitude: 48, longitude: 9 }]}
+          />
+          <GeoPointLayer datasetId="stores" />
+        </MapView>
+      </MapEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(engine.computeFrame).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewport: expect.objectContaining({
+            center: [9, 48],
+            display: "globe",
+            zoom: 2.4,
+          }),
+        }),
+      );
+    });
   });
 
   test("computes viewport helper bounds and globe view states", () => {
@@ -1197,7 +1754,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Controller helper map").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Controller helper map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
       expect(controller).toBeTruthy();
     });
 
@@ -1410,7 +1969,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("GeoJSON point map").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("GeoJSON point map").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
     });
 
     expect(flatMock.getLayerGroups()[0]?.layers).toMatchObject([
@@ -1721,9 +2282,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Offset draggable store points").getAttribute("data-map-ready")).toBe(
-        "true",
-      );
+      expect(
+        screen.getByLabelText("Offset draggable store points").getAttribute("data-map-ready"),
+      ).toBe("true");
     });
 
     const map = flatMock.getMaps()[0];
@@ -2115,10 +2676,14 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Curved route flows").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Curved route flows").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
     });
 
-    const polyline = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+    const polyline = flatMock
+      .getLayerGroups()[0]
+      ?.layers.find((layer) => layer.type === "polyline");
     const latLngs = polyline?.latLngs as Array<[number, number]>;
 
     expect(latLngs).toHaveLength(24);
@@ -2148,7 +2713,9 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Directional route flows").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Directional route flows").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
     });
 
     const marker = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "marker");
@@ -2183,10 +2750,14 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Selectable route flows").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Selectable route flows").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
     });
 
-    const polyline = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+    const polyline = flatMock
+      .getLayerGroups()[0]
+      ?.layers.find((layer) => layer.type === "polyline");
 
     await act(async () => {
       polyline?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
@@ -2223,10 +2794,14 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Tooltip route flows").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Tooltip route flows").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
     });
 
-    const polyline = flatMock.getLayerGroups()[0]?.layers.find((layer) => layer.type === "polyline");
+    const polyline = flatMock
+      .getLayerGroups()[0]
+      ?.layers.find((layer) => layer.type === "polyline");
 
     await act(async () => {
       polyline?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });

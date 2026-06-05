@@ -26,13 +26,13 @@ increase quality and CPU/memory cost.
   fieldValueDomain={[-10, 35]}
   points={stations}
   valueMetric="temperature"
-/>;
+/>
 ```
 
-`initializeMapsScalarFieldWasm(...)` can opt into the optional
-`@moritzbrantner/viz-engine` runtime. If initialization fails, scalar field
-creation falls back to TypeScript and `getMapsScalarFieldWasmLoadError()`
-exposes the last load error.
+`initializeMapsScalarFieldWasm(...)` can opt into the engine-backed scalar-field
+path provided by the required `@moritzbrantner/viz-engine` package. If
+initialization fails, scalar field creation falls back to TypeScript and
+`getMapsScalarFieldWasmLoadError()` exposes the last load error.
 
 ## Temporal GeoJSON
 
