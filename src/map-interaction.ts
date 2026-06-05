@@ -7,6 +7,12 @@ export type MapFeatureInteractionState = {
   selected: boolean;
 };
 
+export type MapFeatureInteractionChange<TFeature> = {
+  feature: TFeature | null;
+  featureId: string | null;
+  source: "click" | "context-menu" | "hover" | "clear";
+};
+
 export type MapContextMenuContext = {
   close: () => void;
   coordinates: [longitude: number, latitude: number];
@@ -19,6 +25,15 @@ export type MapFeatureContextMenuContext<TFeature> = MapContextMenuContext & {
 
 export type MapFeatureInteractionProps<TFeature> = {
   getFeatureId?: (feature: TFeature) => string;
+  hoveredFeatureId?: string | null;
+  onHoveredFeatureIdChange?: (
+    featureId: string | null,
+    context: MapFeatureInteractionChange<TFeature>,
+  ) => void;
+  onSelectedFeatureIdChange?: (
+    featureId: string | null,
+    context: MapFeatureInteractionChange<TFeature>,
+  ) => void;
   onFeatureContextMenu?: (feature: TFeature) => void;
   onFeatureHover?: (feature: TFeature | null) => void;
   renderFeatureTooltip?: (feature: TFeature) => React.ReactNode;

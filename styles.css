@@ -190,6 +190,10 @@
     stroke-dasharray: none;
   }
 
+  .mb-maps__editor-snap-indicator {
+    filter: drop-shadow(0 0 8px rgb(15 118 110 / 0.62));
+  }
+
   .mb-maps__feature--hovered {
     filter: brightness(1.08) saturate(1.12);
   }
@@ -361,6 +365,39 @@
 
   .mb-maps__controls {
     @apply flex flex-wrap items-center gap-2;
+  }
+
+  .mb-maps__legend-title {
+    @apply text-[0.78rem] font-bold uppercase text-slate-600;
+    letter-spacing: 0;
+  }
+
+  .mb-maps__legend-ramp {
+    @apply h-3 min-w-40 overflow-hidden rounded-sm border border-slate-900/10;
+  }
+
+  .mb-maps__legend-row {
+    @apply flex items-center justify-between gap-3 text-xs text-slate-700;
+  }
+
+  .mb-maps__legend-symbol {
+    @apply inline-block size-3 shrink-0 rounded-sm border border-white shadow-[0_0_0_1px_rgb(15_23_42_/_0.14)];
+    background: var(--mb-maps-legend-color, #0f172a);
+  }
+
+  .mb-maps__legend-symbol--circle {
+    @apply rounded-full;
+  }
+
+  .mb-maps__legend-symbol--line {
+    @apply h-0 w-12 rounded-none border-0 shadow-none;
+    background: transparent;
+    border-top: var(--mb-maps-legend-line-width, 2px) solid var(--mb-maps-legend-color, #0f766e);
+  }
+
+  .mb-maps__legend-label {
+    @apply min-w-0 truncate;
+    font-variant-numeric: tabular-nums;
   }
 
   .mb-maps__feature-overlay {

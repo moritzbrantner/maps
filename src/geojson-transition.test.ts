@@ -679,6 +679,172 @@ describe("@moritzbrantner/maps GeoJSON transitions", () => {
     expect(frame.features).toHaveLength(2);
     expectGeometriesAreFiniteAndClosed(frame);
   });
+
+  test("topology-plan flattens GeometryCollection parts without dropping mixed geometries", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([
+          feature("mixed", {
+            geometries: [
+              { coordinates: [0, 0], type: "Point" },
+              {
+                coordinates: [
+                  [0, 0],
+                  [2, 0],
+                ],
+                type: "LineString",
+              },
+              square(0, 0, 2, 2),
+            ],
+            type: "GeometryCollection",
+          }),
+        ]),
+        collection([
+          feature("mixed", {
+            geometries: [
+              { coordinates: [4, 4], type: "Point" },
+              {
+                coordinates: [
+                  [0, 2],
+                  [2, 2],
+                ],
+                type: "LineString",
+              },
+              square(1, 1, 3, 3),
+            ],
+            type: "GeometryCollection",
+          }),
+        ]),
+        { algorithm: "topology-plan", partMatchingStrategy: "auto" },
+      ),
+      0.5,
+    );
+    const types = frame.features.map((item) => item.geometry?.type).sort();
+
+    expect(types).toEqual(["LineString", "Point", "Polygon", "Polygon", "Polygon"]);
+    expect(frame.features.some((item) => item.properties?.sourcePartPath === "geometry.geometries[0]")).toBe(
+      true,
+    );
+    expect(frame.features.some((item) => item.properties?.targetPartPath === "geometry.geometries[1]")).toBe(
+      true,
+    );
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
+
+  test("nearest-centroid part matching handles reordered MultiLineString parts", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([
+          feature("routes", {
+            coordinates: [
+              [
+                [0, 0],
+                [2, 0],
+              ],
+              [
+                [100, 0],
+                [102, 0],
+              ],
+            ],
+            type: "MultiLineString",
+          }),
+        ]),
+        collection([
+          feature("routes", {
+            coordinates: [
+              [
+                [100, 10],
+                [102, 10],
+              ],
+              [
+                [0, 10],
+                [2, 10],
+              ],
+            ],
+            type: "MultiLineString",
+          }),
+        ]),
+        {
+          algorithm: "resample",
+          complexGeometryBehavior: "decompose",
+          minCoordinatesPerLine: 2,
+          minCoordinatesPerRing: 2,
+          partMatchingStrategy: "nearest-centroid",
+        },
+      ),
+      0.5,
+    );
+
+    expect(frame.features).toHaveLength(2);
+    expect(frame.features[0]?.geometry).toEqual({
+      coordinates: [
+        [0, 5],
+        [2, 5],
+      ],
+      type: "LineString",
+    });
+    expect(frame.features[1]?.geometry).toEqual({
+      coordinates: [
+        [100, 5],
+        [102, 5],
+      ],
+      type: "LineString",
+    });
+    expect(frame.features.every((item) => item.properties?.partMatchStrategy === "nearest-centroid")).toBe(
+      true,
+    );
+  });
+
+  test("topology-plan auto matching preserves reordered MultiPolygon islands by overlap", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([
+          feature("islands", {
+            coordinates: [[squareRing(0, 0, 2, 2)], [squareRing(10, 0, 12, 2)]],
+            type: "MultiPolygon",
+          }),
+        ]),
+        collection([
+          feature("islands", {
+            coordinates: [[squareRing(10, 0, 12, 2)], [squareRing(0, 0, 2, 2)]],
+            type: "MultiPolygon",
+          }),
+        ]),
+        { algorithm: "topology-plan", partMatchingStrategy: "auto" },
+      ),
+      0.5,
+    );
+
+    expect(frame.features).toHaveLength(2);
+    expect(frame.features.every((item) => item.properties?.transitionKind === "preserve")).toBe(true);
+    expect(frame.features.every((item) => item.properties?.partMatchStrategy === "overlap")).toBe(true);
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
+
+  test("topology-plan emits appear and disappear for unmatched decomposed polygon parts", () => {
+    const frame = interpolateGeoJsonTransitionPlan(
+      createGeoJsonTransitionPlan(
+        collection([
+          feature("source", {
+            coordinates: [[squareRing(0, 0, 2, 2)], [squareRing(-12, -12, -10, -10)]],
+            type: "MultiPolygon",
+          }),
+        ]),
+        collection([
+          feature("target", {
+            coordinates: [[squareRing(0, 0, 2, 2)], [squareRing(10, 10, 12, 12)]],
+            type: "MultiPolygon",
+          }),
+        ]),
+        { algorithm: "topology-plan", partMatchingStrategy: "auto" },
+      ),
+      0.5,
+    );
+
+    expect(frame.features.map((item) => item.properties?.transitionKind)).toContain("appear");
+    expect(frame.features.map((item) => item.properties?.transitionKind)).toContain("disappear");
+    expectGeometriesAreFiniteAndClosed(frame);
+  });
 });
 
 function collection(

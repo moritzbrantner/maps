@@ -13,6 +13,12 @@ import type {
   TemporalGeoJsonSupportedGeometry,
 } from "./temporal-geojson-types";
 
+export type NormalizedGeometryPart = {
+  geometry: TemporalGeoJsonSupportedGeometry;
+  partIndex: number;
+  partPath: string;
+};
+
 export function normalizeSupportedGeometry(
   geometry: TemporalGeoJsonGeometryFeature["geometry"],
 ): TemporalGeoJsonSupportedGeometry | null {
@@ -41,6 +47,28 @@ export function normalizeSupportedGeometry(
 export function normalizeGeometryCollection(
   geometry: TemporalGeoJsonGeometryFeature["geometry"],
 ): TemporalGeoJsonSupportedGeometry[] {
+  return normalizeGeometryParts(geometry).map((part) => part.geometry);
+}
+
+export function normalizeGeometryParts(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
+  options: {
+    decomposeMultiGeometries?: boolean;
+  } = {},
+): NormalizedGeometryPart[] {
+  return normalizeGeometryPartsAtPath(geometry, "geometry", options).map((part, partIndex) => ({
+    ...part,
+    partIndex,
+  }));
+}
+
+function normalizeGeometryPartsAtPath(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
+  partPath: string,
+  options: {
+    decomposeMultiGeometries?: boolean;
+  },
+): Omit<NormalizedGeometryPart, "partIndex">[] {
   if (!geometry || !isRecord(geometry)) {
     return [];
   }
@@ -48,7 +76,11 @@ export function normalizeGeometryCollection(
   if (geometry.type !== "GeometryCollection") {
     const normalized = normalizeSupportedGeometry(geometry);
 
-    return normalized ? [normalized] : [];
+    if (!normalized) {
+      return [];
+    }
+
+    return decomposeGeometryPart(normalized, partPath, options);
   }
 
   const collection = geometry as { geometries?: unknown; type: "GeometryCollection" };
@@ -57,9 +89,48 @@ export function normalizeGeometryCollection(
     return [];
   }
 
-  return collection.geometries.flatMap((item: unknown) =>
-    normalizeGeometryCollection(item as TemporalGeoJsonGeometryFeature["geometry"]),
+  return collection.geometries.flatMap((item: unknown, index) =>
+    normalizeGeometryPartsAtPath(
+      item as TemporalGeoJsonGeometryFeature["geometry"],
+      `${partPath}.geometries[${index}]`,
+      options,
+    ),
   );
+}
+
+function decomposeGeometryPart(
+  geometry: TemporalGeoJsonSupportedGeometry,
+  partPath: string,
+  options: {
+    decomposeMultiGeometries?: boolean;
+  },
+): Omit<NormalizedGeometryPart, "partIndex">[] {
+  if (!options.decomposeMultiGeometries) {
+    return [{ geometry, partPath }];
+  }
+
+  switch (geometry.type) {
+    case "MultiPoint":
+      return geometry.coordinates.map((coordinates, index) => ({
+        geometry: { coordinates: clonePosition(coordinates), type: "Point" as const },
+        partPath: `${partPath}.coordinates[${index}]`,
+      }));
+    case "MultiLineString":
+      return geometry.coordinates.map((coordinates, index) => ({
+        geometry: { coordinates: coordinates.map(clonePosition), type: "LineString" as const },
+        partPath: `${partPath}.coordinates[${index}]`,
+      }));
+    case "MultiPolygon":
+      return geometry.coordinates.map((coordinates, index) => ({
+        geometry: {
+          coordinates: coordinates.map((ring) => ring.map(clonePosition)),
+          type: "Polygon" as const,
+        },
+        partPath: `${partPath}.coordinates[${index}]`,
+      }));
+    default:
+      return [{ geometry, partPath }];
+  }
 }
 
 function normalizePointGeometry(geometry: {

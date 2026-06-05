@@ -1,4 +1,9 @@
-import { cloneGeometry, closeRing, normalizeSupportedGeometry } from "./temporal-geojson-geometry";
+import {
+  cloneGeometry,
+  closeRing,
+  normalizeGeometryParts,
+  normalizeSupportedGeometry,
+} from "./temporal-geojson-geometry";
 import { interpolateTemporalGeoJsonGeometry } from "./temporal-geojson-interpolation";
 import {
   clipPolygonLikeToVoronoiCell,
@@ -15,6 +20,7 @@ import {
 } from "./geojson-topology";
 import type {
   GeoJsonPosition,
+  GeoJsonPartMatchingStrategy,
   TemporalGeoJsonGeometryFeature,
   TemporalGeoJsonGeometryFeatureCollection,
   TemporalGeoJsonInterpolationStrategy,
@@ -33,14 +39,23 @@ export type GeoJsonTransitionFallback = "hold" | "hide";
 
 export type GeoJsonTopologyStrategy = "bounds" | "area-overlap" | "voronoi-partition";
 
+export type GeoJsonComplexGeometryBehavior = "preserve" | "flatten" | "decompose";
+
 export type GeoJsonTransitionOptions = {
   algorithm?: GeoJsonTransitionAlgorithm;
+  complexGeometryBehavior?: GeoJsonComplexGeometryBehavior;
   coordinateSpace?: "lonlat" | "web-mercator" | "identity";
   fallback?: GeoJsonTransitionFallback;
+  getPartId?: (
+    feature: TemporalGeoJsonGeometryFeature,
+    featureIndex: number,
+    partPath: string,
+  ) => string | number | undefined;
   maxCoordinatesPerLine?: number;
   maxCoordinatesPerRing?: number;
   minCoordinatesPerLine?: number;
   minCoordinatesPerRing?: number;
+  partMatchingStrategy?: GeoJsonPartMatchingStrategy;
   topologyMinOverlapRatio?: number;
   topologyStrategy?: GeoJsonTopologyStrategy;
 };
@@ -63,7 +78,12 @@ export type GeoJsonTransitionPlan<
   readonly type: "GeoJsonTransitionPlan";
 };
 
-export type ResolvedGeoJsonTransitionOptions = Required<GeoJsonTransitionOptions>;
+export type ResolvedGeoJsonTransitionOptions = Omit<
+  Required<GeoJsonTransitionOptions>,
+  "getPartId"
+> & {
+  getPartId?: GeoJsonTransitionOptions["getPartId"];
+};
 
 type GeoJsonTransitionPlanFragment<TProperties extends Record<string, unknown>> = {
   fromFeature?: TemporalGeoJsonGeometryFeature<TProperties>;
@@ -72,8 +92,11 @@ type GeoJsonTransitionPlanFragment<TProperties extends Record<string, unknown>> 
   kind: GeoJsonTransitionFragmentKind;
   overlapArea?: number;
   overlapRatio?: number;
+  partMatchStrategy?: GeoJsonPartMatchingStrategy;
   sourceIds: Array<string | number>;
+  sourcePartPath?: string;
   targetIds: Array<string | number>;
+  targetPartPath?: string;
   toFeature?: TemporalGeoJsonGeometryFeature<TProperties>;
   toGeometry?: TemporalGeoJsonSupportedGeometry;
 };
@@ -82,22 +105,37 @@ type GeoJsonTransitionFeatureEntry<TProperties extends Record<string, unknown>> 
   feature: TemporalGeoJsonGeometryFeature<TProperties>;
   geometry: TemporalGeoJsonSupportedGeometry | null;
   index: number;
+  key: string;
+  partIndex: number;
+  partPath: string;
 };
 
 type PolygonLikeFeatureEntry<TProperties extends Record<string, unknown>> = {
   feature: TemporalGeoJsonGeometryFeature<TProperties>;
   geometry: PolygonLikeGeometry;
   index: number;
+  key: string;
+  partIndex: number;
+  partPath: string;
+};
+
+type PartMatch<TEntry> = {
+  from?: TEntry;
+  score: number;
+  strategy: GeoJsonPartMatchingStrategy;
+  to?: TEntry;
 };
 
 const DEFAULT_TRANSITION_OPTIONS: ResolvedGeoJsonTransitionOptions = {
   algorithm: "vertex-union",
+  complexGeometryBehavior: "preserve",
   coordinateSpace: "lonlat",
   fallback: "hold",
   maxCoordinatesPerLine: 512,
   maxCoordinatesPerRing: 512,
   minCoordinatesPerLine: 16,
   minCoordinatesPerRing: 16,
+  partMatchingStrategy: "index",
   topologyMinOverlapRatio: 0.005,
   topologyStrategy: "area-overlap",
 };
@@ -110,14 +148,20 @@ export function createGeoJsonTransitionPlan<
   options: GeoJsonTransitionOptions = {},
 ): GeoJsonTransitionPlan<TProperties> {
   const resolvedOptions = resolveTransitionOptions(options);
+  const plannedFrom = shouldProjectFeatureCollectionForPlanning(resolvedOptions)
+    ? projectFeatureCollectionForPlanning(from, resolvedOptions)
+    : from;
+  const plannedTo = shouldProjectFeatureCollectionForPlanning(resolvedOptions)
+    ? projectFeatureCollectionForPlanning(to, resolvedOptions)
+    : to;
   const fragments =
     resolvedOptions.algorithm === "topology-plan"
       ? createTopologyPlanFragments(
-          projectFeatureCollectionForPlanning(from, resolvedOptions),
-          projectFeatureCollectionForPlanning(to, resolvedOptions),
+          plannedFrom,
+          plannedTo,
           resolvedOptions,
         )
-      : createPairedPlanFragments(from, to);
+      : createPairedPlanFragments(plannedFrom, plannedTo, resolvedOptions);
 
   return {
     algorithm: resolvedOptions.algorithm,
@@ -147,18 +191,21 @@ export function interpolateGeoJsonTransitionPlan<
 function createPairedPlanFragments<TProperties extends Record<string, unknown>>(
   from: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   to: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
+  options: ResolvedGeoJsonTransitionOptions,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
   return createPairedPlanFragmentsFromEntries(
-    createTransitionFeatureEntries(from),
-    createTransitionFeatureEntries(to),
+    createTransitionFeatureEntries(from, options),
+    createTransitionFeatureEntries(to, options),
+    options,
   );
 }
 
 function createPairedPlanFragmentsFromEntries<TProperties extends Record<string, unknown>>(
   fromEntries: Array<GeoJsonTransitionFeatureEntry<TProperties>>,
   toEntries: Array<GeoJsonTransitionFeatureEntry<TProperties>>,
+  options: ResolvedGeoJsonTransitionOptions,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
-  if (fromEntries.length === 1 && toEntries.length === 1) {
+  if (options.partMatchingStrategy === "index" && fromEntries.length === 1 && toEntries.length === 1) {
     const fromEntry = fromEntries[0]!;
     const toEntry = toEntries[0]!;
 
@@ -166,24 +213,31 @@ function createPairedPlanFragmentsFromEntries<TProperties extends Record<string,
       {
         fromFeature: fromEntry.feature,
         fromGeometry: fromEntry.geometry ?? undefined,
-        id: `${getFeatureKey(fromEntry.feature, fromEntry.index)}:${getFeatureKey(toEntry.feature, toEntry.index)}`,
+        id: `${fromEntry.key}:${toEntry.key}`,
         kind: "morph",
-        sourceIds: [fromEntry.feature.id ?? getFeatureKey(fromEntry.feature, fromEntry.index)],
-        targetIds: [toEntry.feature.id ?? getFeatureKey(toEntry.feature, toEntry.index)],
+        partMatchStrategy: "index",
+        sourceIds: [fromEntry.feature.id ?? fromEntry.key],
+        sourcePartPath: fromEntry.partPath,
+        targetIds: [toEntry.feature.id ?? toEntry.key],
+        targetPartPath: toEntry.partPath,
         toFeature: toEntry.feature,
         toGeometry: toEntry.geometry ?? undefined,
       },
     ];
   }
 
+  if (options.partMatchingStrategy !== "index") {
+    return createMatchedPlanFragments(fromEntries, toEntries, options);
+  }
+
   const targetById = new Map(
-    toEntries.map((entry) => [getFeatureKey(entry.feature, entry.index), entry]),
+    toEntries.map((entry) => [entry.key, entry]),
   );
   const consumedTargetIds = new Set<string>();
   const fragments: Array<GeoJsonTransitionPlanFragment<TProperties>> = [];
 
   fromEntries.forEach((fromEntry) => {
-    const id = getFeatureKey(fromEntry.feature, fromEntry.index);
+    const id = fromEntry.key;
     const toEntry = targetById.get(id);
 
     if (toEntry) {
@@ -195,15 +249,18 @@ function createPairedPlanFragmentsFromEntries<TProperties extends Record<string,
       fromGeometry: fromEntry.geometry ?? undefined,
       id,
       kind: toEntry ? "morph" : "disappear",
+      partMatchStrategy: "index",
       sourceIds: [fromEntry.feature.id ?? id],
+      sourcePartPath: fromEntry.partPath,
       targetIds: toEntry ? [toEntry.feature.id ?? id] : [],
+      targetPartPath: toEntry?.partPath,
       toFeature: toEntry?.feature,
       toGeometry: toEntry?.geometry ?? undefined,
     });
   });
 
   toEntries.forEach((toEntry) => {
-    const id = getFeatureKey(toEntry.feature, toEntry.index);
+    const id = toEntry.key;
 
     if (consumedTargetIds.has(id)) {
       return;
@@ -212,8 +269,10 @@ function createPairedPlanFragmentsFromEntries<TProperties extends Record<string,
     fragments.push({
       id,
       kind: "appear",
+      partMatchStrategy: "index",
       sourceIds: [],
       targetIds: [toEntry.feature.id ?? id],
+      targetPartPath: toEntry.partPath,
       toFeature: toEntry.feature,
       toGeometry: toEntry.geometry ?? undefined,
     });
@@ -229,7 +288,7 @@ function createTopologyPlanFragments<TProperties extends Record<string, unknown>
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
   switch (options.topologyStrategy) {
     case "bounds":
-      return createBoundsTopologyPlanFragments(from, to);
+      return createBoundsTopologyPlanFragments(from, to, options);
     case "voronoi-partition":
       return createAreaOverlapTopologyPlanFragments(from, to, options);
     case "area-overlap":
@@ -240,14 +299,16 @@ function createTopologyPlanFragments<TProperties extends Record<string, unknown>
 function createBoundsTopologyPlanFragments<TProperties extends Record<string, unknown>>(
   from: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   to: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
+  options: ResolvedGeoJsonTransitionOptions,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
-  const fromEntries = createTransitionFeatureEntries(from);
-  const toEntries = createTransitionFeatureEntries(to);
+  const fromEntries = createTransitionFeatureEntries(from, options);
+  const toEntries = createTransitionFeatureEntries(to, options);
   const fromPolygonFeatures = fromEntries.filter(isPolygonLikeFeatureEntry);
   const toPolygonFeatures = toEntries.filter(isPolygonLikeFeatureEntry);
   const pairedNonPolygonFragments = createPairedPlanFragmentsFromEntries(
     fromEntries.filter((entry) => !isPolygonLikeFeatureEntry(entry)),
     toEntries.filter((entry) => !isPolygonLikeFeatureEntry(entry)),
+    options,
   );
 
   if (fromPolygonFeatures.length === 1 && toPolygonFeatures.length === 1) {
@@ -268,8 +329,11 @@ function createBoundsTopologyPlanFragments<TProperties extends Record<string, un
           createCollapsedPolygonGeometry(getGeometryCentroid(source.geometry)),
         id: `split:${getFeatureKey(source.feature, source.index)}:${getFeatureKey(target.feature, target.index)}`,
         kind: "split" as const,
+        partMatchStrategy: options.partMatchingStrategy,
         sourceIds: [source.feature.id ?? source.index],
+        sourcePartPath: source.partPath,
         targetIds: [target.feature.id ?? target.index],
+        targetPartPath: target.partPath,
         toFeature: target.feature,
         toGeometry: target.geometry,
       })),
@@ -286,8 +350,11 @@ function createBoundsTopologyPlanFragments<TProperties extends Record<string, un
         fromGeometry: source.geometry,
         id: `merge:${getFeatureKey(source.feature, source.index)}:${getFeatureKey(target.feature, target.index)}`,
         kind: "merge" as const,
+        partMatchStrategy: options.partMatchingStrategy,
         sourceIds: [source.feature.id ?? source.index],
+        sourcePartPath: source.partPath,
         targetIds: [target.feature.id ?? target.index],
+        targetPartPath: target.partPath,
         toFeature: target.feature,
         toGeometry:
           getBoundsIntersectionGeometry(source.geometry, target.geometry) ??
@@ -297,7 +364,7 @@ function createBoundsTopologyPlanFragments<TProperties extends Record<string, un
     ];
   }
 
-  return createPairedPlanFragments(from, to).map((fragment) => ({
+  return createPairedPlanFragments(from, to, options).map((fragment) => ({
     ...fragment,
     kind: fragment.kind === "morph" ? "preserve" : fragment.kind,
   }));
@@ -308,13 +375,14 @@ function createAreaOverlapTopologyPlanFragments<TProperties extends Record<strin
   to: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   options: ResolvedGeoJsonTransitionOptions,
 ): Array<GeoJsonTransitionPlanFragment<TProperties>> {
-  const fromEntries = createTransitionFeatureEntries(from);
-  const toEntries = createTransitionFeatureEntries(to);
+  const fromEntries = createTransitionFeatureEntries(from, options);
+  const toEntries = createTransitionFeatureEntries(to, options);
   const sourceEntries = createTopologyPolygonEntries(fromEntries);
   const targetEntries = createTopologyPolygonEntries(toEntries);
   const pairedNonPolygonFragments = createPairedPlanFragmentsFromEntries(
     fromEntries.filter((entry) => !isPolygonLikeFeatureEntry(entry)),
     toEntries.filter((entry) => !isPolygonLikeFeatureEntry(entry)),
+    options,
   );
 
   if (sourceEntries.length === 0 || targetEntries.length === 0) {
@@ -368,7 +436,9 @@ function createTopologyPolygonEntries<TProperties extends Record<string, unknown
     feature: entry.feature,
     geometry: entry.geometry,
     index: entry.index,
-    key: getFeatureKey(entry.feature, entry.index),
+    key: entry.key,
+    partIndex: entry.partIndex,
+    partPath: entry.partPath,
   }));
 }
 
@@ -554,8 +624,11 @@ function createSplitAreaOverlapFragments<TProperties extends Record<string, unkn
       kind: "split" as const,
       overlapArea: edge?.area,
       overlapRatio: edge ? Math.max(edge.ratioOfSource, edge.ratioOfTarget) : undefined,
+      partMatchStrategy: "overlap",
       sourceIds: [getEntryId(source)],
+      sourcePartPath: source.partPath,
       targetIds: [getEntryId(target)],
+      targetPartPath: target.partPath,
       toFeature: target.feature,
       toGeometry: target.geometry,
     };
@@ -583,8 +656,11 @@ function createMergeAreaOverlapFragments<TProperties extends Record<string, unkn
       kind: "merge" as const,
       overlapArea: edge?.area,
       overlapRatio: edge ? Math.max(edge.ratioOfSource, edge.ratioOfTarget) : undefined,
+      partMatchStrategy: "overlap",
       sourceIds: [getEntryId(source)],
+      sourcePartPath: source.partPath,
       targetIds: [getEntryId(target)],
+      targetPartPath: target.partPath,
       toFeature: target.feature,
       toGeometry,
     };
@@ -654,8 +730,11 @@ function createPreserveFragment<TProperties extends Record<string, unknown>>(
     kind: "preserve",
     overlapArea: edge.area,
     overlapRatio: Math.max(edge.ratioOfSource, edge.ratioOfTarget),
+    partMatchStrategy: "overlap",
     sourceIds: [getEntryId(edge.source)],
+    sourcePartPath: edge.source.partPath,
     targetIds: [getEntryId(edge.target)],
+    targetPartPath: edge.target.partPath,
     toFeature: edge.target.feature,
     toGeometry: edge.overlapGeometry,
   };
@@ -670,8 +749,10 @@ function createAppearFragment<TProperties extends Record<string, unknown>>(
     fromGeometry: createCollapsedPolygonGeometry(getPolygonLikeCentroid(geometry)),
     id,
     kind: "appear",
+    partMatchStrategy: "overlap",
     sourceIds: [],
     targetIds: [getEntryId(target)],
+    targetPartPath: target.partPath,
     toFeature: target.feature,
     toGeometry: geometry,
   };
@@ -687,7 +768,9 @@ function createDisappearFragment<TProperties extends Record<string, unknown>>(
     fromGeometry: geometry,
     id,
     kind: "disappear",
+    partMatchStrategy: "overlap",
     sourceIds: [getEntryId(source)],
+    sourcePartPath: source.partPath,
     targetIds: [],
     toGeometry: createCollapsedPolygonGeometry(getPolygonLikeCentroid(geometry)),
   };
@@ -851,12 +934,320 @@ function collectTopologyComponent<TProperties extends Record<string, unknown>>(
 
 function createTransitionFeatureEntries<TProperties extends Record<string, unknown>>(
   collection: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
+  options: ResolvedGeoJsonTransitionOptions,
 ): Array<GeoJsonTransitionFeatureEntry<TProperties>> {
-  return collection.features.map((feature, index) => ({
-    feature,
-    geometry: normalizeSupportedGeometry(feature.geometry),
-    index,
-  }));
+  const shouldUseParts = options.complexGeometryBehavior !== "preserve";
+
+  return collection.features.flatMap((feature, index) => {
+    if (!shouldUseParts) {
+      const key = getFeatureKey(feature, index);
+
+      return [
+        {
+          feature,
+          geometry: normalizeSupportedGeometry(feature.geometry),
+          index,
+          key,
+          partIndex: 0,
+          partPath: "geometry",
+        },
+      ];
+    }
+
+    const parts = normalizeGeometryParts(feature.geometry, {
+      decomposeMultiGeometries:
+        options.complexGeometryBehavior === "decompose" ||
+        options.algorithm === "topology-plan",
+    });
+
+    return parts.map((part) => ({
+      feature,
+      geometry: part.geometry,
+      index,
+      key: getPartKey(feature, index, part.partPath, parts.length, options),
+      partIndex: part.partIndex,
+      partPath: part.partPath,
+    }));
+  });
+}
+
+function getPartKey<TProperties extends Record<string, unknown>>(
+  feature: TemporalGeoJsonGeometryFeature<TProperties>,
+  index: number,
+  partPath: string,
+  partCount: number,
+  options: ResolvedGeoJsonTransitionOptions,
+) {
+  const explicitPartId = options.getPartId?.(feature, index, partPath);
+  const propertyPartId = feature.properties?.partId ?? feature.properties?.geometryPartId;
+  const featureKey = getFeatureKey(feature, index);
+
+  if (explicitPartId !== undefined) {
+    return String(explicitPartId);
+  }
+
+  if (typeof propertyPartId === "string" || typeof propertyPartId === "number") {
+    return String(propertyPartId);
+  }
+
+  return partCount === 1 ? featureKey : `${featureKey}:${partPath}`;
+}
+
+function createMatchedPlanFragments<TProperties extends Record<string, unknown>>(
+  fromEntries: Array<GeoJsonTransitionFeatureEntry<TProperties>>,
+  toEntries: Array<GeoJsonTransitionFeatureEntry<TProperties>>,
+  options: ResolvedGeoJsonTransitionOptions,
+): Array<GeoJsonTransitionPlanFragment<TProperties>> {
+  return matchTransitionParts(fromEntries, toEntries, options.partMatchingStrategy).map((match) =>
+    createPlanFragmentFromPartMatch(match),
+  );
+}
+
+function createPlanFragmentFromPartMatch<TProperties extends Record<string, unknown>>(
+  match: PartMatch<GeoJsonTransitionFeatureEntry<TProperties>>,
+): GeoJsonTransitionPlanFragment<TProperties> {
+  const fromEntry = match.from;
+  const toEntry = match.to;
+  const fromGeometry = fromEntry?.geometry ?? undefined;
+  const toGeometry = toEntry?.geometry ?? undefined;
+
+  if (fromEntry && toEntry) {
+    return {
+      fromFeature: fromEntry.feature,
+      fromGeometry,
+      id: `${fromEntry.key}:${toEntry.key}`,
+      kind: "morph",
+      partMatchStrategy: match.strategy,
+      sourceIds: [fromEntry.feature.id ?? fromEntry.key],
+      sourcePartPath: fromEntry.partPath,
+      targetIds: [toEntry.feature.id ?? toEntry.key],
+      targetPartPath: toEntry.partPath,
+      toFeature: toEntry.feature,
+      toGeometry,
+    };
+  }
+
+  if (fromEntry) {
+    return {
+      fromFeature: fromEntry.feature,
+      fromGeometry,
+      id: `disappear:${fromEntry.key}`,
+      kind: "disappear",
+      partMatchStrategy: match.strategy,
+      sourceIds: [fromEntry.feature.id ?? fromEntry.key],
+      sourcePartPath: fromEntry.partPath,
+      targetIds: [],
+      toGeometry: fromGeometry ? collapseGeometryToCentroid(fromGeometry) : undefined,
+    };
+  }
+
+  return {
+    fromGeometry: toGeometry ? collapseGeometryToCentroid(toGeometry) : undefined,
+    id: `appear:${toEntry!.key}`,
+    kind: "appear",
+    partMatchStrategy: match.strategy,
+    sourceIds: [],
+    targetIds: [toEntry!.feature.id ?? toEntry!.key],
+    targetPartPath: toEntry!.partPath,
+    toFeature: toEntry!.feature,
+    toGeometry,
+  };
+}
+
+function matchTransitionParts<TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>>(
+  fromEntries: TEntry[],
+  toEntries: TEntry[],
+  strategy: GeoJsonPartMatchingStrategy,
+): Array<PartMatch<TEntry>> {
+  const candidates = createPartMatchCandidates(fromEntries, toEntries, strategy);
+  const consumedSources = new Set<TEntry>();
+  const consumedTargets = new Set<TEntry>();
+  const matches: Array<PartMatch<TEntry>> = [];
+
+  for (const candidate of candidates) {
+    if (!candidate.from || !candidate.to) {
+      continue;
+    }
+
+    if (consumedSources.has(candidate.from) || consumedTargets.has(candidate.to)) {
+      continue;
+    }
+
+    consumedSources.add(candidate.from);
+    consumedTargets.add(candidate.to);
+    matches.push(candidate);
+  }
+
+  fromEntries.forEach((entry) => {
+    if (!consumedSources.has(entry)) {
+      matches.push({ from: entry, score: 0, strategy });
+    }
+  });
+  toEntries.forEach((entry) => {
+    if (!consumedTargets.has(entry)) {
+      matches.push({ score: 0, strategy, to: entry });
+    }
+  });
+
+  return matches.sort(comparePartMatches);
+}
+
+function createPartMatchCandidates<
+  TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>,
+>(
+  fromEntries: TEntry[],
+  toEntries: TEntry[],
+  strategy: GeoJsonPartMatchingStrategy,
+): Array<PartMatch<TEntry>> {
+  const candidates: Array<PartMatch<TEntry>> = [];
+
+  for (const fromEntry of fromEntries) {
+    for (const toEntry of toEntries) {
+      const candidate = createPartMatchCandidate(fromEntry, toEntry, strategy);
+
+      if (candidate) {
+        candidates.push(candidate);
+      }
+    }
+  }
+
+  return candidates.sort(comparePartMatchCandidates);
+}
+
+function createPartMatchCandidate<
+  TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>,
+>(
+  fromEntry: TEntry,
+  toEntry: TEntry,
+  strategy: GeoJsonPartMatchingStrategy,
+): PartMatch<TEntry> | null {
+  if (strategy === "id") {
+    return fromEntry.key === toEntry.key
+      ? { from: fromEntry, score: 1, strategy, to: toEntry }
+      : null;
+  }
+
+  if (strategy === "nearest-centroid") {
+    return createNearestCentroidPartMatch(fromEntry, toEntry, strategy);
+  }
+
+  if (strategy === "overlap") {
+    return createOverlapPartMatch(fromEntry, toEntry, strategy);
+  }
+
+  if (strategy === "auto") {
+    if (fromEntry.key === toEntry.key) {
+      return { from: fromEntry, score: 1_000_000_000, strategy: "id", to: toEntry };
+    }
+
+    return (
+      createOverlapPartMatch(fromEntry, toEntry, "overlap") ??
+      createNearestCentroidPartMatch(fromEntry, toEntry, "nearest-centroid") ??
+      createIndexPartMatch(fromEntry, toEntry, "index")
+    );
+  }
+
+  return createIndexPartMatch(fromEntry, toEntry, "index");
+}
+
+function createIndexPartMatch<TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>>(
+  fromEntry: TEntry,
+  toEntry: TEntry,
+  strategy: GeoJsonPartMatchingStrategy,
+): PartMatch<TEntry> | null {
+  return fromEntry.partIndex === toEntry.partIndex
+    ? { from: fromEntry, score: 0.0001, strategy, to: toEntry }
+    : null;
+}
+
+function createNearestCentroidPartMatch<
+  TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>,
+>(
+  fromEntry: TEntry,
+  toEntry: TEntry,
+  strategy: GeoJsonPartMatchingStrategy,
+): PartMatch<TEntry> | null {
+  if (!fromEntry.geometry || !toEntry.geometry || fromEntry.geometry.type !== toEntry.geometry.type) {
+    return null;
+  }
+
+  const fromCenter = getGeometryCenter(fromEntry.geometry);
+  const toCenter = getGeometryCenter(toEntry.geometry);
+  const distance = Math.hypot(toCenter[0] - fromCenter[0], toCenter[1] - fromCenter[1]);
+
+  return {
+    from: fromEntry,
+    score: 1 / (1 + distance),
+    strategy,
+    to: toEntry,
+  };
+}
+
+function createOverlapPartMatch<
+  TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>,
+>(
+  fromEntry: TEntry,
+  toEntry: TEntry,
+  strategy: GeoJsonPartMatchingStrategy,
+): PartMatch<TEntry> | null {
+  if (!fromEntry.geometry || !toEntry.geometry || !isPolygonLikeGeometry(fromEntry.geometry) || !isPolygonLikeGeometry(toEntry.geometry)) {
+    return null;
+  }
+
+  const overlap = intersectPolygonLike(fromEntry.geometry, toEntry.geometry);
+
+  if (!overlap) {
+    return null;
+  }
+
+  const area = getPolygonLikeArea(overlap);
+
+  return area > 0
+    ? {
+        from: fromEntry,
+        score: area,
+        strategy,
+        to: toEntry,
+      }
+    : null;
+}
+
+function comparePartMatchCandidates<TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>>(
+  left: PartMatch<TEntry>,
+  right: PartMatch<TEntry>,
+) {
+  return (
+    right.score - left.score ||
+    getMatchSourceKey(left).localeCompare(getMatchSourceKey(right)) ||
+    getMatchTargetKey(left).localeCompare(getMatchTargetKey(right)) ||
+    (left.from?.index ?? 0) - (right.from?.index ?? 0) ||
+    (left.to?.index ?? 0) - (right.to?.index ?? 0)
+  );
+}
+
+function comparePartMatches<TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>>(
+  left: PartMatch<TEntry>,
+  right: PartMatch<TEntry>,
+) {
+  return (
+    getMatchSourceKey(left).localeCompare(getMatchSourceKey(right)) ||
+    getMatchTargetKey(left).localeCompare(getMatchTargetKey(right)) ||
+    (left.from?.index ?? Number.MAX_SAFE_INTEGER) -
+      (right.from?.index ?? Number.MAX_SAFE_INTEGER) ||
+    (left.to?.index ?? Number.MAX_SAFE_INTEGER) - (right.to?.index ?? Number.MAX_SAFE_INTEGER)
+  );
+}
+
+function getMatchSourceKey<TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>>(
+  match: PartMatch<TEntry>,
+) {
+  return match.from?.key ?? "";
+}
+
+function getMatchTargetKey<TEntry extends GeoJsonTransitionFeatureEntry<Record<string, unknown>>>(
+  match: PartMatch<TEntry>,
+) {
+  return match.to?.key ?? "";
 }
 
 function isPolygonLikeFeatureEntry<TProperties extends Record<string, unknown>>(
@@ -984,7 +1375,7 @@ function interpolatePlanFragment<TProperties extends Record<string, unknown>>(
     return [];
   }
   const outputGeometry =
-    plan.algorithm === "topology-plan"
+    shouldProjectFeatureCollectionForPlanning(plan.options)
       ? unprojectGeometryFromPlanning(interpolatedGeometry, plan.options)
       : interpolatedGeometry;
 
@@ -998,8 +1389,13 @@ function interpolatePlanFragment<TProperties extends Record<string, unknown>>(
         flowArea: getGeometryArea(fragment.fromGeometry),
         ...(fragment.overlapArea === undefined ? {} : { overlapArea: fragment.overlapArea }),
         ...(fragment.overlapRatio === undefined ? {} : { overlapRatio: fragment.overlapRatio }),
+        ...(fragment.partMatchStrategy === undefined
+          ? {}
+          : { partMatchStrategy: fragment.partMatchStrategy }),
         sourceIds: fragment.sourceIds,
+        ...(fragment.sourcePartPath === undefined ? {} : { sourcePartPath: fragment.sourcePartPath }),
         targetIds: fragment.targetIds,
+        ...(fragment.targetPartPath === undefined ? {} : { targetPartPath: fragment.targetPartPath }),
         transitionKind: fragment.kind,
       },
       type: "Feature",
@@ -1117,6 +1513,79 @@ function getGeometryArea(geometry: TemporalGeoJsonSupportedGeometry) {
   return 0;
 }
 
+function isPolygonLikeGeometry(geometry: TemporalGeoJsonSupportedGeometry): geometry is PolygonLikeGeometry {
+  return geometry.type === "Polygon" || geometry.type === "MultiPolygon";
+}
+
+function getGeometryCenter(geometry: TemporalGeoJsonSupportedGeometry): GeoJsonPosition {
+  if (isPolygonLikeGeometry(geometry)) {
+    return getPolygonLikeCentroid(geometry);
+  }
+
+  const positions = getGeometryPositions(geometry);
+  const totals = positions.reduce(
+    (sum, position) => [sum[0] + position[0], sum[1] + position[1]] as GeoJsonPosition,
+    [0, 0],
+  );
+
+  return positions.length === 0
+    ? [0, 0]
+    : [totals[0] / positions.length, totals[1] / positions.length];
+}
+
+function collapseGeometryToCentroid(
+  geometry: TemporalGeoJsonSupportedGeometry,
+): TemporalGeoJsonSupportedGeometry {
+  const center = getGeometryCenter(geometry);
+
+  switch (geometry.type) {
+    case "Point":
+      return {
+        coordinates: clonePosition(center),
+        type: "Point",
+      };
+    case "MultiPoint":
+      return {
+        coordinates: geometry.coordinates.map(() => clonePosition(center)),
+        type: "MultiPoint",
+      };
+    case "LineString":
+      return {
+        coordinates: [clonePosition(center), clonePosition(center)],
+        type: "LineString",
+      };
+    case "MultiLineString":
+      return {
+        coordinates: geometry.coordinates.map(() => [clonePosition(center), clonePosition(center)]),
+        type: "MultiLineString",
+      };
+    case "Polygon":
+      return createCollapsedPolygonGeometry(center);
+    case "MultiPolygon":
+      return {
+        coordinates: geometry.coordinates.map(() => createCollapsedPolygonGeometry(center).coordinates),
+        type: "MultiPolygon",
+      };
+  }
+}
+
+function getGeometryPositions(geometry: TemporalGeoJsonSupportedGeometry): GeoJsonPosition[] {
+  switch (geometry.type) {
+    case "Point":
+      return [geometry.coordinates];
+    case "MultiPoint":
+      return geometry.coordinates;
+    case "LineString":
+      return geometry.coordinates;
+    case "MultiLineString":
+      return geometry.coordinates.flat();
+    case "Polygon":
+      return geometry.coordinates.flat();
+    case "MultiPolygon":
+      return geometry.coordinates.flat(2);
+  }
+}
+
 function getPolygonLikePositions(geometry: PolygonLikeGeometry): GeoJsonPosition[] {
   return geometry.type === "Polygon" ? geometry.coordinates.flat() : geometry.coordinates.flat(2);
 }
@@ -1159,14 +1628,16 @@ function projectFeatureCollectionForPlanning<TProperties extends Record<string, 
   return {
     ...collection,
     features: collection.features.map((feature) => {
-      const geometry = normalizeSupportedGeometry(feature.geometry);
-
       return {
         ...feature,
-        geometry: geometry ? mapGeometryPositions(geometry, projectLonLatToWebMercator) : feature.geometry,
+        geometry: mapFeatureGeometryPositionsForPlanning(feature.geometry, projectLonLatToWebMercator),
       };
     }),
   };
+}
+
+function shouldProjectFeatureCollectionForPlanning(options: ResolvedGeoJsonTransitionOptions) {
+  return options.algorithm === "topology-plan" && options.coordinateSpace === "lonlat";
 }
 
 function unprojectGeometryFromPlanning(
@@ -1209,6 +1680,37 @@ function mapGeometryPositions(
   }
 }
 
+function mapFeatureGeometryPositionsForPlanning(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
+  mapPosition: (position: GeoJsonPosition) => GeoJsonPosition,
+): TemporalGeoJsonGeometryFeature["geometry"] {
+  const normalized = normalizeSupportedGeometry(geometry);
+
+  if (normalized) {
+    return mapGeometryPositions(normalized, mapPosition);
+  }
+
+  if (!geometry || typeof geometry !== "object" || geometry.type !== "GeometryCollection") {
+    return geometry;
+  }
+
+  const geometries = "geometries" in geometry ? geometry.geometries : undefined;
+
+  if (!Array.isArray(geometries)) {
+    return geometry;
+  }
+
+  return {
+    geometries: geometries.map((item) =>
+      mapFeatureGeometryPositionsForPlanning(
+        item as TemporalGeoJsonGeometryFeature["geometry"],
+        mapPosition,
+      ),
+    ),
+    type: "GeometryCollection",
+  };
+}
+
 function projectLonLatToWebMercator(position: GeoJsonPosition): GeoJsonPosition {
   const longitude = clamp(position[0], -180, 180);
   const latitude = clamp(position[1], -85.05112878, 85.05112878);
@@ -1234,15 +1736,20 @@ function clonePosition(position: GeoJsonPosition): GeoJsonPosition {
 }
 
 function resolveTransitionOptions(options: GeoJsonTransitionOptions): ResolvedGeoJsonTransitionOptions {
+  const algorithm = options.algorithm ?? DEFAULT_TRANSITION_OPTIONS.algorithm;
   const minCoordinatesPerRing =
     sanitizePositiveInteger(options.minCoordinatesPerRing) ??
     sanitizePositiveInteger(options.minCoordinatesPerLine) ??
     DEFAULT_TRANSITION_OPTIONS.minCoordinatesPerRing;
 
   return {
-    algorithm: options.algorithm ?? DEFAULT_TRANSITION_OPTIONS.algorithm,
+    algorithm,
+    complexGeometryBehavior:
+      options.complexGeometryBehavior ??
+      (algorithm === "topology-plan" ? "flatten" : DEFAULT_TRANSITION_OPTIONS.complexGeometryBehavior),
     coordinateSpace: options.coordinateSpace ?? DEFAULT_TRANSITION_OPTIONS.coordinateSpace,
     fallback: options.fallback ?? DEFAULT_TRANSITION_OPTIONS.fallback,
+    getPartId: options.getPartId,
     maxCoordinatesPerLine:
       sanitizePositiveInteger(options.maxCoordinatesPerLine) ??
       DEFAULT_TRANSITION_OPTIONS.maxCoordinatesPerLine,
@@ -1253,6 +1760,7 @@ function resolveTransitionOptions(options: GeoJsonTransitionOptions): ResolvedGe
       sanitizePositiveInteger(options.minCoordinatesPerLine) ??
       DEFAULT_TRANSITION_OPTIONS.minCoordinatesPerLine,
     minCoordinatesPerRing,
+    partMatchingStrategy: options.partMatchingStrategy ?? DEFAULT_TRANSITION_OPTIONS.partMatchingStrategy,
     topologyMinOverlapRatio:
       sanitizePositiveNumber(options.topologyMinOverlapRatio) ??
       DEFAULT_TRANSITION_OPTIONS.topologyMinOverlapRatio,

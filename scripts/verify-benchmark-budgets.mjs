@@ -23,6 +23,7 @@ const budgetMultiplier = Number(process.env.MAPS_BENCHMARK_BUDGET_MULTIPLIER ?? 
 const benchmarks = [
   benchmarkTemporalGeoJson(),
   benchmarkGeoJsonTransition(),
+  benchmarkComplexGeoJsonTransition(),
   benchmarkScalarField(),
   benchmarkHeatAggregation(),
 ];
@@ -110,6 +111,39 @@ function benchmarkGeoJsonTransition() {
     {
       algorithm: "topology-plan",
       coordinateCount,
+    },
+  );
+}
+
+function benchmarkComplexGeoJsonTransition() {
+  const coordinateCount = 256;
+  const from = createMultiPolygonFeatureCollection("source", [
+    createRing(coordinateCount, 12, 0, 0),
+    createRing(coordinateCount, 10, 32, 0),
+  ]);
+  const to = createMultiPolygonFeatureCollection("target", [
+    createRing(coordinateCount, 10, 32, 0),
+    createRing(coordinateCount, 12, 0, 0),
+    createRing(coordinateCount, 8, 16, 18),
+  ]);
+
+  return createBenchmarkResult(
+    "geojson-transition-complex-topology-plan",
+    1000,
+    measureStats(() => {
+      const plan = createGeoJsonTransitionPlan(from, to, {
+        algorithm: "topology-plan",
+        maxCoordinatesPerRing: 256,
+        minCoordinatesPerRing: 32,
+        partMatchingStrategy: "auto",
+      });
+
+      interpolateGeoJsonTransitionPlan(plan, 0.5);
+    }),
+    {
+      algorithm: "topology-plan",
+      coordinateCount,
+      partMatchingStrategy: "auto",
     },
   );
 }
@@ -247,6 +281,23 @@ function createFeatureCollection(id, ring) {
         geometry: {
           coordinates: [ring],
           type: "Polygon",
+        },
+        id,
+        properties: null,
+        type: "Feature",
+      },
+    ],
+    type: "FeatureCollection",
+  };
+}
+
+function createMultiPolygonFeatureCollection(id, rings) {
+  return {
+    features: [
+      {
+        geometry: {
+          coordinates: rings.map((ring) => [ring]),
+          type: "MultiPolygon",
         },
         id,
         properties: null,

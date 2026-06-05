@@ -87,12 +87,15 @@ export function PointLayer<TProperties = Record<string, unknown>>({
   getFeatureId,
   getPointColor,
   getPointRadius,
+  hoveredFeatureId,
   layerId,
+  onHoveredFeatureIdChange,
   onFeatureContextMenu,
   onFeatureDrag,
   onFeatureDragEnd,
   onFeatureHover,
   onFeatureSelect,
+  onSelectedFeatureIdChange,
   points,
   pointColor = "#0f172a",
   pointRadius = 6,
@@ -114,12 +117,15 @@ export function PointLayer<TProperties = Record<string, unknown>>({
       getFeatureId={getFeatureId}
       getPointColor={getPointColor}
       getPointRadius={getPointRadius}
+      hoveredFeatureId={hoveredFeatureId}
       layerId={layerId}
+      onHoveredFeatureIdChange={onHoveredFeatureIdChange}
       onFeatureContextMenu={onFeatureContextMenu}
       onFeatureDrag={onFeatureDrag}
       onFeatureDragEnd={onFeatureDragEnd}
       onFeatureHover={onFeatureHover}
       onFeatureSelect={onFeatureSelect}
+      onSelectedFeatureIdChange={onSelectedFeatureIdChange}
       pointColor={pointColor}
       pointRadius={pointRadius}
       renderFeatureContextMenu={renderFeatureContextMenu}
@@ -144,12 +150,15 @@ function PointFeatureLayer<
   getFeatureId,
   getPointColor,
   getPointRadius,
+  hoveredFeatureId,
   layerId,
+  onHoveredFeatureIdChange,
   onFeatureContextMenu,
   onFeatureDrag,
   onFeatureDragEnd,
   onFeatureHover,
   onFeatureSelect,
+  onSelectedFeatureIdChange,
   pointColor,
   pointRadius,
   renderFeatureContextMenu,
@@ -202,7 +211,7 @@ function PointFeatureLayer<
         const seen = new Set<string>();
         const preparedFeatures = features.map((feature) => {
           const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-          const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
+          const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
           const featureDraggable = isFeatureDraggable(feature, draggable);
           const featureKey = getFlatPointFeatureKey(feature, getFeatureId);
           const coordinatesKey = createFlatPointCoordinatesKey(feature.coordinates);
@@ -291,7 +300,9 @@ function PointFeatureLayer<
           if (!isMeasuring) {
             marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
               currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                getFeatureId,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeaturePopup,
               });
             });
@@ -299,8 +310,10 @@ function PointFeatureLayer<
               suppressNativeContextMenu(event);
               currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
                 coordinates: feature.coordinates,
+                getFeatureId,
                 onFeatureContextMenu,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeatureContextMenu,
                 renderFeaturePopup,
               });
@@ -317,19 +330,28 @@ function PointFeatureLayer<
             marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
               map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
               currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                getFeatureId,
+                onHoveredFeatureIdChange,
                 onFeatureHover,
                 renderFeatureTooltip,
               });
             });
             marker.on("mousemove", (event: { containerPoint?: { x: number; y: number } } = {}) => {
               currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                getFeatureId,
+                onHoveredFeatureIdChange,
                 onFeatureHover,
                 renderFeatureTooltip,
               });
             });
             marker.on("mouseout", () => {
               map.getContainer().style.cursor = "";
-              currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+              currentSurface.handleFeatureHover(null, null, {
+                getFeatureId,
+                onHoveredFeatureIdChange,
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
             });
           }
 
@@ -358,12 +380,15 @@ function PointFeatureLayer<
     getFeatureId,
     getPointColor,
     getPointRadius,
+    hoveredFeatureId,
     resolvedLayerId,
     onFeatureContextMenu,
     onFeatureDrag,
     onFeatureDragEnd,
     onFeatureHover,
     onFeatureSelect,
+    onHoveredFeatureIdChange,
+    onSelectedFeatureIdChange,
     pointColor,
     pointRadius,
     renderFeaturePopup,
@@ -387,7 +412,7 @@ function PointFeatureLayer<
         }
 
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
+        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
         const featureDraggable = isFeatureDraggable(feature, draggable);
         const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius) * (0.72 + projected.scale * 0.28);
 
@@ -406,7 +431,9 @@ function PointFeatureLayer<
             onClick={(event) => {
               event.stopPropagation();
               surface.handleFeatureClick(feature, { x: projected.x, y: projected.y }, {
+                getFeatureId,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
               });
@@ -416,8 +443,10 @@ function PointFeatureLayer<
               event.stopPropagation();
               surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
                 coordinates: feature.coordinates,
+                getFeatureId,
                 onFeatureContextMenu,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeatureContextMenu,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
@@ -472,13 +501,20 @@ function PointFeatureLayer<
             onPointerEnter={() => {
               if (!surface.isMeasuring) {
                 surface.handleFeatureHover(feature, { x: projected.x, y: projected.y }, {
+                  getFeatureId,
+                  onHoveredFeatureIdChange,
                   onFeatureHover,
                   renderFeatureTooltip,
                 });
               }
             }}
             onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+              surface.handleFeatureHover(null, null, {
+                getFeatureId,
+                onHoveredFeatureIdChange,
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
             }}
             r={radius}
             style={{ opacity: 0.42 + projected.scale * 0.58 }}

@@ -56,6 +56,37 @@ export function FleetMap() {
 }
 ```
 
+## Common Controls
+
+Compose overlays with the built-in legend components and keep feature state
+controlled when the surrounding app owns side panels, tables, or detail views.
+
+```tsx
+import {
+  ClusteredMap,
+  MapColorRampLegend,
+  type MapSurfaceController,
+} from "@moritzbrantner/maps";
+
+let controller: MapSurfaceController | null = null;
+
+<ClusteredMap
+  onMapControllerReady={(next) => {
+    controller = next;
+  }}
+  onSelectedFeatureIdChange={(featureId) => setSelectedId(featureId)}
+  points={points}
+  selectedFeatureId={selectedId}
+>
+  <MapColorRampLegend
+    stops={[[0, "#67e8f9"], [1, "#dc2626"]]}
+    title="Demand"
+  />
+</ClusteredMap>;
+
+controller?.fitPoints(points, { padding: 72 });
+```
+
 ## Documentation
 
 - [Getting Started](docs/getting-started.md)

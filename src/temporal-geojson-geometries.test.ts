@@ -10,8 +10,61 @@ import {
   type TemporalGeoJsonSupportedGeometry,
   type TemporalGeoJsonTrack,
 } from ".";
+import { normalizeGeometryCollection, normalizeGeometryParts } from "./temporal-geojson-geometry";
 
 describe("@moritzbrantner/maps temporal GeoJSON geometries", () => {
+  test("normalizes complex GeometryCollection parts with stable part paths", () => {
+    const geometry = {
+      geometries: [
+        { coordinates: [0, 0], type: "Point" },
+        {
+          geometries: [
+            {
+              coordinates: [
+                [
+                  [0, 0],
+                  [2, 0],
+                ],
+                [
+                  [10, 0],
+                  [12, 0],
+                ],
+              ],
+              type: "MultiLineString",
+            },
+            {
+              coordinates: [[squareRing(0, 0, 2, 2)], [squareRing(10, 0, 12, 2)]],
+              type: "MultiPolygon",
+            },
+          ],
+          type: "GeometryCollection",
+        },
+      ],
+      type: "GeometryCollection",
+    } satisfies TemporalGeoJsonGeometryFeatureCollection["features"][number]["geometry"];
+    const parts = normalizeGeometryParts(geometry, { decomposeMultiGeometries: true });
+
+    expect(parts.map((part) => part.partPath)).toEqual([
+      "geometry.geometries[0]",
+      "geometry.geometries[1].geometries[0].coordinates[0]",
+      "geometry.geometries[1].geometries[0].coordinates[1]",
+      "geometry.geometries[1].geometries[1].coordinates[0]",
+      "geometry.geometries[1].geometries[1].coordinates[1]",
+    ]);
+    expect(parts.map((part) => part.geometry.type)).toEqual([
+      "Point",
+      "LineString",
+      "LineString",
+      "Polygon",
+      "Polygon",
+    ]);
+    expect(normalizeGeometryCollection(geometry).map((item) => item.type)).toEqual([
+      "Point",
+      "MultiLineString",
+      "MultiPolygon",
+    ]);
+  });
+
   test("converts line and polygon features into grouped temporal tracks", () => {
     const collection: TemporalGeoJsonGeometryFeatureCollection = {
       features: [
@@ -1258,6 +1311,104 @@ describe("@moritzbrantner/maps temporal GeoJSON geometries", () => {
     expect(flattenNumbers(geometry?.coordinates).every(Number.isFinite)).toBe(true);
   });
 
+  test("prepared playback index matches raw output for reordered MultiLineString parts", () => {
+    const tracks: TemporalGeoJsonTrack[] = [
+      {
+        id: "routes",
+        frames: [
+          {
+            geometry: {
+              coordinates: [
+                [
+                  [0, 0],
+                  [2, 0],
+                ],
+                [
+                  [100, 0],
+                  [102, 0],
+                ],
+              ],
+              type: "MultiLineString",
+            },
+            time: 0,
+          },
+          {
+            geometry: {
+              coordinates: [
+                [
+                  [100, 10],
+                  [102, 10],
+                ],
+                [
+                  [0, 10],
+                  [2, 10],
+                ],
+              ],
+              type: "MultiLineString",
+            },
+            time: 10,
+          },
+        ],
+      },
+    ];
+    const options = {
+      minResampleCoordinates: 2,
+      partMatchingStrategy: "auto" as const,
+      strategy: "resample" as const,
+    };
+    const raw = getTemporalGeoJsonFeatureCollectionAtTime(tracks, 5, options);
+    const indexed = createTemporalGeoJsonPlaybackIndex(tracks, options).getFeatureCollectionAtTime(5);
+
+    expect(indexed).toEqual(raw);
+    expect(indexed.features[0]?.geometry).toEqual({
+      coordinates: [
+        [
+          [0, 5],
+          [2, 5],
+        ],
+        [
+          [100, 5],
+          [102, 5],
+        ],
+      ],
+      type: "MultiLineString",
+    });
+  });
+
+  test("prepared playback index matches raw output for reordered MultiPolygon parts", () => {
+    const tracks: TemporalGeoJsonTrack[] = [
+      {
+        id: "islands",
+        frames: [
+          {
+            geometry: {
+              coordinates: [[squareRing(0, 0, 2, 2)], [squareRing(10, 0, 12, 2)]],
+              type: "MultiPolygon",
+            },
+            time: 0,
+          },
+          {
+            geometry: {
+              coordinates: [[squareRing(10, 2, 12, 4)], [squareRing(0, 2, 2, 4)]],
+              type: "MultiPolygon",
+            },
+            time: 10,
+          },
+        ],
+      },
+    ];
+    const options = {
+      maxCoordinatesPerRing: 8,
+      minResampleCoordinates: 4,
+      partMatchingStrategy: "auto" as const,
+      strategy: "vertex-union" as const,
+    };
+
+    expect(createTemporalGeoJsonPlaybackIndex(tracks, options).getFeatureCollectionAtTime(5)).toEqual(
+      getTemporalGeoJsonFeatureCollectionAtTime(tracks, 5, options),
+    );
+  });
+
   test("prepared playback index returns deterministic empty output for empty track lists", () => {
     const index = createTemporalGeoJsonPlaybackIndex([]);
 
@@ -1302,6 +1453,16 @@ function createDenseRing(pointCount: number, radius: number, offsetX: number, of
   coordinates.push([...coordinates[0]!] as [number, number]);
 
   return coordinates;
+}
+
+function squareRing(west: number, south: number, east: number, north: number) {
+  return [
+    [west, south],
+    [east, south],
+    [east, north],
+    [west, north],
+    [west, south],
+  ] satisfies Array<[number, number]>;
 }
 
 function flattenNumbers(value: unknown): number[] {

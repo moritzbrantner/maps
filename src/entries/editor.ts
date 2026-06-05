@@ -16,6 +16,9 @@ export {
   type GeoJsonBatchEditReason,
   type GeoJsonEditorCommand,
   type GeoJsonEditorGroupOptions,
+  type GeoJsonEditorSnapMode,
+  type GeoJsonEditorSnapOptions,
+  type GeoJsonSnapTarget,
   type GeoJsonEditMode,
   type GeoJsonEditOperation,
   type GeoJsonEditReason,
@@ -25,3 +28,12 @@ export {
   type GeoJsonEditorSelection,
   type GeoJsonVertexHandle,
 } from "../geojson-editor";
+export {
+  createGeoJsonEditHistoryState,
+  invertGeoJsonEditOperation,
+  pushGeoJsonEditHistory,
+  redoGeoJsonEditHistory,
+  undoGeoJsonEditHistory,
+  type GeoJsonEditHistoryEntry,
+  type GeoJsonEditHistoryState,
+} from "../geojson-editor-history";

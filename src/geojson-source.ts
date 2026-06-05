@@ -1,6 +1,6 @@
 import type { MapMetricRecord, MapPoint } from "./aggregation";
 import type { MapFlow } from "./flow-layer";
-import { cloneGeometry, normalizeGeometryCollection } from "./temporal-geojson-geometry";
+import { cloneGeometry, normalizeGeometryParts } from "./temporal-geojson-geometry";
 import { isRecord } from "./temporal-core";
 import type {
   GeoJsonPosition,
@@ -191,13 +191,13 @@ export function flattenGeoJsonFeatures<
   collection: GeoJsonMapSource<TProperties>,
 ): Array<FlattenedGeoJsonFeature<TProperties>> {
   return collection.features.flatMap((feature, index) => {
-    const geometries = normalizeGeometryCollection(feature.geometry);
+    const parts = normalizeGeometryParts(feature.geometry);
 
-    return geometries.map((geometry, geometryIndex) => ({
+    return parts.map((part) => ({
       feature,
-      geometry,
+      geometry: part.geometry,
       index,
-      partIndex: geometries.length > 1 ? geometryIndex : undefined,
+      partIndex: parts.length > 1 ? part.partIndex : undefined,
     }));
   });
 }

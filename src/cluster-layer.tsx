@@ -31,12 +31,15 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   clusterRadius,
   filterPoint,
   getFeatureId,
+  hoveredFeatureId,
   layerId,
   maxZoom,
   minZoom,
+  onHoveredFeatureIdChange,
   onFeatureContextMenu,
   onFeatureHover,
   onFeatureSelect,
+  onSelectedFeatureIdChange,
   onViewportAggregationChange,
   points,
   renderFeatureContextMenu,
@@ -95,7 +98,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
       for (const feature of aggregation.features) {
         const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
+        const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
         const featureKey = getFlatClusterFeatureKey(feature, getFeatureId);
         const coordinatesKey = createFlatClusterCoordinatesKey(feature.coordinates);
         const signature = createFlatClusterSignature({
@@ -149,7 +152,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 "cluster-expand",
               );
               currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                getFeatureId,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeaturePopup,
               });
             });
@@ -157,8 +162,10 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
               suppressNativeContextMenu(event);
               currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
                 coordinates: feature.coordinates,
+                getFeatureId,
                 onFeatureContextMenu,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeatureContextMenu,
                 renderFeaturePopup,
               });
@@ -166,13 +173,20 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
               map.getContainer().style.cursor = "pointer";
               currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+                getFeatureId,
+                onHoveredFeatureIdChange,
                 onFeatureHover,
                 renderFeatureTooltip,
               });
             });
             marker.on("mouseout", () => {
               map.getContainer().style.cursor = "";
-              currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+              currentSurface.handleFeatureHover(null, null, {
+                getFeatureId,
+                onHoveredFeatureIdChange,
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
             });
           }
 
@@ -214,7 +228,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         if (!isMeasuring) {
           marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+              getFeatureId,
               onFeatureSelect,
+              onSelectedFeatureIdChange,
               renderFeaturePopup,
             });
           });
@@ -222,8 +238,10 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             suppressNativeContextMenu(event);
             currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
               coordinates: feature.coordinates,
+              getFeatureId,
               onFeatureContextMenu,
               onFeatureSelect,
+              onSelectedFeatureIdChange,
               renderFeatureContextMenu,
               renderFeaturePopup,
             });
@@ -231,13 +249,20 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             map.getContainer().style.cursor = "pointer";
             currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
+              getFeatureId,
+              onHoveredFeatureIdChange,
               onFeatureHover,
               renderFeatureTooltip,
             });
           });
           marker.on("mouseout", () => {
             map.getContainer().style.cursor = "";
-            currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+            currentSurface.handleFeatureHover(null, null, {
+              getFeatureId,
+              onHoveredFeatureIdChange,
+              onFeatureHover,
+              renderFeatureTooltip,
+            });
           });
         }
 
@@ -262,11 +287,14 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
     );
   }, [
     getFeatureId,
+    hoveredFeatureId,
     index,
     resolvedLayerId,
     onFeatureContextMenu,
     onFeatureHover,
     onFeatureSelect,
+    onHoveredFeatureIdChange,
+    onSelectedFeatureIdChange,
     onViewportAggregationChange,
     renderFeaturePopup,
     renderFeatureContextMenu,
@@ -296,7 +324,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         }
 
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
+        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
 
         if (feature.kind === "cluster") {
           const radius = getClusterRadius(feature.pointCount) * (0.72 + projected.scale * 0.28);
@@ -327,7 +355,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                   "cluster-expand",
                 );
                 surface.handleFeatureClick(feature, { x: projected.x, y: projected.y }, {
+                  getFeatureId,
                   onFeatureSelect,
+                  onSelectedFeatureIdChange,
                   renderFeaturePopup,
                 });
               }}
@@ -335,8 +365,10 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 event.preventDefault();
                 event.stopPropagation();
                 surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
+                  getFeatureId,
                   onFeatureContextMenu,
                   onFeatureSelect,
+                  onSelectedFeatureIdChange,
                   renderFeatureContextMenu,
                   renderFeaturePopup,
                   suppress: surface.isMeasuring,
@@ -346,13 +378,20 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
               onPointerEnter={() => {
                 if (!surface.isMeasuring) {
                   surface.handleFeatureHover(feature, { x: projected.x, y: projected.y }, {
+                    getFeatureId,
+                    onHoveredFeatureIdChange,
                     onFeatureHover,
                     renderFeatureTooltip,
                   });
                 }
               }}
               onPointerLeave={() => {
-                surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+                surface.handleFeatureHover(null, null, {
+                  getFeatureId,
+                  onHoveredFeatureIdChange,
+                  onFeatureHover,
+                  renderFeatureTooltip,
+                });
               }}
               style={{ opacity: 0.38 + projected.scale * 0.62 }}
             >
@@ -383,7 +422,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             onClick={(event) => {
               event.stopPropagation();
               surface.handleFeatureClick(feature, { x: projected.x, y: projected.y }, {
+                getFeatureId,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
               });
@@ -392,8 +433,10 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
               event.preventDefault();
               event.stopPropagation();
               surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
+                getFeatureId,
                 onFeatureContextMenu,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeatureContextMenu,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
@@ -403,13 +446,20 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             onPointerEnter={() => {
               if (!surface.isMeasuring) {
                 surface.handleFeatureHover(feature, { x: projected.x, y: projected.y }, {
+                  getFeatureId,
+                  onHoveredFeatureIdChange,
                   onFeatureHover,
                   renderFeatureTooltip,
                 });
               }
             }}
             onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+              surface.handleFeatureHover(null, null, {
+                getFeatureId,
+                onHoveredFeatureIdChange,
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
             }}
             r={6 * (0.72 + projected.scale * 0.28)}
             style={{ opacity: 0.42 + projected.scale * 0.58 }}

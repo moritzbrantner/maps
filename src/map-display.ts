@@ -1,6 +1,7 @@
 "use client";
 
 import { getBoundsFromPoints, type MapPoint } from "./aggregation";
+import type { GeoJsonMapSource } from "./geojson-source";
 import {
   type MapLibreMapStyle,
   toLatLng as toFlatLatLng,
@@ -19,9 +20,23 @@ export type MapViewState = {
 
 export type MapBounds = [west: number, south: number, east: number, north: number];
 
+export type MapFitBoundsOptions = {
+  animate?: boolean;
+  durationMs?: number;
+  maxZoom?: number;
+  padding?: number;
+};
+
+export type MapFlyToOptions = {
+  animate?: boolean;
+  durationMs?: number;
+};
+
 export type MapViewStateChangeReason =
   | "initial"
   | "fit-to-data"
+  | "fit-bounds"
+  | "fly-to"
   | "pan"
   | "zoom"
   | "cluster-expand"
@@ -58,6 +73,16 @@ export type MapViewportProps = {
 export type MapSurfaceController = {
   display: MapDisplayMode;
   fitToData: () => void;
+  fitBounds: (bounds: MapBounds, options?: MapFitBoundsOptions) => void;
+  fitPoints: <TProperties>(
+    points: readonly MapPoint<TProperties>[],
+    options?: MapFitBoundsOptions,
+  ) => void;
+  fitGeoJson: <TProperties extends Record<string, unknown>>(
+    source: GeoJsonMapSource<TProperties>,
+    options?: MapFitBoundsOptions,
+  ) => void;
+  flyTo: (viewState: MapViewState, options?: MapFlyToOptions) => void;
   getViewState: () => MapViewState;
   setViewState: (viewState: MapViewState, reason?: MapViewStateChangeReason) => void;
 };
@@ -150,6 +175,56 @@ export function createInitialGlobeViewState<TProperties = Record<string, unknown
 export function createGlobalViewportQuery(zoom: number) {
   return {
     bounds: [-180, -90, 180, 90] as [number, number, number, number],
+    zoom,
+  };
+}
+
+export function getMapBoundsCenter(bounds: MapBounds): [longitude: number, latitude: number] {
+  return [
+    normalizeLongitude((bounds[0] + bounds[2]) / 2),
+    clampLatitude((bounds[1] + bounds[3]) / 2),
+  ];
+}
+
+export function padMapBounds(bounds: MapBounds, paddingDegrees: number): MapBounds {
+  const padding = Number.isFinite(paddingDegrees) ? Math.max(0, paddingDegrees) : 0;
+
+  return [
+    normalizeLongitude(bounds[0] - padding),
+    clampLatitude(bounds[1] - padding),
+    normalizeLongitude(bounds[2] + padding),
+    clampLatitude(bounds[3] + padding),
+  ];
+}
+
+export function mergeMapBounds(
+  ...boundsList: Array<MapBounds | null | undefined>
+): MapBounds | null {
+  const validBounds = boundsList.filter(isValidMapBounds);
+
+  if (validBounds.length === 0) {
+    return null;
+  }
+
+  return validBounds.reduce(
+    (merged, bounds) => [
+      Math.min(merged[0], bounds[0]),
+      Math.min(merged[1], bounds[1]),
+      Math.max(merged[2], bounds[2]),
+      Math.max(merged[3], bounds[3]),
+    ] as MapBounds,
+    validBounds[0]!,
+  );
+}
+
+export function getGlobeViewStateForBounds(bounds: MapBounds): MapViewState {
+  const longitudeSpan = Math.max(1e-6, Math.abs(bounds[2] - bounds[0]));
+  const latitudeSpan = Math.max(1e-6, Math.abs(bounds[3] - bounds[1]));
+  const span = Math.max(longitudeSpan / 360, latitudeSpan / 180);
+  const zoom = clamp(GLOBE_BASE_ZOOM + Math.log2(Math.max(1, 0.7 / span)), GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM);
+
+  return {
+    center: getMapBoundsCenter(bounds),
     zoom,
   };
 }
@@ -484,6 +559,10 @@ export function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function isValidMapBounds(bounds: MapBounds | null | undefined): bounds is MapBounds {
+  return Boolean(bounds?.every((value) => Number.isFinite(value)));
 }
 
 function normalizeLongitude(longitude: number) {

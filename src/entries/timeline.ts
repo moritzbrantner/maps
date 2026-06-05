@@ -4,10 +4,12 @@ export {
   createGeoJsonTransitionPlan,
   interpolateGeoJsonTransitionPlan,
   type GeoJsonTransitionAlgorithm,
+  type GeoJsonComplexGeometryBehavior,
   type GeoJsonTransitionFallback,
   type GeoJsonTransitionFragmentKind,
   type GeoJsonTransitionOptions,
   type GeoJsonTransitionPlan,
+  type GeoJsonTopologyStrategy,
   type ResolvedGeoJsonTransitionOptions,
 } from "../geojson-transition";
 export {

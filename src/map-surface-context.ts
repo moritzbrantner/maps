@@ -14,7 +14,10 @@ import type {
   FlatLayerGroup,
   FlatMapAdapter,
 } from "./maplibre-compat";
-import type { MapFeatureContextMenuContext } from "./map-interaction";
+import type {
+  MapFeatureContextMenuContext,
+  MapFeatureInteractionChange,
+} from "./map-interaction";
 import type { MapCoordinate } from "./measurement";
 
 export type FlatLayerRender = (context: {
@@ -43,6 +46,11 @@ export type MapSurfaceContextValue = {
     feature: TFeature,
     position: { x: number; y: number },
     options?: {
+      getFeatureId?: (feature: TFeature) => string;
+      onSelectedFeatureIdChange?: (
+        featureId: string | null,
+        context: MapFeatureInteractionChange<TFeature>,
+      ) => void;
       onFeatureSelect?: (feature: TFeature | null) => void;
       renderFeaturePopup?: (feature: TFeature) => ReactNode;
       suppress?: boolean;
@@ -53,7 +61,12 @@ export type MapSurfaceContextValue = {
     position: { x: number; y: number },
     options?: {
       coordinates?: [longitude: number, latitude: number];
+      getFeatureId?: (feature: TFeature) => string;
       onFeatureContextMenu?: (feature: TFeature) => void;
+      onSelectedFeatureIdChange?: (
+        featureId: string | null,
+        context: MapFeatureInteractionChange<TFeature>,
+      ) => void;
       onFeatureSelect?: (feature: TFeature | null) => void;
       renderFeatureContextMenu?: (
         feature: TFeature,
@@ -67,12 +80,18 @@ export type MapSurfaceContextValue = {
     feature: TFeature | null,
     position: { x: number; y: number } | null,
     options?: {
+      getFeatureId?: (feature: TFeature) => string;
+      onHoveredFeatureIdChange?: (
+        featureId: string | null,
+        context: MapFeatureInteractionChange<TFeature>,
+      ) => void;
       onFeatureHover?: (feature: TFeature | null) => void;
       renderFeatureTooltip?: (feature: TFeature) => ReactNode;
     },
   ) => void;
   isFeatureHovered: <TFeature>(
     feature: TFeature,
+    hoveredFeatureId?: string | null,
     getFeatureId?: (feature: TFeature) => string,
   ) => boolean;
   isFeatureSelected: <TFeature>(

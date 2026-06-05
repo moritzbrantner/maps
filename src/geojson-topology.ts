@@ -23,6 +23,8 @@ export type TopologyPolygonEntry<TProperties extends Record<string, unknown>> = 
   geometry: PolygonLikeGeometry;
   index: number;
   key: string;
+  partIndex?: number;
+  partPath?: string;
 };
 
 export type TopologyOverlapEdge<TProperties extends Record<string, unknown>> = {

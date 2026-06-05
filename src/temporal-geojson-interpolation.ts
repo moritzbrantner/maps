@@ -17,6 +17,7 @@ import type {
   GeoJsonMultiLineStringGeometry,
   GeoJsonMultiPointGeometry,
   GeoJsonMultiPolygonGeometry,
+  GeoJsonPartMatchingStrategy,
   GeoJsonPointGeometry,
   GeoJsonPolygonGeometry,
   GeoJsonPosition,
@@ -70,6 +71,7 @@ const DEFAULT_INTERPOLATION_OPTIONS: ResolvedInterpolationOptions = {
   maxCoordinatesPerLine: 512,
   maxCoordinatesPerRing: 512,
   minResampleCoordinates: 16,
+  partMatchingStrategy: "index",
   strategy: "compatible",
 };
 
@@ -120,6 +122,19 @@ export function prepareMatchingGeometryInterpolator(
     case "MultiPoint": {
       const nextPoints = (nextGeometry as GeoJsonMultiPointGeometry).coordinates;
 
+      if (options.partMatchingStrategy !== "index") {
+        return {
+          points: createPreparedFlatCoordinates(
+            ...createMatchedPositionCoordinatePair(
+              previousGeometry.coordinates,
+              nextPoints,
+              options.partMatchingStrategy,
+            ),
+          ),
+          type: "MultiPoint",
+        };
+      }
+
       if (previousGeometry.coordinates.length !== nextPoints.length) {
         return null;
       }
@@ -140,14 +155,22 @@ export function prepareMatchingGeometryInterpolator(
     }
     case "MultiLineString": {
       const nextLines = (nextGeometry as GeoJsonMultiLineStringGeometry).coordinates;
+      const linePairs =
+        options.partMatchingStrategy === "index"
+          ? previousGeometry.coordinates.length === nextLines.length
+            ? previousGeometry.coordinates.map((line, index) => [line, nextLines[index]!] as const)
+            : null
+          : createMatchedLineCoordinatePairs(
+              previousGeometry.coordinates,
+              nextLines,
+              options.partMatchingStrategy,
+            );
 
-      if (previousGeometry.coordinates.length !== nextLines.length) {
+      if (!linePairs) {
         return null;
       }
 
-      const lines = previousGeometry.coordinates.map((line, index) =>
-        prepareLineInterpolator(line, nextLines[index]!, options),
-      );
+      const lines = linePairs.map(([line, nextLine]) => prepareLineInterpolator(line, nextLine, options));
 
       return lines.some((line) => line === null)
         ? null
@@ -164,13 +187,23 @@ export function prepareMatchingGeometryInterpolator(
     }
     case "MultiPolygon": {
       const nextPolygons = (nextGeometry as GeoJsonMultiPolygonGeometry).coordinates;
+      const polygonPairs =
+        options.partMatchingStrategy === "index"
+          ? previousGeometry.coordinates.length === nextPolygons.length
+            ? previousGeometry.coordinates.map((polygon, index) => [polygon, nextPolygons[index]!] as const)
+            : null
+          : createMatchedPolygonCoordinatePairs(
+              previousGeometry.coordinates,
+              nextPolygons,
+              options.partMatchingStrategy,
+            );
 
-      if (previousGeometry.coordinates.length !== nextPolygons.length) {
+      if (!polygonPairs) {
         return null;
       }
 
-      const polygons = previousGeometry.coordinates.map((polygon, index) =>
-        preparePolygonInterpolators(polygon, nextPolygons[index]!, options),
+      const polygons = polygonPairs.map(([polygon, nextPolygon]) =>
+        preparePolygonInterpolators(polygon, nextPolygon, options),
       );
 
       return polygons.some((polygon) => polygon === null)
@@ -178,6 +211,199 @@ export function prepareMatchingGeometryInterpolator(
         : { polygons: polygons as PreparedFlatCoordinates[][], type: "MultiPolygon" };
     }
   }
+}
+
+type TemporalPartMatchingStrategy = Exclude<GeoJsonPartMatchingStrategy, "overlap">;
+
+function createMatchedPositionCoordinatePair(
+  previousCoordinates: readonly GeoJsonPosition[],
+  nextCoordinates: readonly GeoJsonPosition[],
+  strategy: TemporalPartMatchingStrategy,
+): [GeoJsonPosition[], GeoJsonPosition[]] {
+  return unzipCoordinatePairs(
+    createMatchedPartPairs(previousCoordinates, nextCoordinates, strategy, {
+      collapse: clonePosition,
+      getCenter: clonePosition,
+    }),
+  );
+}
+
+function createMatchedLineCoordinatePairs(
+  previousCoordinates: readonly (readonly GeoJsonPosition[])[],
+  nextCoordinates: readonly (readonly GeoJsonPosition[])[],
+  strategy: TemporalPartMatchingStrategy,
+): Array<readonly [GeoJsonPosition[], GeoJsonPosition[]]> {
+  return createMatchedPartPairs(previousCoordinates, nextCoordinates, strategy, {
+    collapse: collapseLineToCentroid,
+    getCenter: getPositionsCenter,
+  }).map(([previousLine, nextLine]) => [
+    previousLine.map(clonePosition),
+    nextLine.map(clonePosition),
+  ]);
+}
+
+function createMatchedPolygonCoordinatePairs(
+  previousCoordinates: readonly (readonly (readonly GeoJsonPosition[])[])[],
+  nextCoordinates: readonly (readonly (readonly GeoJsonPosition[])[])[],
+  strategy: TemporalPartMatchingStrategy,
+): Array<readonly [GeoJsonPosition[][], GeoJsonPosition[][]]> {
+  return createMatchedPartPairs(previousCoordinates, nextCoordinates, strategy, {
+    collapse: collapsePolygonToCentroid,
+    getCenter: getPolygonCoordinatesCenter,
+  }).map(([previousPolygon, nextPolygon]) => [
+    previousPolygon.map((ring) => ring.map(clonePosition)),
+    nextPolygon.map((ring) => ring.map(clonePosition)),
+  ]);
+}
+
+function createMatchedPartPairs<TPart, TCollapsed>(
+  previousParts: readonly TPart[],
+  nextParts: readonly TPart[],
+  strategy: TemporalPartMatchingStrategy,
+  options: {
+    collapse: (part: TPart) => TCollapsed;
+    getCenter: (part: TPart) => GeoJsonPosition;
+  },
+): Array<readonly [TPart | TCollapsed, TPart | TCollapsed]> {
+  if (strategy === "id" || strategy === "index") {
+    return createIndexPartPairs(previousParts, nextParts, options.collapse);
+  }
+
+  const candidates: Array<{
+    distance: number;
+    previousIndex: number;
+    nextIndex: number;
+  }> = [];
+
+  previousParts.forEach((previousPart, previousIndex) => {
+    const previousCenter = options.getCenter(previousPart);
+
+    nextParts.forEach((nextPart, nextIndex) => {
+      const nextCenter = options.getCenter(nextPart);
+
+      candidates.push({
+        distance: Math.hypot(nextCenter[0] - previousCenter[0], nextCenter[1] - previousCenter[1]),
+        nextIndex,
+        previousIndex,
+      });
+    });
+  });
+
+  candidates.sort(
+    (left, right) =>
+      left.distance - right.distance ||
+      left.previousIndex - right.previousIndex ||
+      left.nextIndex - right.nextIndex,
+  );
+
+  const matchedPrevious = new Set<number>();
+  const matchedNext = new Set<number>();
+  const pairs: Array<{
+    nextIndex: number;
+    pair: readonly [TPart | TCollapsed, TPart | TCollapsed];
+    previousIndex: number;
+  }> = [];
+
+  for (const candidate of candidates) {
+    if (matchedPrevious.has(candidate.previousIndex) || matchedNext.has(candidate.nextIndex)) {
+      continue;
+    }
+
+    matchedPrevious.add(candidate.previousIndex);
+    matchedNext.add(candidate.nextIndex);
+    pairs.push({
+      nextIndex: candidate.nextIndex,
+      pair: [previousParts[candidate.previousIndex]!, nextParts[candidate.nextIndex]!],
+      previousIndex: candidate.previousIndex,
+    });
+  }
+
+  previousParts.forEach((previousPart, previousIndex) => {
+    if (!matchedPrevious.has(previousIndex)) {
+      pairs.push({
+        nextIndex: Number.MAX_SAFE_INTEGER,
+        pair: [previousPart, options.collapse(previousPart)],
+        previousIndex,
+      });
+    }
+  });
+
+  nextParts.forEach((nextPart, nextIndex) => {
+    if (!matchedNext.has(nextIndex)) {
+      pairs.push({
+        nextIndex,
+        pair: [options.collapse(nextPart), nextPart],
+        previousIndex: Number.MAX_SAFE_INTEGER,
+      });
+    }
+  });
+
+  return pairs
+    .sort(
+      (left, right) =>
+        left.previousIndex - right.previousIndex ||
+        left.nextIndex - right.nextIndex,
+    )
+    .map((item) => item.pair);
+}
+
+function createIndexPartPairs<TPart, TCollapsed>(
+  previousParts: readonly TPart[],
+  nextParts: readonly TPart[],
+  collapse: (part: TPart) => TCollapsed,
+): Array<readonly [TPart | TCollapsed, TPart | TCollapsed]> {
+  return Array.from({ length: Math.max(previousParts.length, nextParts.length) }, (_, index) => {
+    const previousPart = previousParts[index];
+    const nextPart = nextParts[index];
+
+    if (previousPart && nextPart) {
+      return [previousPart, nextPart] as const;
+    }
+
+    if (previousPart) {
+      return [previousPart, collapse(previousPart)] as const;
+    }
+
+    return [collapse(nextPart!), nextPart!] as const;
+  });
+}
+
+function unzipCoordinatePairs(
+  pairs: Array<readonly [GeoJsonPosition, GeoJsonPosition]>,
+): [GeoJsonPosition[], GeoJsonPosition[]] {
+  return [
+    pairs.map(([previousPosition]) => clonePosition(previousPosition)),
+    pairs.map(([, nextPosition]) => clonePosition(nextPosition)),
+  ];
+}
+
+function collapseLineToCentroid(line: readonly GeoJsonPosition[]): GeoJsonPosition[] {
+  const center = getPositionsCenter(line);
+
+  return [clonePosition(center), clonePosition(center)];
+}
+
+function collapsePolygonToCentroid(
+  polygon: readonly (readonly GeoJsonPosition[])[],
+): GeoJsonPosition[][] {
+  const center = getPolygonCoordinatesCenter(polygon);
+
+  return [collapseRingToPoint(center)];
+}
+
+function getPolygonCoordinatesCenter(polygon: readonly (readonly GeoJsonPosition[])[]): GeoJsonPosition {
+  return getPositionsCenter(polygon.flat());
+}
+
+function getPositionsCenter(coordinates: readonly GeoJsonPosition[]): GeoJsonPosition {
+  const totals = coordinates.reduce(
+    (sum, position) => [sum[0] + position[0], sum[1] + position[1]] as GeoJsonPosition,
+    [0, 0],
+  );
+
+  return coordinates.length === 0
+    ? [0, 0]
+    : [totals[0] / coordinates.length, totals[1] / coordinates.length];
 }
 
 function prepareLineInterpolator(
@@ -457,6 +683,21 @@ function interpolateMatchingGeometry(
     case "MultiPoint": {
       const nextPoints = (nextGeometry as GeoJsonMultiPointGeometry).coordinates;
 
+      if (options.partMatchingStrategy !== "index") {
+        const [previousPoints, matchedNextPoints] = createMatchedPositionCoordinatePair(
+          previousGeometry.coordinates,
+          nextPoints,
+          options.partMatchingStrategy,
+        );
+
+        return {
+          coordinates: previousPoints.map((position, index) =>
+            interpolatePosition(position, matchedNextPoints[index]!, progress),
+          ),
+          type: "MultiPoint",
+        };
+      }
+
       if (previousGeometry.coordinates.length !== nextPoints.length) {
         return null;
       }
@@ -521,12 +762,23 @@ function interpolateMultiLineStringGeometry(
   progress: number,
   options: ResolvedInterpolationOptions,
 ): GeoJsonMultiLineStringGeometry | null {
-  if (previousGeometry.coordinates.length !== nextGeometry.coordinates.length) {
+  const linePairs =
+    options.partMatchingStrategy === "index"
+      ? previousGeometry.coordinates.length === nextGeometry.coordinates.length
+        ? previousGeometry.coordinates.map((line, index) => [line, nextGeometry.coordinates[index]!] as const)
+        : null
+      : createMatchedLineCoordinatePairs(
+          previousGeometry.coordinates,
+          nextGeometry.coordinates,
+          options.partMatchingStrategy,
+        );
+
+  if (!linePairs) {
     return null;
   }
 
-  const lines = previousGeometry.coordinates.map((line, index) =>
-    interpolateLineCoordinates(line, nextGeometry.coordinates[index]!, progress, options),
+  const lines = linePairs.map(([line, nextLine]) =>
+    interpolateLineCoordinates(line, nextLine, progress, options),
   );
 
   if (lines.some((line) => line === null)) {
@@ -561,12 +813,23 @@ function interpolateMultiPolygonGeometry(
   progress: number,
   options: ResolvedInterpolationOptions,
 ): GeoJsonMultiPolygonGeometry | null {
-  if (previousGeometry.coordinates.length !== nextGeometry.coordinates.length) {
+  const polygonPairs =
+    options.partMatchingStrategy === "index"
+      ? previousGeometry.coordinates.length === nextGeometry.coordinates.length
+        ? previousGeometry.coordinates.map((polygon, index) => [polygon, nextGeometry.coordinates[index]!] as const)
+        : null
+      : createMatchedPolygonCoordinatePairs(
+          previousGeometry.coordinates,
+          nextGeometry.coordinates,
+          options.partMatchingStrategy,
+        );
+
+  if (!polygonPairs) {
     return null;
   }
 
-  const polygons = previousGeometry.coordinates.map((polygon, index) =>
-    interpolatePolygonCoordinates(polygon, nextGeometry.coordinates[index]!, progress, options),
+  const polygons = polygonPairs.map(([polygon, nextPolygon]) =>
+    interpolatePolygonCoordinates(polygon, nextPolygon, progress, options),
   );
 
   if (polygons.some((polygon) => polygon === null)) {
@@ -840,6 +1103,8 @@ function resolveInterpolationOptions(
       options.minResampleCoordinates,
       DEFAULT_INTERPOLATION_OPTIONS.minResampleCoordinates,
     ),
+    partMatchingStrategy:
+      options.partMatchingStrategy ?? DEFAULT_INTERPOLATION_OPTIONS.partMatchingStrategy,
     strategy: options.strategy ?? DEFAULT_INTERPOLATION_OPTIONS.strategy,
   };
 }

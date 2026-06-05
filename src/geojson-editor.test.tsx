@@ -298,6 +298,81 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     );
   });
 
+  test("snaps drawn points to existing vertices", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    render(
+      <EditableGeoJsonMap
+        editMode="draw-point"
+        fitToData={false}
+        geoJson={lineCollection}
+        mapLabel="Snapping point editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        showAttributionControl={false}
+        snapOptions={{ enabled: true, modes: ["vertex"] }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Snapping point editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = flatMock.getMaps()[0];
+
+    act(() => {
+      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0.05, lng: 0.05 } });
+    });
+
+    expect(onFeatureCollectionChange.mock.calls[0]?.[0].features.at(-1)?.geometry).toEqual({
+      coordinates: [0, 0],
+      type: "Point",
+    });
+  });
+
+  test("shows a snap indicator for midpoint draft previews and clears it on mouseout", async () => {
+    const onSnapTargetChange = vi.fn();
+
+    render(
+      <EditableGeoJsonMap
+        editMode="draw-line"
+        fitToData={false}
+        geoJson={lineCollection}
+        mapLabel="Snapping draft editor"
+        onSnapTargetChange={onSnapTargetChange}
+        showAttributionControl={false}
+        snapOptions={{ enabled: true, modes: ["midpoint"] }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Snapping draft editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = flatMock.getMaps()[0];
+
+    act(() => {
+      map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 0.02, lng: 5.03 } });
+    });
+
+    await waitFor(() => {
+      const indicator = flatMock.getLayerGroups()[0]?.layers.find(
+        (layer) => layer.options?.className === "mb-maps__editor-snap-indicator",
+      );
+
+      expect(indicator?.latLng).toEqual([0, 5]);
+      expect(onSnapTargetChange).toHaveBeenCalledWith(expect.objectContaining({
+        coordinates: [5, 0],
+        mode: "midpoint",
+      }));
+    });
+
+    act(() => {
+      map?.handlers.get("mouseout")?.at(-1)?.({});
+    });
+
+    expect(onSnapTargetChange).toHaveBeenLastCalledWith(null);
+  });
+
   test("draws and completes a line with Enter", async () => {
     const onFeatureCollectionChange = vi.fn();
 
@@ -983,6 +1058,78 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
         type: "update",
       }),
     );
+  });
+
+  test("snaps moved vertices to nearby vertices", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    render(
+      <EditableGeoJsonMap
+        editMode="reshape"
+        fitToData={false}
+        geoJson={twoLineCollection}
+        mapLabel="Snapping vertex editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selectedFeatureId="line-1"
+        showAttributionControl={false}
+        snapOptions={{ enabled: true, includeSelectedFeature: false, modes: ["vertex"] }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Snapping vertex editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = flatMock.getMaps()[0];
+    const vertexHandle = flatMock.getLayerGroups()[0]?.layers.find(
+      (layer) => layer.options?.className === "mb-maps__editor-handle",
+    );
+
+    act(() => {
+      vertexHandle?.handlers.get("mousedown")?.[0]?.({
+        latlng: { lat: 0, lng: 0 },
+        originalEvent: { preventDefault() {}, stopPropagation() {} },
+      });
+      map?.handlers.get("mouseup")?.[0]?.({
+        latlng: { lat: 1.02, lng: 20.03 },
+      });
+    });
+
+    expect(onFeatureCollectionChange.mock.calls[0]?.[0].features[0].geometry.coordinates).toEqual([
+      [20, 1],
+      [10, 0],
+    ]);
+  });
+
+  test("snaps drawn points to a degree grid when enabled", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    render(
+      <EditableGeoJsonMap
+        editMode="draw-point"
+        fitToData={false}
+        geoJson={emptyCollection}
+        mapLabel="Grid snapping editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        showAttributionControl={false}
+        snapOptions={{ enabled: true, gridSizeDegrees: 1, modes: ["grid"] }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Grid snapping editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const map = flatMock.getMaps()[0];
+
+    act(() => {
+      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0.4, lng: 0.6 } });
+    });
+
+    expect(onFeatureCollectionChange.mock.calls[0]?.[0].features[0].geometry).toEqual({
+      coordinates: [1, 0],
+      type: "Point",
+    });
   });
 
   test("rejects invalid editable geometries", () => {

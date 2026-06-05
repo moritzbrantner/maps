@@ -15,14 +15,19 @@ import {
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import {
+  getBoundsFromPoints,
+} from "./aggregation";
+import {
   FeatureOverlays,
   type ContextMenuOverlayState,
   type FeatureOverlayState,
 } from "./feature-overlays";
+import { getBoundsFromGeoJson, type GeoJsonMapSource } from "./geojson-source";
 import { splitMapViewChildren } from "./map-components";
 import {
   defaultRasterMapStyle,
   getBoundedGlobeZoom,
+  getGlobeViewStateForBounds,
   getGlobeDragCenter,
   GLOBE_VIEWBOX_HEIGHT,
   GLOBE_VIEWBOX_WIDTH,
@@ -32,12 +37,16 @@ import {
   projectGlobeCoordinate,
   resolveMapLibreStyle,
   toMapLibreBounds,
+  type MapBounds,
   unprojectGlobePoint,
   type GlobeBasemapMode,
   type GlobeViewState,
   type MapDisplayMode,
   type MapSurfaceController,
+  type MapFitBoundsOptions,
+  type MapFlyToOptions,
   type MapViewState,
+  type MapViewStateChangeReason,
   type MapViewportProps,
   type RasterMapStyle,
 } from "./map-display";
@@ -300,24 +309,29 @@ export function MapView({
     setTooltip(null);
   });
 
-  const fitFlatToData = useEffectEvent(() => {
+  const fitFlatToBounds = useEffectEvent((
+    bounds: MapBounds,
+    options: MapFitBoundsOptions & { reason?: MapViewStateChangeReason } = {},
+  ) => {
     const map = mapRef.current;
 
-    if (!map || !dataBounds) {
+    if (!map) {
       return;
     }
 
+    const effectiveMaxZoom = options.maxZoom ?? resolvedMaxZoom;
     const fitOptions = {
-      animate: false,
-      padding: fitBoundsPadding,
-      ...(resolvedMaxZoom === undefined ? {} : { maxZoom: resolvedMaxZoom }),
+      animate: options.animate ?? false,
+      padding: options.padding ?? fitBoundsPadding,
+      ...(options.durationMs === undefined ? {} : { duration: options.durationMs }),
+      ...(effectiveMaxZoom === undefined ? {} : { maxZoom: effectiveMaxZoom }),
     };
 
-    map.fitBounds(toMapLibreBounds(dataBounds), fitOptions);
+    map.fitBounds(toMapLibreBounds(bounds), fitOptions);
     const next = getMapLibreViewState(map);
 
     lastCommittedFlatStateRef.current = next;
-    setViewState(next, "fit-to-data");
+    setViewState(next, options.reason ?? "fit-bounds");
   });
 
   const syncFlatBoundsConstraints = useEffectEvent(() => {
@@ -355,27 +369,59 @@ export function MapView({
     }
   });
 
-  const fitGlobeToData = useEffectEvent(() => {
-    if (!dataBounds) {
+  const fitGlobeToBounds = useEffectEvent((
+    bounds: MapBounds,
+    options: MapFitBoundsOptions & { reason?: MapViewStateChangeReason } = {},
+  ) => {
+    const globeViewState = getGlobeViewStateForBounds(bounds);
+    const next = {
+      ...globeViewState,
+      ...(options.maxZoom === undefined ? {} : { zoom: Math.min(globeViewState.zoom, options.maxZoom) }),
+    };
+
+    setViewState(next, options.reason ?? "fit-bounds");
+  });
+
+  const fitBoundsNow = useEffectEvent((
+    bounds: MapBounds | null,
+    options: MapFitBoundsOptions & { reason?: MapViewStateChangeReason } = {},
+  ) => {
+    if (!bounds) {
       return;
     }
 
-    setViewState(
-      {
-        center: [(dataBounds[0] + dataBounds[2]) / 2, (dataBounds[1] + dataBounds[3]) / 2],
-        zoom: 1.8,
-      },
-      "fit-to-data",
-    );
+    if (mapDisplay === "flat") {
+      fitFlatToBounds(bounds, options);
+      return;
+    }
+
+    fitGlobeToBounds(bounds, options);
   });
 
   const fitToDataNow = useEffectEvent(() => {
-    if (mapDisplay === "flat") {
-      fitFlatToData();
-      return;
+    fitBoundsNow(dataBounds, { padding: fitBoundsPadding, reason: "fit-to-data" });
+  });
+
+  const flyToNow = useEffectEvent((next: MapViewState, options: MapFlyToOptions = {}) => {
+    const map = mapRef.current;
+
+    if (mapDisplay === "flat" && map) {
+      const camera = {
+        center: next.center,
+        zoom: next.zoom,
+        ...(options.durationMs === undefined ? {} : { duration: options.durationMs }),
+      };
+
+      if (options.animate === false) {
+        map.jumpTo(camera);
+      } else {
+        map.flyTo?.(camera);
+      }
+
+      lastCommittedFlatStateRef.current = next;
     }
 
-    fitGlobeToData();
+    setViewState(next, "fly-to");
   });
 
   const syncFlatControlledView = useEffectEvent(() => {
@@ -606,6 +652,18 @@ export function MapView({
     const controller: MapSurfaceController = {
       display: mapDisplay,
       fitToData: fitToDataNow,
+      fitBounds: (bounds, options) => {
+        fitBoundsNow(bounds, options);
+      },
+      fitPoints: (points, options) => {
+        fitBoundsNow(getBoundsFromPoints(points), options);
+      },
+      fitGeoJson: (source, options) => {
+        fitBoundsNow(getBoundsFromGeoJson(source as GeoJsonMapSource), options);
+      },
+      flyTo: (next, options) => {
+        flyToNow(next, options);
+      },
       getViewState: () => currentViewState,
       setViewState: (next, reason = "programmatic") => {
         setViewState(next, reason);
@@ -613,7 +671,15 @@ export function MapView({
     };
 
     onMapControllerReady?.(controller);
-  }, [currentViewState, fitToDataNow, mapDisplay, onMapControllerReady, setViewState]);
+  }, [
+    currentViewState,
+    fitBoundsNow,
+    fitToDataNow,
+    flyToNow,
+    mapDisplay,
+    onMapControllerReady,
+    setViewState,
+  ]);
 
   const registerFlatLayer = useCallback(
     (id: string, render: FlatLayerRender, options: FlatLayerRegistrationOptions = {}) => {
@@ -780,6 +846,8 @@ export function MapView({
           return;
         }
 
+        const featureId = getFeatureId(feature, options?.getFeatureId as never) || null;
+
         setContextMenu(null);
         setHovered(null);
         setTooltip(null);
@@ -787,6 +855,11 @@ export function MapView({
 
         startTransition(() => {
           options?.onFeatureSelect?.(feature);
+          options?.onSelectedFeatureIdChange?.(featureId, {
+            feature,
+            featureId,
+            source: "click",
+          });
         });
 
         if (options?.renderFeaturePopup) {
@@ -802,6 +875,7 @@ export function MapView({
           return;
         }
 
+        const featureId = getFeatureId(feature, options?.getFeatureId as never) || null;
         const coordinates = options?.coordinates ?? getFeatureCoordinate(feature);
         const context: MapFeatureContextMenuContext<typeof feature> = {
           close: closeContextMenu,
@@ -813,6 +887,11 @@ export function MapView({
         startTransition(() => {
           options?.onFeatureContextMenu?.(feature);
           options?.onFeatureSelect?.(feature);
+          options?.onSelectedFeatureIdChange?.(featureId, {
+            feature,
+            featureId,
+            source: "context-menu",
+          });
         });
 
         if (options?.renderFeatureContextMenu) {
@@ -841,8 +920,15 @@ export function MapView({
         }
       },
       handleFeatureHover(feature, position, options) {
+        const featureId = feature ? getFeatureId(feature, options?.getFeatureId as never) || null : null;
+
         startTransition(() => {
           options?.onFeatureHover?.(feature);
+          options?.onHoveredFeatureIdChange?.(featureId, {
+            feature,
+            featureId,
+            source: feature ? "hover" : "clear",
+          });
         });
 
         if (!feature || !position) {
@@ -857,7 +943,7 @@ export function MapView({
         }
 
         blockedHoverPositionRef.current = null;
-        setHovered({ feature, id: getFeatureId(feature) || null });
+        setHovered({ feature, id: featureId });
 
         if (options?.renderFeatureTooltip) {
           setTooltip({
@@ -867,7 +953,11 @@ export function MapView({
           });
         }
       },
-      isFeatureHovered(feature, getId) {
+      isFeatureHovered(feature, hoveredFeatureId, getId) {
+        if (hoveredFeatureId) {
+          return getFeatureId(feature, getId as never) === hoveredFeatureId;
+        }
+
         if (!hovered) {
           return false;
         }

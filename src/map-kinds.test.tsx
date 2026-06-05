@@ -10,8 +10,12 @@ import {
   GeoJsonLayer,
   HeatMap,
   MapControls,
+  MapCategoryLegend,
+  MapColorRampLegend,
+  MapFlowLegend,
   MapLayers,
   MapLegend,
+  MapSizeLegend,
   MapView,
   PointLayer,
   PointMap,
@@ -23,6 +27,10 @@ import {
   createMapPointsFromGeoJson,
   createPointMapFeatures,
   getBoundsFromGeoJson,
+  getGlobeViewStateForBounds,
+  getMapBoundsCenter,
+  mergeMapBounds,
+  padMapBounds,
   type GeoJsonMapSource,
   type MapFlow,
   type MapPoint,
@@ -1062,6 +1070,173 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
     expect(screen.getByLabelText("Store legend")).toBeTruthy();
+  });
+
+  test("renders built-in legend components", () => {
+    render(
+      <MapView mapDisplay="globe" mapLabel="Legend map">
+        <MapColorRampLegend
+          aria-label="Temperature legend"
+          stops={[
+            [0, "#2563eb"],
+            [10, "#22c55e"],
+          ]}
+          title="Temperature"
+        />
+        <MapSizeLegend
+          aria-label="Demand size legend"
+          getRadius={(value) => value}
+          title="Demand"
+          values={[4, 8]}
+        />
+        <MapCategoryLegend
+          aria-label="Category legend"
+          items={[{ color: "#dc2626", label: "Delayed" }]}
+          title="Status"
+        />
+        <MapFlowLegend
+          aria-label="Flow legend"
+          getWidth={(value) => value}
+          title="Trips"
+          values={[2, 6]}
+        />
+      </MapView>,
+    );
+
+    expect(screen.getByText("Temperature")).toBeTruthy();
+    expect(screen.getByLabelText("Temperature legend").querySelector(".mb-maps__legend-ramp")).toBeTruthy();
+    expect(screen.getByText("Delayed")).toBeTruthy();
+    expect(screen.getByText("Trips")).toBeTruthy();
+  });
+
+  test("applies controlled hovered feature id to flat point layers", async () => {
+    render(
+      <MapView fitToData={false} mapLabel="Controlled hover map" showAttributionControl={false}>
+        <PointLayer
+          hoveredFeatureId="store-1"
+          points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Controlled hover map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(flatMock.getLayerGroups()[0]?.layers[0]?.options?.className).toContain("mb-maps__feature--hovered");
+  });
+
+  test("reports controlled hover and selection id changes", async () => {
+    const onFeatureHover = vi.fn();
+    const onFeatureSelect = vi.fn();
+    const onHoveredFeatureIdChange = vi.fn();
+    const onSelectedFeatureIdChange = vi.fn();
+
+    render(
+      <MapView fitToData={false} mapLabel="Interactive id map" showAttributionControl={false}>
+        <PointLayer
+          onFeatureHover={onFeatureHover}
+          onFeatureSelect={onFeatureSelect}
+          onHoveredFeatureIdChange={onHoveredFeatureIdChange}
+          onSelectedFeatureIdChange={onSelectedFeatureIdChange}
+          points={[{ id: "store-1", latitude: 40, longitude: -74 }]}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Interactive id map").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const marker = flatMock.getLayerGroups()[0]?.layers[0];
+
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+      marker?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(onFeatureHover).toHaveBeenCalledWith(expect.objectContaining({
+      point: expect.objectContaining({ id: "store-1" }),
+    }));
+    expect(onHoveredFeatureIdChange).toHaveBeenCalledWith("store-1", expect.objectContaining({
+      featureId: "store-1",
+      source: "hover",
+    }));
+    expect(onFeatureSelect).toHaveBeenCalledWith(expect.objectContaining({
+      point: expect.objectContaining({ id: "store-1" }),
+    }));
+    expect(onSelectedFeatureIdChange).toHaveBeenCalledWith("store-1", expect.objectContaining({
+      featureId: "store-1",
+      source: "click",
+    }));
+  });
+
+  test("computes viewport helper bounds and globe view states", () => {
+    expect(getMapBoundsCenter([-10, 40, 10, 50])).toEqual([0, 45]);
+    expect(padMapBounds([0, 10, 1, 11], 1)).toEqual([-1, 9, 2, 12]);
+    expect(mergeMapBounds([0, 0, 1, 1], [-2, 3, 4, 5])).toEqual([-2, 0, 4, 5]);
+
+    const globeViewState = getGlobeViewStateForBounds([-10, 40, 10, 50]);
+
+    expect(globeViewState.center).toEqual([0, 45]);
+    expect(globeViewState.zoom).toBeGreaterThan(1);
+  });
+
+  test("controller fits bounds, points, GeoJSON, and flies to view state", async () => {
+    let controller: import("./map-display").MapSurfaceController | null = null;
+
+    render(
+      <MapView
+        fitToData={false}
+        mapLabel="Controller helper map"
+        onMapControllerReady={(nextController) => {
+          controller = nextController;
+        }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Controller helper map").getAttribute("data-map-ready")).toBe("true");
+      expect(controller).toBeTruthy();
+    });
+
+    act(() => {
+      controller?.fitBounds([-10, 40, 10, 50], { maxZoom: 7 });
+    });
+    await waitFor(() => {
+      expect(controller?.getViewState().center).toEqual([0, 45]);
+    });
+
+    act(() => {
+      controller?.fitPoints([{ id: "store-1", latitude: 52, longitude: 13 }]);
+    });
+    await waitFor(() => {
+      expect(controller?.getViewState().center).toEqual([13, 52]);
+    });
+
+    act(() => {
+      controller?.fitGeoJson({
+        type: "FeatureCollection",
+        features: [
+          {
+            geometry: { coordinates: [8, 48], type: "Point" },
+            properties: {},
+            type: "Feature",
+          },
+        ],
+      });
+    });
+    await waitFor(() => {
+      expect(controller?.getViewState().center).toEqual([8, 48]);
+    });
+
+    act(() => {
+      controller?.flyTo({ center: [2, 3], zoom: 4 }, { animate: false });
+    });
+    await waitFor(() => {
+      expect(controller?.getViewState()).toEqual({ center: [2, 3], zoom: 4 });
+    });
   });
 
   test("renders GeoJSON points, lines, and polygons as flat map layers", async () => {

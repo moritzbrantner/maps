@@ -60,6 +60,12 @@ import {
   validateEditOperation,
   type GeoJsonPolygonConstraint,
 } from "./geojson-editor-operations";
+import {
+  resolveGeoJsonSnappedCoordinate,
+  type GeoJsonEditorSnapOptions,
+  type GeoJsonSnapTarget,
+  type GeoJsonEditorSnapMode,
+} from "./geojson-editor-snapping";
 
 export {
   applyGeoJsonEditOperation,
@@ -113,6 +119,12 @@ export type GeoJsonVertexHandle = {
   nextVertexIndex?: number;
   ringIndex?: number;
   vertexIndex: number;
+};
+
+export type {
+  GeoJsonEditorSnapMode,
+  GeoJsonEditorSnapOptions,
+  GeoJsonSnapTarget,
 };
 
 export type GeoJsonEditorSelection = {
@@ -218,7 +230,10 @@ export type GeoJsonEditorLayerProps<
   selectedFeatureId?: string | null;
   selection?: GeoJsonEditorSelection;
   selectedStyle?: GeoJsonLayerStyle;
+  snapIndicatorColor?: string;
+  snapOptions?: GeoJsonEditorSnapOptions;
   style?: GeoJsonLayerStyle;
+  onSnapTargetChange?: (target: GeoJsonSnapTarget | null) => void;
   validateEdit?: (
     nextFeature: TemporalGeoJsonGeometryFeature<TProperties>,
     operation: GeoJsonEditOperation<TProperties>,
@@ -340,7 +355,10 @@ export function GeoJsonEditorLayer<
   selectedFeatureId,
   selection,
   selectedStyle,
+  snapIndicatorColor = "#0f766e",
+  snapOptions,
   style,
+  onSnapTargetChange,
   validateEdit,
 }: GeoJsonEditorLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
@@ -352,6 +370,8 @@ export function GeoJsonEditorLayer<
   const [draft, setDraft] = useState<GeoJsonPosition[]>([]);
   const draftRef = useRef<GeoJsonPosition[]>([]);
   const draftPreviewRef = useRef<GeoJsonPosition | null>(null);
+  const [snapTarget, setSnapTarget] = useState<GeoJsonSnapTarget | null>(null);
+  const snapTargetRef = useRef<GeoJsonSnapTarget | null>(null);
   const [selectedHandle, setSelectedHandle] = useState<GeoJsonVertexHandle | null>(null);
   const selectedHandleRef = useRef<GeoJsonVertexHandle | null>(null);
   const createCounterRef = useRef(0);
@@ -371,11 +391,13 @@ export function GeoJsonEditorLayer<
     onEditorSelectionChange,
     onFeatureCollectionChange,
     onSelectionChange,
+    onSnapTargetChange,
     polygonConstraint,
     resolvedSelection: EMPTY_EDITOR_SELECTION,
     selectedFeatureId,
     selectedFeatureIds,
     selection,
+    snapOptions,
     validateEdit,
   });
   const features = useMemo(
@@ -403,6 +425,10 @@ export function GeoJsonEditorLayer<
   }, [draft]);
 
   useEffect(() => {
+    snapTargetRef.current = snapTarget;
+  }, [snapTarget]);
+
+  useEffect(() => {
     selectedHandleRef.current = resolvedSelection.vertexHandle ?? null;
   }, [resolvedSelection]);
 
@@ -420,11 +446,13 @@ export function GeoJsonEditorLayer<
       onEditorSelectionChange,
       onFeatureCollectionChange,
       onSelectionChange,
+      onSnapTargetChange,
       polygonConstraint,
       resolvedSelection,
       selectedFeatureId,
       selectedFeatureIds,
       selection,
+      snapOptions,
       validateEdit,
     };
   }, [
@@ -440,11 +468,13 @@ export function GeoJsonEditorLayer<
     onEditorSelectionChange,
     onFeatureCollectionChange,
     onSelectionChange,
+    onSnapTargetChange,
     polygonConstraint,
     resolvedSelection,
     selectedFeatureId,
     selectedFeatureIds,
     selection,
+    snapOptions,
     validateEdit,
   ]);
 
@@ -463,8 +493,10 @@ export function GeoJsonEditorLayer<
 
     const map = surface.flatMap;
 
-    function getCoordinate(event: FlatFeaturePointerEvent = {}) {
-      return getEventCoordinate(map, event);
+    function getCoordinate(event: FlatFeaturePointerEvent = {}, snap = false) {
+      const coordinate = getEventCoordinate(map, event);
+
+      return coordinate && snap ? getSnappedCoordinate(coordinate) : coordinate;
     }
 
     function handleClick(event: FlatFeaturePointerEvent = {}) {
@@ -485,15 +517,17 @@ export function GeoJsonEditorLayer<
         current.mode === "reshape" ||
         current.mode === "delete"
       ) {
+        updateSnapTarget(null);
         emitEditorSelection(EMPTY_EDITOR_SELECTION);
         updateSelectedHandle(null);
         return;
       }
 
       if (current.mode === "draw-point") {
+        const snappedCoordinates = getSnappedCoordinate(coordinates);
         const feature = createGeoJsonEditFeature(
           "Point",
-          coordinates,
+          snappedCoordinates,
           current.createFeatureProperties?.("Point") ?? ({} as TProperties),
         );
 
@@ -502,7 +536,7 @@ export function GeoJsonEditorLayer<
       }
 
       if (current.mode === "draw-line" || current.mode === "draw-polygon") {
-        const nextDraft = [...draftRef.current, coordinates];
+        const nextDraft = [...draftRef.current, getSnappedCoordinate(coordinates)];
 
         updateDraft(nextDraft);
       }
@@ -517,14 +551,16 @@ export function GeoJsonEditorLayer<
         current.mode !== "draw-polygon"
       ) {
         updateDraftPreview(null);
+        updateSnapTarget(null);
         return;
       }
 
-      updateDraftPreview(getCoordinate(event));
+      updateDraftPreview(getCoordinate(event, true));
     }
 
     function handleMouseOut() {
       updateDraftPreview(null);
+      updateSnapTarget(null);
     }
 
     function handleDoubleClick(event: FlatFeaturePointerEvent = {}) {
@@ -583,6 +619,7 @@ export function GeoJsonEditorLayer<
     }
 
     updateDraftPreview(null);
+    updateSnapTarget(null);
     updateSelectedHandle(null);
   }, [mode, selectedFeatureId]);
 
@@ -656,6 +693,7 @@ export function GeoJsonEditorLayer<
         }
 
         renderDraft(layer, flat, draftRef.current, draftPreviewRef.current, mode);
+        renderSnapIndicator(layer, flat, snapTargetRef.current, snapIndicatorColor);
       },
       { renderOnViewStateChange: false },
     );
@@ -670,6 +708,7 @@ export function GeoJsonEditorLayer<
     resolvedSelection,
     selectedFeatureIdSet,
     selectedStyle,
+    snapIndicatorColor,
     style,
     registerFlatLayer,
     surfaceDisplay,
@@ -715,6 +754,45 @@ export function GeoJsonEditorLayer<
     }
 
     draftPreviewRef.current = nextPreview ? clonePosition(nextPreview) : null;
+    surface?.requestRender();
+  }
+
+  function getSnappedCoordinate(coordinate: GeoJsonPosition) {
+    const map = flatMap;
+    const current = latestRef.current;
+
+    if (!map) {
+      updateSnapTarget(null);
+      return coordinate;
+    }
+
+    const selectedIds = new Set(current.resolvedSelection.featureIds);
+    const result = resolveGeoJsonSnappedCoordinate({
+      coordinate,
+      draft: draftRef.current,
+      features,
+      map,
+      options: current.snapOptions,
+      selectedFeatureIds: selectedIds,
+    });
+
+    updateSnapTarget(result.target);
+
+    return result.coordinate;
+  }
+
+  function updateSnapTarget(nextTarget: GeoJsonSnapTarget | null) {
+    const current = snapTargetRef.current;
+    const currentKey = current ? createSnapTargetKey(current) : null;
+    const nextKey = nextTarget ? createSnapTargetKey(nextTarget) : null;
+
+    if (currentKey === nextKey) {
+      return;
+    }
+
+    snapTargetRef.current = nextTarget;
+    setSnapTarget(nextTarget);
+    latestRef.current.onSnapTargetChange?.(nextTarget);
     surface?.requestRender();
   }
 
@@ -1298,7 +1376,7 @@ export function GeoJsonEditorLayer<
       return;
     }
 
-    const next = setGeoJsonVertex(drag.feature.geometry, drag.handle, to);
+    const next = setGeoJsonVertex(drag.feature.geometry, drag.handle, getSnappedCoordinate(to));
 
     if (next) {
       updateFeature(drag.feature, next, "move-vertex");
@@ -1666,6 +1744,31 @@ function renderDraft(
     .addTo(layer);
 }
 
+function renderSnapIndicator(
+  layer: FlatLayerGroup,
+  flat: FlatLayerFactory,
+  target: GeoJsonSnapTarget | null,
+  color: string,
+) {
+  if (!target) {
+    return;
+  }
+
+  flat
+    .circleMarker(toLatLng(target.coordinates), {
+      bubblingMouseEvents: false,
+      className: "mb-maps__editor-snap-indicator",
+      color,
+      fillColor: "#ffffff",
+      fillOpacity: 0.92,
+      interactive: false,
+      opacity: 1,
+      radius: target.mode === "grid" ? 4.5 : 6,
+      weight: 2,
+    })
+    .addTo(layer);
+}
+
 function getGeoJsonVertexHandles(
   geometry: TemporalGeoJsonSupportedGeometry,
   featureId: string,
@@ -2014,6 +2117,15 @@ function getCreatedFeatureId<TProperties extends Record<string, unknown>>(
   feature: TemporalGeoJsonGeometryFeature<TProperties>,
 ) {
   return String(feature.id ?? feature.properties?.id ?? feature.properties?.trackId ?? "");
+}
+
+function createSnapTargetKey(target: GeoJsonSnapTarget) {
+  return [
+    target.mode,
+    target.featureId ?? "",
+    target.coordinates.map((value) => value.toFixed(8)).join(","),
+    target.distancePixels.toFixed(3),
+  ].join(":");
 }
 
 function getEventCoordinate(

@@ -49,3 +49,61 @@ Shortcuts are ignored while typing in inputs.
 
 Use `GeoJsonEditorLayer` inside `MapView` for composed maps. Editing currently
 targets flat maps; globe maps are display and inspection surfaces.
+
+## Undo And Redo
+
+The editor stays controlled, but `createGeoJsonEditHistoryState(...)` and the
+history helpers provide a small reducer-friendly model for undo and redo flows.
+
+```tsx
+import {
+  EditableGeoJsonMap,
+  createGeoJsonEditHistoryState,
+  pushGeoJsonEditHistory,
+  undoGeoJsonEditHistory,
+} from "@moritzbrantner/maps/editor";
+
+const [history, setHistory] = useState(() => createGeoJsonEditHistoryState(initialGeoJson));
+
+<button
+  type="button"
+  disabled={!history.canUndo}
+  onClick={() => setHistory((current) => undoGeoJsonEditHistory(current))}
+>
+  Undo
+</button>;
+
+<EditableGeoJsonMap
+  editMode={mode}
+  geoJson={history.present}
+  onFeatureCollectionChange={(next, operation) => {
+    setHistory((current) =>
+      pushGeoJsonEditHistory(current, {
+        after: next,
+        before: current.present,
+        operation,
+      }),
+    );
+  }}
+/>;
+```
+
+## Snapping
+
+Flat editors can snap draw points, draft previews, and moved vertices to nearby
+vertices, midpoints, segments, or a degree grid.
+
+```tsx
+<EditableGeoJsonMap
+  editMode="draw-polygon"
+  geoJson={geoJson}
+  onFeatureCollectionChange={setGeoJson}
+  snapOptions={{
+    enabled: true,
+    modes: ["vertex", "midpoint", "segment"],
+    pixelTolerance: 12,
+  }}
+/>;
+```
+
+Use `onSnapTargetChange` to reflect the active target in surrounding UI.

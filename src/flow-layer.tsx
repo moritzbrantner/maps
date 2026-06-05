@@ -82,15 +82,18 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   getFlowColor,
   getFlowLabel,
   getWeight,
+  hoveredFeatureId,
   hoveredFlowOpacity = 0.95,
   inactiveFlowOpacity = 0.22,
   layerId,
   maxWeight,
   maxWidth,
   minWidth,
+  onHoveredFeatureIdChange,
   onFeatureContextMenu,
   onFeatureHover,
   onFeatureSelect,
+  onSelectedFeatureIdChange,
   renderFeatureContextMenu,
   renderFeaturePopup,
   renderFeatureTooltip,
@@ -139,12 +142,14 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
 
       const cache = flatFlowCacheRef.current;
       const seen = new Set<string>();
-      const hasHoveredFlow = features.some((feature) => currentSurface.isFeatureHovered(feature, getFeatureId));
+      const hasHoveredFlow = features.some((feature) =>
+        currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId)
+      );
 
       for (const feature of features) {
         const color = getFlowColor?.(feature) ?? flowColor;
         const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
+        const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
         const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
         const flowLatLngs = flowCoordinates.map(toLatLng);
         const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
@@ -207,7 +212,9 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
         if (!isMeasuring) {
           line.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             currentSurface.handleFeatureClick(feature, getFlowPosition(map, feature, event), {
+              getFeatureId,
               onFeatureSelect,
+              onSelectedFeatureIdChange,
               renderFeaturePopup,
             });
           });
@@ -215,8 +222,10 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             suppressNativeContextMenu(event);
             currentSurface.handleFeatureContextMenu(feature, getFlowPosition(map, feature, event), {
               coordinates: getFlowCenter(feature),
+              getFeatureId,
               onFeatureContextMenu,
               onFeatureSelect,
+              onSelectedFeatureIdChange,
               renderFeatureContextMenu,
               renderFeaturePopup,
             });
@@ -224,13 +233,20 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
           line.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
             map.getContainer().style.cursor = "pointer";
             currentSurface.handleFeatureHover(feature, getFlowPosition(map, feature, event), {
+              getFeatureId,
+              onHoveredFeatureIdChange,
               onFeatureHover,
               renderFeatureTooltip,
             });
           });
           line.on("mouseout", () => {
             map.getContainer().style.cursor = "";
-            currentSurface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+            currentSurface.handleFeatureHover(null, null, {
+              getFeatureId,
+              onHoveredFeatureIdChange,
+              onFeatureHover,
+              renderFeatureTooltip,
+            });
           });
         }
 
@@ -311,12 +327,15 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     flowShape,
     getFeatureId,
     getFlowColor,
+    hoveredFeatureId,
     hoveredFlowOpacity,
     inactiveFlowOpacity,
     resolvedLayerId,
     onFeatureContextMenu,
     onFeatureHover,
     onFeatureSelect,
+    onHoveredFeatureIdChange,
+    onSelectedFeatureIdChange,
     renderFeaturePopup,
     renderFeatureContextMenu,
     renderFeatureTooltip,
@@ -332,7 +351,9 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     return null;
   }
 
-  const hasHoveredFlow = features.some((feature) => surface.isFeatureHovered(feature, getFeatureId));
+  const hasHoveredFlow = features.some((feature) =>
+    surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId)
+  );
 
   return (
     <>
@@ -346,7 +367,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
 
         const color = getFlowColor?.(feature) ?? flowColor;
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
+        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
         const baseOpacity = clamp(0.28 + Math.min(from.scale, to.scale) * 0.72, 0.18, 0.92);
         const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
         const active = selected || hovered;
@@ -377,7 +398,9 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             onClick={(event) => {
               event.stopPropagation();
               surface.handleFeatureClick(feature, position, {
+                getFeatureId,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
               });
@@ -387,8 +410,10 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
               event.stopPropagation();
               surface.handleFeatureContextMenu(feature, position, {
                 coordinates: getFlowCenter(feature),
+                getFeatureId,
                 onFeatureContextMenu,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeatureContextMenu,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
@@ -397,13 +422,20 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             onPointerEnter={() => {
               if (!surface.isMeasuring) {
                 surface.handleFeatureHover(feature, position, {
+                  getFeatureId,
+                  onHoveredFeatureIdChange,
                   onFeatureHover,
                   renderFeatureTooltip,
                 });
               }
             }}
             onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+              surface.handleFeatureHover(null, null, {
+                getFeatureId,
+                onHoveredFeatureIdChange,
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
             }}
             style={{ opacity }}
           >

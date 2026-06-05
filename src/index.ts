@@ -65,9 +65,29 @@ export {
 export {
   type MapContextMenuContext,
   type MapFeatureContextMenuContext,
+  type MapFeatureInteractionChange,
   type MapFeatureInteractionProps,
   type MapFeatureInteractionState,
 } from "./map-interaction";
+export {
+  MapCategoryLegend,
+  MapColorRampLegend,
+  MapFlowLegend,
+  MapSizeLegend,
+  type MapCategoryLegendProps,
+  type MapColorRampLegendProps,
+  type MapFlowLegendProps,
+  type MapLegendValueFormat,
+  type MapSizeLegendProps,
+} from "./map-legends";
+export {
+  getGlobeViewStateForBounds,
+  getMapBoundsCenter,
+  mergeMapBounds,
+  padMapBounds,
+  type MapFitBoundsOptions,
+  type MapFlyToOptions,
+} from "./map-display";
 export { ClusterLayer, type ClusterLayerProps } from "./cluster-layer";
 export {
   BubbleLayer,
@@ -162,6 +182,9 @@ export {
   removeGeoJsonVertex,
   setGeoJsonVertex,
   validateGeoJsonEditableGeometry,
+  type GeoJsonEditorSnapMode,
+  type GeoJsonEditorSnapOptions,
+  type GeoJsonSnapTarget,
   type EditableGeoJsonMapProps,
   type GeoJsonGeometryTransformOptions,
   type GeoJsonBatchEditReason,
@@ -177,9 +200,19 @@ export {
   type GeoJsonVertexHandle,
 } from "./geojson-editor";
 export {
+  createGeoJsonEditHistoryState,
+  invertGeoJsonEditOperation,
+  pushGeoJsonEditHistory,
+  redoGeoJsonEditHistory,
+  undoGeoJsonEditHistory,
+  type GeoJsonEditHistoryEntry,
+  type GeoJsonEditHistoryState,
+} from "./geojson-editor-history";
+export {
   createGeoJsonTransitionPlan,
   interpolateGeoJsonTransitionPlan,
   type GeoJsonTransitionAlgorithm,
+  type GeoJsonComplexGeometryBehavior,
   type GeoJsonTransitionFallback,
   type GeoJsonTransitionFragmentKind,
   type GeoJsonTransitionOptions,
@@ -286,13 +319,16 @@ export {
   getTemporalGeoJsonFeatureCollectionAtTime,
   getTemporalGeoJsonTimeRange,
   interpolateTemporalGeoJsonGeometry,
+  normalizeGeometryParts,
   type GeoJsonLineStringGeometry,
   type GeoJsonMultiLineStringGeometry,
   type GeoJsonMultiPointGeometry,
   type GeoJsonMultiPolygonGeometry,
+  type GeoJsonPartMatchingStrategy,
   type GeoJsonPointGeometry,
   type GeoJsonPolygonGeometry,
   type GeoJsonPosition,
+  type NormalizedGeometryPart,
   type TemporalGeoJsonFrame,
   type TemporalGeoJsonGeometryFeature,
   type TemporalGeoJsonGeometryFeatureCollection,

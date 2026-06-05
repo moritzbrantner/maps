@@ -24,6 +24,17 @@ export {
   type MapOverlayPosition,
   type MapOverlayProps,
 } from "../map-components";
+export {
+  MapCategoryLegend,
+  MapColorRampLegend,
+  MapFlowLegend,
+  MapSizeLegend,
+  type MapCategoryLegendProps,
+  type MapColorRampLegendProps,
+  type MapFlowLegendProps,
+  type MapLegendValueFormat,
+  type MapSizeLegendProps,
+} from "../map-legends";
 export { ClusterLayer, type ClusterLayerProps } from "../cluster-layer";
 export {
   BubbleLayer,
@@ -62,6 +73,7 @@ export {
 export {
   type MapContextMenuContext,
   type MapFeatureContextMenuContext,
+  type MapFeatureInteractionChange,
   type MapFeatureInteractionProps,
   type MapFeatureInteractionState,
 } from "../map-interaction";

@@ -27,6 +27,33 @@ Validation reports invalid coordinates, unsupported geometries, missing feature
 IDs, and nonnumeric metrics. Missing IDs and nonnumeric metrics are warnings;
 invalid collections, geometries, and coordinates are errors.
 
+## Complex Geometries
+
+GeoJSON helpers accept `GeometryCollection` input by flattening supported child
+geometries. `normalizeGeometryParts(...)` exposes the same flattening with
+stable `partPath` values, and can decompose `MultiPoint`, `MultiLineString`, and
+`MultiPolygon` into individual parts when `decomposeMultiGeometries` is true.
+
+Transition helpers can opt into richer complex handling:
+
+```ts
+createGeoJsonTransitionPlan(previous, next, {
+  algorithm: "topology-plan",
+  partMatchingStrategy: "auto",
+});
+```
+
+`complexGeometryBehavior: "preserve"` keeps existing whole-feature behavior.
+`"flatten"` flattens `GeometryCollection` children. `"decompose"` also splits
+multi-geometries into individual transition parts. `partMatchingStrategy:
+"auto"` matches polygon parts by overlap and line/point parts by nearest
+centroid, which improves reordered multipart animations.
+
+Transition output remains a `FeatureCollection` of supported geometries; it does
+not reconstruct `GeometryCollection` output. Polygon topology planning is
+polygon-focused, and invalid polygon repair is limited to the existing
+boolean-operation fallbacks.
+
 ## GeoJSON-First Maps
 
 ```tsx
@@ -53,6 +80,26 @@ import { FlowMap, GeoJsonMap, HeatMap, PointMap } from "@moritzbrantner/maps";
 
 Use `geoJsonOverlay="none"` to disable contextual overlays, or
 `geoJsonOverlay="all"` to draw the full GeoJSON source below the native layer.
+
+## Controlled Interaction
+
+`GeoJsonLayer` and the convenience maps accept controlled hover and selection
+IDs. The ID comes from `getFeatureId` when provided, otherwise the layer falls
+back to feature, point, flow, or cluster IDs.
+
+```tsx
+const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+const [hoveredFeatureId, setHoveredFeatureId] = useState<string | null>(null);
+
+<GeoJsonMap
+  geoJson={mixedCollection}
+  getFeatureId={(feature) => feature.id}
+  hoveredFeatureId={hoveredFeatureId}
+  onHoveredFeatureIdChange={setHoveredFeatureId}
+  onSelectedFeatureIdChange={setSelectedFeatureId}
+  selectedFeatureId={selectedFeatureId}
+/>;
+```
 
 ## Typed Properties
 

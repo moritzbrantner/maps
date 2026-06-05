@@ -2,6 +2,13 @@
 
 This document tracks topology transition algorithms that are intentionally out of scope for the current area-overlap and Voronoi-partition implementation.
 
+The current implementation supports flattened `GeometryCollection` inputs,
+decomposed multipart matching, centroid-based point/line matching, and
+overlap-based polygon matching. Transition output is still a flat
+`FeatureCollection`; full `GeometryCollection` reconstruction, optimal
+assignment across all many-to-many polygon components, and broad invalid
+polygon repair remain future work.
+
 ## 1. Real Boolean Topology Plan
 
 Compute exact preserved, disappearing, and appearing areas with full polygon overlay operations:

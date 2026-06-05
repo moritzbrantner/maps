@@ -309,7 +309,26 @@ export class Map {
     }
   }
 
-  fitBounds() {}
+  flyTo(options: { center?: [number, number]; zoom?: number }) {
+    this.jumpTo(options);
+  }
+
+  fitBounds(
+    bounds: [[number, number], [number, number]],
+    options: { maxZoom?: number } = {},
+  ) {
+    const west = bounds[0][0];
+    const south = bounds[0][1];
+    const east = bounds[1][0];
+    const north = bounds[1][1];
+    const camera = this.cameraForBounds(bounds);
+
+    this.center = {
+      lat: (south + north) / 2,
+      lng: (west + east) / 2,
+    };
+    this.zoom = Math.max(this.minZoom, Math.min(options.maxZoom ?? Number.POSITIVE_INFINITY, camera.zoom));
+  }
 
   cameraForBounds(bounds: [[number, number], [number, number]]) {
     const west = bounds[0][0];

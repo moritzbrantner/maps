@@ -41,6 +41,13 @@ export type TemporalGeoJsonSupportedGeometry =
   | GeoJsonPolygonGeometry
   | GeoJsonMultiPolygonGeometry;
 
+export type GeoJsonPartMatchingStrategy =
+  | "index"
+  | "id"
+  | "nearest-centroid"
+  | "overlap"
+  | "auto";
+
 export type TemporalGeoJsonGeometryFeature<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 > = {
@@ -96,6 +103,7 @@ export type TemporalGeoJsonInterpolationOptions = {
   maxCoordinatesPerLine?: number;
   maxCoordinatesPerRing?: number;
   minResampleCoordinates?: number;
+  partMatchingStrategy?: Exclude<GeoJsonPartMatchingStrategy, "overlap">;
   strategy?: TemporalGeoJsonInterpolationStrategy;
 };
 

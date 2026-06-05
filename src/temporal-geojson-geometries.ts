@@ -54,7 +54,9 @@ export type {
   TemporalGeoJsonPlaybackIndexOptions,
   TemporalGeoJsonSupportedGeometry,
   TemporalGeoJsonTrack,
+  GeoJsonPartMatchingStrategy,
 } from "./temporal-geojson-types";
+export { normalizeGeometryParts, type NormalizedGeometryPart } from "./temporal-geojson-geometry";
 
 type MutableTemporalGeoJsonTrack<TProperties> = Omit<
   TemporalGeoJsonTrack<TProperties>,

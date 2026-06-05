@@ -13,7 +13,7 @@ import {
 } from "./geojson-rendering";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-view";
-import { cloneGeometry, normalizeGeometryCollection } from "./temporal-geojson-geometry";
+import { cloneGeometry, normalizeGeometryParts } from "./temporal-geojson-geometry";
 import type {
   GeoJsonLineStringGeometry,
   GeoJsonMultiPointGeometry,
@@ -58,10 +58,13 @@ export function GeoJsonLayer<
   featureCollection,
   getFeatureId,
   getFeatureStyle,
+  hoveredFeatureId,
   layerId,
+  onHoveredFeatureIdChange,
   onFeatureContextMenu,
   onFeatureHover,
   onFeatureSelect,
+  onSelectedFeatureIdChange,
   renderFeatureContextMenu,
   renderFeaturePopup,
   renderFeatureTooltip,
@@ -106,7 +109,7 @@ export function GeoJsonLayer<
         for (const feature of features) {
           const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
           const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-          const hovered = currentSurface.isFeatureHovered(feature, getFeatureId);
+          const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
           const className = joinClassNames(
             "mb-maps__geojson-feature",
             hovered && "mb-maps__feature--hovered",
@@ -154,11 +157,14 @@ export function GeoJsonLayer<
             if (interactionMode === "none") {
               bindFlatLayerInteraction(geometryLayer, {
                 feature,
+                getFeatureId,
                 getPosition: (event) => getFlatFeaturePosition(map, feature.geometry, event),
                 map,
+                onHoveredFeatureIdChange,
                 onFeatureContextMenu,
                 onFeatureHover,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeatureContextMenu,
                 renderFeaturePopup,
                 renderFeatureTooltip,
@@ -192,9 +198,12 @@ export function GeoJsonLayer<
     features,
     getFeatureId,
     getFeatureStyle,
+    hoveredFeatureId,
     onFeatureContextMenu,
     onFeatureHover,
     onFeatureSelect,
+    onHoveredFeatureIdChange,
+    onSelectedFeatureIdChange,
     renderFeatureContextMenu,
     renderFeaturePopup,
     renderFeatureTooltip,
@@ -214,7 +223,7 @@ export function GeoJsonLayer<
       {features.map((feature) => {
         const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
         const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, getFeatureId);
+        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
         const position = projectGeometryCenter(feature.geometry, surface);
 
         if (!position) {
@@ -232,7 +241,9 @@ export function GeoJsonLayer<
             onClick={(event) => {
               event.stopPropagation();
               surface.handleFeatureClick(feature, position, {
+                getFeatureId,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
               });
@@ -242,8 +253,10 @@ export function GeoJsonLayer<
               event.stopPropagation();
               surface.handleFeatureContextMenu(feature, position, {
                 coordinates: getGeometryCenter(feature.geometry),
+                getFeatureId,
                 onFeatureContextMenu,
                 onFeatureSelect,
+                onSelectedFeatureIdChange,
                 renderFeatureContextMenu,
                 renderFeaturePopup,
                 suppress: surface.isMeasuring,
@@ -252,13 +265,20 @@ export function GeoJsonLayer<
             onPointerEnter={() => {
               if (!surface.isMeasuring) {
                 surface.handleFeatureHover(feature, position, {
+                  getFeatureId,
+                  onHoveredFeatureIdChange,
                   onFeatureHover,
                   renderFeatureTooltip,
                 });
               }
             }}
             onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, { onFeatureHover, renderFeatureTooltip });
+              surface.handleFeatureHover(null, null, {
+                getFeatureId,
+                onHoveredFeatureIdChange,
+                onFeatureHover,
+                renderFeatureTooltip,
+              });
             }}
           >
             {renderGlobeGeometry(feature.geometry, style, selected)}
@@ -275,14 +295,14 @@ export function createGeoJsonLayerFeatures<
   collection: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
 ): Array<GeoJsonLayerFeature<TProperties>> {
   return collection.features.flatMap((feature, index) => {
-    const geometries = normalizeGeometryCollection(feature.geometry);
+    const parts = normalizeGeometryParts(feature.geometry);
 
-    return geometries.map((geometry, geometryIndex) => ({
-      geometry: cloneGeometry(geometry),
+    return parts.map((part) => ({
+      geometry: cloneGeometry(part.geometry),
       id: createGeoJsonLayerFeatureId(
         feature,
         index,
-        geometries.length > 1 ? geometryIndex : undefined,
+        parts.length > 1 ? part.partIndex : undefined,
       ),
       properties: feature.properties ?? ({} as TProperties),
       sourceIndex: index,
@@ -541,13 +561,20 @@ function removeFlatGeoJsonCacheEntry(
 
 function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
   layer: FlatGeometryLayer,
-  options: {
-    feature: GeoJsonLayerFeature<TProperties>;
-    getPosition: (event: FlatFeaturePointerEvent) => { x: number; y: number };
-    map: { getContainer: () => { style: { cursor: string } } };
-    onFeatureContextMenu?: (feature: GeoJsonLayerFeature<TProperties>) => void;
-    onFeatureHover?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
-    onFeatureSelect?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
+	options: {
+	    feature: GeoJsonLayerFeature<TProperties>;
+	    getFeatureId?: (feature: GeoJsonLayerFeature<TProperties>) => string;
+	    getPosition: (event: FlatFeaturePointerEvent) => { x: number; y: number };
+	    map: { getContainer: () => { style: { cursor: string } } };
+	    onHoveredFeatureIdChange?: import("./map-interaction").MapFeatureInteractionProps<
+	      GeoJsonLayerFeature<TProperties>
+	    >["onHoveredFeatureIdChange"];
+	    onFeatureContextMenu?: (feature: GeoJsonLayerFeature<TProperties>) => void;
+	    onFeatureHover?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
+	    onFeatureSelect?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
+	    onSelectedFeatureIdChange?: import("./map-interaction").MapFeatureInteractionProps<
+	      GeoJsonLayerFeature<TProperties>
+	    >["onSelectedFeatureIdChange"];
     renderFeatureContextMenu?: (
       feature: GeoJsonLayerFeature<TProperties>,
       context: import("./map-interaction").MapFeatureContextMenuContext<
@@ -559,41 +586,51 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
     surface: MapSurfaceContextValue;
   },
 ) {
-  layer.on("click", (event: FlatFeaturePointerEvent = {}) => {
-    options.surface.handleFeatureClick(options.feature, options.getPosition(event), {
-      onFeatureSelect: options.onFeatureSelect,
-      renderFeaturePopup: options.renderFeaturePopup,
-    });
-  });
+	  layer.on("click", (event: FlatFeaturePointerEvent = {}) => {
+	    options.surface.handleFeatureClick(options.feature, options.getPosition(event), {
+	      getFeatureId: options.getFeatureId,
+	      onFeatureSelect: options.onFeatureSelect,
+	      onSelectedFeatureIdChange: options.onSelectedFeatureIdChange,
+	      renderFeaturePopup: options.renderFeaturePopup,
+	    });
+	  });
   layer.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
     suppressNativeContextMenu(event);
-    options.surface.handleFeatureContextMenu(options.feature, options.getPosition(event), {
-      coordinates: getGeometryCenter(options.feature.geometry),
-      onFeatureContextMenu: options.onFeatureContextMenu,
-      onFeatureSelect: options.onFeatureSelect,
-      renderFeatureContextMenu: options.renderFeatureContextMenu,
-      renderFeaturePopup: options.renderFeaturePopup,
-    });
+	    options.surface.handleFeatureContextMenu(options.feature, options.getPosition(event), {
+	      coordinates: getGeometryCenter(options.feature.geometry),
+	      getFeatureId: options.getFeatureId,
+	      onFeatureContextMenu: options.onFeatureContextMenu,
+	      onFeatureSelect: options.onFeatureSelect,
+	      onSelectedFeatureIdChange: options.onSelectedFeatureIdChange,
+	      renderFeatureContextMenu: options.renderFeatureContextMenu,
+	      renderFeaturePopup: options.renderFeaturePopup,
+	    });
   });
   layer.on("mouseover", (event: FlatFeaturePointerEvent = {}) => {
-    options.map.getContainer().style.cursor = "pointer";
-    options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
-      onFeatureHover: options.onFeatureHover,
-      renderFeatureTooltip: options.renderFeatureTooltip,
-    });
-  });
-  layer.on("mousemove", (event: FlatFeaturePointerEvent = {}) => {
-    options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
-      onFeatureHover: options.onFeatureHover,
-      renderFeatureTooltip: options.renderFeatureTooltip,
-    });
-  });
+	    options.map.getContainer().style.cursor = "pointer";
+	    options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
+	      getFeatureId: options.getFeatureId,
+	      onHoveredFeatureIdChange: options.onHoveredFeatureIdChange,
+	      onFeatureHover: options.onFeatureHover,
+	      renderFeatureTooltip: options.renderFeatureTooltip,
+	    });
+	  });
+	  layer.on("mousemove", (event: FlatFeaturePointerEvent = {}) => {
+	    options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
+	      getFeatureId: options.getFeatureId,
+	      onHoveredFeatureIdChange: options.onHoveredFeatureIdChange,
+	      onFeatureHover: options.onFeatureHover,
+	      renderFeatureTooltip: options.renderFeatureTooltip,
+	    });
+	  });
   layer.on("mouseout", () => {
-    options.map.getContainer().style.cursor = "";
-    options.surface.handleFeatureHover(null, null, {
-      onFeatureHover: options.onFeatureHover,
-      renderFeatureTooltip: options.renderFeatureTooltip,
-    });
+	    options.map.getContainer().style.cursor = "";
+	    options.surface.handleFeatureHover(null, null, {
+	      getFeatureId: options.getFeatureId,
+	      onHoveredFeatureIdChange: options.onHoveredFeatureIdChange,
+	      onFeatureHover: options.onFeatureHover,
+	      renderFeatureTooltip: options.renderFeatureTooltip,
+	    });
   });
 }
 

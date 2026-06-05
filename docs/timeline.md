@@ -37,7 +37,10 @@ const transformed = getGeoJsonTimelineFeatureCollectionAtTime(collection, docume
 
 Use `getGeoJsonTimelineSceneAtTime(...)` when items on one timeline track are
 successive GeoJSON states and the end of one item should transition into the
-next. `topology-plan` supports one-to-many splits and many-to-one merges.
+next. `topology-plan` supports one-to-many splits and many-to-one merges. For
+reordered multipart or `GeometryCollection` scene states, use
+`partMatchingStrategy: "auto"` so polygon parts match by overlap and point/line
+parts match by nearest centroid.
 
 ```ts
 import {
@@ -55,6 +58,7 @@ const frame = getGeoJsonTimelineSceneAtTime(collection, document, 750, {
   defaultTransition: {
     algorithm: "topology-plan",
     durationMs: 500,
+    partMatchingStrategy: "auto",
     topologyStrategy: "voronoi-partition",
   },
 });
@@ -62,4 +66,6 @@ const frame = getGeoJsonTimelineSceneAtTime(collection, document, 750, {
 
 For repeated dense temporal GeoJSON playback, prefer
 `createTemporalGeoJsonPlaybackIndex(...)` so line and ring preparation can be
-reused across animation frames.
+reused across animation frames. Temporal geometry interpolation also accepts
+`partMatchingStrategy: "auto"` for reordered `MultiPoint`, `MultiLineString`,
+and `MultiPolygon` frames; topology-plan remains a scene-transition feature.
