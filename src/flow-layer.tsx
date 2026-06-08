@@ -76,11 +76,11 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
   directionMarker = "arrow",
   flowColor = "#0f766e",
   flowShape = "straight",
-  flowValueFormat = defaultFlowValueFormat,
+  flowValueFormat: _flowValueFormat = defaultFlowValueFormat,
   flows,
   getFeatureId,
   getFlowColor,
-  getFlowLabel,
+  getFlowLabel: _getFlowLabel,
   getWeight,
   hoveredFeatureId,
   hoveredFlowOpacity = 0.95,
@@ -121,19 +121,19 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     [deferredFlows, getWeight, maxWeight, maxWidth, minWidth, weightMetric],
   );
   const surfaceDisplay = surface?.display;
-  const registerFlatLayer = surface?.registerFlatLayer;
+  const registerMapLibreLayer = surface?.registerMapLibreLayer;
 
   useEffect(() => {
     surfaceRef.current = surface;
   });
 
   useEffect(() => {
-    if (!registerFlatLayer || surfaceDisplay !== "flat") {
+    if (!registerMapLibreLayer || (surfaceDisplay !== "flat" && surfaceDisplay !== "globe")) {
       flatFlowCacheRef.current.clear();
       return;
     }
 
-    return registerFlatLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
+    return registerMapLibreLayer(resolvedLayerId, ({ isMeasuring, layer, flat, map }) => {
       const currentSurface = surfaceRef.current;
 
       if (!currentSurface) {
@@ -343,120 +343,11 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
     selectedFlowOpacity,
     showDirection,
     showEndpoints,
-    registerFlatLayer,
+    registerMapLibreLayer,
     surfaceDisplay,
   ]);
 
-  if (!surface || surface.display !== "globe") {
-    return null;
-  }
-
-  const hasHoveredFlow = features.some((feature) =>
-    surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId)
-  );
-
-  return (
-    <>
-      {features.map((feature) => {
-        const from = surface.projectGlobeCoordinate(feature.flow.from, surface.viewState);
-        const to = surface.projectGlobeCoordinate(feature.flow.to, surface.viewState);
-
-        if (!from.visible && !to.visible) {
-          return null;
-        }
-
-        const color = getFlowColor?.(feature) ?? flowColor;
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-        const baseOpacity = clamp(0.28 + Math.min(from.scale, to.scale) * 0.72, 0.18, 0.92);
-        const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
-        const active = selected || hovered;
-        const opacity = active
-          ? hovered
-            ? hoveredFlowOpacity
-            : selectedFlowOpacity
-          : hasActiveFlow
-            ? inactiveFlowOpacity
-            : baseOpacity;
-        const position = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
-        const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
-        const projectedCoordinates = flowCoordinates.map((coordinate) =>
-          surface.projectGlobeCoordinate(coordinate, surface.viewState),
-        );
-        const title = formatFlowTitle(feature, getFlowLabel, flowValueFormat);
-
-        return (
-          <g
-            className={joinClassNames(
-              "mb-maps__globe-flow",
-              active && "mb-maps__flow-line--active",
-              hasActiveFlow && !active && "mb-maps__flow-line--inactive",
-              hovered && "mb-maps__feature--hovered",
-              selected && "mb-maps__feature--selected",
-            )}
-            key={feature.flow.id}
-            onClick={(event) => {
-              event.stopPropagation();
-              surface.handleFeatureClick(feature, position, {
-                getFeatureId,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-              });
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              surface.handleFeatureContextMenu(feature, position, {
-                coordinates: getFlowCenter(feature),
-                getFeatureId,
-                onFeatureContextMenu,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeatureContextMenu,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-              });
-            }}
-            onPointerEnter={() => {
-              if (!surface.isMeasuring) {
-                surface.handleFeatureHover(feature, position, {
-                  getFeatureId,
-                  onHoveredFeatureIdChange,
-                  onFeatureHover,
-                  renderFeatureTooltip,
-                });
-              }
-            }}
-            onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            }}
-            style={{ opacity }}
-          >
-            <path
-              d={createProjectedFlowPath(projectedCoordinates)}
-              stroke={color}
-              strokeWidth={selected ? feature.width + 1.5 : feature.width}
-            >
-              <title>{title}</title>
-            </path>
-            {showEndpoints && from.visible ? (
-              <circle cx={from.x} cy={from.y} fill={color} r={Math.max(2.5, feature.width * 0.52)} />
-            ) : null}
-            {showEndpoints && to.visible ? (
-              <circle cx={to.x} cy={to.y} fill={color} r={Math.max(3.5, feature.width * 0.72)} />
-            ) : null}
-          </g>
-        );
-      })}
-    </>
-  );
+  return null;
 }
 
 function getFlowCenter<TProperties>(
@@ -719,21 +610,6 @@ export function createFlowPathCoordinates<TProperties>(
   return coordinates;
 }
 
-function createProjectedFlowPath(
-  coordinates: Array<{
-    x: number;
-    y: number;
-  }>,
-) {
-  return coordinates
-    .map((coordinate, index) => {
-      const command = index === 0 ? "M" : "L";
-
-      return `${command}${coordinate.x.toFixed(2)} ${coordinate.y.toFixed(2)}`;
-    })
-    .join("");
-}
-
 function resolveFlowShapeOptions<TProperties>(
   feature: FlowLayerFeature<TProperties>,
   shape: FlowShape,
@@ -816,19 +692,6 @@ function getFlowArcDirection(id: string) {
   }
 
   return hash % 2 === 0 ? 1 : -1;
-}
-
-function formatFlowTitle<TProperties>(
-  feature: FlowLayerFeature<TProperties>,
-  getFlowLabel: ((feature: FlowLayerFeature<TProperties>) => ReactNode) | undefined,
-  flowValueFormat: (value: number, feature: FlowLayerFeature<TProperties>) => string,
-) {
-  const label = getFlowLabel?.(feature) ?? feature.flow.label;
-  const labelText =
-    typeof label === "string" || typeof label === "number" ? String(label) : feature.flow.label;
-  const valueText = flowValueFormat(feature.rawValue, feature);
-
-  return labelText ? `${labelText}: ${valueText}` : valueText;
 }
 
 function defaultFlowValueFormat(value: number) {

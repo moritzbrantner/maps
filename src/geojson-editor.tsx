@@ -14,7 +14,6 @@ import {
   defaultRasterMapStyle,
   joinClassNames,
   toLatLng,
-  type GlobeBasemapMode,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,
@@ -252,7 +251,6 @@ export type EditableGeoJsonMapProps<
     fitBoundsPadding?: number;
     fitToData?: boolean;
     geoJson: GeoJsonMapSource<TProperties>;
-    globeBasemapMode?: GlobeBasemapMode;
     /**
      * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
      */
@@ -364,7 +362,7 @@ export function GeoJsonEditorLayer<
   const surface = useContext(MapSurfaceContext);
   const surfaceDisplay = surface?.display;
   const flatMap = surface?.flatMap;
-  const registerFlatLayer = surface?.registerFlatLayer;
+  const registerMapLibreLayer = surface?.registerMapLibreLayer;
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `geojson-editor-layer-${generatedLayerId}`;
   const [draft, setDraft] = useState<GeoJsonPosition[]>([]);
@@ -624,11 +622,11 @@ export function GeoJsonEditorLayer<
   }, [mode, selectedFeatureId]);
 
   useEffect(() => {
-    if (!registerFlatLayer || surfaceDisplay !== "flat") {
+    if (!registerMapLibreLayer || surfaceDisplay !== "flat") {
       return;
     }
 
-    return registerFlatLayer(
+    return registerMapLibreLayer(
       resolvedLayerId,
       ({ layer, flat, map }) => {
         layer.clearLayers();
@@ -710,7 +708,7 @@ export function GeoJsonEditorLayer<
     selectedStyle,
     snapIndicatorColor,
     style,
-    registerFlatLayer,
+    registerMapLibreLayer,
     surfaceDisplay,
   ]);
 
@@ -1475,7 +1473,6 @@ export function EditableGeoJsonMap<
   fitBoundsPadding = 56,
   fitToData = true,
   geoJson,
-  globeBasemapMode,
   initialViewState,
   mapDisplay = "flat",
   mapLabel = "Editable GeoJSON map",
@@ -1553,7 +1550,6 @@ export function EditableGeoJsonMap<
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
-      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}

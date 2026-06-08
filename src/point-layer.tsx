@@ -180,13 +180,9 @@ function PointFeatureLayer<
   const surface = useContext(MapSurfaceContext);
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `point-layer-${generatedLayerId}`;
-  const isFlatSurface = surface?.display === "flat";
+  const isFlatSurface = surface?.display === "flat" || surface?.display === "globe";
   const surfaceRef = useRef(surface);
   const flatMarkerCacheRef = useRef<Map<string, FlatPointCacheEntry>>(new Map());
-  const globeDragRef = useRef<{
-    feature: TFeature;
-    pointerId: number;
-  } | null>(null);
 
   useEffect(() => {
     surfaceRef.current = surface;
@@ -198,7 +194,7 @@ function PointFeatureLayer<
       return;
     }
 
-    return surfaceRef.current?.registerFlatLayer(
+    return surfaceRef.current?.registerMapLibreLayer(
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
         const currentSurface = surfaceRef.current;
@@ -398,133 +394,7 @@ function PointFeatureLayer<
     isFlatSurface,
   ]);
 
-  if (!surface || surface.display !== "globe") {
-    return null;
-  }
-
-  return (
-    <>
-      {features.map((feature) => {
-        const projected = surface.projectGlobeCoordinate(feature.coordinates, surface.viewState);
-
-        if (!projected.visible) {
-          return null;
-        }
-
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-        const featureDraggable = isFeatureDraggable(feature, draggable);
-        const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius) * (0.72 + projected.scale * 0.28);
-
-        return (
-          <circle
-            className={joinClassNames(
-              "mb-maps__globe-point",
-              featureDraggable && "mb-maps__feature--draggable",
-              hovered && "mb-maps__feature--hovered",
-              selected && "mb-maps__feature--selected",
-            )}
-            cx={projected.x}
-            cy={projected.y}
-            fill={getPointColor?.(feature) ?? pointColor}
-            key={feature.point.id}
-            onClick={(event) => {
-              event.stopPropagation();
-              surface.handleFeatureClick(feature, { x: projected.x, y: projected.y }, {
-                getFeatureId,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-              });
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
-                coordinates: feature.coordinates,
-                getFeatureId,
-                onFeatureContextMenu,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeatureContextMenu,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-              });
-            }}
-            onPointerDown={(event) => {
-              if (!featureDraggable || surface.isMeasuring) {
-                return;
-              }
-
-              event.preventDefault();
-              event.stopPropagation();
-              globeDragRef.current = {
-                feature,
-                pointerId: event.pointerId,
-              };
-              event.currentTarget.setPointerCapture(event.pointerId);
-            }}
-            onPointerMove={(event) => {
-              const drag = globeDragRef.current;
-
-              if (!drag || drag.pointerId !== event.pointerId || drag.feature !== feature) {
-                return;
-              }
-
-              const coordinates = surface.getGlobePointerCoordinate(event);
-
-              if (!coordinates) {
-                return;
-              }
-
-              event.preventDefault();
-              event.stopPropagation();
-              onFeatureDrag?.(feature, coordinates);
-            }}
-            onPointerUp={(event) => {
-              const drag = globeDragRef.current;
-
-              if (!drag || drag.pointerId !== event.pointerId || drag.feature !== feature) {
-                return;
-              }
-
-              const coordinates = surface.getGlobePointerCoordinate(event);
-              globeDragRef.current = null;
-              event.preventDefault();
-              event.stopPropagation();
-
-              if (coordinates) {
-                onFeatureDragEnd?.(feature, coordinates);
-              }
-            }}
-            onPointerEnter={() => {
-              if (!surface.isMeasuring) {
-                surface.handleFeatureHover(feature, { x: projected.x, y: projected.y }, {
-                  getFeatureId,
-                  onHoveredFeatureIdChange,
-                  onFeatureHover,
-                  renderFeatureTooltip,
-                });
-              }
-            }}
-            onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            }}
-            r={radius}
-            style={{ opacity: 0.42 + projected.scale * 0.58 }}
-          >
-            <title>{feature.point.label}</title>
-          </circle>
-        );
-      })}
-    </>
-  );
+  return null;
 }
 
 export function BubbleLayer<TProperties = Record<string, unknown>>({

@@ -28,17 +28,15 @@ import {
   type VizEngine,
 } from "@moritzbrantner/viz-engine";
 
-import { escapeHtml, joinClassNames, toLatLng } from "./map-display";
+import { escapeHtml, joinClassNames, toLatLng, type MapViewState } from "./map-display";
 import {
   createFlatGeometryLayers,
   getGeometryCenter,
-  projectGeometryCenter,
   resolveFeatureStyle,
   type FlatFeaturePointerEvent,
 } from "./geojson-rendering";
 import {
   createGeoJsonLayerFeatures,
-  renderGlobeGeometry,
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
 import type { MapFeatureContextMenuContext, MapFeatureInteractionProps } from "./map-interaction";
@@ -311,19 +309,30 @@ function EngineGeoLayerRenderer(props: EngineGeoLayerRendererProps) {
   const engineLayer = useResolvedEngineGeoLayer(props, resolvedDatasetId);
   const { layerId: engineLayerId, version } = useRegisteredEngineLayer(engine, engineLayer);
   const surfaceDisplay = surface?.display;
-  const registerFlatLayer = surface?.registerFlatLayer;
+  const registerMapLibreLayer = surface?.registerMapLibreLayer;
   const interactionOptions = useEngineLayerInteractionOptions(props);
 
   useEffect(() => {
-    if (!registerFlatLayer || surfaceDisplay !== "flat" || !engineLayerId) {
+    if (
+      !registerMapLibreLayer ||
+      (surfaceDisplay !== "flat" && surfaceDisplay !== "globe") ||
+      !engineLayerId
+    ) {
       return;
     }
 
-    return registerFlatLayer(
+    return registerMapLibreLayer(
       registeredLayerId,
       ({ interactionMode, layer, flat, map }) => {
         layer.clearLayers();
-        const frameLayer = computeEngineLayerForMap(engine, engineLayerId, map);
+        const display = surface?.display ?? "flat";
+        const frameLayer = computeEngineLayerForMap(
+          engine,
+          engineLayerId,
+          map,
+          display,
+          display === "globe" ? surface?.viewState : undefined,
+        );
 
         if (!frameLayer) {
           return;
@@ -345,23 +354,13 @@ function EngineGeoLayerRenderer(props: EngineGeoLayerRendererProps) {
     engineLayerId,
     interactionOptions,
     registeredLayerId,
-    registerFlatLayer,
+    registerMapLibreLayer,
     surface,
     surfaceDisplay,
     version,
   ]);
 
-  if (!surface || surface.display !== "globe" || !engineLayerId) {
-    return null;
-  }
-
-  const frameLayer = computeEngineLayerForGlobe(engine, engineLayerId, surface);
-
-  if (!frameLayer) {
-    return null;
-  }
-
-  return <>{renderGlobeEngineLayer(frameLayer, surface, interactionOptions)}</>;
+  return null;
 }
 
 type EngineGeoLayerRendererProps =
@@ -574,6 +573,8 @@ function computeEngineLayerForMap(
   engine: VizEngine,
   layerId: string,
   map: FlatMap,
+  display: "flat" | "globe",
+  viewState?: MapViewState,
 ): VizRenderLayer | null {
   const bounds = map.getBounds();
 
@@ -584,36 +585,12 @@ function computeEngineLayerForMap(
         layerIds: [layerId],
         viewport: {
           bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
-          center: [map.getCenter().lng, map.getCenter().lat],
-          display: "flat",
+          center: viewState?.center ?? [map.getCenter().lng, map.getCenter().lat],
+          display,
           height: map.getSize().y,
           kind: "geo",
           width: map.getSize().x,
-          zoom: map.getZoom(),
-        },
-      })
-      .layers.find((candidate) => candidate.layerId === layerId) ?? null
-  );
-}
-
-function computeEngineLayerForGlobe(
-  engine: VizEngine,
-  layerId: string,
-  surface: MapSurfaceContextValue,
-) {
-  return (
-    engine
-      .computeFrame({
-        frameFormat: "objects",
-        layerIds: [layerId],
-        viewport: {
-          bounds: [-180, -90, 180, 90],
-          center: surface.viewState.center,
-          display: "globe",
-          height: 1,
-          kind: "geo",
-          width: 1,
-          zoom: surface.viewState.zoom,
+          zoom: viewState?.zoom ?? map.getZoom(),
         },
       })
       .layers.find((candidate) => candidate.layerId === layerId) ?? null
@@ -919,326 +896,6 @@ function bindFlatEngineFeatureInteraction<TFeature>(
       renderFeatureTooltip: interactionOptions.renderFeatureTooltip,
     });
   });
-}
-
-function renderGlobeEngineLayer(
-  frameLayer: VizRenderLayer,
-  surface: MapSurfaceContextValue,
-  interactionOptions: EngineLayerInteractionOptions,
-) {
-  if (frameLayer.kind === "geo-clusters") {
-    return frameLayer.features.map((feature) => {
-      const projected = surface.projectGlobeCoordinate(feature.coordinates, surface.viewState);
-      if (!projected.visible) {
-        return null;
-      }
-      const radius =
-        interactionOptions.getFeatureRadius?.(feature) ??
-        (feature.kind === "cluster" ? Math.min(24, 7 + Math.sqrt(feature.pointCount)) : 4);
-      const selected = surface.isFeatureSelected(
-        feature,
-        interactionOptions.selectedFeatureId,
-        interactionOptions.getFeatureId,
-      );
-      const hovered = surface.isFeatureHovered(
-        feature,
-        interactionOptions.hoveredFeatureId,
-        interactionOptions.getFeatureId,
-      );
-
-      return (
-        <circle
-          className={joinClassNames(
-            "mb-maps__engine-feature",
-            feature.kind === "cluster" ? "mb-maps__cluster-marker" : "mb-maps__point-marker",
-            hovered && "mb-maps__feature--hovered",
-            selected && "mb-maps__feature--selected",
-          )}
-          cx={projected.x}
-          cy={projected.y}
-          fill={
-            interactionOptions.getFeatureColor?.(feature) ??
-            (feature.kind === "cluster" ? "#2563eb" : "#0f172a")
-          }
-          key={
-            feature.kind === "cluster"
-              ? `cluster-${feature.clusterId}`
-              : `point-${feature.point.id}`
-          }
-          opacity={0.9}
-          r={radius}
-          stroke="#ffffff"
-          strokeWidth={selected ? 2.5 : 1.5}
-          {...createGlobeEngineFeatureHandlers(
-            feature,
-            feature.coordinates,
-            projected,
-            surface,
-            interactionOptions,
-          )}
-        />
-      );
-    });
-  }
-
-  if (frameLayer.kind === "geo-points") {
-    return frameLayer.features.map((feature) => {
-      const projected = surface.projectGlobeCoordinate(
-        [feature.longitude, feature.latitude],
-        surface.viewState,
-      );
-      if (!projected.visible) {
-        return null;
-      }
-      const selected = surface.isFeatureSelected(
-        feature,
-        interactionOptions.selectedFeatureId,
-        interactionOptions.getFeatureId,
-      );
-      const hovered = surface.isFeatureHovered(
-        feature,
-        interactionOptions.hoveredFeatureId,
-        interactionOptions.getFeatureId,
-      );
-
-      return (
-        <circle
-          className={joinClassNames(
-            "mb-maps__point-marker",
-            hovered && "mb-maps__feature--hovered",
-            selected && "mb-maps__feature--selected",
-          )}
-          cx={projected.x}
-          cy={projected.y}
-          fill={interactionOptions.getFeatureColor?.(feature) ?? "#0f172a"}
-          key={`point-${feature.id}`}
-          opacity={0.9}
-          r={interactionOptions.getFeatureRadius?.(feature) ?? 4}
-          stroke="#ffffff"
-          strokeWidth={selected ? 2.5 : 1.5}
-          {...createGlobeEngineFeatureHandlers(
-            feature,
-            [feature.longitude, feature.latitude],
-            projected,
-            surface,
-            interactionOptions,
-          )}
-        />
-      );
-    });
-  }
-
-  if (frameLayer.kind === "geo-heat") {
-    return frameLayer.features.map((feature) =>
-      renderGlobeHeatFeature(feature, surface, interactionOptions),
-    );
-  }
-
-  if (frameLayer.kind === "geo-flows") {
-    return frameLayer.features.map((feature) =>
-      renderGlobeFlowFeature(feature, surface, interactionOptions),
-    );
-  }
-
-  if (frameLayer.kind === "geojson") {
-    return createEngineGeoJsonLayerFeatures(frameLayer.featureCollection).map((feature) => {
-      const position = projectGeometryCenter(feature.geometry, surface);
-      const selected = surface.isFeatureSelected(
-        feature,
-        interactionOptions.selectedFeatureId,
-        interactionOptions.getFeatureId,
-      );
-      const hovered = surface.isFeatureHovered(
-        feature,
-        interactionOptions.hoveredFeatureId,
-        interactionOptions.getFeatureId,
-      );
-
-      if (!position) {
-        return null;
-      }
-
-      return (
-        <g
-          className={joinClassNames(
-            "mb-maps__globe-geojson",
-            "mb-maps__engine-geojson",
-            hovered && "mb-maps__feature--hovered",
-            selected && "mb-maps__feature--selected",
-          )}
-          key={feature.id}
-          {...createGlobeEngineFeatureHandlers(
-            feature,
-            getGeometryCenter(feature.geometry),
-            position,
-            surface,
-            interactionOptions,
-          )}
-        >
-          {renderGlobeGeometry(
-            feature.geometry,
-            resolveFeatureStyle(
-              feature,
-              interactionOptions.style,
-              interactionOptions.getFeatureStyle as never,
-            ),
-            selected,
-          )}
-        </g>
-      );
-    });
-  }
-
-  return null;
-}
-
-function renderGlobeHeatFeature(
-  feature: VizGeoHeatFeature,
-  surface: MapSurfaceContextValue,
-  interactionOptions: EngineLayerInteractionOptions,
-) {
-  const projected = surface.projectGlobeCoordinate(feature.coordinates, surface.viewState);
-  if (!projected.visible) {
-    return null;
-  }
-  const selected = surface.isFeatureSelected(
-    feature,
-    interactionOptions.selectedFeatureId,
-    interactionOptions.getFeatureId,
-  );
-  const hovered = surface.isFeatureHovered(
-    feature,
-    interactionOptions.hoveredFeatureId,
-    interactionOptions.getFeatureId,
-  );
-
-  return (
-    <circle
-      className={joinClassNames(
-        "mb-maps__engine-heat",
-        hovered && "mb-maps__feature--hovered",
-        selected && "mb-maps__feature--selected",
-      )}
-      cx={projected.x}
-      cy={projected.y}
-      fill={interactionOptions.getFeatureColor?.(feature) ?? resolveHeatColor(feature)}
-      key={`heat-${feature.id}`}
-      opacity={0.72}
-      r={interactionOptions.getFeatureRadius?.(feature) ?? 5 + feature.value * 14}
-      {...createGlobeEngineFeatureHandlers(
-        feature,
-        feature.coordinates,
-        projected,
-        surface,
-        interactionOptions,
-      )}
-    />
-  );
-}
-
-function renderGlobeFlowFeature(
-  feature: VizGeoFlowFeature,
-  surface: MapSurfaceContextValue,
-  interactionOptions: EngineLayerInteractionOptions,
-) {
-  const from = surface.projectGlobeCoordinate(feature.flow.from, surface.viewState);
-  const to = surface.projectGlobeCoordinate(feature.flow.to, surface.viewState);
-  if (!from.visible || !to.visible) {
-    return null;
-  }
-  const center = {
-    x: (from.x + to.x) / 2,
-    y: (from.y + to.y) / 2,
-  };
-  const selected = surface.isFeatureSelected(
-    feature,
-    interactionOptions.selectedFeatureId,
-    interactionOptions.getFeatureId,
-  );
-  const hovered = surface.isFeatureHovered(
-    feature,
-    interactionOptions.hoveredFeatureId,
-    interactionOptions.getFeatureId,
-  );
-
-  return (
-    <line
-      className={joinClassNames(
-        "mb-maps__engine-flow",
-        "mb-maps__flow-line",
-        hovered && "mb-maps__feature--hovered",
-        selected && "mb-maps__feature--selected",
-      )}
-      key={`flow-${feature.flow.id}`}
-      opacity={0.72}
-      stroke={interactionOptions.getFlowColor?.(feature) ?? "#0f766e"}
-      strokeWidth={selected ? 2.5 + feature.value * 5 : 1 + feature.value * 5}
-      x1={from.x}
-      x2={to.x}
-      y1={from.y}
-      y2={to.y}
-      {...createGlobeEngineFeatureHandlers(
-        feature,
-        getFlowCenter(feature),
-        center,
-        surface,
-        interactionOptions,
-      )}
-    />
-  );
-}
-
-function createGlobeEngineFeatureHandlers<TFeature>(
-  feature: TFeature,
-  coordinates: [number, number],
-  position: { x: number; y: number },
-  surface: MapSurfaceContextValue,
-  interactionOptions: EngineLayerInteractionOptions,
-) {
-  return {
-    onClick: (event: { stopPropagation: () => void }) => {
-      event.stopPropagation();
-      surface.handleFeatureClick(feature, position, {
-        getFeatureId: interactionOptions.getFeatureId,
-        onFeatureSelect: interactionOptions.onFeatureSelect,
-        onSelectedFeatureIdChange: interactionOptions.onSelectedFeatureIdChange,
-        renderFeaturePopup: interactionOptions.renderFeaturePopup,
-        suppress: surface.isMeasuring,
-      });
-    },
-    onContextMenu: (event: { preventDefault: () => void; stopPropagation: () => void }) => {
-      event.preventDefault();
-      event.stopPropagation();
-      surface.handleFeatureContextMenu(feature, position, {
-        coordinates,
-        getFeatureId: interactionOptions.getFeatureId,
-        onFeatureContextMenu: interactionOptions.onFeatureContextMenu,
-        onFeatureSelect: interactionOptions.onFeatureSelect,
-        onSelectedFeatureIdChange: interactionOptions.onSelectedFeatureIdChange,
-        renderFeatureContextMenu: interactionOptions.renderFeatureContextMenu,
-        renderFeaturePopup: interactionOptions.renderFeaturePopup,
-        suppress: surface.isMeasuring,
-      });
-    },
-    onPointerEnter: () => {
-      if (!surface.isMeasuring) {
-        surface.handleFeatureHover(feature, position, {
-          getFeatureId: interactionOptions.getFeatureId,
-          onHoveredFeatureIdChange: interactionOptions.onHoveredFeatureIdChange,
-          onFeatureHover: interactionOptions.onFeatureHover,
-          renderFeatureTooltip: interactionOptions.renderFeatureTooltip,
-        });
-      }
-    },
-    onPointerLeave: () => {
-      surface.handleFeatureHover(null, null, {
-        getFeatureId: interactionOptions.getFeatureId,
-        onHoveredFeatureIdChange: interactionOptions.onHoveredFeatureIdChange,
-        onFeatureHover: interactionOptions.onFeatureHover,
-        renderFeatureTooltip: interactionOptions.renderFeatureTooltip,
-      });
-    },
-  };
 }
 
 function createEngineGeoJsonLayerFeatures(

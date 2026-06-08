@@ -1370,7 +1370,7 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(changedCell?.opacity).toBeCloseTo(initialCell?.opacity ?? 0, 3);
   });
 
-  test("renders heat markers on the globe display", () => {
+  test("renders heat markers on the globe display", async () => {
     render(
       <HeatMap
         initialViewState={{ center: [-74, 40], zoom: 2 }}
@@ -1393,10 +1393,20 @@ describe("@moritzbrantner/maps heat maps", () => {
 
     const map = screen.getByLabelText("Demand globe heat map");
 
-    expect(map.getAttribute("data-map-ready")).toBe("true");
-    expect(map.querySelector(".mb-maps__globe")).toBeTruthy();
-    expect(map.querySelector(".mb-maps__globe-heat-marker")).toBeTruthy();
-    expect(flatMock.getMaps()).toHaveLength(0);
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(map.querySelector(".mb-maps__canvas")).toBeTruthy();
+      expect(map.querySelector(".mb-maps__globe")).toBeFalsy();
+      expect(flatMock.getMaps()).toHaveLength(1);
+      expect(flatMock.getLayerGroups().flatMap((group) => group.layers)).toEqual([
+        expect.objectContaining({
+          options: expect.objectContaining({
+            className: "mb-maps__heat-surface mb-maps__heat-surface--interpolated",
+          }),
+          type: "imageOverlay",
+        }),
+      ]);
+    });
   });
 
   test("slices temporal tracks into weighted heat-map frames", async () => {

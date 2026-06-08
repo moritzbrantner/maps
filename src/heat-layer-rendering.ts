@@ -26,9 +26,7 @@ import {
 import { clamp } from "./heat-layer-utils";
 import {
   createHeatSurfaceRenderPlan,
-  getProjectedMetersRadius,
   getHeatLayerSurfaceQueryBounds as getPlannedHeatLayerSurfaceQueryBounds,
-  resolveHeatLayerDisplayRadius,
   type HeatSurfaceCacheMetadata,
   type HeatSurfaceRenderPlan,
 } from "./heat-surface-render-plan";
@@ -365,24 +363,6 @@ export function getHeatLayerViewportBounds(
     clamp(bounds.getEast(), -180, 180),
     clamp(bounds.getNorth(), -90, 90),
   ];
-}
-
-export function resolveHeatLayerGlobeRadius(
-  radius: HeatLayerRadius,
-  coordinate: [longitude: number, latitude: number],
-  viewState: { center: [number, number]; zoom: number },
-  projectCoordinate: (
-    coordinate: [longitude: number, latitude: number],
-    viewState: { center: [number, number]; zoom: number },
-  ) => { visible: boolean; x: number; y: number },
-) {
-  if (typeof radius === "object" && "meters" in radius) {
-    return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
-      projectCoordinate(nextCoordinate, viewState),
-    );
-  }
-
-  return resolveHeatLayerDisplayRadius(radius, viewState.zoom);
 }
 
 export function createHeatLayerFlatRenderState(): HeatLayerFlatRenderState {

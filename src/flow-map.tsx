@@ -1,29 +1,9 @@
 "use client";
 
-import {
-  startTransition,
-  useDeferredValue,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import type { ReactNode } from "react";
 
 import {
-  createGlobeGraticuleLines,
-  createVisibleSvgPath,
   defaultRasterMapStyle,
-  getBoundedGlobeZoom,
-  getGlobeDragCenter,
-  getGlobeRadius,
-  GLOBE_VIEWBOX_HEIGHT,
-  GLOBE_VIEWBOX_WIDTH,
-  joinClassNames,
-  projectGlobeCoordinate,
-  type GlobeBasemapMode,
-  type GlobeViewState,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,
@@ -32,7 +12,6 @@ import {
 } from "./map-display";
 import {
   FlowLayer,
-  createFlowPathCoordinates,
   type FlowDirectionMarker,
   type FlowLayerFeature,
   type FlowLayerWeightAccessor,
@@ -83,7 +62,6 @@ export type FlowMapProps<TProperties extends Record<string, unknown> = Record<st
   getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
   getFlowLabel?: (feature: FlowMapFeature<TProperties>) => ReactNode;
   getWeight?: FlowMapWeightAccessor<TProperties>;
-  globeBasemapMode?: GlobeBasemapMode;
   hoveredFlowOpacity?: number;
   inactiveFlowOpacity?: number;
   /**
@@ -115,7 +93,6 @@ export function FlowMap<TProperties extends Record<string, unknown> = Record<str
   className,
   fitBoundsPadding = 56,
   fitToData = true,
-  globeBasemapMode,
   initialViewState,
   mapLabel = "Interactive flow map",
   mapStyle = defaultRasterMapStyle,
@@ -158,7 +135,6 @@ export function FlowMap<TProperties extends Record<string, unknown> = Record<str
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
-      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
@@ -235,271 +211,6 @@ export function FlatFlowMap<TProperties extends Record<string, unknown> = Record
   ...props
 }: FlowMapProps<TProperties>) {
   return <FlowMap {...props} mapDisplay="flat" />;
-}
-
-export function GlobeFlowMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
-  className,
-  fitToData = true,
-  flowColor = "#0f766e",
-  flowShape = "straight",
-  flows = [],
-  getFlowColor,
-  getWeight,
-  initialViewState,
-  mapLabel = "Interactive flow map",
-  maxZoom,
-  measurementDistanceFormat: _measurementDistanceFormat,
-  measurementDraftLineColor: _measurementDraftLineColor,
-  measurementLineColor: _measurementLineColor,
-  measurementMode: _measurementMode,
-  measurements: _measurements,
-  maxWeight,
-  maxWidth,
-  minWidth,
-  onFeatureSelect,
-  onMeasurementCreate: _onMeasurementCreate,
-  onMeasurementDraftChange: _onMeasurementDraftChange,
-  onMeasurementSelect: _onMeasurementSelect,
-  showEndpoints = true,
-  style,
-  weightMetric,
-}: FlowMapProps<TProperties>) {
-  const deferredFlows = useDeferredValue(flows);
-  const dragRef = useRef<{
-    center: [number, number];
-    pointerId: number;
-    x: number;
-    y: number;
-  } | null>(null);
-  const [viewState, setViewState] = useState<GlobeViewState>(() =>
-    createInitialFlowGlobeViewState({
-      fitToData,
-      flows,
-      initialViewState,
-    }),
-  );
-  const features = useMemo(
-    () =>
-      createFlowMapFeatures(deferredFlows, {
-        getWeight,
-        maxWeight,
-        maxWidth,
-        minWidth,
-        weightMetric,
-      }),
-    [deferredFlows, getWeight, maxWeight, maxWidth, minWidth, weightMetric],
-  );
-
-  useEffect(() => {
-    if (initialViewState || !fitToData) {
-      return;
-    }
-
-    setViewState(createInitialFlowGlobeViewState({ fitToData, flows: deferredFlows, initialViewState }));
-  }, [deferredFlows, fitToData, initialViewState]);
-
-  const handleFeatureClick = useEffectEvent((feature: FlowMapFeature<TProperties>) => {
-    startTransition(() => {
-      onFeatureSelect?.(feature);
-    });
-  });
-
-  return (
-    <div
-      aria-label={mapLabel}
-      className={joinClassNames("mb-maps", "mb-maps--globe", className)}
-      data-map-ready="true"
-      style={{
-        minHeight: 480,
-        width: "100%",
-        ...style,
-      }}
-    >
-      <svg
-        className="mb-maps__globe"
-        viewBox={`0 0 ${GLOBE_VIEWBOX_WIDTH} ${GLOBE_VIEWBOX_HEIGHT}`}
-        role="img"
-        onPointerDown={(event) => {
-          dragRef.current = {
-            center: viewState.center,
-            pointerId: event.pointerId,
-            x: event.clientX,
-            y: event.clientY,
-          };
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          const drag = dragRef.current;
-
-          if (!drag || drag.pointerId !== event.pointerId) {
-            return;
-          }
-
-          setViewState((current) => ({
-            ...current,
-            center: getGlobeDragCenter(
-              drag.center,
-              event.clientX - drag.x,
-              event.clientY - drag.y,
-              current.zoom,
-            ),
-          }));
-        }}
-        onPointerUp={(event) => {
-          if (dragRef.current?.pointerId === event.pointerId) {
-            dragRef.current = null;
-          }
-        }}
-        onWheel={(event) => {
-          event.preventDefault();
-          setViewState((current) => ({
-            ...current,
-            zoom: getBoundedGlobeZoom(current.zoom, event.deltaY, maxZoom),
-          }));
-        }}
-      >
-        <FlowGlobeBase viewState={viewState} />
-        <g className="mb-maps__globe-features">
-          {features.map((feature) => (
-            <GlobeFlowFeature
-              feature={feature}
-              flowColor={flowColor}
-              flowShape={flowShape}
-              getFlowColor={getFlowColor}
-              key={feature.flow.id}
-              onClick={handleFeatureClick}
-              showEndpoints={showEndpoints}
-              viewState={viewState}
-            />
-          ))}
-        </g>
-      </svg>
-    </div>
-  );
-}
-
-function FlowGlobeBase({ viewState }: { viewState: GlobeViewState }) {
-  const radius = getGlobeRadius(viewState.zoom);
-
-  return (
-    <>
-      <defs>
-        <radialGradient id="mb-maps-globe-ocean" cx="38%" cy="30%" r="70%">
-          <stop offset="0%" stopColor="#f8fafc" />
-          <stop offset="58%" stopColor="#a7f3d0" />
-          <stop offset="100%" stopColor="#0f766e" />
-        </radialGradient>
-      </defs>
-      <circle
-        className="mb-maps__globe-ocean"
-        cx={GLOBE_VIEWBOX_WIDTH / 2}
-        cy={GLOBE_VIEWBOX_HEIGHT / 2}
-        r={radius}
-      />
-      <g className="mb-maps__globe-graticule">
-        {createGlobeGraticuleLines(viewState).map((line, index) => {
-          const path = createVisibleSvgPath(line);
-
-          return path ? <path d={path} key={index} /> : null;
-        })}
-      </g>
-      <circle
-        className="mb-maps__globe-rim"
-        cx={GLOBE_VIEWBOX_WIDTH / 2}
-        cy={GLOBE_VIEWBOX_HEIGHT / 2}
-        r={radius}
-      />
-    </>
-  );
-}
-
-function GlobeFlowFeature<TProperties extends Record<string, unknown>>({
-  feature,
-  flowColor,
-  flowShape,
-  getFlowColor,
-  onClick,
-  showEndpoints,
-  viewState,
-}: {
-  feature: FlowMapFeature<TProperties>;
-  flowColor: string;
-  flowShape: FlowShape;
-  getFlowColor?: (feature: FlowMapFeature<TProperties>) => string;
-  onClick: (feature: FlowMapFeature<TProperties>) => void;
-  showEndpoints: boolean;
-  viewState: GlobeViewState;
-}) {
-  const from = projectGlobeCoordinate(feature.flow.from, viewState);
-  const to = projectGlobeCoordinate(feature.flow.to, viewState);
-
-  if (!from.visible && !to.visible) {
-    return null;
-  }
-
-  const color = getFlowColor?.(feature) ?? flowColor;
-  const opacity = clamp(0.28 + Math.min(from.scale, to.scale) * 0.72, 0.18, 0.92);
-  const projectedPath = createFlowPathCoordinates(feature, flowShape)
-    .map((coordinate, index) => {
-      const projected = projectGlobeCoordinate(coordinate, viewState);
-      const command = index === 0 ? "M" : "L";
-
-      return `${command}${projected.x.toFixed(2)} ${projected.y.toFixed(2)}`;
-    })
-    .join("");
-
-  return (
-    <g
-      className="mb-maps__globe-flow"
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick(feature);
-      }}
-      style={{ opacity }}
-    >
-      <path
-        d={projectedPath}
-        stroke={color}
-        strokeWidth={feature.width}
-      >
-        <title>{feature.flow.label}</title>
-      </path>
-      {showEndpoints && from.visible ? (
-        <circle cx={from.x} cy={from.y} fill={color} r={Math.max(2.5, feature.width * 0.52)} />
-      ) : null}
-      {showEndpoints && to.visible ? (
-        <circle cx={to.x} cy={to.y} fill={color} r={Math.max(3.5, feature.width * 0.72)} />
-      ) : null}
-    </g>
-  );
-}
-
-function createInitialFlowGlobeViewState<TProperties extends Record<string, unknown>>({
-  fitToData,
-  flows,
-  initialViewState,
-}: {
-  fitToData: boolean;
-  flows: readonly MapFlow<TProperties>[];
-  initialViewState?: MapViewState;
-}): GlobeViewState {
-  if (initialViewState) {
-    return initialViewState;
-  }
-
-  const bounds = fitToData ? getBoundsFromFlows(flows) : null;
-
-  if (bounds) {
-    return {
-      center: [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2],
-      zoom: 1.8,
-    };
-  }
-
-  return {
-    center: [12, 25],
-    zoom: 1.35,
-  };
 }
 
 function getBoundsFromFlows<TProperties extends Record<string, unknown>>(flows: readonly MapFlow<TProperties>[]) {

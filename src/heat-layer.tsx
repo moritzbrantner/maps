@@ -9,7 +9,6 @@ import {
   createHeatLayerNumberArrayKey,
   createHeatLayerSourceIndex,
   createHeatLayerValueFeatureCollection,
-  formatHeatLayerFeatureValue,
   getHeatLayerFeatureCollectionInBounds,
   isHeatFieldContoursVisible,
   isHeatFieldRasterVisible,
@@ -34,10 +33,9 @@ import {
   renderHeatLayerFieldSurface,
   renderHeatLayerSurface,
   resetHeatLayerFlatRenderState,
-  resolveHeatLayerGlobeRadius,
   type HeatLayerFlatRenderState,
 } from "./heat-layer-rendering";
-import { prepareHeatLayerColorRamp, resolveHeatLayerColor } from "./heat-surface";
+import { prepareHeatLayerColorRamp } from "./heat-surface";
 import { MapSurfaceContext } from "./map-view";
 import { createScalarFieldGrid, type ScalarFieldGrid } from "./scalar-field";
 import {
@@ -46,7 +44,6 @@ import {
   type HeatFieldContourFeatureCollection,
   type HeatFieldImage,
 } from "./scalar-field-render";
-import { clamp } from "./heat-layer-utils";
 
 export { createHeatLayerDensityIndex } from "./heat-layer-data";
 export type {
@@ -388,15 +385,15 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   const renderVersion =
     heatmapAggregationMaxZoom ?? heatmapAggregationMinZoom ?? heatmapAggregationRadius ?? null;
   const surfaceDisplay = surface?.display;
-  const registerFlatLayer = surface?.registerFlatLayer;
+  const registerMapLibreLayer = surface?.registerMapLibreLayer;
 
   useEffect(() => {
-    if (!registerFlatLayer || surfaceDisplay !== "flat") {
+    if (!registerMapLibreLayer || (surfaceDisplay !== "flat" && surfaceDisplay !== "globe")) {
       return;
     }
 
     const flatRenderState = flatRenderStateRef.current;
-    const unregister = registerFlatLayer(
+    const unregister = registerMapLibreLayer(
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
         clearHeatLayerManagedLayers(layer, flatRenderState.dataLayers);
@@ -542,89 +539,11 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     resolvedLayerId,
     showDataPoints,
     shouldRenderFieldAsync,
-    registerFlatLayer,
+    registerMapLibreLayer,
     surfaceDisplay,
   ]);
 
-  if (!surface || surface.display !== "globe") {
-    return null;
-  }
-
-  const data = heatIndex.getFeatureCollection([-180, -90, 180, 90]);
-
-  return (
-    <>
-      {surface.viewState.zoom <= heatmapMaxZoom
-        ? data.features.map((feature) => {
-            const projected = surface.projectGlobeCoordinate(
-              feature.geometry.coordinates,
-              surface.viewState,
-            );
-
-            if (!projected.visible) {
-              return null;
-            }
-
-            const normalizedWeight = clamp(feature.properties.weight, 0, 1);
-            const projectedRadius = resolveHeatLayerGlobeRadius(
-              heatmapRadius,
-              feature.geometry.coordinates,
-              surface.viewState,
-              surface.projectGlobeCoordinate,
-            );
-            const markerRadius =
-              projectedRadius *
-              Math.max(0.35, Math.sqrt(normalizedWeight)) *
-              Math.max(0, heatmapIntensity) *
-              (0.62 + projected.scale * 0.38);
-            const safeOpacity = clamp(heatmapOpacity, 0, 1);
-
-            return (
-              <circle
-                className="mb-maps__globe-heat-marker"
-                cx={projected.x}
-                cy={projected.y}
-                fill={resolveHeatLayerColor(preparedHeatmapColorRamp, normalizedWeight)}
-                fillOpacity={safeOpacity * Math.min(1, 0.35 + normalizedWeight * 0.65)}
-                key={feature.properties.pointId}
-                r={markerRadius}
-                style={{ opacity: 0.34 + projected.scale * 0.66 }}
-              >
-                <title>{formatHeatLayerFeatureValue(feature, dataPointValueFormat)}</title>
-              </circle>
-            );
-          })
-        : null}
-      {showDataPoints && surface.viewState.zoom <= heatmapMaxZoom
-        ? data.features.map((feature) => {
-            const projected = surface.projectGlobeCoordinate(
-              feature.geometry.coordinates,
-              surface.viewState,
-            );
-
-            if (!projected.visible) {
-              return null;
-            }
-
-            return (
-              <circle
-                className="mb-maps__globe-heat-data-point"
-                cx={projected.x}
-                cy={projected.y}
-                fill={dataPointColor}
-                fillOpacity={clamp(dataPointOpacity, 0, 1)}
-                key={`data-point-${feature.properties.pointId}`}
-                r={Math.max(0, dataPointRadius) * (0.72 + projected.scale * 0.28)}
-                stroke={dataPointStrokeColor}
-                strokeWidth={Math.max(0, dataPointStrokeWidth)}
-              >
-                <title>{feature.properties.label}</title>
-              </circle>
-            );
-          })
-        : null}
-    </>
-  );
+  return null;
 }
 
 export type HeatFieldLayerProps<TProperties = Record<string, unknown>> = Omit<

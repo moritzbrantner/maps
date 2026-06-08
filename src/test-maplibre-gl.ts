@@ -1,6 +1,7 @@
 import * as flat from "flat";
 
 type Handler = (...args: unknown[]) => void;
+type ProjectionSpecification = { type: string };
 const flatRuntime = flat as unknown as {
   circleMarker: (...args: never[]) => { addTo: (group: unknown) => unknown };
   imageOverlay: (...args: never[]) => { addTo: (group: unknown) => unknown };
@@ -24,6 +25,7 @@ export class Map {
   private mockLayers = new globalThis.Map<string, unknown>();
   private maxBounds: [[number, number], [number, number]] | null = null;
   private minZoom = 0;
+  private projection: ProjectionSpecification = { type: "mercator" };
   private sources = new globalThis.Map<
     string,
     {
@@ -44,6 +46,7 @@ export class Map {
     container?: HTMLElement;
     maxBounds?: [[number, number], [number, number]];
     minZoom?: number;
+    style?: unknown;
     zoom?: number;
   }) {
     const baseMap = flatRuntime.map();
@@ -55,9 +58,11 @@ export class Map {
     };
     this.maxBounds = options.maxBounds ?? null;
     this.minZoom = options.minZoom ?? this.minZoom;
+    this.projection = getProjectionFromStyle(options.style) ?? this.projection;
     this.zoom = options.zoom ?? this.zoom;
 
     queueMicrotask(() => {
+      this.fire("style.load");
       this.fire("load");
     });
   }
@@ -282,6 +287,10 @@ export class Map {
     return this.minZoom;
   }
 
+  getProjection() {
+    return this.projection;
+  }
+
   getLayer(id: string) {
     return this.layers.get(id);
   }
@@ -413,6 +422,10 @@ export class Map {
     this.zoom = Math.max(this.zoom, zoom);
   }
 
+  setProjection(projection: ProjectionSpecification) {
+    this.projection = projection;
+  }
+
   unproject(point: [number, number]) {
     return this.baseMap.containerPointToLatLng(point);
   }
@@ -489,6 +502,18 @@ export class Map {
       mockLayer.url = source?.url;
     }
   }
+}
+
+function getProjectionFromStyle(style: unknown): ProjectionSpecification | null {
+  if (style && typeof style === "object" && "projection" in style) {
+    const projection = (style as { projection?: ProjectionSpecification }).projection;
+
+    if (projection?.type) {
+      return projection;
+    }
+  }
+
+  return null;
 }
 
 function normalizeEventPayload(payload: unknown) {

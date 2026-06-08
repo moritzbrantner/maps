@@ -91,6 +91,8 @@ controller?.fitPoints(points, { padding: 72 });
 
 - [Getting Started](docs/getting-started.md)
 - [Entrypoints](docs/entrypoints.md)
+- [API Stability](docs/api-stability.md)
+- [Recipes](docs/recipes.md)
 - [GeoJSON](docs/geojson.md)
 - [GeoJSON Editor](docs/editor.md)
 - [Timeline And Temporal Maps](docs/timeline.md)
@@ -102,10 +104,9 @@ controller?.fitPoints(points, { padding: 72 });
 
 - React, React DOM, and `@moritzbrantner/ui` are peer dependencies.
 - `@moritzbrantner/timeline-editor` is an optional peer used by timeline editor components.
-- Tailwind CSS remains a runtime dependency because the shipped stylesheet imports it.
 - Rendering map components requires browser DOM APIs and WebGL/canvas support.
 - React map entrypoints are client components and start with `"use client"`.
-- `@moritzbrantner/maps/styles.css` imports Tailwind CSS and MapLibre GL CSS.
+- `@moritzbrantner/maps/styles.css` is compiled CSS that includes package styles and MapLibre GL CSS.
 - Data-only helpers from `@moritzbrantner/maps/core` can be used outside React.
 
 ## Verification

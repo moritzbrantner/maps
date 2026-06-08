@@ -36,10 +36,6 @@
       "types": "./dist/flat.d.ts",
       "import": "./dist/flat.js"
     },
-    "./globe": {
-      "types": "./dist/globe.d.ts",
-      "import": "./dist/globe.js"
-    },
     "./editor": {
       "types": "./dist/editor.d.ts",
       "import": "./dist/editor.js"
@@ -48,6 +44,22 @@
       "types": "./dist/timeline.d.ts",
       "import": "./dist/timeline.js"
     },
+    "./geojson": {
+      "types": "./dist/geojson.d.ts",
+      "import": "./dist/geojson.js"
+    },
+    "./heat": {
+      "types": "./dist/heat.d.ts",
+      "import": "./dist/heat.js"
+    },
+    "./measurement": {
+      "types": "./dist/measurement.d.ts",
+      "import": "./dist/measurement.js"
+    },
+    "./temporal": {
+      "types": "./dist/temporal.d.ts",
+      "import": "./dist/temporal.js"
+    },
     "./package.json": "./package.json",
     "./styles.css": "./styles.css"
   },
@@ -55,7 +67,9 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup --config tsup.config.ts",
+    "build": "tsup --config tsup.config.ts && bun run build:styles",
+    "build:js": "tsup --config tsup.config.ts",
+    "build:styles": "node ./scripts/build-styles.mjs",
     "analyze:bundles": "node ./scripts/analyze-bundles.mjs",
     "bench:heat-map": "bun run ./scripts/benchmark-heat-map.mjs",
     "bench:heat-layer": "bun run ./scripts/benchmark-heat-layer.mjs",
@@ -87,14 +101,10 @@
     "@turf/centroid": "^7.3.5",
     "@turf/helpers": "^7.3.5",
     "d3-delaunay": "^6.0.4",
-    "d3-geo": "^3.1.1",
     "maplibre-gl": "^5.24.0",
     "polygon-clipping": "^0.15.7",
     "supercluster": "^8.0.1",
-    "tailwindcss": "^4.3.0",
-    "three": "^0.184.0",
-    "topojson-client": "^3.1.0",
-    "world-atlas": "^2.0.2"
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@moritzbrantner/timeline-editor": "^1.0.0",
@@ -104,19 +114,19 @@
     "@tanstack/react-query": "^5.100.14",
     "@testing-library/react": "^16.3.2",
     "@types/d3-delaunay": "^6.0.4",
-    "@types/d3-geo": "^3.1.0",
+    "@types/geojson": "^7946.0.16",
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@types/supercluster": "^7.1.3",
     "@types/three": "^0.184.1",
-    "@types/topojson-client": "^3.1.5",
     "@vitejs/plugin-react": "^6.0.2",
     "jsdom": "^29.1.1",
     "oxlint": "^1.67.0",
     "oxfmt": "^0.52.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "tailwindcss": "^4.3.0",
     "tsup": "^8.5.1",
     "typescript": "6.0.3",
     "vite": "^8.0.16",

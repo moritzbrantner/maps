@@ -1,6 +1,15 @@
 "use client";
 
-import { startTransition, useContext, useDeferredValue, useEffect, useId, useMemo, useRef } from "react";
+import {
+  startTransition,
+  useContext,
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  type MutableRefObject,
+} from "react";
 
 import {
   createPointAggregationIndex,
@@ -10,7 +19,7 @@ import {
   type PointAggregationIndexOptions,
   type VisibleAggregationSummary,
 } from "./aggregation";
-import { escapeHtml, GLOBE_MAX_ZOOM, joinClassNames, toLatLng } from "./map-display";
+import { escapeHtml, joinClassNames, toLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 import type { FlatLayer, FlatLayerGroup } from "./maplibre-compat";
@@ -50,7 +59,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   const surface = useContext(MapSurfaceContext);
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `cluster-layer-${generatedLayerId}`;
-  const isFlatSurface = surface?.display === "flat";
+  const isFlatSurface = surface?.display === "flat" || surface?.display === "globe";
   const deferredPoints = useDeferredValue(points);
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
   const surfaceRef = useRef(surface);
@@ -76,7 +85,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       return;
     }
 
-    return surfaceRef.current?.registerFlatLayer(
+    return surfaceRef.current?.registerMapLibreLayer(
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
         const currentSurface = surfaceRef.current;
@@ -303,219 +312,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
     isFlatSurface,
   ]);
 
-  if (!surface || surface.display !== "globe") {
-    return null;
-  }
-
-  const aggregation = index.getViewportAggregation({
-    bounds: [-180, -90, 180, 90],
-    zoom: surface.viewState.zoom,
-  });
-
-  emitViewportSummary(aggregation.summary, lastViewportSummaryKeyRef, onViewportAggregationChange);
-
-  return (
-    <>
-      {aggregation.features.map((feature) => {
-        const projected = surface.projectGlobeCoordinate(feature.coordinates, surface.viewState);
-
-        if (!projected.visible) {
-          return null;
-        }
-
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-
-        if (feature.kind === "cluster") {
-          const radius = getClusterRadius(feature.pointCount) * (0.72 + projected.scale * 0.28);
-
-          return (
-            <g
-              className={joinClassNames(
-                "mb-maps__globe-cluster",
-                hovered && "mb-maps__feature--hovered",
-                selected && "mb-maps__feature--selected",
-              )}
-              key={`cluster-${feature.clusterId}`}
-              onClick={(event) => {
-                event.stopPropagation();
-
-                if (surface.isMeasuring) {
-                  return;
-                }
-
-                surface.setViewState(
-                  {
-                    center: feature.coordinates,
-                    zoom: Math.min(
-                      GLOBE_MAX_ZOOM,
-                      Math.max(surface.viewState.zoom + 0.8, feature.expansionZoom),
-                    ),
-                  },
-                  "cluster-expand",
-                );
-                surface.handleFeatureClick(feature, { x: projected.x, y: projected.y }, {
-                  getFeatureId,
-                  onFeatureSelect,
-                  onSelectedFeatureIdChange,
-                  renderFeaturePopup,
-                });
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
-                  getFeatureId,
-                  onFeatureContextMenu,
-                  onFeatureSelect,
-                  onSelectedFeatureIdChange,
-                  renderFeatureContextMenu,
-                  renderFeaturePopup,
-                  suppress: surface.isMeasuring,
-                  coordinates: feature.coordinates,
-                });
-              }}
-              onPointerEnter={() => {
-                if (!surface.isMeasuring) {
-                  surface.handleFeatureHover(feature, { x: projected.x, y: projected.y }, {
-                    getFeatureId,
-                    onHoveredFeatureIdChange,
-                    onFeatureHover,
-                    renderFeatureTooltip,
-                  });
-                }
-              }}
-              onPointerLeave={() => {
-                surface.handleFeatureHover(null, null, {
-                  getFeatureId,
-                  onHoveredFeatureIdChange,
-                  onFeatureHover,
-                  renderFeatureTooltip,
-                });
-              }}
-              style={{ opacity: 0.38 + projected.scale * 0.62 }}
-            >
-              <title>{feature.pointCountAbbreviated}</title>
-              <circle
-                cx={projected.x}
-                cy={projected.y}
-                fill={getClusterColor(feature.pointCount)}
-                r={radius}
-              />
-              <text x={projected.x} y={projected.y}>
-                {feature.pointCountAbbreviated}
-              </text>
-            </g>
-          );
-        }
-
-        return (
-          <circle
-            className={joinClassNames(
-              "mb-maps__globe-point",
-              hovered && "mb-maps__feature--hovered",
-              selected && "mb-maps__feature--selected",
-            )}
-            cx={projected.x}
-            cy={projected.y}
-            key={feature.point.id}
-            onClick={(event) => {
-              event.stopPropagation();
-              surface.handleFeatureClick(feature, { x: projected.x, y: projected.y }, {
-                getFeatureId,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-              });
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              surface.handleFeatureContextMenu(feature, { x: projected.x, y: projected.y }, {
-                getFeatureId,
-                onFeatureContextMenu,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeatureContextMenu,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-                coordinates: feature.coordinates,
-              });
-            }}
-            onPointerEnter={() => {
-              if (!surface.isMeasuring) {
-                surface.handleFeatureHover(feature, { x: projected.x, y: projected.y }, {
-                  getFeatureId,
-                  onHoveredFeatureIdChange,
-                  onFeatureHover,
-                  renderFeatureTooltip,
-                });
-              }
-            }}
-            onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            }}
-            r={6 * (0.72 + projected.scale * 0.28)}
-            style={{ opacity: 0.42 + projected.scale * 0.58 }}
-          >
-            <title>{feature.point.label}</title>
-          </circle>
-        );
-      })}
-    </>
-  );
-}
-
-function emitViewportSummary(
-  summary: VisibleAggregationSummary,
-  ref: React.MutableRefObject<string | null>,
-  onViewportAggregationChange: ((summary: VisibleAggregationSummary) => void) | undefined,
-) {
-  const nextSummaryKey = serializeVisibleAggregationSummary(summary);
-
-  if (ref.current === nextSummaryKey) {
-    return;
-  }
-
-  ref.current = nextSummaryKey;
-  startTransition(() => {
-    onViewportAggregationChange?.(summary);
-  });
-}
-
-function getFlatFeaturePosition(
-  map: { latLngToContainerPoint?: (latLng: [number, number]) => { x: number; y: number } },
-  coordinates: [number, number],
-  event: { containerPoint?: { x: number; y: number } },
-) {
-  if (event.containerPoint) {
-    return event.containerPoint;
-  }
-
-  return map.latLngToContainerPoint?.(toLatLng(coordinates)) ?? { x: 0, y: 0 };
-}
-
-type FlatFeaturePointerEvent = {
-  containerPoint?: { x: number; y: number };
-  originalEvent?: {
-    preventDefault?: () => void;
-  };
-};
-
-type FlatClusterCacheEntry = {
-  coordinatesKey: string;
-  layers: FlatLayer[];
-  signature: string;
-};
-
-function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
-  event.originalEvent?.preventDefault?.();
+  return null;
 }
 
 function getClusterColor(pointCount: number) {
@@ -603,4 +400,48 @@ function removeFlatClusterCacheEntry(layer: FlatLayerGroup, entry: FlatClusterCa
   for (const cachedLayer of entry.layers) {
     layer.removeLayer(cachedLayer);
   }
+}
+
+type FlatClusterCacheEntry = {
+  coordinatesKey: string;
+  layers: FlatLayer[];
+  signature: string;
+};
+
+type FlatFeaturePointerEvent = {
+  containerPoint?: { x: number; y: number };
+  originalEvent?: {
+    preventDefault?: () => void;
+    stopPropagation?: () => void;
+  };
+};
+
+function emitViewportSummary(
+  summary: VisibleAggregationSummary,
+  lastKeyRef: MutableRefObject<string | null>,
+  onViewportAggregationChange?: (summary: VisibleAggregationSummary) => void,
+) {
+  const key = serializeVisibleAggregationSummary(summary);
+
+  if (lastKeyRef.current === key) {
+    return;
+  }
+
+  lastKeyRef.current = key;
+  startTransition(() => {
+    onViewportAggregationChange?.(summary);
+  });
+}
+
+function getFlatFeaturePosition(
+  map: { project: (coordinates: [number, number]) => { x: number; y: number } },
+  coordinates: [longitude: number, latitude: number],
+  event: { containerPoint?: { x: number; y: number } } = {},
+) {
+  return event.containerPoint ?? map.project(coordinates);
+}
+
+function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
+  event.originalEvent?.preventDefault?.();
+  event.originalEvent?.stopPropagation?.();
 }

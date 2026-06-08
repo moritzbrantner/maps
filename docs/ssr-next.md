@@ -37,4 +37,4 @@ export function summarizePoints(points) {
 - Browser DOM APIs are required for rendered maps.
 - WebGL/canvas support is required for MapLibre and globe surfaces.
 - Import `@moritzbrantner/maps/styles.css` once in a client app shell.
-- Configure Tailwind processing so package `@source` declarations are honored.
+- The package stylesheet is compiled; server-safe `core` imports do not require CSS or Tailwind processing.

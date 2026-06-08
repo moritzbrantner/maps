@@ -13,8 +13,11 @@ const entrySources = {
   "./core": "src/entries/core.ts",
   "./editor": "src/entries/editor.ts",
   "./flat": "src/entries/flat.ts",
-  "./globe": "src/entries/globe.ts",
+  "./geojson": "src/entries/geojson.ts",
+  "./heat": "src/entries/heat.ts",
   "./layers": "src/entries/layers.ts",
+  "./measurement": "src/entries/measurement.ts",
+  "./temporal": "src/entries/temporal.ts",
   "./timeline": "src/entries/timeline.ts",
 };
 

@@ -1,9 +1,7 @@
 "use client";
 
 import {
-  lazy,
   startTransition,
-  Suspense,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -26,21 +24,12 @@ import { getBoundsFromGeoJson, type GeoJsonMapSource } from "./geojson-source";
 import { splitMapViewChildren } from "./map-components";
 import {
   defaultRasterMapStyle,
-  getBoundedGlobeZoom,
-  getGlobeViewStateForBounds,
-  getGlobeDragCenter,
-  GLOBE_VIEWBOX_HEIGHT,
-  GLOBE_VIEWBOX_WIDTH,
   joinClassNames,
   normalizeMapBounds,
   normalizeMapMaxZoom,
-  projectGlobeCoordinate,
-  resolveMapLibreStyle,
+  resolveMapLibreDisplayStyle,
   toMapLibreBounds,
   type MapBounds,
-  unprojectGlobePoint,
-  type GlobeBasemapMode,
-  type GlobeViewState,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapFitBoundsOptions,
@@ -67,8 +56,8 @@ import { WebGlFlatRuntime, type FlatMapRuntime } from "./webgl-flat-runtime";
 import type { MapContextMenuContext, MapFeatureContextMenuContext } from "./map-interaction";
 import {
   MapSurfaceContext,
-  type FlatLayerRegistrationOptions,
-  type FlatLayerRender,
+  type MapLibreLayerRegistrationOptions,
+  type MapLibreLayerRender,
   type MapInteractionMode,
   type MapSurfaceContextValue,
 } from "./map-surface-context";
@@ -84,19 +73,11 @@ import {
 
 export {
   MapSurfaceContext,
-  type FlatLayerRegistrationOptions,
-  type FlatLayerRender,
+  type MapLibreLayerRegistrationOptions,
+  type MapLibreLayerRender,
   type MapInteractionMode,
   type MapSurfaceContextValue,
 } from "./map-surface-context";
-
-const GLOBE_TILE_MIN_ZOOM = 4;
-const GlobeBase = lazy(() =>
-  import("./globe-base").then((module) => ({ default: module.GlobeBase })),
-);
-const GlobeSvgOverlayBase = lazy(() =>
-  import("./globe-base").then((module) => ({ default: module.GlobeSvgOverlayBase })),
-);
 
 export type MapViewProps = MapViewportProps & {
   children?: ReactNode;
@@ -105,7 +86,6 @@ export type MapViewProps = MapViewportProps & {
   fitBoundsPadding?: number;
   fitToData?: boolean;
   flatRuntime?: FlatMapRuntime;
-  globeBasemapMode?: GlobeBasemapMode;
   mapDisplay?: MapDisplayMode;
   mapLabel?: string;
   mapStyle?: string | RasterMapStyle;
@@ -122,7 +102,7 @@ type RegisteredFlatLayer = {
   id: string;
   group: FlatLayerGroup | null;
   preserveOnRender: boolean;
-  render: FlatLayerRender;
+  render: MapLibreLayerRender;
   renderOnViewStateChange: boolean;
 };
 
@@ -134,7 +114,6 @@ export function MapView({
   fitBoundsPadding = 56,
   fitToData = true,
   flatRuntime = "maplibre",
-  globeBasemapMode = "vector",
   initialViewState,
   mapDisplay = "flat",
   mapLabel = "Interactive map",
@@ -150,8 +129,8 @@ export function MapView({
   style,
   viewState,
 }: MapViewProps) {
+  const usesMapLibreRuntime = mapDisplay === "globe" || (mapDisplay === "flat" && flatRuntime === "maplibre");
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
   const maplibreRef = useRef<typeof import("maplibre-gl") | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const flatMapAdapterRef = useRef<FlatMapAdapter | null>(null);
@@ -161,12 +140,6 @@ export function MapView({
     renderMapContextMenu?: (context: MapContextMenuContext) => ReactNode;
   }>({});
   const layersRef = useRef<Map<string, RegisteredFlatLayer>>(new Map());
-  const dragRef = useRef<{
-    center: [number, number];
-    pointerId: number;
-    x: number;
-    y: number;
-  } | null>(null);
   const lastCommittedFlatStateRef = useRef<MapViewState | null>(null);
   const lastFlatMoveStateRef = useRef<MapViewState | null>(null);
   const lastFitBoundsKeyRef = useRef<string | null>(null);
@@ -174,7 +147,7 @@ export function MapView({
   const lastFlatViewportRenderKeyRef = useRef<string | null>(null);
   const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const isFlatStyleReadyRef = useRef(false);
-  const [isReady, setIsReady] = useState(mapDisplay === "globe");
+  const [isReady, setIsReady] = useState(false);
   const [renderVersion, setRenderVersion] = useState(0);
   const interactionModesRef = useRef<Map<string, Exclude<MapInteractionMode, "none">>>(new Map());
   const [interactionMode, setInteractionMode] = useState<MapInteractionMode>("none");
@@ -337,7 +310,7 @@ export function MapView({
   const syncFlatBoundsConstraints = useEffectEvent(() => {
     const map = mapRef.current;
 
-    if (!map || mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+    if (!map || !usesMapLibreRuntime) {
       return;
     }
 
@@ -369,19 +342,6 @@ export function MapView({
     }
   });
 
-  const fitGlobeToBounds = useEffectEvent((
-    bounds: MapBounds,
-    options: MapFitBoundsOptions & { reason?: MapViewStateChangeReason } = {},
-  ) => {
-    const globeViewState = getGlobeViewStateForBounds(bounds);
-    const next = {
-      ...globeViewState,
-      ...(options.maxZoom === undefined ? {} : { zoom: Math.min(globeViewState.zoom, options.maxZoom) }),
-    };
-
-    setViewState(next, options.reason ?? "fit-bounds");
-  });
-
   const fitBoundsNow = useEffectEvent((
     bounds: MapBounds | null,
     options: MapFitBoundsOptions & { reason?: MapViewStateChangeReason } = {},
@@ -390,12 +350,9 @@ export function MapView({
       return;
     }
 
-    if (mapDisplay === "flat") {
+    if (usesMapLibreRuntime) {
       fitFlatToBounds(bounds, options);
-      return;
     }
-
-    fitGlobeToBounds(bounds, options);
   });
 
   const fitToDataNow = useEffectEvent(() => {
@@ -405,7 +362,7 @@ export function MapView({
   const flyToNow = useEffectEvent((next: MapViewState, options: MapFlyToOptions = {}) => {
     const map = mapRef.current;
 
-    if (mapDisplay === "flat" && map) {
+    if (usesMapLibreRuntime && map) {
       const camera = {
         center: next.center,
         zoom: next.zoom,
@@ -474,12 +431,13 @@ export function MapView({
   });
 
   useEffect(() => {
-    if (mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+    if (!usesMapLibreRuntime) {
       setIsReady(true);
       return;
     }
 
     let isCancelled = false;
+    let handleStyleLoad: (() => void) | null = null;
     let localMap: MapLibreMap | null = null;
 
     async function initializeMap() {
@@ -501,7 +459,7 @@ export function MapView({
         container: containerRef.current,
         ...(resolvedMaxBounds ? { maxBounds: toMapLibreBounds(resolvedMaxBounds) } : {}),
         ...(resolvedMaxZoom === undefined ? {} : { maxZoom: resolvedMaxZoom }),
-        style: resolveMapLibreStyle(mapStyle),
+        style: resolveMapLibreDisplayStyle(mapStyle, mapDisplay),
         zoom: currentViewState.zoom,
       });
       localMap.addControl(new maplibre.NavigationControl({ showCompass: false }), "top-left");
@@ -533,14 +491,25 @@ export function MapView({
         );
       });
 
+      handleStyleLoad = () => {
+        if (isCancelled || !localMap) {
+          return;
+        }
+
+        if (mapDisplay === "globe") {
+          localMap.setProjection?.({ type: "globe" });
+        }
+        isFlatStyleReadyRef.current = true;
+        syncFlatBoundsConstraints();
+        renderFlatLayers({ viewportOnly: false });
+      };
+
+      localMap.on("style.load", handleStyleLoad);
       localMap.once("load", () => {
         if (isCancelled || !localMap) {
           return;
         }
 
-        isFlatStyleReadyRef.current = true;
-        syncFlatBoundsConstraints();
-        renderFlatLayers({ viewportOnly: false });
         setIsReady(true);
         handleMapReady(localMap);
       });
@@ -565,6 +534,9 @@ export function MapView({
         localMap.off("zoomstart", clearFeatureHover);
         localMap.off("dragstart", clearFeatureHover);
         localMap.off("resize", syncFlatBoundsConstraints);
+        if (handleStyleLoad) {
+          localMap.off("style.load", handleStyleLoad);
+        }
         localMap.remove();
       }
 
@@ -574,12 +546,12 @@ export function MapView({
       maplibreRef.current = null;
       isFlatStyleReadyRef.current = false;
     };
-  }, [flatRuntime, mapDisplay]);
+  }, [mapDisplay, usesMapLibreRuntime]);
 
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+    if (!map || !usesMapLibreRuntime) {
       return;
     }
 
@@ -590,10 +562,10 @@ export function MapView({
       lastCommittedFlatStateRef.current = currentViewState;
       map.jumpTo({ zoom: currentViewState.zoom });
     }
-  }, [currentViewState, flatRuntime, mapDisplay, resolvedMaxZoom, syncFlatBoundsConstraints]);
+  }, [currentViewState, resolvedMaxZoom, syncFlatBoundsConstraints, usesMapLibreRuntime]);
 
   useEffect(() => {
-    if (mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+    if (!usesMapLibreRuntime) {
       return;
     }
 
@@ -604,10 +576,10 @@ export function MapView({
     lastFlatFullRenderKeyRef.current = flatFullRenderKey;
 
     renderFlatLayers({ viewportOnly: false });
-  }, [flatFullRenderKey, flatRuntime, mapDisplay]);
+  }, [flatFullRenderKey, usesMapLibreRuntime]);
 
   useEffect(() => {
-    if (mapDisplay !== "flat" || flatRuntime !== "maplibre") {
+    if (!usesMapLibreRuntime) {
       return;
     }
 
@@ -622,7 +594,7 @@ export function MapView({
     }
 
     renderFlatLayers({ viewportOnly: true });
-  }, [controlled, flatRuntime, flatViewportRenderKey, mapDisplay]);
+  }, [controlled, flatViewportRenderKey, usesMapLibreRuntime]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -681,8 +653,8 @@ export function MapView({
     setViewState,
   ]);
 
-  const registerFlatLayer = useCallback(
-    (id: string, render: FlatLayerRender, options: FlatLayerRegistrationOptions = {}) => {
+  const registerMapLibreLayer = useCallback(
+    (id: string, render: MapLibreLayerRender, options: MapLibreLayerRegistrationOptions = {}) => {
       const flat = flatLayerFactoryRef.current;
       const map = flatMapAdapterRef.current;
       const maplibre = maplibreRef.current;
@@ -719,7 +691,7 @@ export function MapView({
           return;
         }
 
-        const clearRender: FlatLayerRender = ({ layer: currentLayer }) => {
+        const clearRender: MapLibreLayerRender = ({ layer: currentLayer }) => {
           currentLayer.clearLayers();
         };
 
@@ -745,23 +717,6 @@ export function MapView({
       };
     },
     [interactionMode, isMeasuring],
-  );
-
-  const getGlobePointerCoordinate = useCallback(
-    (event: { clientX: number; clientY: number }) => {
-      const svg = svgRef.current;
-
-      if (!svg) {
-        return null;
-      }
-
-      const rect = svg.getBoundingClientRect();
-      const x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * GLOBE_VIEWBOX_WIDTH;
-      const y = ((event.clientY - rect.top) / Math.max(1, rect.height)) * GLOBE_VIEWBOX_HEIGHT;
-
-      return unprojectGlobePoint({ x, y }, currentViewState as GlobeViewState);
-    },
-    [currentViewState],
   );
 
   const getFeatureId = useCallback((feature: unknown, getId?: (feature: never) => string) => {
@@ -833,7 +788,6 @@ export function MapView({
     () => ({
       closeFeaturePopup: () => setPopup(null),
       display: mapDisplay,
-      getGlobePointerCoordinate,
       handleBackgroundClick: () => {
         blockedHoverPositionRef.current = null;
         setHovered(null);
@@ -978,8 +932,7 @@ export function MapView({
       flatMap: flatMapAdapterRef.current,
       maplibre: maplibreRef.current,
       maplibreMap: mapRef.current,
-      projectGlobeCoordinate,
-      registerFlatLayer,
+      registerMapLibreLayer,
       registerInteractionMode,
       requestRender,
       setMeasurementActive,
@@ -989,13 +942,12 @@ export function MapView({
     [
       currentViewState,
       getFeatureId,
-      getGlobePointerCoordinate,
       hovered,
       interactionMode,
       isReady,
       isMeasuring,
       mapDisplay,
-      registerFlatLayer,
+      registerMapLibreLayer,
       registerInteractionMode,
       requestRender,
       setMeasurementActive,
@@ -1023,14 +975,8 @@ export function MapView({
           width: "100%",
           ...style,
         }}
-        onClick={() => {
-          if (mapDisplay === "globe") {
-            setPopup(null);
-            setContextMenu(null);
-          }
-        }}
       >
-        {mapDisplay === "flat" && flatRuntime === "maplibre" ? (
+        {usesMapLibreRuntime ? (
           <div ref={containerRef} className="mb-maps__canvas" />
         ) : null}
         {mapDisplay === "flat" && flatRuntime === "webgl" ? (
@@ -1051,105 +997,7 @@ export function MapView({
             onViewStateChange={setViewState}
           />
         ) : null}
-        {mapDisplay === "globe" ? (
-          <>
-            <Suspense fallback={null}>
-              <GlobeBase
-                basemapMode={globeBasemapMode}
-                mapStyle={mapStyle}
-                viewState={currentViewState as GlobeViewState}
-              />
-            </Suspense>
-            <svg
-              ref={svgRef}
-              className="mb-maps__globe"
-              viewBox={`0 0 ${GLOBE_VIEWBOX_WIDTH} ${GLOBE_VIEWBOX_HEIGHT}`}
-              role="img"
-              onPointerDown={(event) => {
-                dragRef.current = {
-                  center: currentViewState.center,
-                  pointerId: event.pointerId,
-                  x: event.clientX,
-                  y: event.clientY,
-                };
-                event.currentTarget.setPointerCapture(event.pointerId);
-              }}
-              onPointerMove={(event) => {
-                const drag = dragRef.current;
-
-                if (!drag || drag.pointerId !== event.pointerId) {
-                  return;
-                }
-
-                setViewState(
-                  {
-                    ...currentViewState,
-                    center: getGlobeDragCenter(
-                      drag.center,
-                      event.clientX - drag.x,
-                      event.clientY - drag.y,
-                      currentViewState.zoom,
-                    ),
-                  },
-                  "pan",
-                );
-              }}
-              onPointerUp={(event) => {
-                if (dragRef.current?.pointerId === event.pointerId) {
-                  dragRef.current = null;
-                }
-              }}
-              onWheel={(event) => {
-                event.preventDefault();
-                setViewState(
-                  {
-                    ...currentViewState,
-                    zoom: getBoundedGlobeZoom(currentViewState.zoom, event.deltaY, resolvedMaxZoom),
-                  },
-                  "zoom",
-                );
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                const coordinate = getGlobePointerCoordinate(event);
-
-                if (!coordinate) {
-                  return;
-                }
-
-                const rect = event.currentTarget.getBoundingClientRect();
-
-                handleMapContextMenu(
-                  {
-                    coordinates: coordinate,
-                    position: {
-                      x: event.clientX - rect.left,
-                      y: event.clientY - rect.top,
-                    },
-                  },
-                  {
-                    onMapContextMenu,
-                    renderMapContextMenu,
-                  },
-                );
-              }}
-            >
-              <Suspense fallback={null}>
-                <GlobeSvgOverlayBase
-                  showVectorBasemap={
-                    globeBasemapMode !== "tiles" || currentViewState.zoom < GLOBE_TILE_MIN_ZOOM
-                  }
-                  viewState={currentViewState as GlobeViewState}
-                />
-              </Suspense>
-              <g className="mb-maps__globe-features">{mapChildren.layers}</g>
-            </svg>
-          </>
-        ) : (
-          mapChildren.layers
-        )}
+        {mapChildren.layers}
         {mapChildren.overlays.length > 0 ? (
           <div className="mb-maps__overlays">{mapChildren.overlays}</div>
         ) : null}

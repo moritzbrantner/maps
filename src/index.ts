@@ -41,7 +41,6 @@ export {
   ClusteredMap,
   defaultRasterMapStyle,
   type ClusteredMapProps,
-  type GlobeBasemapMode,
   type MapBounds,
   type MapDisplayMode,
   type MapSurfaceController,
@@ -51,7 +50,7 @@ export {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./clustered-map";
-export { MapView, type FlatLayerRender, type FlatMapRuntime, type MapViewProps } from "./map-view";
+export { MapView, type MapLibreLayerRender, type FlatMapRuntime, type MapViewProps } from "./map-view";
 export {
   MapControls,
   MapLayers,
@@ -82,7 +81,6 @@ export {
   type MapSizeLegendProps,
 } from "./map-legends";
 export {
-  getGlobeViewStateForBounds,
   getMapBoundsCenter,
   mergeMapBounds,
   padMapBounds,

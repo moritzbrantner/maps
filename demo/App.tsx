@@ -1783,6 +1783,11 @@ function renderMap(
           bubbleColor="#0f766e"
           mapDisplay="globe"
           mapStyle={demoMapStyle}
+          onMapReady={(map) => {
+            if (typeof window !== "undefined") {
+              (window as typeof window & { __mbMapsDemoMap?: unknown }).__mbMapsDemoMap = map;
+            }
+          }}
           onViewStateChange={setViewport}
           points={points}
           renderFeatureTooltip={(feature) => feature.point.label}

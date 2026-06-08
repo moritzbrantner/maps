@@ -11,9 +11,12 @@ const entrySizeBudgets = {
   "core.js": 16_384,
   "editor.js": 4_096,
   "flat.js": 8_192,
-  "globe.js": 4_096,
+  "geojson.js": 4_096,
+  "heat.js": 4_096,
   "index.js": 40_960,
   "layers.js": 4_096,
+  "measurement.js": 4_096,
+  "temporal.js": 4_096,
   "timeline.js": 4_096,
 };
 const maxSharedChunkBytes = 220_000;
@@ -23,16 +26,12 @@ verifyMissingImports("core", [
   "react/jsx-runtime",
   "flat",
   "three",
-  "world-atlas",
-  "topojson-client",
   "@moritzbrantner/ui",
   "@moritzbrantner/timeline-editor",
   "@moritzbrantner/viz-engine",
 ]);
 verifyMissingImports("flat", [
   "three",
-  "world-atlas",
-  "topojson-client",
   "@moritzbrantner/timeline-editor",
 ]);
 verifyBundleBudgets();

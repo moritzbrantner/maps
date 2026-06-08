@@ -16,14 +16,12 @@ Import the maps stylesheet once in the app shell:
 import "@moritzbrantner/maps/styles.css";
 ```
 
-The package stylesheet imports Tailwind CSS and MapLibre GL CSS. Vite consumers
-should include the Tailwind Vite plugin, or otherwise run Tailwind over app CSS,
-so `@import "tailwindcss";` and package `@source` declarations are processed.
+The package stylesheet is compiled CSS and includes MapLibre GL CSS. Consumers do
+not need to run Tailwind over `@moritzbrantner/maps/styles.css`.
 
 React, React DOM, and `@moritzbrantner/ui` are peer dependencies. The optional
 `@moritzbrantner/timeline-editor` peer is only required when using timeline
-editor components. Tailwind CSS stays in runtime dependencies because the
-published stylesheet must resolve `@import "tailwindcss";`.
+editor components.
 
 ## Basic Clustered Map
 
@@ -44,7 +42,8 @@ export function FleetMap() {
 }
 ```
 
-Set `mapDisplay="globe"` to render the same data on an orthographic globe:
+Set `mapDisplay="globe"` to render the same data with MapLibre GL JS native
+globe projection:
 
 ```tsx
 <ClusteredMap mapDisplay="globe" points={points} style={{ height: 420 }} />

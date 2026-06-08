@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  startTransition,
-  useDeferredValue,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useDeferredValue, useMemo } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import {
@@ -26,19 +18,7 @@ import {
   type GeoJsonSourceOptions,
 } from "./geojson-source";
 import {
-  createInitialGlobeViewState,
-  createGlobeGraticuleLines,
-  createVisibleSvgPath,
   defaultRasterMapStyle,
-  getBoundedGlobeZoom,
-  getGlobeDragCenter,
-  getGlobeRadius,
-  GLOBE_VIEWBOX_HEIGHT,
-  GLOBE_VIEWBOX_WIDTH,
-  joinClassNames,
-  projectGlobeCoordinate,
-  type GlobeViewState,
-  type GlobeBasemapMode,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,
@@ -74,7 +54,6 @@ export type PointMapProps<TProperties extends Record<string, unknown> = Record<s
   geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
   getPointColor?: (feature: PointMapFeature<TProperties>) => string;
   getPointRadius?: (feature: PointMapFeature<TProperties>) => number;
-  globeBasemapMode?: GlobeBasemapMode;
   /**
    * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
    */
@@ -146,7 +125,6 @@ export function PointMap<TProperties extends Record<string, unknown> = Record<st
   className,
   fitBoundsPadding = 56,
   fitToData = true,
-  globeBasemapMode,
   initialViewState,
   mapLabel = "Interactive point map",
   mapStyle = defaultRasterMapStyle,
@@ -191,7 +169,6 @@ export function PointMap<TProperties extends Record<string, unknown> = Record<st
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
-      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
@@ -238,7 +215,6 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
   className,
   fitBoundsPadding = 56,
   fitToData = true,
-  globeBasemapMode,
   initialViewState,
   mapLabel = "Interactive point map",
   mapStyle = defaultRasterMapStyle,
@@ -283,7 +259,6 @@ export function BubbleMap<TProperties extends Record<string, unknown> = Record<s
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
-      globeBasemapMode={globeBasemapMode}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
@@ -385,212 +360,6 @@ export function FlatPointMap<TProperties extends Record<string, unknown> = Recor
   ...props
 }: PointMapProps<TProperties>) {
   return <PointMap {...props} mapDisplay="flat" />;
-}
-
-export function GlobePointMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
-  className,
-  filterPoint,
-  fitToData = true,
-  getPointColor,
-  getPointRadius,
-  initialViewState,
-  mapLabel = "Interactive point map",
-  maxZoom,
-  measurementDistanceFormat: _measurementDistanceFormat,
-  measurementDraftLineColor: _measurementDraftLineColor,
-  measurementLineColor: _measurementLineColor,
-  measurementMode: _measurementMode,
-  measurements: _measurements,
-  onMeasurementCreate: _onMeasurementCreate,
-  onMeasurementDraftChange: _onMeasurementDraftChange,
-  onMeasurementSelect: _onMeasurementSelect,
-  onFeatureSelect,
-  points = [],
-  pointColor = "#0f172a",
-  pointRadius = 6,
-  style,
-}: PointMapProps<TProperties>) {
-  const deferredPoints = useDeferredValue(points);
-  const dragRef = useRef<{
-    center: [number, number];
-    pointerId: number;
-    x: number;
-    y: number;
-  } | null>(null);
-  const [viewState, setViewState] = useState<GlobeViewState>(() =>
-    createInitialGlobeViewState({
-      fitToData,
-      initialViewState,
-      points,
-    }),
-  );
-  const features = useMemo(
-    () => createPointMapFeatures(deferredPoints, { filterPoint }),
-    [deferredPoints, filterPoint],
-  );
-
-  useEffect(() => {
-    if (initialViewState || !fitToData) {
-      return;
-    }
-
-    setViewState(createInitialGlobeViewState({ fitToData, initialViewState, points: deferredPoints }));
-  }, [deferredPoints, fitToData, initialViewState]);
-
-  const handleFeatureClick = useEffectEvent((feature: PointMapFeature<TProperties>) => {
-    startTransition(() => {
-      onFeatureSelect?.(feature);
-    });
-  });
-
-  return (
-    <div
-      aria-label={mapLabel}
-      className={joinClassNames("mb-maps", "mb-maps--globe", className)}
-      data-map-ready="true"
-      style={{
-        minHeight: 480,
-        width: "100%",
-        ...style,
-      }}
-    >
-      <svg
-        className="mb-maps__globe"
-        viewBox={`0 0 ${GLOBE_VIEWBOX_WIDTH} ${GLOBE_VIEWBOX_HEIGHT}`}
-        role="img"
-        onPointerDown={(event) => {
-          dragRef.current = {
-            center: viewState.center,
-            pointerId: event.pointerId,
-            x: event.clientX,
-            y: event.clientY,
-          };
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          const drag = dragRef.current;
-
-          if (!drag || drag.pointerId !== event.pointerId) {
-            return;
-          }
-
-          setViewState((current) => ({
-            ...current,
-            center: getGlobeDragCenter(
-              drag.center,
-              event.clientX - drag.x,
-              event.clientY - drag.y,
-              current.zoom,
-            ),
-          }));
-        }}
-        onPointerUp={(event) => {
-          if (dragRef.current?.pointerId === event.pointerId) {
-            dragRef.current = null;
-          }
-        }}
-        onWheel={(event) => {
-          event.preventDefault();
-          setViewState((current) => ({
-            ...current,
-            zoom: getBoundedGlobeZoom(current.zoom, event.deltaY, maxZoom),
-          }));
-        }}
-      >
-        <PointGlobeBase viewState={viewState} />
-        <g className="mb-maps__globe-features">
-          {features.map((feature) => (
-            <GlobePointFeature
-              feature={feature}
-              getPointColor={getPointColor}
-              getPointRadius={getPointRadius}
-              key={feature.point.id}
-              onClick={handleFeatureClick}
-              pointColor={pointColor}
-              pointRadius={pointRadius}
-              viewState={viewState}
-            />
-          ))}
-        </g>
-      </svg>
-    </div>
-  );
-}
-
-function PointGlobeBase({ viewState }: { viewState: GlobeViewState }) {
-  const radius = getGlobeRadius(viewState.zoom);
-
-  return (
-    <>
-      <defs>
-        <radialGradient id="mb-maps-globe-ocean" cx="38%" cy="30%" r="70%">
-          <stop offset="0%" stopColor="#f8fafc" />
-          <stop offset="58%" stopColor="#bae6fd" />
-          <stop offset="100%" stopColor="#0f766e" />
-        </radialGradient>
-      </defs>
-      <circle
-        className="mb-maps__globe-ocean"
-        cx={GLOBE_VIEWBOX_WIDTH / 2}
-        cy={GLOBE_VIEWBOX_HEIGHT / 2}
-        r={radius}
-      />
-      <g className="mb-maps__globe-graticule">
-        {createGlobeGraticuleLines(viewState).map((line, index) => {
-          const path = createVisibleSvgPath(line);
-
-          return path ? <path d={path} key={index} /> : null;
-        })}
-      </g>
-      <circle
-        className="mb-maps__globe-rim"
-        cx={GLOBE_VIEWBOX_WIDTH / 2}
-        cy={GLOBE_VIEWBOX_HEIGHT / 2}
-        r={radius}
-      />
-    </>
-  );
-}
-
-function GlobePointFeature<TProperties extends Record<string, unknown>>({
-  feature,
-  getPointColor,
-  getPointRadius,
-  onClick,
-  pointColor,
-  pointRadius,
-  viewState,
-}: {
-  feature: PointMapFeature<TProperties>;
-  getPointColor?: (feature: PointMapFeature<TProperties>) => string;
-  getPointRadius?: (feature: PointMapFeature<TProperties>) => number;
-  onClick: (feature: PointMapFeature<TProperties>) => void;
-  pointColor: string;
-  pointRadius: number;
-  viewState: GlobeViewState;
-}) {
-  const projected = projectGlobeCoordinate(feature.coordinates, viewState);
-
-  if (!projected.visible) {
-    return null;
-  }
-
-  return (
-    <circle
-      className="mb-maps__globe-point"
-      cx={projected.x}
-      cy={projected.y}
-      fill={getPointColor?.(feature) ?? pointColor}
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick(feature);
-      }}
-      r={Math.max(0, getPointRadius?.(feature) ?? pointRadius) * (0.72 + projected.scale * 0.28)}
-      style={{ opacity: 0.42 + projected.scale * 0.58 }}
-    >
-      <title>{feature.point.label}</title>
-    </circle>
-  );
 }
 
 function useBubbleMapPointProps<TProperties extends Record<string, unknown>>(

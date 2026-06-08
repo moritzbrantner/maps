@@ -1,6 +1,6 @@
 "use client";
 
-import { getBoundsFromPoints, type MapPoint } from "./aggregation";
+import type { MapPoint } from "./aggregation";
 import type { GeoJsonMapSource } from "./geojson-source";
 import {
   type MapLibreMapStyle,
@@ -8,10 +8,8 @@ import {
   toLngLat,
   toMapLibreBounds,
 } from "./maplibre-compat";
-import type { MapCoordinate } from "./measurement";
 
 export type MapDisplayMode = "flat" | "globe";
-export type GlobeBasemapMode = "vector" | "tiles";
 
 export type MapViewState = {
   center: [longitude: number, latitude: number];
@@ -96,26 +94,6 @@ export type LegacyRasterMapStyle = {
   tiles?: string | readonly string[] | false;
 } & Record<string, unknown>;
 export type RasterMapStyle = MapLibreMapStyle | LegacyRasterMapStyle;
-
-export type GlobeViewState = {
-  center: [longitude: number, latitude: number];
-  zoom: number;
-};
-
-export type GlobeProjectionResult = {
-  scale: number;
-  visible: boolean;
-  x: number;
-  y: number;
-};
-
-export const GLOBE_VIEWBOX_HEIGHT = 480;
-export const GLOBE_VIEWBOX_WIDTH = 960;
-export const GLOBE_MAX_ZOOM = 18;
-export const GLOBE_MIN_ZOOM = 0.8;
-const GLOBE_BASE_ZOOM = 1.35;
-const GLOBE_BASE_RADIUS_FACTOR = 0.42;
-const THREE_SPHERE_TEXTURE_FRONT_OFFSET = Math.PI / 2;
 export const defaultMapLibreStyle = {
   sources: {
     osm: {
@@ -136,48 +114,6 @@ export const defaultMapLibreStyle = {
 } satisfies Exclude<MapLibreMapStyle, string>;
 
 export const defaultRasterMapStyle: RasterMapStyle = defaultMapLibreStyle;
-
-const DEG_TO_RAD = Math.PI / 180;
-
-export function createInitialGlobeViewState<TProperties = Record<string, unknown>>({
-  fitToData,
-  initialViewState,
-  points,
-}: {
-  fitToData: boolean;
-  initialViewState?: MapViewState;
-  points: readonly MapPoint<TProperties>[];
-}): GlobeViewState {
-  if (initialViewState) {
-    return {
-      center: initialViewState.center,
-      zoom: initialViewState.zoom,
-    };
-  }
-
-  if (fitToData) {
-    const bounds = getBoundsFromPoints(points);
-
-    if (bounds) {
-      return {
-        center: [normalizeLongitude((bounds[0] + bounds[2]) / 2), clampLatitude((bounds[1] + bounds[3]) / 2)],
-        zoom: 1.8,
-      };
-    }
-  }
-
-  return {
-    center: [12, 25],
-    zoom: 1.35,
-  };
-}
-
-export function createGlobalViewportQuery(zoom: number) {
-  return {
-    bounds: [-180, -90, 180, 90] as [number, number, number, number],
-    zoom,
-  };
-}
 
 export function getMapBoundsCenter(bounds: MapBounds): [longitude: number, latitude: number] {
   return [
@@ -214,133 +150,6 @@ export function mergeMapBounds(
       Math.max(merged[3], bounds[3]),
     ] as MapBounds,
     validBounds[0]!,
-  );
-}
-
-export function getGlobeViewStateForBounds(bounds: MapBounds): MapViewState {
-  const longitudeSpan = Math.max(1e-6, Math.abs(bounds[2] - bounds[0]));
-  const latitudeSpan = Math.max(1e-6, Math.abs(bounds[3] - bounds[1]));
-  const span = Math.max(longitudeSpan / 360, latitudeSpan / 180);
-  const zoom = clamp(GLOBE_BASE_ZOOM + Math.log2(Math.max(1, 0.7 / span)), GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM);
-
-  return {
-    center: getMapBoundsCenter(bounds),
-    zoom,
-  };
-}
-
-export function projectGlobeCoordinate(
-  [longitude, latitude]: [number, number],
-  viewState: GlobeViewState,
-): GlobeProjectionResult {
-  const centerLongitude = viewState.center[0] * DEG_TO_RAD;
-  const centerLatitude = viewState.center[1] * DEG_TO_RAD;
-  const pointLongitude = longitude * DEG_TO_RAD;
-  const pointLatitude = latitude * DEG_TO_RAD;
-  const deltaLongitude = pointLongitude - centerLongitude;
-  const sinLatitude = Math.sin(pointLatitude);
-  const cosLatitude = Math.cos(pointLatitude);
-  const sinCenterLatitude = Math.sin(centerLatitude);
-  const cosCenterLatitude = Math.cos(centerLatitude);
-  const cosDeltaLongitude = Math.cos(deltaLongitude);
-  const visibility =
-    sinCenterLatitude * sinLatitude + cosCenterLatitude * cosLatitude * cosDeltaLongitude;
-  const radius = getGlobeRadius(viewState.zoom);
-
-  return {
-    scale: Math.max(0, visibility),
-    visible: visibility >= -0.02,
-    x:
-      GLOBE_VIEWBOX_WIDTH / 2 +
-      radius * cosLatitude * Math.sin(deltaLongitude),
-    y:
-      GLOBE_VIEWBOX_HEIGHT / 2 -
-      radius *
-        (cosCenterLatitude * sinLatitude -
-          sinCenterLatitude * cosLatitude * cosDeltaLongitude),
-  };
-}
-
-export function unprojectGlobePoint(
-  point: { x: number; y: number },
-  viewState: GlobeViewState,
-): MapCoordinate | null {
-  const radius = getGlobeRadius(viewState.zoom);
-  const normalizedX = (point.x - GLOBE_VIEWBOX_WIDTH / 2) / radius;
-  const normalizedY = -(point.y - GLOBE_VIEWBOX_HEIGHT / 2) / radius;
-  const radiusSquared = normalizedX ** 2 + normalizedY ** 2;
-
-  if (radiusSquared > 1) {
-    return null;
-  }
-
-  const rho = Math.sqrt(radiusSquared);
-  const centerLongitude = viewState.center[0] * DEG_TO_RAD;
-  const centerLatitude = viewState.center[1] * DEG_TO_RAD;
-
-  if (rho === 0) {
-    return [normalizeLongitude(viewState.center[0]), clampLatitude(viewState.center[1])];
-  }
-
-  const angularDistance = Math.asin(Math.min(1, rho));
-  const sinAngularDistance = Math.sin(angularDistance);
-  const cosAngularDistance = Math.cos(angularDistance);
-  const sinCenterLatitude = Math.sin(centerLatitude);
-  const cosCenterLatitude = Math.cos(centerLatitude);
-  const latitude = Math.asin(
-    cosAngularDistance * sinCenterLatitude +
-      (normalizedY * sinAngularDistance * cosCenterLatitude) / rho,
-  );
-  const longitude =
-    centerLongitude +
-    Math.atan2(
-      normalizedX * sinAngularDistance,
-      rho * cosCenterLatitude * cosAngularDistance -
-        normalizedY * sinCenterLatitude * sinAngularDistance,
-    );
-  const coordinate: MapCoordinate = [
-    normalizeLongitude(longitude / DEG_TO_RAD),
-    clampLatitude(latitude / DEG_TO_RAD),
-  ];
-  const projected = projectGlobeCoordinate(coordinate, viewState);
-
-  return projected.visible ? coordinate : null;
-}
-
-export function getGlobeRadius(zoom: number) {
-  const safeZoom = Number.isFinite(zoom) ? clamp(zoom, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM) : GLOBE_BASE_ZOOM;
-  const baseRadius = Math.min(GLOBE_VIEWBOX_HEIGHT, GLOBE_VIEWBOX_WIDTH) * GLOBE_BASE_RADIUS_FACTOR;
-
-  return baseRadius * 2 ** (safeZoom - GLOBE_BASE_ZOOM);
-}
-
-export function getGlobeDragCenter(
-  currentCenter: [longitude: number, latitude: number],
-  deltaX: number,
-  deltaY: number,
-  zoom: number,
-) {
-  const degreesPerPixel = 70 / getGlobeRadius(zoom);
-
-  return [
-    normalizeLongitude(currentCenter[0] - deltaX * degreesPerPixel),
-    clampLatitude(currentCenter[1] + deltaY * degreesPerPixel),
-  ] as [number, number];
-}
-
-export function getGlobeZoom(currentZoom: number, deltaY: number) {
-  return clamp(currentZoom - deltaY * 0.0025, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM);
-}
-
-export function getBoundedGlobeZoom(currentZoom: number, deltaY: number, maxZoom?: number) {
-  const effectiveMaxZoom = normalizeMapMaxZoom(maxZoom);
-
-  return clamp(
-    currentZoom - deltaY * 0.0025,
-    GLOBE_MIN_ZOOM,
-    effectiveMaxZoom === undefined
-      ? GLOBE_MAX_ZOOM
-      : clamp(effectiveMaxZoom, GLOBE_MIN_ZOOM, GLOBE_MAX_ZOOM),
   );
 }
 
@@ -416,51 +225,6 @@ export function constrainMapCenterToBounds(
   return longitude === center[0] && latitude === center[1]
     ? center
     : ([longitude, latitude] as [longitude: number, latitude: number]);
-}
-
-export function getGlobeSphereRotation(viewState: GlobeViewState) {
-  return {
-    x: viewState.center[1] * DEG_TO_RAD,
-    y: -viewState.center[0] * DEG_TO_RAD - THREE_SPHERE_TEXTURE_FRONT_OFFSET,
-    z: 0,
-  };
-}
-
-export function createGlobeGraticuleLines(
-  viewState: GlobeViewState,
-): Array<Array<GlobeProjectionResult>> {
-  const lines: Array<Array<[number, number]>> = [];
-
-  for (let latitude = -60; latitude <= 60; latitude += 30) {
-    lines.push(
-      Array.from({ length: 73 }, (_, index) => [-180 + index * 5, latitude] as [number, number]),
-    );
-  }
-
-  for (let longitude = -150; longitude <= 180; longitude += 30) {
-    lines.push(
-      Array.from({ length: 37 }, (_, index) => [longitude, -90 + index * 5] as [number, number]),
-    );
-  }
-
-  return lines.map((line) => line.map((coordinate) => projectGlobeCoordinate(coordinate, viewState)));
-}
-
-export function createVisibleSvgPath(points: readonly GlobeProjectionResult[]) {
-  let path = "";
-  let isDrawing = false;
-
-  for (const point of points) {
-    if (!point.visible) {
-      isDrawing = false;
-      continue;
-    }
-
-    path += `${isDrawing ? "L" : "M"}${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
-    isDrawing = true;
-  }
-
-  return path;
 }
 
 export function toLatLng([longitude, latitude]: [number, number]) {
@@ -546,6 +310,40 @@ export function resolveMapLibreStyle(mapStyle: RasterMapStyle): MapLibreMapStyle
     },
     version: 8,
   };
+}
+
+export function resolveMapLibreDisplayStyle(
+  mapStyle: RasterMapStyle,
+  display: MapDisplayMode,
+): MapLibreMapStyle {
+  const resolvedStyle = resolveMapLibreStyle(mapStyle);
+
+  if (display !== "globe" || typeof resolvedStyle === "string") {
+    return resolvedStyle;
+  }
+
+  const style = {
+    ...resolvedStyle,
+    layers: [...(resolvedStyle.layers ?? [])],
+    sources: { ...resolvedStyle.sources },
+  } as Record<string, unknown>;
+
+  style.projection = { type: "globe" };
+  style.sky ??= {
+    "atmosphere-blend": [
+      "interpolate",
+      ["linear"],
+      ["zoom"],
+      0,
+      1,
+      5,
+      1,
+      7,
+      0,
+    ],
+  };
+
+  return style as Exclude<MapLibreMapStyle, string>;
 }
 
 export function joinClassNames(...values: Array<string | undefined | false>) {

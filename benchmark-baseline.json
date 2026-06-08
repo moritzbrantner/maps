@@ -1,0 +1,25 @@
+{
+  "benchmarks": {
+    "temporal-geojson-indexed-playback": {
+      "p95": 1.1804539999999974,
+      "budgetMs": 100
+    },
+    "geojson-transition-topology-plan": {
+      "p95": 8.479560000000006,
+      "budgetMs": 500
+    },
+    "geojson-transition-complex-topology-plan": {
+      "p95": 17.379962000000006,
+      "budgetMs": 1000
+    },
+    "scalar-field-grid": {
+      "p95": 19.84235000000001,
+      "budgetMs": 1500
+    },
+    "heat-map-density-index": {
+      "p95": 54.59451100000001,
+      "budgetMs": 1000
+    }
+  },
+  "generatedAt": "2026-06-05T20:02:52.518Z"
+}

@@ -7,7 +7,6 @@ import type {
   MapDisplayMode,
   MapViewState,
   MapViewStateChangeReason,
-  projectGlobeCoordinate,
 } from "./map-display";
 import type {
   FlatLayerFactory,
@@ -18,9 +17,8 @@ import type {
   MapFeatureContextMenuContext,
   MapFeatureInteractionChange,
 } from "./map-interaction";
-import type { MapCoordinate } from "./measurement";
 
-export type FlatLayerRender = (context: {
+export type MapLibreLayerRender = (context: {
   flat: FlatLayerFactory;
   interactionMode: MapInteractionMode;
   isMeasuring: boolean;
@@ -30,7 +28,7 @@ export type FlatLayerRender = (context: {
   maplibreMap: MapLibreMap;
 }) => void;
 
-export type FlatLayerRegistrationOptions = {
+export type MapLibreLayerRegistrationOptions = {
   preserveOnRender?: boolean;
   renderOnViewStateChange?: boolean;
 };
@@ -40,7 +38,6 @@ export type MapInteractionMode = "none" | "measurement" | "editing";
 export type MapSurfaceContextValue = {
   closeFeaturePopup: () => void;
   display: MapDisplayMode;
-  getGlobePointerCoordinate: (event: { clientX: number; clientY: number }) => MapCoordinate | null;
   handleBackgroundClick: () => void;
   handleFeatureClick: <TFeature>(
     feature: TFeature,
@@ -104,11 +101,10 @@ export type MapSurfaceContextValue = {
   flatMap: FlatMapAdapter | null;
   maplibre: typeof import("maplibre-gl") | null;
   maplibreMap: MapLibreMap | null;
-  projectGlobeCoordinate: typeof projectGlobeCoordinate;
-  registerFlatLayer: (
+  registerMapLibreLayer: (
     id: string,
-    render: FlatLayerRender,
-    options?: FlatLayerRegistrationOptions,
+    render: MapLibreLayerRender,
+    options?: MapLibreLayerRegistrationOptions,
   ) => () => void;
   registerInteractionMode: (id: string, mode: Exclude<MapInteractionMode, "none">) => () => void;
   requestRender: () => void;

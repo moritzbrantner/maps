@@ -1,20 +1,14 @@
 #!/usr/bin/env node
 
-import {
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
-const tempDir = mkdtempSync(path.join(os.tmpdir(), "maps-consumer-"));
+const tempRoot = mkdtempSync(path.join(os.tmpdir(), "maps-consumers-"));
 let tarballPath = null;
 
 try {
@@ -23,9 +17,10 @@ try {
 
   tarballPath = path.join(rootDir, packInfo.filename);
 
-  writeConsumerFiles(tempDir, tarballPath, rootPackageJson);
-  run("bun", ["install"], tempDir);
-  run("bunx", ["--bun", "vite", "build"], tempDir);
+  verifyFullViteConsumer(path.join(tempRoot, "full-vite"), tarballPath);
+  verifyFlatOnlyViteConsumer(path.join(tempRoot, "flat-vite"), tarballPath);
+  verifyCoreOnlyNodeConsumer(path.join(tempRoot, "core-node"), tarballPath);
+  verifyNextStyleBoundaries(path.join(tempRoot, "next-boundaries"), tarballPath);
 
   console.log("Packed consumer verification passed.");
 } finally {
@@ -33,15 +28,216 @@ try {
     rmSync(tarballPath, { force: true });
   }
 
-  rmSync(tempDir, { force: true, recursive: true });
+  rmSync(tempRoot, { force: true, recursive: true });
 }
 
-function writeConsumerFiles(directory, packageTarball, packageJson) {
-  const version = (name) =>
-    packageJson.dependencies?.[name] ??
-    packageJson.devDependencies?.[name] ??
-    packageJson.peerDependencies?.[name];
+function verifyFullViteConsumer(directory, packageTarball) {
+  writePackage(directory, {
+    "@moritzbrantner/maps": `file:${packageTarball}`,
+    "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
+    "@moritzbrantner/ui": version("@moritzbrantner/ui"),
+    "@vitejs/plugin-react": version("@vitejs/plugin-react"),
+    react: version("react"),
+    "react-dom": version("react-dom"),
+    typescript: version("typescript"),
+    vite: version("vite"),
+  });
+  writeViteShell(directory);
+  writeFile(
+    directory,
+    "src/main.tsx",
+    `import { createRoot } from "react-dom/client";
+import "@moritzbrantner/maps/styles.css";
+import { ClusteredMap, type MapPoint } from "@moritzbrantner/maps";
+import { createPointAggregationIndex } from "@moritzbrantner/maps/core";
+import { MapLayers, MapView } from "@moritzbrantner/maps/layers";
+import { FlatPointMap } from "@moritzbrantner/maps/flat";
+import { EditableGeoJsonMap } from "@moritzbrantner/maps/editor";
+import { createGeoJsonTimelineDocument } from "@moritzbrantner/maps/timeline";
+import { GeoJsonMap } from "@moritzbrantner/maps/geojson";
+import { HeatMap } from "@moritzbrantner/maps/heat";
+import { getBeeLineDistanceMeters } from "@moritzbrantner/maps/measurement";
+import { createTemporalMapPlaybackIndex } from "@moritzbrantner/maps/temporal";
+import packageJson from "@moritzbrantner/maps/package.json";
 
+const points: MapPoint[] = [{ id: "berlin", latitude: 52.52, longitude: 13.405 }];
+const collection = { type: "FeatureCollection" as const, features: [] };
+
+createPointAggregationIndex(points);
+createGeoJsonTimelineDocument(collection);
+getBeeLineDistanceMeters([13.405, 52.52], [11.582, 48.1351]);
+createTemporalMapPlaybackIndex([]);
+console.log(
+  packageJson.name,
+  Boolean(MapView),
+  Boolean(MapLayers),
+  Boolean(FlatPointMap),
+  Boolean(EditableGeoJsonMap),
+  Boolean(GeoJsonMap),
+  Boolean(HeatMap),
+);
+
+createRoot(document.getElementById("root")!).render(
+  <ClusteredMap
+    defaultViewState={{ center: [13.405, 52.52], zoom: 8 }}
+    fitToData={false}
+    points={points}
+    style={{ height: 320 }}
+  />,
+);
+`,
+  );
+
+  run("bun", ["install"], directory);
+  run("bunx", ["--bun", "vite", "build"], directory);
+}
+
+function verifyFlatOnlyViteConsumer(directory, packageTarball) {
+  writePackage(directory, {
+    "@moritzbrantner/maps": `file:${packageTarball}`,
+    "@moritzbrantner/ui": version("@moritzbrantner/ui"),
+    "@vitejs/plugin-react": version("@vitejs/plugin-react"),
+    react: version("react"),
+    "react-dom": version("react-dom"),
+    typescript: version("typescript"),
+    vite: version("vite"),
+  });
+  writeViteShell(directory);
+  writeFile(
+    directory,
+    "src/main.tsx",
+    `import { createRoot } from "react-dom/client";
+import "@moritzbrantner/maps/styles.css";
+import { FlatPointMap } from "@moritzbrantner/maps/flat";
+
+const points = [
+  { id: "berlin", latitude: 52.52, longitude: 13.405, metrics: {} },
+];
+
+createRoot(document.getElementById("root")!).render(
+  <FlatPointMap points={points} style={{ height: 320 }} />,
+);
+`,
+  );
+
+  run("bun", ["install"], directory);
+  run("bunx", ["--bun", "vite", "build"], directory);
+}
+
+function verifyCoreOnlyNodeConsumer(directory, packageTarball) {
+  writePackage(directory, {
+    "@moritzbrantner/maps": `file:${packageTarball}`,
+  });
+  writeFile(
+    directory,
+    "main.mjs",
+    `import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createPointAggregationIndex, getBoundsFromPoints } from "@moritzbrantner/maps/core";
+
+const points = [{ id: "berlin", latitude: 52.52, longitude: 13.405 }];
+const index = createPointAggregationIndex(points);
+
+if (!index.getViewportAggregation({ bounds: [13, 52, 14, 53], zoom: 8 }).features.length) {
+  throw new Error("core aggregation did not run in a Node-only consumer");
+}
+
+if (!getBoundsFromPoints(points)) {
+  throw new Error("core bounds helper did not run in a Node-only consumer");
+}
+
+if ("window" in globalThis || "document" in globalThis) {
+  throw new Error("core fixture unexpectedly depends on browser globals");
+}
+
+const packageRoot = path.dirname(fileURLToPath(import.meta.resolve("@moritzbrantner/maps/package.json")));
+const coreBundle = readFileSync(path.join(packageRoot, "dist", "core.js"), "utf8");
+const forbiddenImports = [
+  "react",
+  "react/jsx-runtime",
+  "maplibre-gl",
+  "three",
+  "@moritzbrantner/ui",
+  "@moritzbrantner/timeline-editor",
+];
+
+for (const packageName of forbiddenImports) {
+  if (hasRuntimeImport(coreBundle, packageName)) {
+    throw new Error("core bundle must not import " + packageName);
+  }
+}
+
+function hasRuntimeImport(contents, packageName) {
+  return (
+    contents.includes('from "' + packageName) ||
+    contents.includes("from '" + packageName) ||
+    contents.includes('import("' + packageName) ||
+    contents.includes("import('" + packageName)
+  );
+}
+`,
+  );
+
+  run("bun", ["install"], directory);
+  run("bun", ["./main.mjs"], directory);
+}
+
+function verifyNextStyleBoundaries(directory, packageTarball) {
+  writePackage(directory, {
+    "@moritzbrantner/maps": `file:${packageTarball}`,
+    "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
+    "@moritzbrantner/ui": version("@moritzbrantner/ui"),
+    "@types/geojson": version("@types/geojson"),
+    "@types/react": version("@types/react"),
+    "@types/react-dom": version("@types/react-dom"),
+    react: version("react"),
+    "react-dom": version("react-dom"),
+    typescript: version("typescript"),
+  });
+  writeTsConfig(directory);
+  writeFile(
+    directory,
+    "src/server.ts",
+    `import {
+  createPointAggregationIndex,
+  type MapPoint,
+} from "@moritzbrantner/maps/core";
+
+export function summarizePoints(points: MapPoint[]) {
+  return createPointAggregationIndex(points).getViewportAggregation({
+    bounds: [-180, -90, 180, 90],
+    zoom: 2,
+  });
+}
+`,
+  );
+  writeFile(
+    directory,
+    "src/global.d.ts",
+    `declare module "@moritzbrantner/maps/styles.css";
+`,
+  );
+  writeFile(
+    directory,
+    "src/client-map.tsx",
+    `"use client";
+
+import "@moritzbrantner/maps/styles.css";
+import { ClusteredMap, type MapPoint } from "@moritzbrantner/maps";
+
+export function ClientMap({ points }: { points: MapPoint[] }) {
+  return <ClusteredMap fitToData={false} points={points} style={{ height: 320 }} />;
+}
+`,
+  );
+
+  run("bun", ["install"], directory);
+  run("bunx", ["tsc", "--noEmit"], directory);
+}
+
+function writePackage(directory, dependencies) {
+  mkdirSync(directory, { recursive: true });
   writeFileSync(
     path.join(directory, "package.json"),
     `${JSON.stringify(
@@ -51,36 +247,69 @@ function writeConsumerFiles(directory, packageTarball, packageJson) {
           build: "vite build",
         },
         type: "module",
-        dependencies: {
-          "@moritzbrantner/maps": `file:${packageTarball}`,
-          "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
-          "@moritzbrantner/ui": version("@moritzbrantner/ui"),
-          "@tailwindcss/vite": version("@tailwindcss/vite"),
-          "@vitejs/plugin-react": version("@vitejs/plugin-react"),
-          react: version("react"),
-          "react-dom": version("react-dom"),
-          typescript: version("typescript"),
-          vite: version("vite"),
-        },
+        dependencies: compactObject(dependencies),
         devDependencies: {},
       },
       null,
       2,
     )}\n`,
   );
-  writeFileSync(
-    path.join(directory, "index.html"),
-    `<div id="root"></div><script type="module" src="/src/main.tsx"></script>\n`,
+}
+
+function writeViteShell(directory) {
+  writeTsConfig(directory);
+  writeFile(directory, "index.html", `<div id="root"></div><script type="module" src="/src/main.tsx"></script>\n`);
+  writeFile(
+    directory,
+    "vite.config.ts",
+    `import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [react()],
+});
+`,
   );
-  writeFileSync(
-    path.join(directory, "vite.config.ts"),
-    `import tailwindcss from "@tailwindcss/vite";\nimport react from "@vitejs/plugin-react";\nimport { defineConfig } from "vite";\n\nexport default defineConfig({\n  plugins: [react(), tailwindcss()],\n});\n`,
+}
+
+function writeTsConfig(directory) {
+  writeFile(
+    directory,
+    "tsconfig.json",
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          jsx: "react-jsx",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          strict: true,
+          target: "ES2022",
+          types: ["geojson", "react", "react-dom"],
+        },
+        include: ["src"],
+      },
+      null,
+      2,
+    )}\n`,
   );
-  writeFileSync(path.join(directory, "tsconfig.json"), `{"compilerOptions":{"jsx":"react-jsx","module":"ESNext","moduleResolution":"Bundler","strict":true,"target":"ES2022"},"include":["src"]}\n`);
-  mkdirSync(path.join(directory, "src"));
-  writeFileSync(
-    path.join(directory, "src", "main.tsx"),
-    `import { createRoot } from "react-dom/client";\nimport "@moritzbrantner/maps/styles.css";\nimport { ClusteredMap, type MapPoint } from "@moritzbrantner/maps";\nimport { createPointAggregationIndex } from "@moritzbrantner/maps/core";\nimport { MapLayers, MapView } from "@moritzbrantner/maps/layers";\nimport { FlatPointMap } from "@moritzbrantner/maps/flat";\nimport { GlobePointMap } from "@moritzbrantner/maps/globe";\nimport { EditableGeoJsonMap } from "@moritzbrantner/maps/editor";\nimport { createGeoJsonTimelineDocument } from "@moritzbrantner/maps/timeline";\nimport packageJson from "@moritzbrantner/maps/package.json";\n\nconst points: MapPoint[] = [{ id: "berlin", latitude: 52.52, longitude: 13.405 }];\nconst collection = { type: "FeatureCollection" as const, features: [] };\n\ncreatePointAggregationIndex(points);\ncreateGeoJsonTimelineDocument(collection);\nconsole.log(packageJson.name, Boolean(MapView), Boolean(MapLayers), Boolean(FlatPointMap), Boolean(GlobePointMap), Boolean(EditableGeoJsonMap));\n\ncreateRoot(document.getElementById("root")!).render(\n  <ClusteredMap\n    defaultViewState={{ center: [13.405, 52.52], zoom: 8 }}\n    fitToData={false}\n    points={points}\n    style={{ height: 320 }}\n  />,\n);\n`,
+  mkdirSync(path.join(directory, "src"), { recursive: true });
+}
+
+function writeFile(directory, relativePath, contents) {
+  const filePath = path.join(directory, relativePath);
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, contents);
+}
+
+function compactObject(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+}
+
+function version(name) {
+  return (
+    rootPackageJson.dependencies?.[name] ??
+    rootPackageJson.devDependencies?.[name] ??
+    rootPackageJson.peerDependencies?.[name]
   );
 }
 

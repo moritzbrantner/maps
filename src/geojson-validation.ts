@@ -276,6 +276,17 @@ function validateNestedPositionArray(
     return;
   }
 
+  if (coordinates.length === 0) {
+    addIssue({
+      code: "invalid-coordinate",
+      featureIndex,
+      geometryPath,
+      message: "Geometry coordinates must not be empty.",
+      severity: "error",
+    });
+    return;
+  }
+
   coordinates.forEach((entry, index) => {
     const entryPath = `${geometryPath}[${index}]`;
 
@@ -300,6 +311,17 @@ function validatePositionArray(
       featureIndex,
       geometryPath,
       message: "Geometry coordinates must be an array of positions.",
+      severity: "error",
+    });
+    return;
+  }
+
+  if (coordinates.length === 0) {
+    addIssue({
+      code: "invalid-coordinate",
+      featureIndex,
+      geometryPath,
+      message: "Geometry coordinates must contain at least one position.",
       severity: "error",
     });
     return;

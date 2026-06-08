@@ -1,7 +1,8 @@
 # Entrypoints
 
-Use narrower entrypoints when an app only needs data helpers, flat maps, globe
-maps, editor tools, or timeline helpers.
+Use narrower entrypoints when an app only needs data helpers, flat wrappers,
+composed layers, editor tools, heat maps, GeoJSON display, measurement, or
+temporal helpers.
 
 | Entry point | Use when |
 | --- | --- |
@@ -9,9 +10,12 @@ maps, editor tools, or timeline helpers.
 | `@moritzbrantner/maps/core` | You only need transforms, aggregation, measurement, heat-field, or temporal helpers. |
 | `@moritzbrantner/maps/layers` | You compose layers inside `MapView`. |
 | `@moritzbrantner/maps/flat` | You only render flat MapLibre-backed wrappers. |
-| `@moritzbrantner/maps/globe` | You only render globe wrappers or globe basemap helpers. |
 | `@moritzbrantner/maps/editor` | You need GeoJSON editing components and edit-operation helpers. |
 | `@moritzbrantner/maps/timeline` | You need GeoJSON timeline transforms and transition helpers. |
+| `@moritzbrantner/maps/geojson` | You need GeoJSON display, source conversion, bounds, or validation helpers. |
+| `@moritzbrantner/maps/heat` | You need heat maps, scalar fields, or heat-field rendering helpers. |
+| `@moritzbrantner/maps/measurement` | You need bee-line measurement helpers or layers. |
+| `@moritzbrantner/maps/temporal` | You need temporal point or temporal GeoJSON playback helpers and maps. |
 | `@moritzbrantner/maps/styles.css` | You need the package stylesheet. Import once in the app shell. |
 
 ## Root
@@ -67,14 +71,6 @@ import { FlatPointMap } from "@moritzbrantner/maps/flat";
 <FlatPointMap points={points} style={{ height: 360 }} />;
 ```
 
-## Globe
-
-```tsx
-import { GlobePointMap } from "@moritzbrantner/maps/globe";
-
-<GlobePointMap points={points} style={{ height: 360 }} />;
-```
-
 ## Editor
 
 ```tsx
@@ -98,4 +94,47 @@ const history = createGeoJsonEditHistoryState(collection);
 import { createGeoJsonTimelineDocument } from "@moritzbrantner/maps/timeline";
 
 const document = createGeoJsonTimelineDocument(collection, { durationMs: 4_000 });
+```
+
+## GeoJSON
+
+```tsx
+import { GeoJsonMap, validateGeoJsonMapSource } from "@moritzbrantner/maps/geojson";
+
+const validation = validateGeoJsonMapSource(collection);
+
+if (validation.valid) {
+  <GeoJsonMap geoJson={collection} style={{ height: 360 }} />;
+}
+```
+
+## Heat
+
+```tsx
+import { HeatMap, createHeatMapDensityIndex } from "@moritzbrantner/maps/heat";
+
+const index = createHeatMapDensityIndex(points, { weightMetric: "demand" });
+
+<HeatMap points={points} weightMetric="demand" style={{ height: 360 }} />;
+```
+
+## Measurement
+
+```ts
+import { formatMapDistance, getBeeLineDistanceMeters } from "@moritzbrantner/maps/measurement";
+
+const distance = getBeeLineDistanceMeters([13.405, 52.52], [2.3522, 48.8566]);
+const label = distance === null ? null : formatMapDistance(distance);
+```
+
+## Temporal
+
+```ts
+import {
+  createTemporalMapPlaybackIndex,
+  getTemporalMapPointsAtTime,
+} from "@moritzbrantner/maps/temporal";
+
+const index = createTemporalMapPlaybackIndex(tracks);
+const frame = getTemporalMapPointsAtTime(tracks, 1_000);
 ```

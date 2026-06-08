@@ -2,11 +2,10 @@
 
 import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 
-import { createVisibleSvgPath, joinClassNames, toLatLng } from "./map-display";
+import { joinClassNames, toLatLng } from "./map-display";
 import {
   createFlatGeometryLayers,
   getGeometryCenter,
-  projectGeometryCenter,
   resolveFeatureStyle,
   type FlatGeometryLayer,
   type FlatFeaturePointerEvent,
@@ -15,10 +14,6 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-view";
 import { cloneGeometry, normalizeGeometryParts } from "./temporal-geojson-geometry";
 import type {
-  GeoJsonLineStringGeometry,
-  GeoJsonMultiPointGeometry,
-  GeoJsonPointGeometry,
-  GeoJsonPolygonGeometry,
   TemporalGeoJsonGeometryFeatureCollection,
   TemporalGeoJsonSupportedGeometry,
 } from "./temporal-geojson-types";
@@ -82,19 +77,19 @@ export function GeoJsonLayer<
     [deferredFeatureCollection],
   );
   const surfaceDisplay = surface?.display;
-  const registerFlatLayer = surface?.registerFlatLayer;
+  const registerMapLibreLayer = surface?.registerMapLibreLayer;
 
   useEffect(() => {
     surfaceRef.current = surface;
   });
 
   useEffect(() => {
-    if (!registerFlatLayer || surfaceDisplay !== "flat") {
+    if (!registerMapLibreLayer || (surfaceDisplay !== "flat" && surfaceDisplay !== "globe")) {
       flatFeatureCacheRef.current.clear();
       return;
     }
 
-    return registerFlatLayer(
+    return registerMapLibreLayer(
       resolvedLayerId,
       ({ interactionMode, layer, flat, map }) => {
         const currentSurface = surfaceRef.current;
@@ -210,83 +205,11 @@ export function GeoJsonLayer<
     resolvedLayerId,
     selectedFeatureId,
     styleProps,
-    registerFlatLayer,
+    registerMapLibreLayer,
     surfaceDisplay,
   ]);
 
-  if (!surface || surface.display !== "globe") {
-    return null;
-  }
-
-  return (
-    <>
-      {features.map((feature) => {
-        const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
-        const selected = surface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-        const position = projectGeometryCenter(feature.geometry, surface);
-
-        if (!position) {
-          return null;
-        }
-
-        return (
-          <g
-            className={joinClassNames(
-              "mb-maps__globe-geojson",
-              hovered && "mb-maps__feature--hovered",
-              selected && "mb-maps__feature--selected",
-            )}
-            key={feature.id}
-            onClick={(event) => {
-              event.stopPropagation();
-              surface.handleFeatureClick(feature, position, {
-                getFeatureId,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-              });
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              surface.handleFeatureContextMenu(feature, position, {
-                coordinates: getGeometryCenter(feature.geometry),
-                getFeatureId,
-                onFeatureContextMenu,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeatureContextMenu,
-                renderFeaturePopup,
-                suppress: surface.isMeasuring,
-              });
-            }}
-            onPointerEnter={() => {
-              if (!surface.isMeasuring) {
-                surface.handleFeatureHover(feature, position, {
-                  getFeatureId,
-                  onHoveredFeatureIdChange,
-                  onFeatureHover,
-                  renderFeatureTooltip,
-                });
-              }
-            }}
-            onPointerLeave={() => {
-              surface.handleFeatureHover(null, null, {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            }}
-          >
-            {renderGlobeGeometry(feature.geometry, style, selected)}
-          </g>
-        );
-      })}
-    </>
-  );
+  return null;
 }
 
 export function createGeoJsonLayerFeatures<
@@ -308,168 +231,6 @@ export function createGeoJsonLayerFeatures<
       sourceIndex: index,
     }));
   });
-}
-
-export function renderGlobeGeometry(
-  geometry: TemporalGeoJsonSupportedGeometry,
-  style: Required<GeoJsonLayerStyle>,
-  selected: boolean,
-) {
-  switch (geometry.type) {
-    case "Point":
-      return <GlobePoint geometry={geometry} style={style} selected={selected} />;
-    case "MultiPoint":
-      return <GlobeMultiPoint geometry={geometry} style={style} selected={selected} />;
-    case "LineString":
-      return <GlobeLine geometry={geometry} style={style} selected={selected} />;
-    case "MultiLineString":
-      return (
-        <>
-          {geometry.coordinates.map((coordinates, index) => (
-            <GlobeLine
-              geometry={{ coordinates, type: "LineString" }}
-              key={index}
-              selected={selected}
-              style={style}
-            />
-          ))}
-        </>
-      );
-    case "Polygon":
-      return <GlobePolygon geometry={geometry} selected={selected} style={style} />;
-    case "MultiPolygon":
-      return (
-        <>
-          {geometry.coordinates.map((coordinates, index) => (
-            <GlobePolygon
-              geometry={{ coordinates, type: "Polygon" }}
-              key={index}
-              selected={selected}
-              style={style}
-            />
-          ))}
-        </>
-      );
-  }
-}
-
-function GlobeMultiPoint({
-  geometry,
-  selected,
-  style,
-}: {
-  geometry: GeoJsonMultiPointGeometry;
-  selected: boolean;
-  style: Required<GeoJsonLayerStyle>;
-}) {
-  return (
-    <>
-      {geometry.coordinates.map((coordinates, index) => (
-        <GlobePoint
-          geometry={{ coordinates, type: "Point" }}
-          key={`${coordinates[0]}:${coordinates[1]}:${index}`}
-          selected={selected}
-          style={style}
-        />
-      ))}
-    </>
-  );
-}
-
-function GlobePoint({
-  geometry,
-  selected,
-  style,
-}: {
-  geometry: GeoJsonPointGeometry;
-  selected: boolean;
-  style: Required<GeoJsonLayerStyle>;
-}) {
-  const surface = useContext(MapSurfaceContext);
-  const projected = surface?.projectGlobeCoordinate(geometry.coordinates, surface.viewState);
-
-  if (!projected?.visible) {
-    return null;
-  }
-
-  return (
-    <circle
-      cx={projected.x}
-      cy={projected.y}
-      fill={style.pointColor}
-      r={style.pointRadius * (0.72 + projected.scale * 0.28)}
-      stroke="#ffffff"
-      strokeWidth={selected ? 3 : 2}
-    />
-  );
-}
-
-function GlobeLine({
-  geometry,
-  selected,
-  style,
-}: {
-  geometry: GeoJsonLineStringGeometry;
-  selected: boolean;
-  style: Required<GeoJsonLayerStyle>;
-}) {
-  const surface = useContext(MapSurfaceContext);
-  const path = surface
-    ? createVisibleSvgPath(
-        geometry.coordinates.map((coordinate) =>
-          surface.projectGlobeCoordinate(coordinate, surface.viewState),
-        ),
-      )
-    : "";
-
-  return path ? (
-    <path
-      d={path}
-      fill="none"
-      stroke={style.lineColor}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeOpacity={style.lineOpacity}
-      strokeWidth={selected ? style.lineWidth + 1.5 : style.lineWidth}
-    />
-  ) : null;
-}
-
-function GlobePolygon({
-  geometry,
-  selected,
-  style,
-}: {
-  geometry: GeoJsonPolygonGeometry;
-  selected: boolean;
-  style: Required<GeoJsonLayerStyle>;
-}) {
-  const surface = useContext(MapSurfaceContext);
-
-  if (!surface) {
-    return null;
-  }
-
-  const path = geometry.coordinates
-    .map((ring) =>
-      createVisibleSvgPath(
-        ring.map((coordinate) => surface.projectGlobeCoordinate(coordinate, surface.viewState)),
-      ),
-    )
-    .filter(Boolean)
-    .map((ringPath) => `${ringPath}Z`)
-    .join("");
-
-  return path ? (
-    <path
-      d={path}
-      fill={style.polygonFillColor}
-      fillOpacity={style.polygonFillOpacity}
-      stroke={style.polygonStrokeColor}
-      strokeOpacity={0.9}
-      strokeWidth={selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth}
-    />
-  ) : null;
 }
 
 type FlatGeoJsonCacheEntry = {

@@ -34,7 +34,6 @@ import {
   createMapPointsFromGeoJson,
   createPointMapFeatures,
   getBoundsFromGeoJson,
-  getGlobeViewStateForBounds,
   getMapBoundsCenter,
   mergeMapBounds,
   padMapBounds,
@@ -42,21 +41,7 @@ import {
   type MapFlow,
   type MapPoint,
 } from ".";
-import {
-  getGlobeRadius,
-  getGlobeSphereRotation,
-  getGlobeZoom,
-  GLOBE_MAX_ZOOM,
-  projectGlobeCoordinate,
-} from "./map-display";
-import {
-  buildGlobeTileUrl,
-  createGlobeBasemapPaths,
-  createGlobeRenderScheduler,
-  getVisibleGlobeTiles,
-  projectGlobeBasemapCoordinate,
-  resolveGlobeTileSource,
-} from "./globe-base";
+import { resolveMapLibreDisplayStyle } from "./map-display";
 import {
   buildWebGlFlatTileUrl,
   coordinateToWebGlFlatWorldPoint,
@@ -1301,7 +1286,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     });
   });
 
-  test("renders layer and overlay slots across map displays", () => {
+  test("renders layer and overlay slots across map displays", async () => {
     render(
       <MapView
         initialViewState={{ center: [-74, 40], zoom: 2 }}
@@ -1322,13 +1307,22 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     const map = screen.getByLabelText("Modular map");
 
-    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(flatMock.getLayerGroups().flatMap((group) => group.layers)).toEqual([
+        expect.objectContaining({
+          options: expect.objectContaining({
+            className: "mb-maps__point-marker",
+          }),
+        }),
+      ]);
+    });
     expect(screen.getByLabelText("Map controls")).toBeTruthy();
     expect(screen.getByLabelText("Demand legend")).toBeTruthy();
-    expect(map.querySelector(".mb-maps__globe-features")?.textContent).not.toContain("Reset");
+    expect(map.querySelector(".mb-maps__overlays")?.textContent).toContain("Reset");
   });
 
-  test("renders overlay components inside convenience maps", () => {
+  test("renders overlay components inside convenience maps", async () => {
     render(
       <PointMap
         initialViewState={{ center: [-74, 40], zoom: 2 }}
@@ -1342,7 +1336,16 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     const map = screen.getByLabelText("Point map with legend");
 
-    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(flatMock.getLayerGroups().flatMap((group) => group.layers)).toEqual([
+        expect.objectContaining({
+          options: expect.objectContaining({
+            className: "mb-maps__point-marker",
+          }),
+        }),
+      ]);
+    });
     expect(screen.getByLabelText("Store legend")).toBeTruthy();
   });
 
@@ -1728,15 +1731,10 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     });
   });
 
-  test("computes viewport helper bounds and globe view states", () => {
+  test("computes viewport helper bounds", () => {
     expect(getMapBoundsCenter([-10, 40, 10, 50])).toEqual([0, 45]);
     expect(padMapBounds([0, 10, 1, 11], 1)).toEqual([-1, 9, 2, 12]);
     expect(mergeMapBounds([0, 0, 1, 1], [-2, 3, 4, 5])).toEqual([-2, 0, 4, 5]);
-
-    const globeViewState = getGlobeViewStateForBounds([-10, 40, 10, 50]);
-
-    expect(globeViewState.center).toEqual([0, 45]);
-    expect(globeViewState.zoom).toBeGreaterThan(1);
   });
 
   test("controller fits bounds, points, GeoJSON, and flies to view state", async () => {
@@ -2315,12 +2313,37 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     );
   });
 
-  test("renders globe bubble markers without Flat", () => {
+  test("injects native globe projection into object styles", () => {
+    const style = resolveMapLibreDisplayStyle(
+      {
+        layers: [],
+        sources: {},
+        version: 8,
+      },
+      "globe",
+    );
+
+    expect(style).toEqual(
+      expect.objectContaining({
+        projection: { type: "globe" },
+        sky: expect.objectContaining({
+          "atmosphere-blend": expect.any(Array),
+        }),
+      }),
+    );
+  });
+
+  test("renders globe bubble markers through MapLibre layers", async () => {
+    let readyMap: import("maplibre-gl").Map | null = null;
+
     render(
       <BubbleMap
         initialViewState={{ center: [-74, 40], zoom: 2 }}
         mapDisplay="globe"
         mapLabel="Demand bubbles"
+        onMapReady={(map) => {
+          readyMap = map;
+        }}
         points={[
           {
             id: "a",
@@ -2337,87 +2360,35 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     const map = screen.getByLabelText("Demand bubbles");
 
-    expect(map.getAttribute("data-map-ready")).toBe("true");
-    expect(map.querySelector(".mb-maps__globe-renderer")).toBeTruthy();
-    expect(map.querySelector(".mb-maps__globe-land path")?.getAttribute("d")).not.toBe("");
-    expect(map.querySelector(".mb-maps__globe-country-borders")?.getAttribute("d")).not.toBe("");
-    expect(map.querySelector(".mb-maps__globe-rim")).toBeTruthy();
-    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
-    expect(flatMock.getMaps()).toHaveLength(0);
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(readyMap?.getProjection?.().type).toBe("globe");
+      expect(map.querySelector(".mb-maps__canvas")).toBeTruthy();
+      expect(map.querySelector(".mb-maps__globe-renderer")).toBeFalsy();
+      expect(map.querySelector(".mb-maps__globe")).toBeFalsy();
+      expect(flatMock.getMaps()).toHaveLength(1);
+      expect(flatMock.getLayerGroups().flatMap((group) => group.layers)).toEqual([
+        expect.objectContaining({
+          options: expect.objectContaining({
+            className: expect.stringContaining("mb-maps__point-marker"),
+          }),
+        }),
+      ]);
+    });
   });
 
-  test("keeps vector globe basemap non-empty at close zoom", () => {
-    const paths = createGlobeBasemapPaths({
-      center: [13.405, 52.52],
-      zoom: 18,
-    });
+  test("sets native globe projection for string styles on style load", async () => {
+    let readyMap: import("maplibre-gl").Map | null = null;
 
-    expect(paths.landPath).not.toBe("");
-    expect(paths.countryBorderPath).not.toBe("");
-  });
-
-  test("coalesces globe WebGL rendering into scheduled one-shot frames", () => {
-    const callbacks: FrameRequestCallback[] = [];
-    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
-      callbacks.push(callback);
-
-      return callbacks.length;
-    });
-    const cancelAnimationFrameMock = vi.fn((id: number) => {
-      callbacks[id - 1] = () => undefined;
-    });
-    const renderGlobe = vi.fn();
-
-    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
-
-    const scheduler = createGlobeRenderScheduler(renderGlobe);
-
-    scheduler.scheduleRender();
-    scheduler.scheduleRender();
-
-    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(2);
-    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(1);
-    callbacks[1]?.(0);
-    expect(renderGlobe).toHaveBeenCalledTimes(1);
-
-    scheduler.scheduleRender();
-    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(3);
-    scheduler.cancel();
-    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(3);
-  });
-
-  test("selects capped visible globe tiles from a raster map style", () => {
-    const source = resolveGlobeTileSource({
-      maxZoom: 12,
-      tiles: "https://tiles.example.test/{z}/{x}/{y}.png",
-    });
-
-    expect(source).toBeTruthy();
-
-    const tiles = getVisibleGlobeTiles(
-      {
-        center: [13.405, 52.52],
-        zoom: 6,
-      },
-      source!,
-    );
-
-    expect(tiles.length).toBeGreaterThan(0);
-    expect(tiles.length).toBeLessThanOrEqual(48);
-    expect(buildGlobeTileUrl(source!, tiles[0]!)).toMatch(
-      /^https:\/\/tiles\.example\.test\/\d+\/\d+\/\d+\.png$/,
-    );
-  });
-
-  test("uses tile globe basemap mode without rendering vector land above it", () => {
     render(
       <BubbleMap
-        globeBasemapMode="tiles"
         initialViewState={{ center: [-74, 40], zoom: 5 }}
         mapDisplay="globe"
-        mapLabel="Tiled demand globe"
-        mapStyle={{ tiles: "https://tiles.example.test/{z}/{x}/{y}.png" }}
+        mapLabel="Remote style globe"
+        mapStyle="https://styles.example.test/style.json"
+        onMapReady={(map) => {
+          readyMap = map;
+        }}
         points={[
           {
             id: "a",
@@ -2432,39 +2403,10 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       />,
     );
 
-    const map = screen.getByLabelText("Tiled demand globe");
-
-    expect(map.getAttribute("data-map-ready")).toBe("true");
-    expect(map.querySelector(".mb-maps__globe-renderer")).toBeTruthy();
-    expect(map.querySelector(".mb-maps__globe-land")).toBeFalsy();
-    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
-    expect(flatMock.getMaps()).toHaveLength(0);
-  });
-
-  test("allows a closer globe zoom", () => {
-    expect(getGlobeZoom(GLOBE_MAX_ZOOM - 0.1, -1000)).toBe(GLOBE_MAX_ZOOM);
-    expect(getGlobeRadius(18) / getGlobeRadius(17)).toBeCloseTo(2, 5);
-  });
-
-  test("aligns globe sphere rotation with projected point coordinates", () => {
-    const center: [number, number] = [13.405, 52.52];
-    const rotation = getGlobeSphereRotation({ center, zoom: 1.8 });
-    const projected = projectGlobeCoordinate(center, { center, zoom: 1.8 });
-
-    expect(rotation.x).toBeCloseTo((center[1] * Math.PI) / 180);
-    expect(rotation.y).toBeCloseTo(-((center[0] + 90) * Math.PI) / 180);
-    expect(projected.x).toBeCloseTo(480);
-    expect(projected.y).toBeCloseTo(240);
-  });
-
-  test("aligns vector globe projection with projected point coordinates", () => {
-    const center: [number, number] = [13.405, 52.52];
-    const viewState = { center, zoom: 1.8 };
-    const projected = projectGlobeCoordinate(center, viewState);
-    const basemapProjected = projectGlobeBasemapCoordinate(center, viewState);
-
-    expect(basemapProjected?.[0]).toBeCloseTo(projected.x);
-    expect(basemapProjected?.[1]).toBeCloseTo(projected.y);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Remote style globe").getAttribute("data-map-ready")).toBe("true");
+      expect(readyMap?.getProjection?.().type).toBe("globe");
+    });
   });
 
   test("roundtrips WebGL flat Mercator projection", () => {

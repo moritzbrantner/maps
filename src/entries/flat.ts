@@ -4,7 +4,6 @@ export {
   FlatClusteredMap,
   defaultRasterMapStyle,
   type ClusteredMapProps,
-  type GlobeBasemapMode,
   type MapDisplayMode,
   type MapSurfaceController,
   type MapViewState,

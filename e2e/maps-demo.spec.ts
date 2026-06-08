@@ -218,9 +218,21 @@ test("Globe view renders nonblank canvas and responds to dragging @smoke", async
   await openView(page, "Globe");
 
   const globe = page.locator(".mb-maps--globe");
-  const canvas = page.locator(".mb-maps__globe-canvas");
+  const canvas = globe.locator(".maplibregl-canvas");
   await expect(globe).toBeVisible();
   await expect(canvas).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __mbMapsDemoMap?: { getProjection?: () => { type?: string } };
+            }
+          ).__mbMapsDemoMap?.getProjection?.().type,
+      ),
+    )
+    .toBe("globe");
   await expect.poll(async () => pngHasPixelVariance(await globe.screenshot())).toBe(true);
 
   const before = await globe.screenshot();
@@ -266,6 +278,45 @@ test("Editor mode enters polygon drawing mode", async ({ page }) => {
   await expect(
     page.locator(".demo-editor-facts").filter({ hasText: "draw-polygon" }),
   ).toBeVisible();
+});
+
+test("Primary map controls expose accessible names and keyboard operation @smoke", async ({ page }) => {
+  await openView(page, "Clusters");
+
+  const measureButton = page.getByRole("button", { name: "Measure" });
+
+  await expect(measureButton).toBeVisible();
+  await measureButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".mb-maps--measuring")).toBeVisible();
+
+  const editorTab = page.getByRole("tab", { name: "Editor" });
+
+  await editorTab.focus();
+  await page.keyboard.press("Enter");
+  await expect(editorTab).toHaveAttribute("aria-selected", "true");
+
+  const polygonButton = page.getByRole("button", { name: "Polygon" });
+
+  await expect(polygonButton).toBeVisible();
+  await polygonButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.locator(".demo-editor-facts").filter({ hasText: "draw-polygon" }),
+  ).toBeVisible();
+});
+
+test("Timeline slider is named and keyboard operable", async ({ page }) => {
+  await openView(page, "Timeline");
+  await page.getByRole("button", { name: "Pause" }).click();
+
+  const slider = page.getByRole("slider", { name: "Shipment timeline" });
+  const initialTime = await page.locator(".mb-temporal-map__current-time").textContent();
+
+  await expect(slider).toBeVisible();
+  await slider.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator(".mb-temporal-map__current-time")).not.toHaveText(initialTime ?? "");
 });
 
 test("Mobile layout does not overflow horizontally @mobile", async ({ page }) => {

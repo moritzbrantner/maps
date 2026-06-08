@@ -188,7 +188,7 @@ function getRenderedGeoJsonLayersByType(type: string) {
 }
 
 describe("@moritzbrantner/maps TemporalClusteredMap", () => {
-  test("renders clustered points on the globe display", () => {
+  test("renders clustered points on the globe display", async () => {
     render(
       <ClusteredMap
         initialViewState={{ center: [13, 52], zoom: 2 }}
@@ -207,10 +207,19 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
 
     const map = screen.getByLabelText("Warehouse globe");
 
-    expect(map.getAttribute("data-map-ready")).toBe("true");
-    expect(map.querySelector(".mb-maps__globe")).toBeTruthy();
-    expect(map.querySelector(".mb-maps__globe-point")).toBeTruthy();
-    expect(flatMock.getMaps()).toHaveLength(0);
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(map.querySelector(".mb-maps__canvas")).toBeTruthy();
+      expect(map.querySelector(".mb-maps__globe")).toBeFalsy();
+      expect(flatMock.getMaps()).toHaveLength(1);
+      expect(flatMock.getLayerGroups().flatMap((group) => group.layers)).toEqual([
+        expect.objectContaining({
+          options: expect.objectContaining({
+            className: "mb-maps__point-marker",
+          }),
+        }),
+      ]);
+    });
   });
 
   test("renders timeline controls and slices track points into the map overlay", async () => {

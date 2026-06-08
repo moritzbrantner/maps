@@ -49,12 +49,20 @@ for (const packageDir of packageDirs) {
 
   const stylesheet = readFileSync(stylesPath, "utf8");
 
-  if (!/@import\s+"tailwindcss";/.test(stylesheet)) {
-    errors.push(`${packageName}: styles.css must import tailwindcss`);
+  if (!/^\/\* Generated from src\/styles\.css\./.test(stylesheet)) {
+    errors.push(`${packageName}: styles.css must be the compiled output from src/styles.css`);
   }
 
-  if (!/@source\s+/.test(stylesheet)) {
-    errors.push(`${packageName}: styles.css must declare at least one Tailwind @source`);
+  if (/@import\s+"tailwindcss";|@source\s+|@apply\s+/.test(stylesheet)) {
+    errors.push(`${packageName}: styles.css must not require consumer Tailwind processing`);
+  }
+
+  if (!/\.mb-maps/.test(stylesheet)) {
+    errors.push(`${packageName}: styles.css must include package map component styles`);
+  }
+
+  if (!/\.maplibregl-/.test(stylesheet)) {
+    errors.push(`${packageName}: styles.css must include MapLibre GL styles`);
   }
 
   if (!files.includes("styles.css")) {

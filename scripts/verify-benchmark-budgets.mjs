@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,7 +18,9 @@ import { createScalarFieldGrid } from "../src/scalar-field.ts";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputDir = path.join(rootDir, "benchmark-results");
 const outputPath = path.join(outputDir, "maps-benchmark-summary.json");
+const baselinePath = path.join(rootDir, "benchmark-baseline.json");
 const budgetMultiplier = Number(process.env.MAPS_BENCHMARK_BUDGET_MULTIPLIER ?? "1");
+const updateBaseline = process.argv.includes("--update-baseline");
 
 const benchmarks = [
   benchmarkTemporalGeoJson(),
@@ -44,11 +46,37 @@ writeFileSync(
 
 console.log(`Wrote ${path.relative(rootDir, outputPath)}`);
 
+if (updateBaseline) {
+  writeFileSync(
+    baselinePath,
+    `${JSON.stringify(
+      {
+        benchmarks: Object.fromEntries(
+          benchmarks.map((benchmark) => [
+            benchmark.name,
+            {
+              p95: benchmark.stats.p95,
+              budgetMs: benchmark.budgetMs,
+            },
+          ]),
+        ),
+        generatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  console.log(`Updated ${path.relative(rootDir, baselinePath)}`);
+}
+
 for (const benchmark of benchmarks) {
+  const baseline = readBenchmarkBaseline(benchmark.name);
+  const trend = baseline ? ` baselineDelta=${formatDelta(benchmark.stats.p95, baseline.p95)}` : "";
+
   console.log(
     `${benchmark.name}: p95=${benchmark.stats.p95.toFixed(2)}ms budget=${benchmark.budgetMs.toFixed(
       2,
-    )}ms`,
+    )}ms${trend}`,
   );
 }
 
@@ -64,6 +92,23 @@ if (failures.length > 0) {
   }
 
   process.exit(1);
+}
+
+function readBenchmarkBaseline(name) {
+  if (!existsSync(baselinePath)) {
+    return null;
+  }
+
+  const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+
+  return baseline.benchmarks?.[name] ?? null;
+}
+
+function formatDelta(value, baseline) {
+  const delta = value - baseline;
+  const sign = delta > 0 ? "+" : "";
+
+  return `${sign}${delta.toFixed(2)}ms`;
 }
 
 function benchmarkTemporalGeoJson() {

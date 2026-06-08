@@ -37,8 +37,7 @@ export function BeeLineMeasurementLayer({
   const surface = useContext(MapSurfaceContext);
   const display = surface?.display;
   const flatMap = surface?.flatMap;
-  const getGlobePointerCoordinate = surface?.getGlobePointerCoordinate;
-  const registerFlatLayer = surface?.registerFlatLayer;
+  const registerMapLibreLayer = surface?.registerMapLibreLayer;
   const setMeasurementActive = surface?.setMeasurementActive;
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `measurement-layer-${generatedLayerId}`;
@@ -73,13 +72,13 @@ export function BeeLineMeasurementLayer({
   }, [draft, isMeasuring]);
 
   useEffect(() => {
-    if (!registerFlatLayer || display !== "flat") {
+    if (!registerMapLibreLayer || (display !== "flat" && display !== "globe")) {
       flatMeasurementCacheRef.current.clear();
       flatDraftCacheRef.current = null;
       return;
     }
 
-    return registerFlatLayer(resolvedLayerId, ({ layer, flat, map }) => {
+    return registerMapLibreLayer(resolvedLayerId, ({ layer, flat, map }) => {
       const cache = flatMeasurementCacheRef.current;
       const seen = new Set<string>();
 
@@ -163,12 +162,12 @@ export function BeeLineMeasurementLayer({
     measurementLineColor,
     measurements,
     display,
-    registerFlatLayer,
+    registerMapLibreLayer,
     resolvedLayerId,
   ]);
 
   useEffect(() => {
-    if (display !== "flat" || !flatMap || !isMeasuring) {
+    if ((display !== "flat" && display !== "globe") || !flatMap || !isMeasuring) {
       return;
     }
 
@@ -260,204 +259,7 @@ export function BeeLineMeasurementLayer({
     measurementDistanceFormat,
   ]);
 
-  useEffect(() => {
-    if (display !== "globe" || !isMeasuring) {
-      return;
-    }
-
-    function clearDraft() {
-      setDraft(null);
-      emitDraftChange(null);
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && draft) {
-        clearDraft();
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [display, draft, isMeasuring]);
-
-  if (!surface || display !== "globe") {
-    return null;
-  }
-
-  return (
-    <g
-      className="mb-maps__globe-measurements"
-      onClick={(event) => {
-        if (!isMeasuring) {
-          return;
-        }
-
-        event.stopPropagation();
-        const coordinate = getGlobePointerCoordinate?.(
-          event as unknown as React.PointerEvent<SVGSVGElement>,
-        );
-
-        if (!coordinate) {
-          return;
-        }
-
-        if (!draft?.from) {
-          const nextDraft = { from: coordinate };
-
-          setDraft(nextDraft);
-          onMeasurementDraftChange?.(nextDraft);
-          return;
-        }
-
-        const result = createMeasurementResult(draft.from, coordinate, measurementDistanceFormat);
-
-        if (result) {
-          onMeasurementCreate?.(result);
-        }
-
-        setDraft(null);
-        onMeasurementDraftChange?.(null);
-      }}
-      onPointerMove={(event) => {
-        if (!isMeasuring || !draft?.from) {
-          return;
-        }
-
-        const coordinate = getGlobePointerCoordinate?.(
-          event as unknown as React.PointerEvent<SVGSVGElement>,
-        );
-        const result = coordinate
-          ? createMeasurementResult(draft.from, coordinate, measurementDistanceFormat)
-          : null;
-
-        if (!result) {
-          return;
-        }
-
-        const nextDraft = {
-          distanceMeters: result.distanceMeters,
-          formattedDistance: result.formattedDistance,
-          from: result.from,
-          to: result.to,
-        };
-
-        setDraft(nextDraft);
-        onMeasurementDraftChange?.(nextDraft);
-      }}
-      pointerEvents={isMeasuring ? "all" : "none"}
-    >
-      {measurements.map((measurement) => (
-        <GlobeMeasurement
-          key={measurement.id}
-          measurement={measurement}
-          measurementDistanceFormat={measurementDistanceFormat}
-          measurementLineColor={measurementLineColor}
-          onMeasurementSelect={onMeasurementSelect}
-        />
-      ))}
-      {draft?.to && draft.formattedDistance ? (
-        <GlobeDraftMeasurement draft={draft} measurementDraftLineColor={draftLineColor} />
-      ) : null}
-    </g>
-  );
-}
-
-function GlobeMeasurement({
-  measurement,
-  measurementDistanceFormat,
-  measurementLineColor,
-  onMeasurementSelect,
-}: {
-  measurement: MapBeeLineMeasurement;
-  measurementDistanceFormat: MapDistanceFormat;
-  measurementLineColor: string;
-  onMeasurementSelect?: (measurement: MapBeeLineMeasurement | null) => void;
-}) {
-  const surface = useContext(MapSurfaceContext)!;
-  const from = surface.projectGlobeCoordinate(measurement.from, surface.viewState);
-  const to = surface.projectGlobeCoordinate(measurement.to, surface.viewState);
-  const midpoint = getBeeLineMidpoint(measurement.from, measurement.to);
-  const label = getBeeLineMeasurementLabel(measurement, measurementDistanceFormat);
-  const projectedMidpoint = midpoint
-    ? surface.projectGlobeCoordinate(midpoint, surface.viewState)
-    : null;
-
-  if (!from.visible || !to.visible || !projectedMidpoint?.visible || !label) {
-    return null;
-  }
-
-  return (
-    <g
-      className="mb-maps__measurement"
-      onClick={(event) => {
-        event.stopPropagation();
-        onMeasurementSelect?.(measurement);
-      }}
-    >
-      <line
-        className="mb-maps__measurement-line"
-        stroke={measurementLineColor}
-        x1={from.x}
-        x2={to.x}
-        y1={from.y}
-        y2={to.y}
-      />
-      <circle className="mb-maps__measurement-endpoint" cx={from.x} cy={from.y} r={4} />
-      <circle className="mb-maps__measurement-endpoint" cx={to.x} cy={to.y} r={4} />
-      <text
-        className="mb-maps__measurement-label"
-        x={projectedMidpoint.x}
-        y={projectedMidpoint.y}
-      >
-        {label}
-      </text>
-    </g>
-  );
-}
-
-function GlobeDraftMeasurement({
-  draft,
-  measurementDraftLineColor,
-}: {
-  draft: MapBeeLineMeasurementDraft;
-  measurementDraftLineColor: string;
-}) {
-  const surface = useContext(MapSurfaceContext)!;
-  const from = draft.from ? surface.projectGlobeCoordinate(draft.from, surface.viewState) : null;
-  const to = draft.to ? surface.projectGlobeCoordinate(draft.to, surface.viewState) : null;
-  const midpoint = draft.to ? getBeeLineMidpoint(draft.from, draft.to) : null;
-  const projectedMidpoint = midpoint
-    ? surface.projectGlobeCoordinate(midpoint, surface.viewState)
-    : null;
-
-  if (!from?.visible || !to?.visible || !projectedMidpoint?.visible || !draft.formattedDistance) {
-    return null;
-  }
-
-  return (
-    <g className="mb-maps__measurement mb-maps__measurement--draft">
-      <line
-        className="mb-maps__measurement-line mb-maps__measurement-line--draft"
-        stroke={measurementDraftLineColor}
-        x1={from.x}
-        x2={to.x}
-        y1={from.y}
-        y2={to.y}
-      />
-      <circle className="mb-maps__measurement-endpoint" cx={from.x} cy={from.y} r={4} />
-      <circle className="mb-maps__measurement-endpoint" cx={to.x} cy={to.y} r={4} />
-      <text
-        className="mb-maps__measurement-label"
-        x={projectedMidpoint.x}
-        y={projectedMidpoint.y}
-      >
-        {draft.formattedDistance}
-      </text>
-    </g>
-  );
+  return null;
 }
 
 function renderCompletedFlatMeasurement({

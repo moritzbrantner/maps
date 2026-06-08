@@ -1,6 +1,5 @@
 import { toLatLng } from "./map-display";
 import type { FlatLayer, FlatLayerFactory, FlatPointerEvent } from "./maplibre-compat";
-import type { MapSurfaceContextValue } from "./map-view";
 import type {
   GeoJsonLineStringGeometry,
   GeoJsonPolygonGeometry,
@@ -124,16 +123,6 @@ export function getGeometryPositions(geometry: TemporalGeoJsonSupportedGeometry)
   }
 }
 
-export function projectGeometryCenter(
-  geometry: TemporalGeoJsonSupportedGeometry,
-  surface: MapSurfaceContextValue,
-) {
-  const center = getGeometryCenter(geometry);
-  const projected = surface.projectGlobeCoordinate(center, surface.viewState);
-
-  return projected.visible ? { x: projected.x, y: projected.y } : getFirstVisiblePosition(geometry, surface);
-}
-
 export function resolveFeatureStyle<TProperties extends Record<string, unknown>>(
   feature: GeoJsonLayerFeature<TProperties>,
   props: GeoJsonLayerStyle,
@@ -184,19 +173,4 @@ function createFlatPolygonLayer(
     opacity: 0.9,
     weight: selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth,
   }) as FlatGeometryLayer;
-}
-
-function getFirstVisiblePosition(
-  geometry: TemporalGeoJsonSupportedGeometry,
-  surface: MapSurfaceContextValue,
-) {
-  for (const coordinate of getGeometryPositions(geometry)) {
-    const projected = surface.projectGlobeCoordinate(coordinate, surface.viewState);
-
-    if (projected.visible) {
-      return { x: projected.x, y: projected.y };
-    }
-  }
-
-  return null;
 }

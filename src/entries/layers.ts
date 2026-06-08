@@ -13,7 +13,7 @@ export {
   type GeoHeatLayerProps,
   type GeoPointLayerProps,
 } from "../map-engine";
-export { MapView, type FlatLayerRender, type FlatMapRuntime, type MapViewProps } from "../map-view";
+export { MapView, type MapLibreLayerRender, type FlatMapRuntime, type MapViewProps } from "../map-view";
 export {
   MapControls,
   MapLayers,

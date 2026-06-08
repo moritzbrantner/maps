@@ -19,11 +19,9 @@ export {
 } from "../aggregation";
 export {
   defaultRasterMapStyle,
-  getGlobeViewStateForBounds,
   getMapBoundsCenter,
   mergeMapBounds,
   padMapBounds,
-  type GlobeBasemapMode,
   type MapBounds,
   type MapDisplayMode,
   type MapFitBoundsOptions,

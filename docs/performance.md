@@ -6,7 +6,10 @@ Prefer narrow entrypoints when possible:
 
 - `@moritzbrantner/maps/core` for data-only helpers.
 - `@moritzbrantner/maps/layers` for composed map layers.
-- `@moritzbrantner/maps/flat` or `@moritzbrantner/maps/globe` for display-specific apps.
+- `@moritzbrantner/maps/flat` for flat-only wrapper imports.
+
+Use `mapDisplay="globe"` on the standard map components when you need native
+MapLibre globe projection.
 
 The release verification includes entry bundle budgets and a package consumer
 smoke test.
@@ -51,4 +54,13 @@ bun run bench:performance
 ```
 
 `scripts/verify-entry-bundles.mjs` also reports bundle budget failures. Use the
-bundle analysis script to inspect the largest emitted chunks.
+bundle analysis script to inspect the largest emitted chunks, entrypoint owners,
+and deltas from `bundle-baseline.json`.
+
+```sh
+bun run analyze:bundles
+node scripts/analyze-bundles.mjs --update-baseline
+```
+
+Benchmark verification writes `benchmark-results/maps-benchmark-summary.json`
+and compares p95 values to `benchmark-baseline.json` when present.
