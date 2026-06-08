@@ -2405,10 +2405,7 @@ function GeoJsonInterpolationWorkbench() {
           </span>
         </div>
 
-        <label
-          className="demo-interpolation-toggle"
-          aria-disabled={!canConstrainToLandmass}
-        >
+        <label className="demo-interpolation-toggle" aria-disabled={!canConstrainToLandmass}>
           <input
             checked={constrainToLandmass && canConstrainToLandmass}
             disabled={!canConstrainToLandmass}

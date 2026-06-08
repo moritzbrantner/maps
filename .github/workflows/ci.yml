@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,12 +14,15 @@ permissions:
 jobs:
   fast-validation:
     name: Fast Validation
-    uses: moritzbrantner/reusable-workflows/.github/workflows/fast-validation.yml@workflow-standard-v1
     permissions:
       contents: read
       packages: read
+    uses: moritzbrantner/reusable-workflows/.github/workflows/fast-validation.yml@workflow-standard-v1.2
     with:
+      node_version: "24"
       bun_version: "1.3.14"
+      bun_cache_dependency_path: bun.lock
+      format_command: bun run format:check
       lint_command: bun run lint
       typecheck_command: bun run check-types
       build_command: bun run build
@@ -26,31 +30,43 @@ jobs:
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
-  integration-validation:
-    name: Integration Validation
+  package-validation:
+    name: Package Validation
     needs: fast-validation
-    uses: moritzbrantner/reusable-workflows/.github/workflows/integration-validation.yml@workflow-standard-v1
     permissions:
       contents: read
       packages: read
+    uses: moritzbrantner/reusable-workflows/.github/workflows/integration-validation.yml@workflow-standard-v1.2
     with:
+      node_version: "24"
       bun_version: "1.3.14"
-      pre_command: bun run build
-      package_check_command: bun run verify:api-surface && bun run verify:entry-bundles && bun run verify:package-consumer && bun run pack:dry
+      bun_cache_dependency_path: bun.lock
+      package_check_command: |
+        bun run verify:api-surface
+        bun run build
+        bun run verify:entry-bundles
+        bun run verify:package-consumer
+        bun run pack:dry
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
   browser-smoke:
     name: Browser Smoke
     needs: fast-validation
-    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@workflow-standard-v1
     permissions:
       contents: read
       packages: read
+    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@workflow-standard-v1.2
     with:
+      node_version: "24"
       bun_version: "1.3.14"
+      bun_cache_dependency_path: bun.lock
       pre_command: bunx playwright install --with-deps chromium
       e2e_command: bun run test:browser -- --grep @smoke --project=chromium
       install_playwright: false
+      artifact_paths: |
+        playwright-report
+        test-results
+      upload_artifacts_on: failure
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}

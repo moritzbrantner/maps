@@ -12,12 +12,22 @@ permissions:
 jobs:
   performance-validation:
     name: Performance Validation
-    uses: moritzbrantner/reusable-workflows/.github/workflows/performance-validation.yml@workflow-standard-v1
     permissions:
       contents: read
       packages: read
+    uses: moritzbrantner/reusable-workflows/.github/workflows/performance-validation.yml@workflow-standard-v1.2
     with:
+      node_version: "24"
       bun_version: "1.3.14"
-      benchmark_command: bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance
+      bun_cache_dependency_path: bun.lock
+      build_command: bun run build
+      benchmark_command: |
+        bun run verify:benchmarks
+        bun run bench:temporal-geojson
+        bun run bench:performance
+      bundle_size_command: bun run verify:entry-bundles
+      api_report_command: bun run verify:api-surface
+      artifact_paths: benchmark-results
+      upload_artifacts_on: always
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}

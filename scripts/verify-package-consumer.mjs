@@ -282,6 +282,7 @@ function writeTsConfig(directory) {
           jsx: "react-jsx",
           module: "ESNext",
           moduleResolution: "Bundler",
+          skipLibCheck: true,
           strict: true,
           target: "ES2022",
           types: ["geojson", "react", "react-dom"],

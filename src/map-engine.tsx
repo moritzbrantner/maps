@@ -182,9 +182,8 @@ export function useMapFrame(layer: EngineGeoLayer): VizRenderFrame | null {
       return null;
     }
 
-    return engine.computeFrame({
+    const frame = engine.computeFrame({
       frameFormat: "objects",
-      layerIds: [layerId],
       viewport: {
         bounds: [-180, -90, 180, 90],
         center: surface.viewState.center,
@@ -195,6 +194,17 @@ export function useMapFrame(layer: EngineGeoLayer): VizRenderFrame | null {
         zoom: surface.viewState.zoom,
       },
     });
+
+    const layers = frame.layers.filter((candidate) => candidate.layerId === layerId);
+
+    return {
+      ...frame,
+      layers,
+      stats: {
+        ...frame.stats,
+        renderedLayerCount: layers.length,
+      },
+    };
   }, [engine, layerId, surface, version]);
 }
 
@@ -531,19 +541,6 @@ function useRegisteredEngineLayer(engine: VizEngine, layer: EngineGeoLayer | nul
       return;
     }
 
-    const updated = engine.updateLayer(
-      current.layerId,
-      layer as Parameters<VizEngine["updateLayer"]>[1],
-    );
-
-    if (updated) {
-      setState((previous) => ({
-        layerId: current.layerId,
-        version: previous.version + 1,
-      }));
-      return;
-    }
-
     current.engine.removeLayer(current.layerId);
     const layerId = engine.addLayer(layer as Parameters<VizEngine["addLayer"]>[0]);
 
@@ -582,7 +579,6 @@ function computeEngineLayerForMap(
     engine
       .computeFrame({
         frameFormat: "objects",
-        layerIds: [layerId],
         viewport: {
           bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
           center: viewState?.center ?? [map.getCenter().lng, map.getCenter().lat],

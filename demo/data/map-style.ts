@@ -75,7 +75,15 @@ const e2eMapStyle = {
         features: [
           {
             geometry: {
-              coordinates: [[[-18, 34], [42, 34], [42, 72], [-18, 72], [-18, 34]]],
+              coordinates: [
+                [
+                  [-18, 34],
+                  [42, 34],
+                  [42, 72],
+                  [-18, 72],
+                  [-18, 34],
+                ],
+              ],
               type: "Polygon",
             },
             properties: { name: "Europe" },
@@ -83,7 +91,15 @@ const e2eMapStyle = {
           },
           {
             geometry: {
-              coordinates: [[[-130, 24], [-62, 24], [-62, 55], [-130, 55], [-130, 24]]],
+              coordinates: [
+                [
+                  [-130, 24],
+                  [-62, 24],
+                  [-62, 55],
+                  [-130, 55],
+                  [-130, 24],
+                ],
+              ],
               type: "Polygon",
             },
             properties: { name: "North America" },
@@ -91,7 +107,15 @@ const e2eMapStyle = {
           },
           {
             geometry: {
-              coordinates: [[[68, 6], [150, 6], [150, 58], [68, 58], [68, 6]]],
+              coordinates: [
+                [
+                  [68, 6],
+                  [150, 6],
+                  [150, 58],
+                  [68, 58],
+                  [68, 6],
+                ],
+              ],
               type: "Polygon",
             },
             properties: { name: "Asia" },
@@ -99,7 +123,15 @@ const e2eMapStyle = {
           },
           {
             geometry: {
-              coordinates: [[[-82, -55], [-34, -55], [-34, 12], [-82, 12], [-82, -55]]],
+              coordinates: [
+                [
+                  [-82, -55],
+                  [-34, -55],
+                  [-34, 12],
+                  [-82, 12],
+                  [-82, -55],
+                ],
+              ],
               type: "Polygon",
             },
             properties: { name: "South America" },
@@ -107,7 +139,15 @@ const e2eMapStyle = {
           },
           {
             geometry: {
-              coordinates: [[[-18, -35], [52, -35], [52, 34], [-18, 34], [-18, -35]]],
+              coordinates: [
+                [
+                  [-18, -35],
+                  [52, -35],
+                  [52, 34],
+                  [-18, 34],
+                  [-18, -35],
+                ],
+              ],
               type: "Polygon",
             },
             properties: { name: "Africa" },

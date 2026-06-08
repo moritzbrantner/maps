@@ -15,14 +15,20 @@ permissions:
 jobs:
   browser-validation:
     name: Full Browser Validation
-    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@workflow-standard-v1
     permissions:
       contents: read
       packages: read
+    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@workflow-standard-v1.2
     with:
+      node_version: "24"
       bun_version: "1.3.14"
+      bun_cache_dependency_path: bun.lock
       pre_command: bunx playwright install --with-deps chromium
       e2e_command: bun run test:browser -- --project=chromium
       install_playwright: false
+      artifact_paths: |
+        playwright-report
+        test-results
+      upload_artifacts_on: failure
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
