@@ -92,6 +92,8 @@ controller?.fitPoints(points, { padding: 72 });
 - [Getting Started](docs/getting-started.md)
 - [Entrypoints](docs/entrypoints.md)
 - [API Stability](docs/api-stability.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
 - [Recipes](docs/recipes.md)
 - [GeoJSON](docs/geojson.md)
 - [GeoJSON Editor](docs/editor.md)
@@ -102,12 +104,19 @@ controller?.fitPoints(points, { padding: 72 });
 
 ## Runtime Notes
 
-- React, React DOM, and `@moritzbrantner/ui` are peer dependencies.
-- `@moritzbrantner/timeline-editor` is an optional peer used by timeline editor components.
+- Rendered React maps require the `react`, `react-dom`, and
+  `@moritzbrantner/ui` peer dependencies.
+- `@moritzbrantner/timeline-editor` is an optional peer required only for
+  timeline editor components.
+- MapLibre, Three, Turf helpers, supercluster, d3-delaunay, polygon-clipping,
+  and related map/runtime packages are included as package dependencies.
 - Rendering map components requires browser DOM APIs and WebGL/canvas support.
 - React map entrypoints are client components and start with `"use client"`.
-- `@moritzbrantner/maps/styles.css` is compiled CSS that includes package styles and MapLibre GL CSS.
-- Data-only helpers from `@moritzbrantner/maps/core` can be used outside React.
+- `@moritzbrantner/maps/styles.css` is compiled CSS that includes package styles
+  and MapLibre GL CSS.
+- `@moritzbrantner/maps/core` is intended for data-only usage and must remain
+  free of React, DOM, MapLibre, Three, `@moritzbrantner/ui`, and timeline editor
+  runtime imports.
 
 ## Verification
 

@@ -233,24 +233,37 @@ test("Globe view renders nonblank canvas and responds to dragging @smoke", async
       ),
     )
     .toBe("globe");
+  await waitForDemoMapIdle(page);
   await expect.poll(async () => pngHasPixelVariance(await globe.screenshot())).toBe(true);
 
-  const before = await globe.screenshot();
+  const beforeCenter = await getDemoMapCenter(page);
   const box = await globe.boundingBox();
 
+  expect(beforeCenter).not.toBeNull();
   expect(box).not.toBeNull();
 
   await page.mouse.move(box!.x + box!.width * 0.58, box!.y + box!.height * 0.5);
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width * 0.38, box!.y + box!.height * 0.5, { steps: 8 });
   await page.mouse.up();
-  await page.waitForTimeout(100);
 
-  const after = await globe.screenshot();
+  await expect
+    .poll(async () => {
+      const center = await getDemoMapCenter(page);
 
-  expect(Buffer.compare(before, after)).not.toBe(0);
+      return Boolean(
+        beforeCenter &&
+          center &&
+          (Math.abs(center.lng - beforeCenter.lng) > 0.01 ||
+            Math.abs(center.lat - beforeCenter.lat) > 0.01),
+      );
+    })
+    .toBe(true);
+  await waitForDemoMapIdle(page);
+  await expect.poll(async () => pngHasPixelVariance(await globe.screenshot())).toBe(true);
   await openView(page, "Clusters");
   await openView(page, "Globe");
+  await waitForDemoMapIdle(page);
   await expect(page.locator(".demo-stage")).toHaveScreenshot("globe-desktop.png");
 });
 
@@ -419,6 +432,60 @@ async function hasHorizontalOverflow(page: Page) {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
+}
+
+async function getDemoMapCenter(page: Page) {
+  return page.evaluate(() => {
+    const map = (
+      window as typeof window & {
+        __mbMapsDemoMap?: {
+          getCenter?: () => { lat?: number; lng?: number };
+        };
+      }
+    ).__mbMapsDemoMap;
+    const center = map?.getCenter?.();
+
+    if (typeof center?.lat !== "number" || typeof center.lng !== "number") {
+      return null;
+    }
+
+    return { lat: center.lat, lng: center.lng };
+  });
+}
+
+async function waitForDemoMapIdle(page: Page) {
+  await page.evaluate(async () => {
+    const map = (
+      window as typeof window & {
+        __mbMapsDemoMap?: {
+          idle?: () => boolean;
+          isMoving?: () => boolean;
+          loaded?: () => boolean;
+          once?: (event: "idle", listener: () => void) => void;
+        };
+      }
+    ).__mbMapsDemoMap;
+
+    if (!map || typeof map.once !== "function") {
+      return;
+    }
+
+    const isSettled =
+      map.idle?.() === true || (map.loaded?.() === true && map.isMoving?.() !== true);
+
+    if (isSettled) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      const timeoutId = window.setTimeout(resolve, 1_000);
+
+      map.once?.("idle", () => {
+        window.clearTimeout(timeoutId);
+        resolve();
+      });
+    });
+  });
 }
 
 function pngHasPixelVariance(png: Buffer) {

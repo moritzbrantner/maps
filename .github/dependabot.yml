@@ -1,0 +1,51 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      test-tooling:
+        patterns:
+          - "vitest"
+          - "jsdom"
+          - "@playwright/test"
+          - "@testing-library/react"
+      build-tooling:
+        patterns:
+          - "vite"
+          - "@vitejs/plugin-react"
+          - "tsup"
+          - "typescript"
+          - "tailwindcss"
+          - "@tailwindcss/vite"
+      maps-runtime:
+        patterns:
+          - "maplibre-gl"
+          - "three"
+          - "@turf/*"
+          - "supercluster"
+          - "d3-delaunay"
+          - "polygon-clipping"
+      moritzbrantner:
+        patterns:
+          - "@moritzbrantner/*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:30"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5

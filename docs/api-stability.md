@@ -21,6 +21,7 @@ node scripts/verify-api-surface.mjs --update
 Deprecated exports stay available for at least one minor release after the docs
 mark the replacement. Removal should be called out in `CHANGELOG.md`, update
 `api-surface.json`, and include a migration note in the relevant docs page.
+Contributor workflow details live in [Contributing](../CONTRIBUTING.md).
 
 `initialViewState` remains a legacy alias. New examples and tests should use
 `defaultViewState`; compatibility tests should keep covering the alias until it

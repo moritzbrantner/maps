@@ -91,8 +91,9 @@
     "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
+    "verify:package-size": "node ./scripts/verify-package-size.mjs",
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
-    "verify:fast": "bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run pack:dry",
+    "verify:fast": "bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
     "verify:release": "bun run verify:fast && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
   },
   "dependencies": {
@@ -108,7 +109,7 @@
   },
   "devDependencies": {
     "@moritzbrantner/timeline-editor": "^1.0.0",
-    "@moritzbrantner/ui": "^0.9.1",
+    "@moritzbrantner/ui": "^1.0.0",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.3.0",
     "@tanstack/react-query": "^5.100.14",
@@ -134,7 +135,7 @@
   },
   "peerDependencies": {
     "@moritzbrantner/timeline-editor": "^1.0.0",
-    "@moritzbrantner/ui": "^0.9.1",
+    "@moritzbrantner/ui": "^1.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

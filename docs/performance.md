@@ -11,8 +11,17 @@ Prefer narrow entrypoints when possible:
 Use `mapDisplay="globe"` on the standard map components when you need native
 MapLibre globe projection.
 
-The release verification includes entry bundle budgets and a package consumer
-smoke test.
+The release verification includes entry bundle budgets, package/CSS budgets,
+and a package consumer smoke test.
+
+```sh
+bun run verify:package-size
+bun run analyze:bundles
+```
+
+JS entry budgets live in `scripts/verify-entry-bundles.mjs`. Package-level
+compressed size, unpacked size, entry count, and stylesheet budgets live in
+`scripts/verify-package-size.mjs`.
 
 ## Heat And Scalar Fields
 
@@ -53,7 +62,7 @@ bun run bench:temporal-geojson
 bun run bench:performance
 ```
 
-`scripts/verify-entry-bundles.mjs` also reports bundle budget failures. Use the
+`scripts/verify-entry-bundles.mjs` reports JS entry budget failures. Use the
 bundle analysis script to inspect the largest emitted chunks, entrypoint owners,
 and deltas from `bundle-baseline.json`.
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Patch Changes
+
+- Updated `@moritzbrantner/ui` to `1.0.0`; refreshed Chromium smoke
+  screenshots for the resulting UI spacing and styling changes.
+
 ## 0.1.4
 
 ### Patch Changes

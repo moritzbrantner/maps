@@ -2,12 +2,26 @@
 
 ## Install
 
+For full React map usage:
+
 ```sh
 bun add @moritzbrantner/maps @moritzbrantner/ui react react-dom
 ```
 
 ```sh
 npm install @moritzbrantner/maps @moritzbrantner/ui react react-dom
+```
+
+For timeline editor components:
+
+```sh
+bun add @moritzbrantner/timeline-editor
+```
+
+For core-only server or data usage:
+
+```sh
+bun add @moritzbrantner/maps
 ```
 
 Import the maps stylesheet once in the app shell:
@@ -19,9 +33,9 @@ import "@moritzbrantner/maps/styles.css";
 The package stylesheet is compiled CSS and includes MapLibre GL CSS. Consumers do
 not need to run Tailwind over `@moritzbrantner/maps/styles.css`.
 
-React, React DOM, and `@moritzbrantner/ui` are peer dependencies. The optional
-`@moritzbrantner/timeline-editor` peer is only required when using timeline
-editor components.
+React, React DOM, and `@moritzbrantner/ui` are required peers for rendered map
+components. The optional `@moritzbrantner/timeline-editor` peer is only required
+when using timeline editor components.
 
 ## Basic Clustered Map
 

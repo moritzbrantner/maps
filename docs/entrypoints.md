@@ -18,6 +18,21 @@ temporal helpers.
 | `@moritzbrantner/maps/temporal` | You need temporal point or temporal GeoJSON playback helpers and maps. |
 | `@moritzbrantner/maps/styles.css` | You need the package stylesheet. Import once in the app shell. |
 
+## Dependency Expectations
+
+| Entry point | React required | `@moritzbrantner/ui` required | Timeline editor required | Server-safe |
+| --- | --- | --- | --- | --- |
+| `@moritzbrantner/maps/core` | No | No | No | Yes |
+| `@moritzbrantner/maps` | Yes | Yes | Only for timeline editor exports | No |
+| `@moritzbrantner/maps/layers` | Yes | Yes | No | No |
+| `@moritzbrantner/maps/flat` | Yes | Yes | No | No |
+| `@moritzbrantner/maps/editor` | Yes | Yes | Only when using timeline editor integration | No |
+| `@moritzbrantner/maps/timeline` | Yes | Yes | Yes for `GeoJsonTimelineEditor` | No |
+| `@moritzbrantner/maps/geojson` | Yes | Yes | No | No |
+| `@moritzbrantner/maps/heat` | Yes | Yes | No | No |
+| `@moritzbrantner/maps/measurement` | Layer: Yes, helpers: No | Layer: Yes, helpers: No | No | Helper imports only |
+| `@moritzbrantner/maps/temporal` | Maps: Yes, helpers: No | Maps: Yes | No | Helper imports only |
+
 ## Root
 
 ```tsx
