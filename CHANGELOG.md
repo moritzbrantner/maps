@@ -4,6 +4,11 @@
 
 ### Patch Changes
 
+- Slimmed the default `styles.css` export by removing Tailwind
+  preflight/global reset and added `styles.full.css` as the compatibility
+  stylesheet.
+- Made bundle analysis baselines hash-insensitive for emitted chunks.
+- Added benchmark warning thresholds alongside hard failure budgets.
 - Updated `@moritzbrantner/ui` to `1.0.0`; refreshed Chromium smoke
   screenshots for the resulting UI spacing and styling changes.
 

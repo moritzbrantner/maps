@@ -7,42 +7,56 @@ import tailwindcss from "@tailwindcss/vite";
 import { build } from "vite";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const entries = [
+  {
+    outputFileName: "styles.css",
+    sourceFileName: "styles.css",
+  },
+  {
+    outputFileName: "styles.full.css",
+    sourceFileName: "styles.full.css",
+  },
+];
 const tempDir = path.join(rootDir, ".style-build");
-const sourcePath = path.join(rootDir, "src", "styles.css");
-const outputPath = path.join(rootDir, "styles.css");
 
 rmSync(tempDir, { force: true, recursive: true });
 mkdirSync(tempDir, { recursive: true });
 
-await build({
-  configFile: false,
-  logLevel: "silent",
-  plugins: [tailwindcss()],
-  build: {
-    assetsDir: ".",
-    emptyOutDir: true,
-    outDir: tempDir,
-    rollupOptions: {
-      input: sourcePath,
-      output: {
-        assetFileNames: "styles[extname]",
-        entryFileNames: "style-entry.js",
+for (const entry of entries) {
+  const sourcePath = path.join(rootDir, "src", entry.sourceFileName);
+  const outputPath = path.join(rootDir, entry.outputFileName);
+  const entryTempDir = path.join(tempDir, path.basename(entry.outputFileName, ".css"));
+
+  await build({
+    configFile: false,
+    logLevel: "silent",
+    plugins: [tailwindcss()],
+    build: {
+      assetsDir: ".",
+      emptyOutDir: true,
+      outDir: entryTempDir,
+      rollupOptions: {
+        input: sourcePath,
+        output: {
+          assetFileNames: "styles[extname]",
+          entryFileNames: "style-entry.js",
+        },
       },
     },
-  },
-});
+  });
 
-const cssPath = findCssFile(tempDir);
+  const cssPath = findCssFile(entryTempDir);
 
-if (!cssPath) {
-  throw new Error("Style build did not emit a CSS asset.");
+  if (!cssPath) {
+    throw new Error(`Style build did not emit a CSS asset for ${entry.sourceFileName}.`);
+  }
+
+  const css = readFileSync(cssPath, "utf8");
+  writeFileSync(
+    outputPath,
+    `/* Generated from src/${entry.sourceFileName}. Run \`bun run build:styles\` after editing package styles. */\n${css}`,
+  );
 }
-
-const css = readFileSync(cssPath, "utf8");
-writeFileSync(
-  outputPath,
-  `/* Generated from src/styles.css. Run \`bun run build:styles\` after editing package styles. */\n${css}`,
-);
 rmSync(tempDir, { force: true, recursive: true });
 
 function findCssFile(directory) {

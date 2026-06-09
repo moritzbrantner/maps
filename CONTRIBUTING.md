@@ -68,6 +68,10 @@ Update baselines only when the regression or improvement is understood:
 bun run ./scripts/verify-benchmark-budgets.mjs --update-baseline
 ```
 
+Benchmark verification has warning thresholds and hard failure budgets. Warnings
+do not fail by default; set `MAPS_BENCHMARK_WARN_AS_ERROR=1` when you want a
+stricter local or scheduled run.
+
 ## Bundle And Package Budgets
 
 Run:
@@ -78,7 +82,15 @@ bun run analyze:bundles
 ```
 
 Update `bundle-baseline.json` only for intentional changes. Explain size
-increases in PR descriptions.
+increases in PR descriptions. Bundle analysis keys hashed chunks by entrypoint
+owner group and rank, so deltas should remain useful when emitted chunk
+filenames change.
+
+## Stylesheets
+
+`bun run build:styles` generates both `styles.css` and `styles.full.css`.
+`styles.css` is the slim default without Tailwind preflight/global reset;
+`styles.full.css` is the compatibility export that preserves the legacy reset.
 
 ## Release Flow
 

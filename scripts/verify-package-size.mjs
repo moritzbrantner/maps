@@ -8,7 +8,8 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const budgets = {
   compressedSize: 190_000,
   entryCount: 80,
-  stylesheetSize: 125_000,
+  fullStylesheetSize: 125_000,
+  stylesheetSize: 112_000,
   unpackedSize: 1_050_000,
 };
 
@@ -39,7 +40,8 @@ try {
 
 const files = Array.isArray(packageInfo?.files) ? packageInfo.files : [];
 const stylesheet = files.find((file) => file.path === "styles.css");
-const requiredFiles = ["styles.css", "README.md", "package.json"];
+const fullStylesheet = files.find((file) => file.path === "styles.full.css");
+const requiredFiles = ["styles.css", "styles.full.css", "README.md", "package.json"];
 const errors = [];
 
 for (const filePath of requiredFiles) {
@@ -52,12 +54,14 @@ checkBudget("compressed package size", packageInfo?.size, budgets.compressedSize
 checkBudget("unpacked package size", packageInfo?.unpackedSize, budgets.unpackedSize, "bytes");
 checkBudget("package entry count", files.length, budgets.entryCount, "entries");
 checkBudget("styles.css size", stylesheet?.size, budgets.stylesheetSize, "bytes");
+checkBudget("styles.full.css size", fullStylesheet?.size, budgets.fullStylesheetSize, "bytes");
 
 console.log("Package size summary:");
 console.log(`- compressed size: ${formatBytes(packageInfo?.size)}`);
 console.log(`- unpacked size: ${formatBytes(packageInfo?.unpackedSize)}`);
 console.log(`- entry count: ${files.length}`);
 console.log(`- stylesheet size: ${formatBytes(stylesheet?.size)}`);
+console.log(`- full stylesheet size: ${formatBytes(fullStylesheet?.size)}`);
 
 if (errors.length > 0) {
   console.error("Package size verification failed:");

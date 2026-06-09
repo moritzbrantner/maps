@@ -107,7 +107,7 @@ function verifyFlatOnlyViteConsumer(directory, packageTarball) {
     directory,
     "src/main.tsx",
     `import { createRoot } from "react-dom/client";
-import "@moritzbrantner/maps/styles.css";
+import "@moritzbrantner/maps/styles.full.css";
 import { FlatPointMap } from "@moritzbrantner/maps/flat";
 
 const points = [

@@ -16,7 +16,8 @@ temporal helpers.
 | `@moritzbrantner/maps/heat` | You need heat maps, scalar fields, or heat-field rendering helpers. |
 | `@moritzbrantner/maps/measurement` | You need bee-line measurement helpers or layers. |
 | `@moritzbrantner/maps/temporal` | You need temporal point or temporal GeoJSON playback helpers and maps. |
-| `@moritzbrantner/maps/styles.css` | You need the package stylesheet. Import once in the app shell. |
+| `@moritzbrantner/maps/styles.css` | You need the package stylesheet and MapLibre GL CSS without Tailwind preflight. Import once in the app shell. |
+| `@moritzbrantner/maps/styles.full.css` | You need the compatibility stylesheet with Tailwind preflight/global reset. |
 
 ## Dependency Expectations
 

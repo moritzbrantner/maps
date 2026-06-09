@@ -4,6 +4,15 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "src/**"
+      - "e2e/**"
+      - "public/**"
+      - "package.json"
+      - "bun.lock"
+      - "playwright.config.*"
+      - "vite.config.*"
+      - ".github/workflows/browser.yml"
   workflow_dispatch:
   schedule:
     - cron: "41 4 * * 2"

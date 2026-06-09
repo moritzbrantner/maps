@@ -11,7 +11,8 @@
   "files": [
     "dist",
     "docs",
-    "styles.css"
+    "styles.css",
+    "styles.full.css"
   ],
   "type": "module",
   "sideEffects": [
@@ -61,7 +62,8 @@
       "import": "./dist/temporal.js"
     },
     "./package.json": "./package.json",
-    "./styles.css": "./styles.css"
+    "./styles.css": "./styles.css",
+    "./styles.full.css": "./styles.full.css"
   },
   "publishConfig": {
     "access": "public"

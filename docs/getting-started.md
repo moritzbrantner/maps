@@ -31,7 +31,15 @@ import "@moritzbrantner/maps/styles.css";
 ```
 
 The package stylesheet is compiled CSS and includes MapLibre GL CSS. Consumers do
-not need to run Tailwind over `@moritzbrantner/maps/styles.css`.
+not need to run Tailwind over `@moritzbrantner/maps/styles.css`. The default
+stylesheet does not include Tailwind preflight/global reset.
+
+If an app relied on the legacy reset from earlier package styles, import the
+compatibility stylesheet instead:
+
+```ts
+import "@moritzbrantner/maps/styles.full.css";
+```
 
 React, React DOM, and `@moritzbrantner/ui` are required peers for rendered map
 components. The optional `@moritzbrantner/timeline-editor` peer is only required

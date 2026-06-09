@@ -1,25 +1,30 @@
 {
   "benchmarks": {
     "temporal-geojson-indexed-playback": {
-      "p95": 1.1804539999999974,
-      "budgetMs": 100
+      "baselineP95Ms": 1.5490350000000035,
+      "budgetMs": 25,
+      "warnMs": 5
     },
     "geojson-transition-topology-plan": {
-      "p95": 8.479560000000006,
-      "budgetMs": 500
+      "baselineP95Ms": 9.83170199999995,
+      "budgetMs": 100,
+      "warnMs": 25
     },
     "geojson-transition-complex-topology-plan": {
-      "p95": 17.379962000000006,
-      "budgetMs": 1000
+      "baselineP95Ms": 8.788109000000077,
+      "budgetMs": 200,
+      "warnMs": 50
     },
     "scalar-field-grid": {
-      "p95": 19.84235000000001,
-      "budgetMs": 1500
+      "baselineP95Ms": 12.400547999999844,
+      "budgetMs": 300,
+      "warnMs": 75
     },
     "heat-map-density-index": {
-      "p95": 54.59451100000001,
-      "budgetMs": 1000
+      "baselineP95Ms": 57.11813300000017,
+      "budgetMs": 400,
+      "warnMs": 150
     }
   },
-  "generatedAt": "2026-06-05T20:02:52.518Z"
+  "generatedAt": "2026-06-09T11:48:43.894Z"
 }

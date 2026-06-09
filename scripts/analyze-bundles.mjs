@@ -10,6 +10,7 @@ const baselinePath = path.join(rootDir, "bundle-baseline.json");
 const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
 const limit = Number(process.env.MAPS_BUNDLE_ANALYSIS_LIMIT ?? "16");
 const updateBaseline = process.argv.includes("--update-baseline");
+const baseline = readBaseline();
 
 if (!existsSync(distDir)) {
   console.error("dist is missing. Run `bun run build` before bundle analysis.");
@@ -24,20 +25,26 @@ const importsByFile = new Map(
   jsFiles.map((fileName) => [fileName, getStaticImports(path.join(distDir, fileName))]),
 );
 const ownersByFile = getOwnersByFile(entries, importsByFile);
-const files = jsFiles
+const files = assignStableKeys(
+  jsFiles
   .map((fileName) => {
     const absolutePath = path.join(distDir, fileName);
     const bytes = statSync(absolutePath).size;
     const owners = ownersByFile.get(fileName) ?? [];
+    const ownerKey = owners.length === 0 ? "unattributed" : owners.join("+");
 
     return {
-      baselineBytes: readBaseline()?.files?.[fileName],
       bytes,
       fileName,
       kib: bytes / 1024,
+      ownerKey,
       owner: owners.length === 0 ? "unattributed" : owners.length === 1 ? owners[0] : `shared: ${owners.join(", ")}`,
     };
-  })
+  }),
+).map((file) => ({
+  ...file,
+  baselineBytes: getBaselineBytes(file, baseline),
+}))
   .sort((left, right) => right.bytes - left.bytes);
 
 if (updateBaseline) {
@@ -45,7 +52,8 @@ if (updateBaseline) {
     baselinePath,
     `${JSON.stringify(
       {
-        files: Object.fromEntries(files.map((file) => [file.fileName, file.bytes])),
+        schemaVersion: 2,
+        files: Object.fromEntries(files.map((file) => [file.stableKey, file.bytes])),
         generatedAt: new Date().toISOString(),
       },
       null,
@@ -56,15 +64,47 @@ if (updateBaseline) {
 }
 
 console.log(`Largest ${Math.min(limit, files.length)} JavaScript bundles in dist:`);
-console.log(`${"file".padEnd(34)} ${"size".padStart(10)} ${"delta".padStart(10)}  owner`);
+console.log(
+  `${"file".padEnd(34)} ${"stable key".padEnd(58)} ${"size".padStart(10)} ${"delta".padStart(
+    10,
+  )}  owner`,
+);
 
 for (const item of files.slice(0, limit)) {
   console.log(
-    `${item.fileName.padEnd(34)} ${formatKib(item.bytes).padStart(10)} ${formatDelta(
+    `${item.fileName.padEnd(34)} ${item.stableKey.padEnd(58)} ${formatKib(item.bytes).padStart(
+      10,
+    )} ${formatDelta(
       item.bytes,
       item.baselineBytes,
     ).padStart(10)}  ${item.owner}`,
   );
+}
+
+function assignStableKeys(fileRecords) {
+  const chunksByOwner = new Map();
+
+  for (const file of fileRecords) {
+    if (entries.has(file.fileName)) {
+      file.stableKey = `entry:${file.fileName}`;
+      continue;
+    }
+
+    const group = chunksByOwner.get(file.ownerKey) ?? [];
+
+    group.push(file);
+    chunksByOwner.set(file.ownerKey, group);
+  }
+
+  for (const [ownerKey, chunks] of chunksByOwner) {
+    chunks
+      .sort((left, right) => right.bytes - left.bytes || left.fileName.localeCompare(right.fileName))
+      .forEach((file, index) => {
+        file.stableKey = `chunk:${ownerKey}#${index + 1}`;
+      });
+  }
+
+  return fileRecords;
 }
 
 function getPackageEntries() {
@@ -144,6 +184,18 @@ function readBaseline() {
   }
 
   return JSON.parse(readFileSync(baselinePath, "utf8"));
+}
+
+function getBaselineBytes(file, baselineValue) {
+  if (!baselineValue?.files) {
+    return undefined;
+  }
+
+  if (baselineValue.schemaVersion === 2) {
+    return baselineValue.files[file.stableKey];
+  }
+
+  return baselineValue.files[file.fileName];
 }
 
 function formatKib(bytes) {

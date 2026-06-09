@@ -37,7 +37,7 @@ verifyMissingImports("flat", [
 verifyBundleBudgets();
 
 for (const [exportPath, exportValue] of Object.entries(packageJson.exports ?? {})) {
-  if (exportPath === "./package.json" || exportPath === "./styles.css") {
+  if (exportPath === "./package.json" || exportPath === "./styles.css" || exportPath === "./styles.full.css") {
     continue;
   }
 

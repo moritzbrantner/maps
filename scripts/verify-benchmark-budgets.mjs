@@ -20,7 +20,30 @@ const outputDir = path.join(rootDir, "benchmark-results");
 const outputPath = path.join(outputDir, "maps-benchmark-summary.json");
 const baselinePath = path.join(rootDir, "benchmark-baseline.json");
 const budgetMultiplier = Number(process.env.MAPS_BENCHMARK_BUDGET_MULTIPLIER ?? "1");
+const warnAsError = process.env.MAPS_BENCHMARK_WARN_AS_ERROR === "1";
 const updateBaseline = process.argv.includes("--update-baseline");
+const benchmarkThresholds = {
+  "temporal-geojson-indexed-playback": {
+    budgetMs: 25,
+    warnMs: 5,
+  },
+  "geojson-transition-topology-plan": {
+    budgetMs: 100,
+    warnMs: 25,
+  },
+  "geojson-transition-complex-topology-plan": {
+    budgetMs: 200,
+    warnMs: 50,
+  },
+  "scalar-field-grid": {
+    budgetMs: 300,
+    warnMs: 75,
+  },
+  "heat-map-density-index": {
+    budgetMs: 400,
+    warnMs: 150,
+  },
+};
 
 const benchmarks = [
   benchmarkTemporalGeoJson(),
@@ -29,7 +52,8 @@ const benchmarks = [
   benchmarkScalarField(),
   benchmarkHeatAggregation(),
 ];
-const failures = benchmarks.filter((item) => item.stats.p95 > item.budgetMs);
+const failures = benchmarks.filter((item) => item.status === "failed");
+const warnings = benchmarks.filter((item) => item.status === "warning");
 
 mkdirSync(outputDir, { recursive: true });
 writeFileSync(
@@ -55,8 +79,9 @@ if (updateBaseline) {
           benchmarks.map((benchmark) => [
             benchmark.name,
             {
-              p95: benchmark.stats.p95,
+              baselineP95Ms: benchmark.stats.p95,
               budgetMs: benchmark.budgetMs,
+              warnMs: benchmark.warnMs,
             },
           ]),
         ),
@@ -70,17 +95,39 @@ if (updateBaseline) {
 }
 
 for (const benchmark of benchmarks) {
-  const baseline = readBenchmarkBaseline(benchmark.name);
-  const trend = baseline ? ` baselineDelta=${formatDelta(benchmark.stats.p95, baseline.p95)}` : "";
+  const baselineDelta =
+    typeof benchmark.baselineDeltaMs === "number"
+      ? ` baselineDelta=${formatDelta(benchmark.baselineDeltaMs)}`
+      : "";
 
   console.log(
-    `${benchmark.name}: p95=${benchmark.stats.p95.toFixed(2)}ms budget=${benchmark.budgetMs.toFixed(
+    `${benchmark.name}: status=${benchmark.status} p95=${benchmark.stats.p95.toFixed(
       2,
-    )}ms${trend}`,
+    )}ms warn=${benchmark.warnMs.toFixed(2)}ms budget=${benchmark.budgetMs.toFixed(
+      2,
+    )}ms${baselineDelta}`,
   );
 }
 
-if (failures.length > 0) {
+if (warnings.length > 0) {
+  const log = warnAsError ? console.error : console.warn;
+
+  log(
+    warnAsError
+      ? "Benchmark warning verification failed because MAPS_BENCHMARK_WARN_AS_ERROR=1:"
+      : "Benchmark warning thresholds exceeded:",
+  );
+
+  for (const warning of warnings) {
+    log(
+      `- ${warning.name}: p95 ${warning.stats.p95.toFixed(2)}ms exceeded warning ${warning.warnMs.toFixed(
+        2,
+      )}ms`,
+    );
+  }
+}
+
+if (failures.length > 0 || (warnAsError && warnings.length > 0)) {
   console.error("Benchmark budget verification failed:");
 
   for (const failure of failures) {
@@ -89,6 +136,16 @@ if (failures.length > 0) {
         2,
       )}ms`,
     );
+  }
+
+  if (warnAsError) {
+    for (const warning of warnings) {
+      console.error(
+        `- ${warning.name}: p95 ${warning.stats.p95.toFixed(2)}ms exceeded warning ${warning.warnMs.toFixed(
+          2,
+        )}ms`,
+      );
+    }
   }
 
   process.exit(1);
@@ -101,11 +158,20 @@ function readBenchmarkBaseline(name) {
 
   const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 
-  return baseline.benchmarks?.[name] ?? null;
+  const entry = baseline.benchmarks?.[name] ?? null;
+
+  if (!entry) {
+    return null;
+  }
+
+  return {
+    baselineP95Ms: entry.baselineP95Ms ?? entry.p95,
+    budgetMs: entry.budgetMs,
+    warnMs: entry.warnMs,
+  };
 }
 
-function formatDelta(value, baseline) {
-  const delta = value - baseline;
+function formatDelta(delta) {
   const sign = delta > 0 ? "+" : "";
 
   return `${sign}${delta.toFixed(2)}ms`;
@@ -243,11 +309,39 @@ function benchmarkHeatAggregation() {
 }
 
 function createBenchmarkResult(name, baseBudgetMs, stats, metadata) {
+  const thresholds = resolveBenchmarkThresholds(name, baseBudgetMs);
+  const baseline = readBenchmarkBaseline(name);
+  const baselineP95Ms = baseline?.baselineP95Ms;
+  const baselineDeltaMs =
+    typeof baselineP95Ms === "number" ? stats.p95 - baselineP95Ms : undefined;
+  const status =
+    stats.p95 > thresholds.budgetMs
+      ? "failed"
+      : stats.p95 > thresholds.warnMs
+        ? "warning"
+        : "ok";
+
   return {
-    budgetMs: baseBudgetMs * budgetMultiplier,
+    baselineDeltaMs,
+    baselineP95Ms,
+    budgetMs: thresholds.budgetMs,
     metadata,
     name,
     stats,
+    status,
+    warnMs: thresholds.warnMs,
+  };
+}
+
+function resolveBenchmarkThresholds(name, fallbackBudgetMs) {
+  const configured = benchmarkThresholds[name] ?? {
+    budgetMs: fallbackBudgetMs,
+    warnMs: fallbackBudgetMs,
+  };
+
+  return {
+    budgetMs: configured.budgetMs * budgetMultiplier,
+    warnMs: configured.warnMs * budgetMultiplier,
   };
 }
 

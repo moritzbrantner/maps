@@ -19,6 +19,13 @@ Import the stylesheet once in your app shell:
 import "@moritzbrantner/maps/styles.css";
 ```
 
+The default stylesheet includes package map styles and MapLibre GL CSS without
+Tailwind preflight. If you need the legacy global reset, import:
+
+```ts
+import "@moritzbrantner/maps/styles.full.css";
+```
+
 Live demo: <https://moritzbrantner.github.io/maps/>
 
 ## Which Map Should I Use?
@@ -113,7 +120,9 @@ controller?.fitPoints(points, { padding: 72 });
 - Rendering map components requires browser DOM APIs and WebGL/canvas support.
 - React map entrypoints are client components and start with `"use client"`.
 - `@moritzbrantner/maps/styles.css` is compiled CSS that includes package styles
-  and MapLibre GL CSS.
+  and MapLibre GL CSS without Tailwind preflight/global reset.
+- `@moritzbrantner/maps/styles.full.css` is a compatibility stylesheet that
+  includes Tailwind preflight/global reset.
 - `@moritzbrantner/maps/core` is intended for data-only usage and must remain
   free of React, DOM, MapLibre, Three, `@moritzbrantner/ui`, and timeline editor
   runtime imports.

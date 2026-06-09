@@ -23,6 +23,12 @@ JS entry budgets live in `scripts/verify-entry-bundles.mjs`. Package-level
 compressed size, unpacked size, entry count, and stylesheet budgets live in
 `scripts/verify-package-size.mjs`.
 
+`scripts/analyze-bundles.mjs` stores hash-insensitive bundle baselines. Entry
+files are keyed as `entry:<fileName>`, while emitted chunks are keyed by sorted
+entrypoint owner group and size rank, such as
+`chunk:core+flat+root#1`. This keeps deltas useful even when tsup changes hashed
+chunk filenames.
+
 ## Heat And Scalar Fields
 
 Field rendering uses inverse distance weighting over a fixed geographic domain.
@@ -72,4 +78,14 @@ node scripts/analyze-bundles.mjs --update-baseline
 ```
 
 Benchmark verification writes `benchmark-results/maps-benchmark-summary.json`
-and compares p95 values to `benchmark-baseline.json` when present.
+and compares p95 values to `benchmark-baseline.json` when present. Each
+benchmark has a warning threshold and a hard failure budget. Warnings keep CI
+green by default; set `MAPS_BENCHMARK_WARN_AS_ERROR=1` to make warning
+thresholds fail locally or in stricter scheduled jobs.
+
+## Stylesheet Size
+
+The default `@moritzbrantner/maps/styles.css` includes package map styles and
+MapLibre GL CSS without Tailwind preflight/global reset. Use
+`@moritzbrantner/maps/styles.full.css` only when an app needs compatibility with
+the legacy reset-inclusive stylesheet.
