@@ -5,7 +5,7 @@ import type {
   VizGeoPoint,
   VizGeoScalarFieldOptions,
   VizRenderLayer,
-} from "@moritzbrantner/viz-engine";
+} from "@moritzbrantner/viz-engine/core";
 
 const EARTH_RADIUS_METERS = 6_371_008.8;
 const DEFAULT_FIELD_COLUMNS = 256;
@@ -15,7 +15,7 @@ const DEFAULT_DOMAIN_PADDING_RATIO = 0.08;
 const DEFAULT_EPSILON_METERS = 1;
 const MAX_EXPLICIT_FIELD_SIZE = 2_048;
 const MAX_FAST_GRID_VALUE_POINTS = 256;
-const DEFAULT_VIZ_ENGINE_PACKAGE = "@moritzbrantner/viz-engine";
+const DEFAULT_VIZ_ENGINE_PACKAGE = "@moritzbrantner/viz-engine/core";
 
 export type HeatFieldInterpolation = "idw";
 

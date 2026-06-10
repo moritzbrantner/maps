@@ -26,7 +26,7 @@ import {
   type VizRenderFrame,
   type VizRenderLayer,
   type VizEngine,
-} from "@moritzbrantner/viz-engine";
+} from "@moritzbrantner/viz-engine/core";
 
 import { escapeHtml, joinClassNames, toLatLng, type MapViewState } from "./map-display";
 import {

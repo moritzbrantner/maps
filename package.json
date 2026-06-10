@@ -99,7 +99,7 @@
     "verify:release": "bun run verify:fast && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
   },
   "dependencies": {
-    "@moritzbrantner/viz-engine": "^0.2.0",
+    "@moritzbrantner/viz-engine": "^0.3.0",
     "@turf/boolean-clockwise": "^7.3.5",
     "@turf/centroid": "^7.3.5",
     "@turf/helpers": "^7.3.5",

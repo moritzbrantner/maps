@@ -61,7 +61,7 @@ import type {
   VizGeoJsonFeatureCollection,
   VizLayer,
   VizRenderLayer,
-} from "@moritzbrantner/viz-engine";
+} from "@moritzbrantner/viz-engine/core";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;

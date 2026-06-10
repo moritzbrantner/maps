@@ -48,9 +48,14 @@ increase quality and CPU/memory cost.
 ```
 
 `initializeMapsScalarFieldWasm(...)` can opt into the engine-backed scalar-field
-path provided by the required `@moritzbrantner/viz-engine` package. If
+path provided by the required `@moritzbrantner/viz-engine/core` entrypoint. If
 initialization fails, scalar field creation falls back to TypeScript and
 `getMapsScalarFieldWasmLoadError()` exposes the last load error.
+
+`@moritzbrantner/viz-engine@0.3.0` also exposes a lazy WASM entrypoint, but maps
+keeps the scalar-field initialization path synchronous for now. Lazy loading
+requires a separate maps-level API design because the current helper returns a
+ready-to-use runtime state.
 
 ## Temporal GeoJSON
 
