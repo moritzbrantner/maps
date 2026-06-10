@@ -1,6 +1,6 @@
 # @moritzbrantner/maps
 
-## Unreleased
+## 0.1.5
 
 ### Patch Changes
 
