@@ -12,6 +12,7 @@ import {
   moveGeoJsonGeometry,
   validateGeoJsonEditableGeometry,
   type GeoJsonEditOperation,
+  type GeoJsonPosition,
   type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalGeoJsonSupportedGeometry,
 } from ".";
@@ -1138,6 +1139,188 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
   });
 
+  test("union mode replaces selected polygons with one result and emits a batch operation", async () => {
+    const onFeatureCollectionChange = vi.fn();
+    const source = polygonCollection([
+      ["a", squareRing(0, 0, 1, 1)],
+      ["b", squareRing(1, 0, 2, 1)],
+    ]);
+
+    render(
+      <EditableGeoJsonMap
+        editMode="boolean-union"
+        fitToData={false}
+        geoJson={source}
+        mapLabel="Boolean union editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selection={{ featureIds: ["a", "b"], primaryFeatureId: "a" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Boolean union editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    });
+
+    expect(onFeatureCollectionChange.mock.calls[0]?.[0].features).toHaveLength(1);
+    expect(onFeatureCollectionChange.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        reason: "boolean-union",
+        type: "batch",
+      }),
+    );
+  });
+
+  test("intersection mode produces geometry through an undo-compatible batch operation", async () => {
+    const onFeatureCollectionChange = vi.fn();
+    const source = polygonCollection([
+      ["a", squareRing(0, 0, 2, 2)],
+      ["b", squareRing(1, 1, 3, 3)],
+    ]);
+
+    render(
+      <EditableGeoJsonMap
+        editMode="boolean-intersection"
+        fitToData={false}
+        geoJson={source}
+        mapLabel="Boolean intersection editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selection={{ featureIds: ["a", "b"], primaryFeatureId: "a" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Boolean intersection editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    });
+
+    const [next, operation] = onFeatureCollectionChange.mock.calls[0] ?? [];
+
+    expect(next.features[0].properties.area).toBe(1);
+    expect(operation).toEqual(expect.objectContaining({ reason: "boolean-intersection", type: "batch" }));
+    expect(applyGeoJsonEditOperation(source, operation)).toEqual(next);
+  });
+
+  test("difference mode subtracts masks from the subject", async () => {
+    const onFeatureCollectionChange = vi.fn();
+    const source = polygonCollection([
+      ["subject", squareRing(0, 0, 4, 4)],
+      ["mask", squareRing(1, 1, 3, 3)],
+    ]);
+
+    render(
+      <EditableGeoJsonMap
+        editMode="boolean-difference"
+        fitToData={false}
+        geoJson={source}
+        mapLabel="Boolean difference editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selection={{ featureIds: ["subject", "mask"], primaryFeatureId: "subject" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Boolean difference editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    });
+
+    const next = onFeatureCollectionChange.mock.calls[0]?.[0];
+
+    expect(next.features).toHaveLength(1);
+    expect(next.features[0].id).toBe("subject");
+    expect(next.features[0].properties.area).toBe(12);
+    expect(onFeatureCollectionChange.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ reason: "boolean-difference", type: "batch" }),
+    );
+  });
+
+  test("empty boolean results leave the collection unchanged", async () => {
+    const onFeatureCollectionChange = vi.fn();
+    const source = polygonCollection([
+      ["a", squareRing(0, 0, 1, 1)],
+      ["b", squareRing(2, 2, 3, 3)],
+    ]);
+
+    render(
+      <EditableGeoJsonMap
+        editMode="boolean-intersection"
+        fitToData={false}
+        geoJson={source}
+        mapLabel="Empty boolean editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        selection={{ featureIds: ["a", "b"], primaryFeatureId: "a" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Empty boolean editor").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    });
+
+    expect(onFeatureCollectionChange).not.toHaveBeenCalled();
+  });
+
+  test("boolean preview callback receives a result and clears when invalid", async () => {
+    const onBooleanOperationPreviewChange = vi.fn();
+    const source = polygonCollection([
+      ["a", squareRing(0, 0, 1, 1)],
+      ["b", squareRing(1, 0, 2, 1)],
+    ]);
+
+    const { rerender } = render(
+      <EditableGeoJsonMap
+        editMode="boolean-union"
+        fitToData={false}
+        geoJson={source}
+        mapLabel="Boolean preview editor"
+        onBooleanOperationPreviewChange={onBooleanOperationPreviewChange}
+        selection={{ featureIds: ["a", "b"], primaryFeatureId: "a" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Boolean preview editor").getAttribute("data-map-ready")).toBe("true");
+    });
+    await waitFor(() => {
+      expect(onBooleanOperationPreviewChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: "FeatureCollection" }),
+      );
+    });
+
+    rerender(
+      <EditableGeoJsonMap
+        editMode="boolean-union"
+        fitToData={false}
+        geoJson={source}
+        mapLabel="Boolean preview editor"
+        onBooleanOperationPreviewChange={onBooleanOperationPreviewChange}
+        selection={{ featureIds: ["a"], primaryFeatureId: "a" }}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onBooleanOperationPreviewChange).toHaveBeenLastCalledWith(null);
+    });
+  });
+
   test("rejects invalid editable geometries", () => {
     expect(
       validateGeoJsonEditableGeometry({
@@ -1202,6 +1385,33 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     expect(onFeatureCollectionChange).not.toHaveBeenCalled();
   });
 });
+
+function polygonCollection(
+  items: Array<[id: string, ring: GeoJsonPosition[]]>,
+): TemporalGeoJsonGeometryFeatureCollection {
+  return {
+    features: items.map(([id, ring]) => ({
+      geometry: {
+        coordinates: [ring],
+        type: "Polygon" as const,
+      },
+      id,
+      properties: {},
+      type: "Feature" as const,
+    })),
+    type: "FeatureCollection",
+  };
+}
+
+function squareRing(minX: number, minY: number, maxX: number, maxY: number): GeoJsonPosition[] {
+  return [
+    [minX, minY],
+    [maxX, minY],
+    [maxX, maxY],
+    [minX, maxY],
+    [minX, minY],
+  ];
+}
 
 function getGeometryBounds(geometry: TemporalGeoJsonSupportedGeometry | null) {
   expect(geometry).not.toBeNull();

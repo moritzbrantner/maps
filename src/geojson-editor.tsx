@@ -4,6 +4,11 @@ import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { getBoundsFromGeoJson, type GeoJsonMapSource } from "./geojson-source";
+import {
+  differenceGeoJsonFeatures,
+  intersectGeoJsonFeatures,
+  unionGeoJsonFeatures,
+} from "./geojson-operations";
 import { type GeoJsonLayerStyle } from "./geojson-layer";
 import {
   createFlatGeometryLayers,
@@ -87,7 +92,10 @@ export type GeoJsonEditMode =
   | "draw-polygon"
   | "move"
   | "reshape"
-  | "delete";
+  | "delete"
+  | "boolean-union"
+  | "boolean-intersection"
+  | "boolean-difference";
 
 export type GeoJsonEditReason =
   | "move-feature"
@@ -96,14 +104,20 @@ export type GeoJsonEditReason =
   | "remove-vertex"
   | "group-feature"
   | "ungroup-feature"
-  | "draw-complete";
+  | "draw-complete"
+  | "boolean-union"
+  | "boolean-intersection"
+  | "boolean-difference";
 
 export type GeoJsonBatchEditReason =
   | "delete-selection"
   | "duplicate-selection"
   | "group-selection"
   | "ungroup-selection"
-  | "move-selection";
+  | "move-selection"
+  | "boolean-union"
+  | "boolean-intersection"
+  | "boolean-difference";
 
 export type GeoJsonEditValidationResult = {
   reason?: string;
@@ -199,6 +213,7 @@ export type GeoJsonEditOperation<
 export type GeoJsonEditorLayerProps<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 > = {
+  booleanPreview?: boolean;
   canEditFeature?: (feature: TemporalGeoJsonGeometryFeature<TProperties>) => boolean;
   createFeatureProperties?: (geometryType: "Point" | "LineString" | "Polygon") => TProperties;
   enableKeyboardShortcuts?: boolean;
@@ -223,6 +238,7 @@ export type GeoJsonEditorLayerProps<
     next: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
     operation: GeoJsonEditOperation<TProperties>,
   ) => void;
+  onBooleanOperationPreviewChange?: (preview: GeoJsonMapSource | null) => void;
   onSelectionChange?: (featureId: string | null) => void;
   polygonConstraint?: GeoJsonPolygonConstraint;
   selectedFeatureIds?: readonly string[];
@@ -332,6 +348,7 @@ const EMPTY_EDITOR_SELECTION: GeoJsonEditorSelection = {
 export function GeoJsonEditorLayer<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 >({
+  booleanPreview = true,
   canEditFeature,
   createFeatureProperties,
   enableKeyboardShortcuts = false,
@@ -344,6 +361,7 @@ export function GeoJsonEditorLayer<
   midpointHandleColor = "#bae6fd",
   mode,
   onCommand,
+  onBooleanOperationPreviewChange,
   onEditModeChange,
   onEditorSelectionChange,
   onFeatureCollectionChange,
@@ -377,6 +395,7 @@ export function GeoJsonEditorLayer<
   const groupCounterRef = useRef(0);
   const dragRef = useRef<DragState<TProperties> | null>(null);
   const latestRef = useRef({
+    booleanPreview,
     canEditFeature,
     createFeatureProperties,
     enableKeyboardShortcuts,
@@ -385,6 +404,7 @@ export function GeoJsonEditorLayer<
     groupOptions,
     mode,
     onCommand,
+    onBooleanOperationPreviewChange,
     onEditModeChange,
     onEditorSelectionChange,
     onFeatureCollectionChange,
@@ -417,6 +437,13 @@ export function GeoJsonEditorLayer<
     () => new Set(resolvedSelection.featureIds),
     [resolvedSelection.featureIds],
   );
+  const booleanPreviewCollection = useMemo(
+    () =>
+      booleanPreview
+        ? createBooleanOperationResult(features, resolvedSelection, mode)
+        : null,
+    [booleanPreview, features, mode, resolvedSelection],
+  );
 
   useEffect(() => {
     draftRef.current = draft;
@@ -432,6 +459,7 @@ export function GeoJsonEditorLayer<
 
   useEffect(() => {
     latestRef.current = {
+      booleanPreview,
       canEditFeature,
       createFeatureProperties,
       enableKeyboardShortcuts,
@@ -440,6 +468,7 @@ export function GeoJsonEditorLayer<
       groupOptions,
       mode,
       onCommand,
+      onBooleanOperationPreviewChange,
       onEditModeChange,
       onEditorSelectionChange,
       onFeatureCollectionChange,
@@ -454,6 +483,7 @@ export function GeoJsonEditorLayer<
       validateEdit,
     };
   }, [
+    booleanPreview,
     canEditFeature,
     createFeatureProperties,
     enableKeyboardShortcuts,
@@ -462,6 +492,7 @@ export function GeoJsonEditorLayer<
     groupOptions,
     mode,
     onCommand,
+    onBooleanOperationPreviewChange,
     onEditModeChange,
     onEditorSelectionChange,
     onFeatureCollectionChange,
@@ -475,6 +506,11 @@ export function GeoJsonEditorLayer<
     snapOptions,
     validateEdit,
   ]);
+
+  useEffect(() => {
+    onBooleanOperationPreviewChange?.(booleanPreviewCollection);
+    surface?.requestRender();
+  }, [booleanPreviewCollection, onBooleanOperationPreviewChange, surface]);
 
   useEffect(() => {
     if (!surface || surface.display !== "flat" || mode === "none") {
@@ -513,7 +549,8 @@ export function GeoJsonEditorLayer<
         current.mode === "select" ||
         current.mode === "move" ||
         current.mode === "reshape" ||
-        current.mode === "delete"
+        current.mode === "delete" ||
+        isBooleanEditMode(current.mode)
       ) {
         updateSnapTarget(null);
         emitEditorSelection(EMPTY_EDITOR_SELECTION);
@@ -690,6 +727,7 @@ export function GeoJsonEditorLayer<
           }
         }
 
+        renderBooleanPreview(layer, flat, booleanPreviewCollection);
         renderDraft(layer, flat, draftRef.current, draftPreviewRef.current, mode);
         renderSnapIndicator(layer, flat, snapTargetRef.current, snapIndicatorColor);
       },
@@ -702,6 +740,7 @@ export function GeoJsonEditorLayer<
     handleColor,
     midpointHandleColor,
     mode,
+    booleanPreviewCollection,
     resolvedLayerId,
     resolvedSelection,
     selectedFeatureIdSet,
@@ -867,6 +906,11 @@ export function GeoJsonEditorLayer<
   }
 
   function selectFeature(featureId: string, event: FlatFeaturePointerEvent = {}) {
+    if (isBooleanEditMode(mode) && selectedFeatureIdSet.has(featureId)) {
+      commitBooleanOperation();
+      return;
+    }
+
     if (mode === "delete") {
       const feature = features.find((candidate) => candidate.id === featureId);
 
@@ -1020,6 +1064,10 @@ export function GeoJsonEditorLayer<
     }
 
     if (command === "finish-draft") {
+      if (isBooleanEditMode(current.mode)) {
+        return commitBooleanOperation();
+      }
+
       completeDraft();
       return current.mode === "draw-line" || current.mode === "draw-polygon";
     }
@@ -1203,6 +1251,92 @@ export function GeoJsonEditorLayer<
       ...latestRef.current.resolvedSelection,
       vertexHandle: null,
     };
+  }
+
+  function commitBooleanOperation() {
+    const current = latestRef.current;
+
+    if (!isBooleanEditMode(current.mode)) {
+      return false;
+    }
+
+    const selectedFeatures = getSelectedBooleanFeatures(features, current.resolvedSelection);
+    const result = createBooleanOperationResult(features, current.resolvedSelection, current.mode);
+
+    if (!result || result.features.length === 0 || selectedFeatures.length < 2) {
+      current.onBooleanOperationPreviewChange?.(null);
+      return false;
+    }
+
+    if (current.mode === "boolean-difference") {
+      const subject = selectedFeatures[0]!;
+      const masks = selectedFeatures.slice(1);
+      const resultFeature = result.features[0]!;
+
+      emitOperation(
+        {
+          operations: [
+            {
+              feature: {
+                ...cloneFeature(subject.feature),
+                geometry: resultFeature.geometry,
+                properties: resultFeature.properties as TProperties,
+              },
+              featureId: subject.id,
+              previousFeature: cloneFeature(subject.feature),
+              reason: "boolean-difference",
+              type: "update",
+            },
+            ...masks.map((feature) => ({
+              featureId: feature.id,
+              previousFeature: cloneFeature(feature.feature),
+              type: "delete" as const,
+            })),
+          ],
+          reason: "boolean-difference",
+          type: "batch",
+        },
+        undefined,
+        createEditorSelection([subject.id], subject.id),
+      );
+      return true;
+    }
+
+    const reason =
+      current.mode === "boolean-union" ? "boolean-union" : "boolean-intersection";
+    const createdFeatures = result.features.map((feature) =>
+      ensureCreatedFeatureId(
+        {
+          ...feature,
+          id: undefined,
+        },
+        createCounterRef,
+      ),
+    );
+    const createdIds = createdFeatures.map((feature) => getCreatedFeatureId(feature));
+
+    emitOperation(
+      {
+        operations: [
+          ...selectedFeatures.map((feature) => ({
+            featureId: feature.id,
+            previousFeature: cloneFeature(feature.feature),
+            type: "delete" as const,
+          })),
+          ...createdFeatures.map((feature, index) => ({
+            feature,
+            featureId: createdIds[index]!,
+            type: "create" as const,
+          })),
+        ],
+        reason,
+        type: "batch",
+      },
+      undefined,
+      createEditorSelection(createdIds, createdIds[0] ?? null),
+    );
+
+    return true;
   }
 
   function applyPolygonConstraintToEditOperation(
@@ -1641,6 +1775,88 @@ function createEditableFeatures<TProperties extends Record<string, unknown>>(
   });
 }
 
+function createBooleanOperationResult<TProperties extends Record<string, unknown>>(
+  features: Array<EditableFeature<TProperties>>,
+  selection: GeoJsonEditorSelection,
+  mode: GeoJsonEditMode,
+): GeoJsonMapSource<TProperties> | null {
+  if (!isBooleanEditMode(mode)) {
+    return null;
+  }
+
+  const selectedFeatures = getSelectedBooleanFeatures(features, selection);
+
+  if (selectedFeatures.length < 2) {
+    return null;
+  }
+
+  const options = {
+    getProperties: ({
+      defaultProperties,
+      sourceFeatures,
+    }: {
+      defaultProperties: Record<string, unknown>;
+      sourceFeatures: Array<TemporalGeoJsonGeometryFeature<TProperties>>;
+    }) =>
+      ({
+        ...sourceFeatures[0]?.properties,
+        ...defaultProperties,
+      }) as TProperties,
+  };
+  const selectedFeatureCollection = {
+    features: selectedFeatures.map((feature) => cloneFeature(feature.feature)),
+    type: "FeatureCollection" as const,
+  };
+
+  if (mode === "boolean-union") {
+    const result = unionGeoJsonFeatures(selectedFeatureCollection, options);
+
+    return result.collection.features.length > 0 ? result.collection : null;
+  }
+
+  if (mode === "boolean-difference") {
+    const [subject, ...masks] = selectedFeatures;
+    const result = differenceGeoJsonFeatures(
+      cloneFeature(subject!.feature),
+      masks.map((feature) => cloneFeature(feature.feature)),
+      options,
+    );
+
+    return result.collection.features.length > 0 ? result.collection : null;
+  }
+
+  let current: GeoJsonMapSource<TProperties> = {
+    features: [cloneFeature(selectedFeatures[0]!.feature)],
+    type: "FeatureCollection",
+  };
+
+  for (const feature of selectedFeatures.slice(1)) {
+    const result = intersectGeoJsonFeatures(current, cloneFeature(feature.feature), options);
+
+    if (result.collection.features.length === 0) {
+      return null;
+    }
+
+    current = result.collection;
+  }
+
+  return current.features.length > 0 ? current : null;
+}
+
+function getSelectedBooleanFeatures<TProperties extends Record<string, unknown>>(
+  features: Array<EditableFeature<TProperties>>,
+  selection: GeoJsonEditorSelection,
+) {
+  const featuresById = new Map(features.map((feature) => [feature.id, feature]));
+
+  return selection.featureIds
+    .map((featureId) => featuresById.get(featureId))
+    .filter(
+      (feature): feature is EditableFeature<TProperties> =>
+        Boolean(feature?.editable) && isPolygonLikeGeometry(feature!.geometry),
+    );
+}
+
 function bindFeatureLayer<TProperties extends Record<string, unknown>>(
   layer: FlatGeometryLayer,
   options: {
@@ -1738,6 +1954,46 @@ function renderDraft(
       weight: 2,
     })
     .addTo(layer);
+}
+
+function renderBooleanPreview<TProperties extends Record<string, unknown>>(
+  layer: FlatLayerGroup,
+  flat: FlatLayerFactory,
+  preview: GeoJsonMapSource<TProperties> | null,
+) {
+  if (!preview) {
+    return;
+  }
+
+  for (const feature of preview.features) {
+    const geometry = normalizeSupportedGeometry(feature.geometry);
+
+    if (!geometry) {
+      continue;
+    }
+
+    const layers = createFlatGeometryLayers(geometry, {
+      className: "mb-maps__editor-boolean-preview",
+      flat,
+      interactive: false,
+      selected: false,
+      style: {
+        lineColor: "#7c3aed",
+        lineOpacity: 0.92,
+        lineWidth: 3,
+        pointColor: "#7c3aed",
+        pointRadius: 6,
+        polygonFillColor: "#a3e635",
+        polygonFillOpacity: 0.28,
+        polygonStrokeColor: "#7c3aed",
+        polygonStrokeWidth: 2,
+      },
+    });
+
+    for (const geometryLayer of layers) {
+      geometryLayer.addTo(layer);
+    }
+  }
 }
 
 function renderSnapIndicator(
@@ -2061,6 +2317,20 @@ function getCommandEditMode(command: GeoJsonEditorCommand): GeoJsonEditMode | nu
     default:
       return null;
   }
+}
+
+function isBooleanEditMode(mode: GeoJsonEditMode) {
+  return (
+    mode === "boolean-union" ||
+    mode === "boolean-intersection" ||
+    mode === "boolean-difference"
+  );
+}
+
+function isPolygonLikeGeometry(
+  geometry: TemporalGeoJsonSupportedGeometry,
+): geometry is Extract<TemporalGeoJsonSupportedGeometry, { type: "Polygon" | "MultiPolygon" }> {
+  return geometry.type === "Polygon" || geometry.type === "MultiPolygon";
 }
 
 function isKeyboardShortcutTargetEditable(target: EventTarget | null) {

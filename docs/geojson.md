@@ -54,6 +54,54 @@ not reconstruct `GeometryCollection` output. Polygon topology planning is
 polygon-focused, and invalid polygon repair is limited to the existing
 boolean-operation fallbacks.
 
+## Polygon Operations
+
+Use the GeoJSON operations helpers for planar polygon overlays and relationship
+queries. Overlay operations only use `Polygon` and `MultiPolygon` geometries;
+other geometries are skipped and reported through `issues`.
+
+```ts
+import {
+  clipGeoJsonToPolygon,
+  differenceGeoJsonFeatures,
+  intersectGeoJsonFeatures,
+  unionGeoJsonFeatures,
+} from "@moritzbrantner/maps/geojson";
+
+const intersection = intersectGeoJsonFeatures(parcelA, parcelB);
+const merged = unionGeoJsonFeatures(selectedParcels);
+const buildable = differenceGeoJsonFeatures(parcel, restrictedZones);
+const clipped = clipGeoJsonToPolygon(districts, cityBoundary);
+
+if (merged.issues.length > 0) {
+  console.warn(merged.issues);
+}
+```
+
+Default result properties include the operation name, source and target IDs,
+source and target indexes, planar area, and source/target area ratios. Pass
+`getProperties` to replace those properties. Areas are calculated in the input
+longitude/latitude coordinate plane; they are not geodesic square meters.
+
+## Spatial Relationships
+
+```ts
+import {
+  findContainingGeoJsonFeatures,
+  findOverlappingGeoJsonFeatures,
+  getGeoJsonIntersections,
+} from "@moritzbrantner/maps/geojson";
+
+const intersections = getGeoJsonIntersections(existingZones, proposedZones);
+const containedStores = findContainingGeoJsonFeatures(stores, serviceAreas);
+const overlappingParcels = findOverlappingGeoJsonFeatures(parcels);
+```
+
+Point containment supports `Point` and `MultiPoint` inputs. Polygon
+relationships support `Polygon`, `MultiPolygon`, and polygon children of
+`GeometryCollection`. Boundary points count as contained by default; set
+`includeBoundary: false` to exclude them. Polygon holes exclude contained points.
+
 ## GeoJSON-First Maps
 
 ```tsx

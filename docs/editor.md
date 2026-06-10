@@ -50,6 +50,37 @@ Shortcuts are ignored while typing in inputs.
 Use `GeoJsonEditorLayer` inside `MapView` for composed maps. Editing currently
 targets flat maps; globe maps are display and inspection surfaces.
 
+## Boolean Polygon Modes
+
+The editor supports `"boolean-union"`, `"boolean-intersection"`, and
+`"boolean-difference"` modes for selected polygon-like features. Union and
+intersection require at least two selected `Polygon` or `MultiPolygon` features
+and replace them with the derived result. Difference uses the first selected
+polygon as the subject and the remaining selected polygons as masks; masks are
+deleted only when the operation succeeds.
+
+```tsx
+<EditableGeoJsonMap
+  editMode="boolean-difference"
+  geoJson={geoJson}
+  selection={selection}
+  onBooleanOperationPreviewChange={setPreview}
+  onFeatureCollectionChange={setGeoJson}
+/>
+```
+
+Press `Enter` to commit the active boolean operation, or use
+`GeoJsonEditorLayer` with the same mode in a composed map. The emitted
+operation has `type: "batch"`, so the existing undo and redo helpers can invert
+it. Empty or failed boolean results do not mutate the collection.
+
+Boolean previews are enabled by default and are emitted through
+`onBooleanOperationPreviewChange`. The callback receives the derived
+`FeatureCollection` while mode and selection are valid, and `null` when they are
+not. For difference, selection order determines the subject. If the consuming
+app only manages a single selected ID or an unordered selected set, the editor
+falls back to feature order in the collection.
+
 ## Undo And Redo
 
 The editor stays controlled, but `createGeoJsonEditHistoryState(...)` and the
