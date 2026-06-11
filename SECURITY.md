@@ -14,3 +14,12 @@ minimal security issue without exploit details and request maintainer contact.
 
 Security reports may cover package code, published artifacts, and dependency
 vulnerabilities that affect consumers.
+
+## Consumer-Controlled Markup
+
+`FlatDivIconOptions.html` is treated as trusted markup for compatibility with
+DOM marker APIs. Do not pass unsanitized user-authored HTML into marker icons.
+
+The package also uses reviewed dynamic imports for optional runtime packages,
+including optional scalar-field and WASM kernel backends. These paths are for
+module specifiers controlled by application code, not for arbitrary user input.

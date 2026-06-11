@@ -46,6 +46,7 @@ jobs:
         bun run build
         bun run verify:entry-bundles
         bun run verify:package-consumer
+        bun run verify:package-size
         bun run pack:dry
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}

@@ -82,7 +82,7 @@
     "dev": "vite --host 0.0.0.0",
     "format": "oxfmt --write demo package.json .oxfmtrc.json",
     "format:check": "oxfmt --check demo package.json .oxfmtrc.json",
-    "lint": "bun run lint:static && node ./scripts/verify-package-imports.mjs ./src @/ next/ && node ./scripts/verify-package-styles.mjs .",
+    "lint": "bun run lint:static && node ./scripts/verify-package-imports.mjs ./src @/ next/ && node ./scripts/verify-package-styles.mjs . && bun run verify:security-sensitive",
     "lint:static": "oxlint src demo e2e",
     "prepack": "bun run build",
     "check-types": "tsc --noEmit",
@@ -90,6 +90,8 @@
     "test:browser": "playwright test",
     "test:browser:update": "playwright test --update-snapshots",
     "verify:api-surface": "node ./scripts/verify-api-surface.mjs",
+    "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
+    "verify:audit": "bun audit --audit-level high",
     "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
@@ -110,7 +112,7 @@
     "three": "^0.184.0"
   },
   "devDependencies": {
-    "@moritzbrantner/timeline-editor": "^1.0.0",
+    "@moritzbrantner/timeline-editor": "^1.0.1",
     "@moritzbrantner/ui": "^1.0.0",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.3.0",
@@ -136,7 +138,7 @@
     "vitest": "^4.1.8"
   },
   "peerDependencies": {
-    "@moritzbrantner/timeline-editor": "^1.0.0",
+    "@moritzbrantner/timeline-editor": "^1.0.1",
     "@moritzbrantner/ui": "^1.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

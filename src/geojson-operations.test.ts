@@ -69,6 +69,24 @@ describe("@moritzbrantner/maps GeoJSON operations", () => {
     expect(result.collection.features[0]?.properties?.area).toBe(12);
   });
 
+  test("boolean operations do not mutate input feature collections", () => {
+    const source = collection([
+      polygonFeature("source", squareRing(0, 0, 4, 4)),
+      polygonFeature("source-2", squareRing(5, 0, 6, 1)),
+    ]);
+    const mask = collection([polygonFeature("mask", squareRing(1, 1, 3, 3))]);
+    const sourceBefore = cloneJson(source);
+    const maskBefore = cloneJson(mask);
+
+    intersectGeoJsonFeatures(source, mask);
+    unionGeoJsonFeatures(source);
+    differenceGeoJsonFeatures(source, mask);
+    clipGeoJsonToPolygon(source, mask);
+
+    expect(source).toEqual(sourceBefore);
+    expect(mask).toEqual(maskBefore);
+  });
+
   test("clips one output feature per source polygon", () => {
     const result = clipGeoJsonToPolygon(
       collection([
@@ -141,6 +159,28 @@ describe("@moritzbrantner/maps GeoJSON operations", () => {
         featureId: "invalid",
       }),
     ]);
+  });
+
+  test("empty feature collections produce controlled empty operation results", () => {
+    const empty = collection([]);
+    const mask = polygonFeature("mask", squareRing(0, 0, 1, 1));
+
+    expect(unionGeoJsonFeatures(empty)).toEqual({
+      collection: { features: [], type: "FeatureCollection" },
+      issues: [],
+    });
+    expect(intersectGeoJsonFeatures(empty, mask)).toEqual({
+      collection: { features: [], type: "FeatureCollection" },
+      issues: [],
+    });
+    expect(differenceGeoJsonFeatures(empty, mask)).toEqual({
+      collection: { features: [], type: "FeatureCollection" },
+      issues: [],
+    });
+    expect(clipGeoJsonToPolygon(empty, mask)).toEqual({
+      collection: { features: [], type: "FeatureCollection" },
+      issues: [],
+    });
   });
 
   test("supports MultiPolygon inputs", () => {
@@ -299,4 +339,8 @@ function squareRing(minX: number, minY: number, maxX: number, maxY: number): Geo
     [minX, maxY],
     [minX, minY],
   ];
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }

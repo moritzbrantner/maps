@@ -9,6 +9,7 @@ import {
   type MapsKernelDiagnostic,
 } from "./runtime";
 import { resampleLineFlat, resampleRingFlat } from "./typescript-kernels";
+import { loadMapsWasmKernelRuntime } from "./wasm-kernels";
 
 describe("@moritzbrantner/maps kernel runtime", () => {
   afterEach(() => {
@@ -37,6 +38,12 @@ describe("@moritzbrantner/maps kernel runtime", () => {
     expect(initialized).toBe(false);
     expect(Array.from(output)).toEqual([0, 0, 5, 0, 10, 0]);
     expect(diagnostics.some((event) => event.mode === "fallback")).toBe(true);
+  });
+
+  test("reports a controlled error when no WASM package is configured", async () => {
+    await expect(loadMapsWasmKernelRuntime()).rejects.toThrow(
+      "No public WASM kernel package configured.",
+    );
   });
 
   test("includes a clear fallback reason when WASM initialization fails", async () => {
