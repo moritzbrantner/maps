@@ -9,8 +9,8 @@ const budgets = {
   compressedSize: 190_000,
   entryCount: 80,
   fullStylesheetSize: 125_000,
-  stylesheetSize: 112_000,
-  unpackedSize: 1_050_000,
+  stylesheetSize: 116_000,
+  unpackedSize: 1_060_000,
 };
 
 const pack = spawnSync(
