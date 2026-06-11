@@ -99,7 +99,7 @@ test.afterEach(async ({ page }) => {
 for (const view of visualBaselineViews) {
   test(`${view} view visual baseline${smokeVisualBaselineViews.has(view) ? " @smoke" : ""}`, async ({ page }) => {
     await openView(page, view);
-    await expect(page.locator(".demo-stage")).toHaveScreenshot(`${view.toLowerCase()}-desktop.png`);
+    await expectDemoStageScreenshot(page, `${view.toLowerCase()}-desktop.png`);
   });
 }
 
@@ -135,7 +135,7 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
 
   await expect(page.locator(".mb-temporal-map__current-time")).not.toHaveText(initialTime ?? "");
   expect(await viewportValue.textContent()).toBe(initialViewport);
-  await expect(page.locator(".demo-stage")).toHaveScreenshot("timeline-desktop.png");
+  await expectDemoStageScreenshot(page, "timeline-desktop.png");
 });
 
 test("Interpolation view exposes algorithm and keyframe controls", async ({ page }) => {
@@ -264,7 +264,7 @@ test("Globe view renders nonblank canvas and responds to dragging @smoke", async
   await openView(page, "Clusters");
   await openView(page, "Globe");
   await waitForDemoMapIdle(page);
-  await expect(page.locator(".demo-stage")).toHaveScreenshot("globe-desktop.png");
+  await expectDemoStageScreenshot(page, "globe-desktop.png");
 });
 
 test("Measurement mode activates measuring state @smoke", async ({ page }) => {
@@ -272,7 +272,7 @@ test("Measurement mode activates measuring state @smoke", async ({ page }) => {
   await page.getByRole("button", { name: "Measure" }).click();
 
   await expect(page.locator(".mb-maps--measuring")).toBeVisible();
-  await expect(page.locator(".demo-stage")).toHaveScreenshot("measurement-desktop.png");
+  await expectDemoStageScreenshot(page, "measurement-desktop.png");
 });
 
 test("Editor mode controls update without visual breakage @smoke", async ({ page }) => {
@@ -281,7 +281,7 @@ test("Editor mode controls update without visual breakage @smoke", async ({ page
   await expect(
     page.locator(".demo-editor-facts").filter({ hasText: "draw-polygon" }),
   ).toBeVisible();
-  await expect(page.locator(".demo-stage")).toHaveScreenshot("editor-draw-polygon-desktop.png");
+  await expectDemoStageScreenshot(page, "editor-draw-polygon-desktop.png");
 });
 
 test("Editor mode enters polygon drawing mode", async ({ page }) => {
@@ -432,6 +432,11 @@ async function hasHorizontalOverflow(page: Page) {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
+}
+
+async function expectDemoStageScreenshot(page: Page, name: string) {
+  await waitForDemoMapIdle(page);
+  await expect(page.locator(".demo-stage")).toHaveScreenshot(name, { timeout: 15_000 });
 }
 
 async function getDemoMapCenter(page: Page) {
