@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { getBoundsFromGeoJson, type GeoJsonMapSource } from "./geojson-source";
@@ -1656,6 +1656,13 @@ export function EditableGeoJsonMap<
   );
   const [uncontrolledTimelineDocument, setUncontrolledTimelineDocument] =
     useState(generatedTimelineDocument);
+  const handleEditorMapReady = useCallback(
+    (map: MapLibreMap) => {
+      map.boxZoom?.disable();
+      onMapReady?.(map);
+    },
+    [onMapReady],
+  );
   const resolvedTimelineDocument = timelineDocument ?? uncontrolledTimelineDocument;
   const resolvedTimelineTime = timelineActiveTimeMs ?? resolvedTimelineDocument.currentTimeMs ?? 0;
   const transformedGeoJson =
@@ -1692,7 +1699,7 @@ export function EditableGeoJsonMap<
       maxZoom={maxZoom}
       onMapControllerReady={onMapControllerReady}
       onMapContextMenu={onMapContextMenu}
-      onMapReady={onMapReady}
+      onMapReady={handleEditorMapReady}
       onViewStateChange={onViewStateChange}
       renderMapContextMenu={renderMapContextMenu}
       showAttributionControl={showAttributionControl}

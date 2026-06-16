@@ -14,8 +14,6 @@ on:
       - "vite.config.*"
       - ".github/workflows/browser.yml"
   workflow_dispatch:
-  schedule:
-    - cron: "41 4 * * 2"
 
 permissions:
   contents: read

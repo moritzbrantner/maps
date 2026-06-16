@@ -127,8 +127,6 @@ test("Timeline view keeps a stable viewport while seeking through playback", asy
   await expect(slider).toBeVisible();
   await expect(page.getByText("08:00").first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Jump to start" }).click();
-
   const initialTime = await page.locator(".mb-temporal-map__current-time").textContent();
 
   await slider.fill("70");
@@ -225,6 +223,12 @@ test("Globe view renders nonblank canvas and responds to dragging @smoke", async
     .poll(() =>
       page.evaluate(
         () =>
+          (
+            window as typeof window & {
+              __mbMapsDemo?: { getMapProjection?: () => string | null };
+              __mbMapsDemoMap?: { getProjection?: () => { type?: string } };
+            }
+          ).__mbMapsDemo?.getMapProjection?.() ??
           (
             window as typeof window & {
               __mbMapsDemoMap?: { getProjection?: () => { type?: string } };
@@ -441,13 +445,25 @@ async function expectDemoStageScreenshot(page: Page, name: string) {
 
 async function getDemoMapCenter(page: Page) {
   return page.evaluate(() => {
-    const map = (
-      window as typeof window & {
-        __mbMapsDemoMap?: {
-          getCenter?: () => { lat?: number; lng?: number };
-        };
-      }
-    ).__mbMapsDemoMap;
+    const demoWindow = window as typeof window & {
+      __mbMapsDemo?: {
+        getViewState?: () => { center?: [number, number]; zoom?: number } | null;
+      };
+      __mbMapsDemoMap?: {
+        getCenter?: () => { lat?: number; lng?: number };
+      };
+    };
+    const probeState = demoWindow.__mbMapsDemo?.getViewState?.();
+
+    if (
+      Array.isArray(probeState?.center) &&
+      typeof probeState.center[0] === "number" &&
+      typeof probeState.center[1] === "number"
+    ) {
+      return { lat: probeState.center[1], lng: probeState.center[0] };
+    }
+
+    const map = demoWindow.__mbMapsDemoMap;
     const center = map?.getCenter?.();
 
     if (typeof center?.lat !== "number" || typeof center.lng !== "number") {
@@ -460,16 +476,21 @@ async function getDemoMapCenter(page: Page) {
 
 async function waitForDemoMapIdle(page: Page) {
   await page.evaluate(async () => {
-    const map = (
-      window as typeof window & {
-        __mbMapsDemoMap?: {
-          idle?: () => boolean;
-          isMoving?: () => boolean;
-          loaded?: () => boolean;
-          once?: (event: "idle", listener: () => void) => void;
-        };
-      }
-    ).__mbMapsDemoMap;
+    const demoWindow = window as typeof window & {
+      __mbMapsDemo?: { isMapIdle?: () => boolean | null };
+      __mbMapsDemoMap?: {
+        idle?: () => boolean;
+        isMoving?: () => boolean;
+        loaded?: () => boolean;
+        once?: (event: "idle", listener: () => void) => void;
+      };
+    };
+
+    if (demoWindow.__mbMapsDemo?.isMapIdle?.() === true) {
+      return;
+    }
+
+    const map = demoWindow.__mbMapsDemoMap;
 
     if (!map || typeof map.once !== "function") {
       return;

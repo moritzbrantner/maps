@@ -6,8 +6,6 @@ on:
       - "package.json"
       - "bun.lock"
       - ".github/workflows/security.yml"
-  schedule:
-    - cron: "53 5 * * 1"
   workflow_dispatch:
 
 permissions:

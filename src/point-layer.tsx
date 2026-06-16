@@ -522,6 +522,7 @@ function bindFlatPointDrag<TFeature>(
 ) {
   let dragStart:
     | {
+        active: boolean;
         coordinates: [number, number];
         pointer: [number, number];
       }
@@ -538,6 +539,26 @@ function bindFlatPointDrag<TFeature>(
       return;
     }
 
+    const activeDragStart = dragStart;
+
+    if (!activeDragStart) {
+      return;
+    }
+
+    if (!activeDragStart.active) {
+      const movedPixels = Math.hypot(
+        (getFlatDragPoint(event)?.x ?? 0) - activeDragStart.pointer[0],
+        (getFlatDragPoint(event)?.y ?? 0) - activeDragStart.pointer[1],
+      );
+
+      if (movedPixels < 4) {
+        return;
+      }
+
+      activeDragStart.active = true;
+      options.map.dragging?.disable?.();
+    }
+
     lastCoordinates = coordinates;
     marker.setLatLng?.(toLatLng(coordinates));
     options.onFeatureDrag?.(options.feature, coordinates);
@@ -550,15 +571,17 @@ function bindFlatPointDrag<TFeature>(
         ? getOffsetDragCoordinates(dragStart, pointerCoordinates)
         : pointerCoordinates ?? lastCoordinates;
 
-    options.map.off?.("mousemove", handleMove);
-    options.map.off?.("mouseup", handleUp);
-    options.map.dragging?.enable?.();
+    document.removeEventListener("mousemove", handleDocumentMove);
+    document.removeEventListener("mouseup", handleDocumentUp);
+    if (dragStart?.active) {
+      options.map.dragging?.enable?.();
+    }
     const container = options.map.getContainer?.();
     if (container) {
       container.style.cursor = "";
     }
 
-    if (coordinates) {
+    if (dragStart?.active && coordinates) {
       marker.setLatLng?.(toLatLng(coordinates));
       options.onFeatureDragEnd?.(options.feature, coordinates);
     }
@@ -566,26 +589,31 @@ function bindFlatPointDrag<TFeature>(
     dragStart = null;
     lastCoordinates = null;
   };
+  const handleDocumentMove = (event: MouseEvent) => {
+    handleMove(getFlatDocumentDragEvent(options.map, event));
+  };
+  const handleDocumentUp = (event: MouseEvent) => {
+    handleUp(getFlatDocumentDragEvent(options.map, event));
+  };
 
   marker.on("mousedown", (event: FlatDragEvent = {}) => {
-    suppressNativeContextMenu(event);
     const pointerCoordinates = getFlatDragCoordinates(options.map, event);
 
     dragStart = pointerCoordinates
       ? {
+          active: false,
           coordinates: options.coordinates,
           pointer: pointerCoordinates,
         }
       : null;
     lastCoordinates = options.coordinates;
     marker.bringToFront?.();
-    options.map.dragging?.disable?.();
     const container = options.map.getContainer?.();
     if (container) {
       container.style.cursor = "grabbing";
     }
-    options.map.on?.("mousemove", handleMove);
-    options.map.on?.("mouseup", handleUp);
+    document.addEventListener("mousemove", handleDocumentMove);
+    document.addEventListener("mouseup", handleDocumentUp);
   });
 }
 
@@ -594,13 +622,43 @@ function getFlatDragCoordinates(map: FlatDragMap, event: FlatDragEvent) {
     return [event.latlng.lng, event.latlng.lat] as [number, number];
   }
 
+  if (event.lngLat) {
+    return [event.lngLat.lng, event.lngLat.lat] as [number, number];
+  }
+
   if (event.containerPoint && map.containerPointToLatLng) {
     const latlng = map.containerPointToLatLng([event.containerPoint.x, event.containerPoint.y]);
 
     return [latlng.lng, latlng.lat] as [number, number];
   }
 
+  if (event.point && map.containerPointToLatLng) {
+    const latlng = map.containerPointToLatLng([event.point.x, event.point.y]);
+
+    return [latlng.lng, latlng.lat] as [number, number];
+  }
+
   return null;
+}
+
+function getFlatDragPoint(event: FlatDragEvent) {
+  return event.containerPoint ?? event.point ?? null;
+}
+
+function getFlatDocumentDragEvent(map: FlatDragMap, event: MouseEvent): FlatDragEvent {
+  const rect = map.getContainer?.().getBoundingClientRect?.();
+
+  if (!rect) {
+    return {};
+  }
+
+  return {
+    containerPoint: {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    },
+    originalEvent: event,
+  };
 }
 
 function getOffsetDragCoordinates(
@@ -635,13 +693,16 @@ type FlatDragMap = {
     disable?: () => void;
     enable?: () => void;
   };
-  getContainer?: () => { style: { cursor: string } };
-  off?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
-  on?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
+  getContainer?: () => {
+    getBoundingClientRect?: () => { left: number; top: number };
+    style: { cursor: string };
+  };
 };
 
 type FlatDragEvent = FlatFeaturePointerEvent & {
   latlng?: { lat: number; lng: number };
+  lngLat?: { lat: number; lng: number };
+  point?: { x: number; y: number };
 };
 
 type FlatPointCacheEntry = {

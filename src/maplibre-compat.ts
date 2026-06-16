@@ -305,6 +305,7 @@ abstract class MapLibreSourceLayer implements FlatLayer {
     event: string;
     handler: (event: unknown) => void;
     layerId: string;
+    mapLevel: boolean;
     publicHandler: (event?: FlatPointerEvent) => void;
   }> = [];
 
@@ -374,7 +375,11 @@ abstract class MapLibreSourceLayer implements FlatLayer {
     for (const entry of this.handlers.filter(
       (entry) => entry.event === mapEvent && entry.publicHandler === publicHandler,
     )) {
-      (this.map as unknown as EventedMap).off(entry.event, entry.layerId, entry.handler);
+      if (entry.mapLevel) {
+        (this.map as unknown as EventedMap).off(entry.event, entry.handler);
+      } else {
+        (this.map as unknown as EventedMap).off(entry.event, entry.layerId, entry.handler);
+      }
       this.handlers.splice(this.handlers.indexOf(entry), 1);
     }
     for (const entry of this.pendingHandlers.filter(
@@ -421,7 +426,11 @@ abstract class MapLibreSourceLayer implements FlatLayer {
 
   remove() {
     for (const entry of this.handlers) {
-      (this.map as unknown as EventedMap).off(entry.event, entry.layerId, entry.handler);
+      if (entry.mapLevel) {
+        (this.map as unknown as EventedMap).off(entry.event, entry.handler);
+      } else {
+        (this.map as unknown as EventedMap).off(entry.event, entry.layerId, entry.handler);
+      }
     }
     this.handlers.length = 0;
     this.tooltip?.marker?.remove?.();
@@ -454,6 +463,18 @@ abstract class MapLibreSourceLayer implements FlatLayer {
 
   private attachHandler(event: string, publicHandler: (event?: FlatPointerEvent) => void) {
     const mapEvent = event === "mouseover" ? "mouseenter" : event === "mouseout" ? "mouseleave" : event;
+    const seenEvents = new WeakSet<object>();
+    const emit = (mapEventObject: unknown) => {
+      if (mapEventObject && typeof mapEventObject === "object") {
+        if (seenEvents.has(mapEventObject)) {
+          return;
+        }
+
+        seenEvents.add(mapEventObject);
+      }
+
+      publicHandler(toFlatPointerEvent(mapEventObject));
+    };
 
     for (const layerId of this.layerIds) {
       if (
@@ -464,12 +485,45 @@ abstract class MapLibreSourceLayer implements FlatLayer {
         continue;
       }
 
-      const handler = (mapEventObject: unknown) => {
-        publicHandler(toFlatPointerEvent(mapEventObject));
-      };
+      const handler = (mapEventObject: unknown) => emit(mapEventObject);
 
       (this.map as unknown as EventedMap).on(mapEvent, layerId, handler);
-      this.handlers.push({ event: mapEvent, handler, layerId, publicHandler });
+      this.handlers.push({ event: mapEvent, handler, layerId, mapLevel: false, publicHandler });
+
+      if (!usesMapLevelHitTestFallback(mapEvent)) {
+        continue;
+      }
+
+      const fallbackHandler = (mapEventObject: unknown) => {
+        const point = (mapEventObject as { point?: { x: number; y: number } } | undefined)?.point;
+
+        if (!point || !this.map.getLayer(layerId)) {
+          return;
+        }
+
+        const hits = this.map.queryRenderedFeatures(
+          [
+            [point.x - 6, point.y - 6],
+            [point.x + 6, point.y + 6],
+          ],
+          { layers: [layerId] },
+        );
+
+        if (hits.length === 0) {
+          return;
+        }
+
+        emit(mapEventObject);
+      };
+
+      (this.map as unknown as EventedMap).on(mapEvent, fallbackHandler);
+      this.handlers.push({
+        event: mapEvent,
+        handler: fallbackHandler,
+        layerId,
+        mapLevel: true,
+        publicHandler,
+      });
     }
   }
 }
@@ -922,9 +976,19 @@ function toFlatPointerEvent(event: unknown): FlatPointerEvent {
 }
 
 type EventedMap = {
-  off: (event: string, layerId: string, handler: (event: unknown) => void) => void;
-  on: (event: string, layerId: string, handler: (event: unknown) => void) => void;
+  off: {
+    (event: string, handler: (event: unknown) => void): void;
+    (event: string, layerId: string, handler: (event: unknown) => void): void;
+  };
+  on: {
+    (event: string, handler: (event: unknown) => void): void;
+    (event: string, layerId: string, handler: (event: unknown) => void): void;
+  };
 };
+
+function usesMapLevelHitTestFallback(event: string) {
+  return event === "click" || event === "contextmenu" || event === "dblclick" || event === "mousedown";
+}
 
 function getMarkerConstructor(map: MapLibreMap) {
   return (map as unknown as { _mbMarkerConstructor?: typeof import("maplibre-gl").Marker })
