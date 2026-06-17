@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   BubbleMap,
+  ClusterLayer,
   ClusteredMap,
   EngineGeoJsonLayer,
   FlowLayer,
@@ -189,6 +190,7 @@ const flatMock = vi.hoisted(() => {
     const layer: Layer & {
       addTo: (group: MockLayerGroup) => typeof layer;
       on: (event: string, handler: Handler) => typeof layer;
+      remove: () => typeof layer;
     } = {
       handlers: new Map(),
       latLng,
@@ -196,6 +198,7 @@ const flatMock = vi.hoisted(() => {
       options,
       type,
       addTo(group: MockLayerGroup) {
+        (this as typeof layer & { group?: MockLayerGroup }).group = group;
         group.addLayer(this);
         return this;
       },
@@ -207,6 +210,15 @@ const flatMock = vi.hoisted(() => {
 
         handlers.push(handler);
         this.handlers.set(event, handlers);
+
+        return this;
+      },
+      remove() {
+        const group = (this as typeof layer & { group?: MockLayerGroup }).group;
+
+        if (group) {
+          group.layers = group.layers.filter((candidate) => candidate !== this);
+        }
 
         return this;
       },
@@ -1222,6 +1234,232 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(group?.layers).toHaveLength(1);
     expect(group?.layers[0]).toBe(marker);
     expect(group?.layers[0]?.latLng).toEqual([41, -73]);
+  });
+
+  test("removes stale flat point markers when features disappear", async () => {
+    const { rerender } = render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Point deletion"
+        showAttributionControl={false}
+      >
+        <PointLayer points={[{ id: "store-1", latitude: 40, longitude: -74 }]} />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Point deletion").getAttribute("data-map-ready")).toBe("true");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+
+    expect(group?.layers).toHaveLength(1);
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Point deletion"
+        showAttributionControl={false}
+      >
+        <PointLayer points={[]} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.layers).toHaveLength(0);
+  });
+
+  test("keeps equivalent cluster layer rerenders mounted and removes stale entries", async () => {
+    const { rerender } = render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Cluster reconciler"
+        showAttributionControl={false}
+      >
+        <ClusterLayer points={[{ id: "store-1", latitude: 40, longitude: -74 }]} />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Cluster reconciler").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const marker = group?.layers[0];
+    const initialClearCount = group?.clearCount ?? 0;
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Cluster reconciler"
+        showAttributionControl={false}
+      >
+        <ClusterLayer points={[{ id: "store-1", latitude: 40, longitude: -74 }]} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.clearCount).toBe(initialClearCount);
+    expect(group?.layers[0]).toBe(marker);
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Cluster reconciler"
+        showAttributionControl={false}
+      >
+        <ClusterLayer points={[]} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.layers).toHaveLength(0);
+  });
+
+  test("keeps equivalent flow layer rerenders mounted and removes stale entries", async () => {
+    const flow = { from: [-74, 40], id: "flow-1", to: [-73, 41] } satisfies MapFlow;
+    const { rerender } = render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Flow reconciler"
+        showAttributionControl={false}
+      >
+        <FlowLayer flows={[flow]} />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Flow reconciler").getAttribute("data-map-ready")).toBe("true");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const line = group?.layers[0];
+    const initialClearCount = group?.clearCount ?? 0;
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Flow reconciler"
+        showAttributionControl={false}
+      >
+        <FlowLayer flows={[flow]} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.clearCount).toBe(initialClearCount);
+    expect(group?.layers[0]).toBe(line);
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Flow reconciler"
+        showAttributionControl={false}
+      >
+        <FlowLayer flows={[]} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.layers).toHaveLength(0);
+  });
+
+  test("keeps equivalent GeoJSON layer rerenders mounted and removes stale entries", async () => {
+    const source: GeoJsonMapSource = {
+      features: [
+        {
+          geometry: { coordinates: [-74, 40], type: "Point" },
+          properties: {},
+          type: "Feature",
+        },
+      ],
+      type: "FeatureCollection",
+    };
+    const { rerender } = render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="GeoJSON reconciler"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer featureCollection={source} />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("GeoJSON reconciler").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const point = group?.layers[0];
+    const initialClearCount = group?.clearCount ?? 0;
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="GeoJSON reconciler"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer featureCollection={source} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.clearCount).toBe(initialClearCount);
+    expect(group?.layers[0]).toBe(point);
+
+    rerender(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="GeoJSON reconciler"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer featureCollection={{ features: [], type: "FeatureCollection" }} />
+      </MapView>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(group?.layers).toHaveLength(0);
   });
 
   test("renders multiple flat layers of the same kind independently", async () => {

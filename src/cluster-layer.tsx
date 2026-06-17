@@ -22,7 +22,8 @@ import {
 import { escapeHtml, joinClassNames, toLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
-import type { FlatLayer, FlatLayerGroup } from "./maplibre-compat";
+import type { FlatLayer } from "./maplibre-compat";
+import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
 
 export type ClusterLayerProps<TProperties = Record<string, unknown>> =
   MapFeatureInteractionProps<AggregatedMapFeature<TProperties>> & {
@@ -102,195 +103,215 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
       emitViewportSummary(aggregation.summary, lastViewportSummaryKeyRef, onViewportAggregationChange);
 
-      const cache = flatFeatureCacheRef.current;
-      const seen = new Set<string>();
-
-      for (const feature of aggregation.features) {
-        const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-        const featureKey = getFlatClusterFeatureKey(feature, getFeatureId);
-        const coordinatesKey = createFlatClusterCoordinatesKey(feature.coordinates);
-        const signature = createFlatClusterSignature({
-          feature,
-          hovered,
-          isMeasuring,
-          selected,
-        });
-        const cached = cache.get(featureKey);
-
-        seen.add(featureKey);
-
-        if (cached?.signature === signature) {
-          if (cached.coordinatesKey !== coordinatesKey) {
-            for (const cachedLayer of cached.layers) {
-              cachedLayer.setLatLng?.(toLatLng(feature.coordinates));
-            }
-            cached.coordinatesKey = coordinatesKey;
-          }
-          continue;
-        }
-
-        if (cached) {
-          removeFlatClusterCacheEntry(layer, cached);
-        }
-
-        if (feature.kind === "cluster") {
-          const marker = flat.circleMarker(toLatLng(feature.coordinates), {
-            className: joinClassNames(
-              "mb-maps__cluster-marker",
-              hovered && "mb-maps__feature--hovered",
-              selected && "mb-maps__feature--selected",
-            ),
-            color: "#ffffff",
-            fillColor: getClusterColor(feature.pointCount),
-            fillOpacity: 0.9,
-            interactive: !isMeasuring,
-            opacity: 1,
-            radius: getClusterRadius(feature.pointCount),
-            weight: selected ? 3 : 2,
+      reconcileFlatLayerEntries<FlatClusterCacheEntry>({
+        cache: flatFeatureCacheRef.current,
+        layer,
+        plans: aggregation.features.map((feature) => {
+          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+          const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
+          const featureKey = getFlatClusterFeatureKey(feature, getFeatureId);
+          const coordinatesKey = createFlatClusterCoordinatesKey(feature.coordinates);
+          const signature = createFlatClusterSignature({
+            feature,
+            hovered,
+            isMeasuring,
+            selected,
           });
 
-          if (!isMeasuring) {
-            marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-              map.setView(toLatLng(feature.coordinates), feature.expansionZoom);
-              currentSurface.setViewState(
-                {
-                  center: feature.coordinates,
-                  zoom: feature.expansionZoom,
-                },
-                "cluster-expand",
-              );
-              currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-                getFeatureId,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeaturePopup,
-              });
-            });
-            marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
-              suppressNativeContextMenu(event);
-              currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-                coordinates: feature.coordinates,
-                getFeatureId,
-                onFeatureContextMenu,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeatureContextMenu,
-                renderFeaturePopup,
-              });
-            });
-            marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-              map.getContainer().style.cursor = "pointer";
-              currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            });
-            marker.on("mouseout", () => {
-              map.getContainer().style.cursor = "";
-              currentSurface.handleFeatureHover(null, null, {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            });
-          }
+          return {
+            key: featureKey,
+            render: () => {
+              if (feature.kind === "cluster") {
+                const marker = flat.circleMarker(toLatLng(feature.coordinates), {
+                  className: joinClassNames(
+                    "mb-maps__cluster-marker",
+                    hovered && "mb-maps__feature--hovered",
+                    selected && "mb-maps__feature--selected",
+                  ),
+                  color: "#ffffff",
+                  fillColor: getClusterColor(feature.pointCount),
+                  fillOpacity: 0.9,
+                  interactive: !isMeasuring,
+                  opacity: 1,
+                  radius: getClusterRadius(feature.pointCount),
+                  weight: selected ? 3 : 2,
+                });
 
-          marker.addTo(layer);
-          const countMarker = flat
-            .marker(toLatLng(feature.coordinates), {
-              icon: flat.divIcon({
-                className: "mb-maps__cluster-count",
-                html: escapeHtml(feature.pointCountAbbreviated),
-                iconAnchor: [18, 18],
-                iconSize: [36, 36],
-              }),
-              interactive: false,
-            })
-            .addTo(layer);
-          cache.set(featureKey, {
-            coordinatesKey,
-            layers: [marker, countMarker],
+                if (!isMeasuring) {
+                  marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                    map.setView(toLatLng(feature.coordinates), feature.expansionZoom);
+                    currentSurface.setViewState(
+                      {
+                        center: feature.coordinates,
+                        zoom: feature.expansionZoom,
+                      },
+                      "cluster-expand",
+                    );
+                    currentSurface.handleFeatureClick(
+                      feature,
+                      getFlatFeaturePosition(map, feature.coordinates, event),
+                      {
+                        getFeatureId,
+                        onFeatureSelect,
+                        onSelectedFeatureIdChange,
+                        renderFeaturePopup,
+                      },
+                    );
+                  });
+                  marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
+                    suppressNativeContextMenu(event);
+                    currentSurface.handleFeatureContextMenu(
+                      feature,
+                      getFlatFeaturePosition(map, feature.coordinates, event),
+                      {
+                        coordinates: feature.coordinates,
+                        getFeatureId,
+                        onFeatureContextMenu,
+                        onFeatureSelect,
+                        onSelectedFeatureIdChange,
+                        renderFeatureContextMenu,
+                        renderFeaturePopup,
+                      },
+                    );
+                  });
+                  marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                    map.getContainer().style.cursor = "pointer";
+                    currentSurface.handleFeatureHover(
+                      feature,
+                      getFlatFeaturePosition(map, feature.coordinates, event),
+                      {
+                        getFeatureId,
+                        onHoveredFeatureIdChange,
+                        onFeatureHover,
+                        renderFeatureTooltip,
+                      },
+                    );
+                  });
+                  marker.on("mouseout", () => {
+                    map.getContainer().style.cursor = "";
+                    currentSurface.handleFeatureHover(null, null, {
+                      getFeatureId,
+                      onHoveredFeatureIdChange,
+                      onFeatureHover,
+                      renderFeatureTooltip,
+                    });
+                  });
+                }
+
+                marker.addTo(layer);
+                const countMarker = flat
+                  .marker(toLatLng(feature.coordinates), {
+                    icon: flat.divIcon({
+                      className: "mb-maps__cluster-count",
+                      html: escapeHtml(feature.pointCountAbbreviated),
+                      iconAnchor: [18, 18],
+                      iconSize: [36, 36],
+                    }),
+                    interactive: false,
+                  })
+                  .addTo(layer);
+
+                return {
+                  coordinatesKey,
+                  layers: [marker, countMarker],
+                  signature,
+                };
+              }
+
+              const marker = flat.circleMarker(toLatLng(feature.coordinates), {
+                className: joinClassNames(
+                  "mb-maps__point-marker",
+                  hovered && "mb-maps__feature--hovered",
+                  selected && "mb-maps__feature--selected",
+                ),
+                color: "#ffffff",
+                fillColor: "#0f172a",
+                fillOpacity: 0.92,
+                interactive: !isMeasuring,
+                opacity: 1,
+                radius: 6,
+                weight: selected ? 3 : 2,
+              });
+
+              if (!isMeasuring) {
+                marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                  currentSurface.handleFeatureClick(
+                    feature,
+                    getFlatFeaturePosition(map, feature.coordinates, event),
+                    {
+                      getFeatureId,
+                      onFeatureSelect,
+                      onSelectedFeatureIdChange,
+                      renderFeaturePopup,
+                    },
+                  );
+                });
+                marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
+                  suppressNativeContextMenu(event);
+                  currentSurface.handleFeatureContextMenu(
+                    feature,
+                    getFlatFeaturePosition(map, feature.coordinates, event),
+                    {
+                      coordinates: feature.coordinates,
+                      getFeatureId,
+                      onFeatureContextMenu,
+                      onFeatureSelect,
+                      onSelectedFeatureIdChange,
+                      renderFeatureContextMenu,
+                      renderFeaturePopup,
+                    },
+                  );
+                });
+                marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                  map.getContainer().style.cursor = "pointer";
+                  currentSurface.handleFeatureHover(
+                    feature,
+                    getFlatFeaturePosition(map, feature.coordinates, event),
+                    {
+                      getFeatureId,
+                      onHoveredFeatureIdChange,
+                      onFeatureHover,
+                      renderFeatureTooltip,
+                    },
+                  );
+                });
+                marker.on("mouseout", () => {
+                  map.getContainer().style.cursor = "";
+                  currentSurface.handleFeatureHover(null, null, {
+                    getFeatureId,
+                    onHoveredFeatureIdChange,
+                    onFeatureHover,
+                    renderFeatureTooltip,
+                  });
+                });
+              }
+
+              marker.addTo(layer);
+              return {
+                coordinatesKey,
+                layers: [marker],
+                signature,
+              };
+            },
             signature,
-          });
-          continue;
-        }
+            update: (entry) => {
+              if (entry.coordinatesKey === coordinatesKey) {
+                return true;
+              }
 
-        const marker = flat.circleMarker(toLatLng(feature.coordinates), {
-          className: joinClassNames(
-            "mb-maps__point-marker",
-            hovered && "mb-maps__feature--hovered",
-            selected && "mb-maps__feature--selected",
-          ),
-          color: "#ffffff",
-          fillColor: "#0f172a",
-          fillOpacity: 0.92,
-          interactive: !isMeasuring,
-          opacity: 1,
-          radius: 6,
-          weight: selected ? 3 : 2,
-        });
+              const updated = entry.layers.every((cachedLayer) =>
+                Boolean(cachedLayer.setLatLng?.(toLatLng(feature.coordinates))),
+              );
 
-        if (!isMeasuring) {
-          marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-              getFeatureId,
-              onFeatureSelect,
-              onSelectedFeatureIdChange,
-              renderFeaturePopup,
-            });
-          });
-          marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
-            suppressNativeContextMenu(event);
-            currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-              coordinates: feature.coordinates,
-              getFeatureId,
-              onFeatureContextMenu,
-              onFeatureSelect,
-              onSelectedFeatureIdChange,
-              renderFeatureContextMenu,
-              renderFeaturePopup,
-            });
-          });
-          marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            map.getContainer().style.cursor = "pointer";
-            currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-              getFeatureId,
-              onHoveredFeatureIdChange,
-              onFeatureHover,
-              renderFeatureTooltip,
-            });
-          });
-          marker.on("mouseout", () => {
-            map.getContainer().style.cursor = "";
-            currentSurface.handleFeatureHover(null, null, {
-              getFeatureId,
-              onHoveredFeatureIdChange,
-              onFeatureHover,
-              renderFeatureTooltip,
-            });
-          });
-        }
+              if (updated) {
+                entry.coordinatesKey = coordinatesKey;
+              }
 
-        marker.addTo(layer);
-        cache.set(featureKey, {
-          coordinatesKey,
-          layers: [marker],
-          signature,
-        });
-      }
-
-        for (const [featureKey, cached] of cache) {
-          if (seen.has(featureKey)) {
-            continue;
-          }
-
-          removeFlatClusterCacheEntry(layer, cached);
-          cache.delete(featureKey);
-        }
+              return updated;
+            },
+          };
+        }),
+      });
       },
       { preserveOnRender: true },
     );
@@ -394,12 +415,6 @@ function createFlatClusterSignature<TProperties>({
     radius: feature.kind === "cluster" ? getClusterRadius(feature.pointCount) : 6,
     selected,
   });
-}
-
-function removeFlatClusterCacheEntry(layer: FlatLayerGroup, entry: FlatClusterCacheEntry) {
-  for (const cachedLayer of entry.layers) {
-    layer.removeLayer(cachedLayer);
-  }
 }
 
 type FlatClusterCacheEntry = {

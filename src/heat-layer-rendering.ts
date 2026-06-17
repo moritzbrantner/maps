@@ -7,6 +7,17 @@ import type {
   FlatLayerGroup,
   FlatMapAdapter,
 } from "./maplibre-compat";
+import {
+  beginFlatLayerResourceRequest,
+  clearFlatLayerEntries,
+  createFlatLayerResourceState,
+  isCurrentFlatLayerResourceRequest,
+  reconcileFlatLayerEntries,
+  removeFlatLayerEntry,
+  resetFlatLayerResourceState,
+  type FlatLayerEntry,
+  type FlatLayerResourceState,
+} from "./flat-layer-reconciler";
 import type { HeatFieldContourFeatureCollection, HeatFieldImage } from "./scalar-field-render";
 import {
   createHeatLayerDataSurfaceDataUrl,
@@ -31,11 +42,9 @@ import {
   type HeatSurfaceRenderPlan,
 } from "./heat-surface-render-plan";
 
-type HeatLayerManagedLayer = {
-  remove?: () => unknown;
-};
+type HeatLayerManagedLayer = FlatLayer;
 
-type HeatLayerImageOverlay = HeatLayerManagedLayer & {
+type HeatLayerImageOverlay = FlatLayer & {
   bounds?: [[number, number], [number, number]];
   options?: Record<string, unknown>;
   setBounds?: (bounds: [[number, number], [number, number]]) => unknown;
@@ -45,18 +54,17 @@ type HeatLayerImageOverlay = HeatLayerManagedLayer & {
 };
 
 export type HeatLayerFlatRenderState = {
-  contourLayers: HeatLayerManagedLayer[];
-  dataLayers: HeatLayerManagedLayer[];
-  renderRequestId: number;
-  surfaceCache: HeatLayerSurfaceCache | null;
-  surfaceClassName: string | null;
-  surfaceLayer: HeatLayerImageOverlay | null;
+  contourEntries: Map<string, HeatLayerManagedEntry>;
+  dataEntries: Map<string, HeatLayerManagedEntry>;
+  surface: FlatLayerResourceState<HeatLayerImageOverlay, HeatLayerSurfaceCache>;
 };
 
 type HeatLayerSurfaceCache = HeatSurfaceCacheMetadata & {
   objectUrl: boolean;
   url: string;
 };
+
+type HeatLayerManagedEntry = FlatLayerEntry<HeatLayerManagedLayer>;
 
 export function renderHeatLayerFieldSurface({
   image,
@@ -112,46 +120,70 @@ export function renderHeatLayerContourSurface({
   state: HeatLayerFlatRenderState;
 }) {
   if (!collection) {
+    clearHeatLayerContourLayers(layer, state);
     return;
   }
 
   const safeOpacity = clamp(lineOpacity, 0, 1);
   const safeLineWidth = Math.max(0.25, lineWidth ?? 1);
 
-  for (const feature of collection.features) {
-    const geometry = feature.geometry;
+  reconcileFlatLayerEntries<HeatLayerManagedEntry>({
+    cache: state.contourEntries,
+    layer,
+    plans: collection.features.flatMap((feature, index) => {
+      const geometry = feature.geometry;
 
-    if (geometry?.type !== "MultiLineString") {
-      continue;
-    }
+      if (geometry?.type !== "MultiLineString") {
+        return [];
+      }
 
-    const lines = (geometry.coordinates as Array<Array<[number, number]>>).filter(
-      (line) => line.length >= 2,
-    );
+      const lines = (geometry.coordinates as Array<Array<[number, number]>>).filter(
+        (line) => line.length >= 2,
+      );
 
-    if (lines.length === 0) {
-      continue;
-    }
+      if (lines.length === 0) {
+        return [];
+      }
 
-    const polyline = flat.polyline(
-      lines.map((line) => line.map(toLatLng)),
-      {
-        bubblingMouseEvents: false,
-        className: "mb-maps__heat-contour",
-        color: lineColor ?? "#111827",
+      const tooltip = feature.properties?.valueLabel ?? String(feature.properties?.value ?? "");
+      const signature = JSON.stringify({
+        geometry,
         interactive: !isMeasuring,
+        lineColor: lineColor ?? "#111827",
         opacity: safeOpacity,
+        tooltip,
         weight: safeLineWidth,
-      },
-    );
+      });
 
-    bindHeatLayerTooltip(
-      polyline,
-      feature.properties?.valueLabel ?? String(feature.properties?.value ?? ""),
-    );
-    polyline.addTo(layer);
-    state.contourLayers.push(polyline);
-  }
+      return [
+        {
+          key: `contour:${index}:${tooltip}`,
+          render: () => {
+            const polyline = flat.polyline(
+              lines.map((line) => line.map(toLatLng)),
+              {
+                bubblingMouseEvents: false,
+                className: "mb-maps__heat-contour",
+                color: lineColor ?? "#111827",
+                interactive: !isMeasuring,
+                opacity: safeOpacity,
+                weight: safeLineWidth,
+              },
+            );
+
+            bindHeatLayerTooltip(polyline, tooltip);
+            polyline.addTo(layer);
+
+            return {
+              layers: [polyline],
+              signature,
+            };
+          },
+          signature,
+        },
+      ];
+    }),
+  });
 }
 
 export function renderHeatLayerDataPoints({
@@ -179,24 +211,54 @@ export function renderHeatLayerDataPoints({
   strokeColor: string;
   strokeWidth: number;
 }) {
-  for (const feature of data.features) {
-    const [longitude, latitude] = feature.geometry.coordinates;
-    const marker = flat.circleMarker(toLatLng([longitude, latitude]), {
-      bubblingMouseEvents: false,
-      className: "mb-maps__heat-data-point",
-      color: strokeColor,
-      fillColor: color,
-      fillOpacity: clamp(opacity, 0, 1),
-      interactive: !isMeasuring,
-      opacity: clamp(opacity, 0, 1),
-      radius: Math.max(0, radius),
-      weight: Math.max(0, strokeWidth),
-    });
+  const safeOpacity = clamp(opacity, 0, 1);
+  const safeRadius = Math.max(0, radius);
+  const safeStrokeWidth = Math.max(0, strokeWidth);
 
-    bindHeatLayerTooltip(marker, formatHeatLayerFeatureValue(feature, formatValue));
-    marker.addTo(layer);
-    state.dataLayers.push(marker);
-  }
+  reconcileFlatLayerEntries<HeatLayerManagedEntry>({
+    cache: state.dataEntries,
+    layer,
+    plans: data.features.map((feature, index) => {
+      const [longitude, latitude] = feature.geometry.coordinates;
+      const tooltip = formatHeatLayerFeatureValue(feature, formatValue);
+      const signature = JSON.stringify({
+        color,
+        coordinates: feature.geometry.coordinates,
+        interactive: !isMeasuring,
+        opacity: safeOpacity,
+        radius: safeRadius,
+        strokeColor,
+        strokeWidth: safeStrokeWidth,
+        tooltip,
+      });
+
+      return {
+        key: feature.properties.pointId || `data:${longitude},${latitude}:${index}`,
+        render: () => {
+          const marker = flat.circleMarker(toLatLng([longitude, latitude]), {
+            bubblingMouseEvents: false,
+            className: "mb-maps__heat-data-point",
+            color: strokeColor,
+            fillColor: color,
+            fillOpacity: safeOpacity,
+            interactive: !isMeasuring,
+            opacity: safeOpacity,
+            radius: safeRadius,
+            weight: safeStrokeWidth,
+          });
+
+          bindHeatLayerTooltip(marker, tooltip);
+          marker.addTo(layer);
+
+          return {
+            layers: [marker],
+            signature,
+          };
+        },
+        signature,
+      };
+    }),
+  });
 }
 
 export function renderHeatLayerSurface({
@@ -248,7 +310,7 @@ export function renderHeatLayerSurface({
     overscanRatio,
     radius,
     strategy,
-    surfaceCache: state.surfaceCache,
+    surfaceCache: state.surface.metadata,
     width,
   });
 
@@ -257,7 +319,7 @@ export function renderHeatLayerSurface({
     return;
   }
 
-  const cachedUrl = state.surfaceCache?.key === plan.cacheKey ? state.surfaceCache.url : null;
+  const cachedUrl = state.surface.metadata?.key === plan.cacheKey ? state.surface.metadata.url : null;
 
   if (cachedUrl) {
     renderOrUpdateHeatLayerImageOverlay({
@@ -272,12 +334,11 @@ export function renderHeatLayerSurface({
     return;
   }
 
-  state.renderRequestId += 1;
-  const requestId = state.renderRequestId;
+  const requestId = beginFlatLayerResourceRequest(state.surface);
 
   if (asyncRender) {
     createHeatLayerSurfaceImage(plan).then((image) => {
-      if (state.renderRequestId !== requestId) {
+      if (!isCurrentFlatLayerResourceRequest(state.surface, requestId)) {
         revokeHeatLayerSurfaceImage(image);
         return;
       }
@@ -348,7 +409,7 @@ export function getHeatLayerSurfaceQueryBounds({
     overscanRatio,
     radius,
     strategy,
-    surfaceCache: state.surfaceCache,
+    surfaceCache: state.surface.metadata,
   });
 }
 
@@ -367,64 +428,52 @@ export function getHeatLayerViewportBounds(
 
 export function createHeatLayerFlatRenderState(): HeatLayerFlatRenderState {
   return {
-    contourLayers: [],
-    dataLayers: [],
-    renderRequestId: 0,
-    surfaceCache: null,
-    surfaceClassName: null,
-    surfaceLayer: null,
+    contourEntries: new Map(),
+    dataEntries: new Map(),
+    surface: createFlatLayerResourceState(),
   };
 }
 
 export function resetHeatLayerFlatRenderState(state: HeatLayerFlatRenderState) {
-  state.renderRequestId += 1;
-  state.contourLayers = [];
-  state.dataLayers = [];
-  revokeHeatLayerSurfaceCache(state.surfaceCache);
-  state.surfaceCache = null;
-  state.surfaceClassName = null;
-  state.surfaceLayer = null;
+  state.contourEntries.clear();
+  state.dataEntries.clear();
+  resetFlatLayerResourceState({
+    remove: (layer) => {
+      layer.remove?.();
+    },
+    revokeMetadata: revokeHeatLayerSurfaceCache,
+    state: state.surface,
+  });
 }
 
 export function removeHeatLayerSurfaceLayer(
   parent: FlatLayerGroup,
   state: HeatLayerFlatRenderState,
 ) {
-  if (!state.surfaceLayer) {
+  beginFlatLayerResourceRequest(state.surface);
+  const surfaceLayer = state.surface.resource;
+
+  if (!surfaceLayer) {
     return;
   }
 
-  removeHeatLayerManagedLayer(parent, state.surfaceLayer);
-  state.surfaceLayer = null;
-  state.surfaceClassName = null;
+  removeHeatLayerManagedLayer(parent, surfaceLayer);
+  state.surface.resource = null;
+  state.surface.signature = null;
 }
 
-export function clearHeatLayerManagedLayers(
-  parent: FlatLayerGroup,
-  layers: HeatLayerManagedLayer[],
-) {
-  for (const layer of layers) {
-    removeHeatLayerManagedLayer(parent, layer);
-  }
-
-  layers.length = 0;
-}
-
-export function clearHeatLayerNonSurfaceLayers(
+export function clearHeatLayerDataPointLayers(
   parent: FlatLayerGroup,
   state: HeatLayerFlatRenderState,
 ) {
-  const layers = (parent as FlatLayerGroup & { layers?: HeatLayerManagedLayer[] }).layers;
+  clearFlatLayerEntries({ cache: state.dataEntries, layer: parent });
+}
 
-  if (!Array.isArray(layers)) {
-    return;
-  }
-
-  for (const layer of layers.slice()) {
-    if (layer !== state.surfaceLayer) {
-      removeHeatLayerManagedLayer(parent, layer);
-    }
-  }
+export function clearHeatLayerContourLayers(
+  parent: FlatLayerGroup,
+  state: HeatLayerFlatRenderState,
+) {
+  clearFlatLayerEntries({ cache: state.contourEntries, layer: parent });
 }
 
 function createHeatLayerSurfaceDataImage(
@@ -458,11 +507,11 @@ function heatLayerBoundsToLatLngBounds([west, south, east, north]: [
 }
 
 function setHeatLayerSurfaceCache(state: HeatLayerFlatRenderState, cache: HeatLayerSurfaceCache) {
-  if (state.surfaceCache?.url !== cache.url) {
-    revokeHeatLayerSurfaceCache(state.surfaceCache);
+  if (state.surface.metadata?.url !== cache.url) {
+    revokeHeatLayerSurfaceCache(state.surface.metadata);
   }
 
-  state.surfaceCache = cache;
+  state.surface.metadata = cache;
 }
 
 function revokeHeatLayerSurfaceCache(cache: HeatLayerSurfaceCache | null) {
@@ -504,20 +553,20 @@ function renderOrUpdateHeatLayerImageOverlay({
 }) {
   const safeOpacity = clamp(opacity, 0, 1);
 
-  if (!state.surfaceLayer || state.surfaceClassName !== className) {
+  if (!state.surface.resource || state.surface.signature !== className) {
     removeHeatLayerSurfaceLayer(layer, state);
-    state.surfaceLayer = flat
+    state.surface.resource = flat
       .imageOverlay(url, bounds, {
         className,
         interactive: false,
         opacity: safeOpacity,
       })
       .addTo(layer) as unknown as HeatLayerImageOverlay;
-    state.surfaceClassName = className;
+    state.surface.signature = className;
     return;
   }
 
-  updateHeatLayerImageOverlay(state.surfaceLayer, {
+  updateHeatLayerImageOverlay(state.surface.resource, {
     bounds,
     opacity: safeOpacity,
     url,
@@ -559,26 +608,7 @@ function updateHeatLayerImageOverlay(
 }
 
 function removeHeatLayerManagedLayer(parent: FlatLayerGroup, layer: HeatLayerManagedLayer) {
-  const removableParent = parent as FlatLayerGroup & {
-    layers?: unknown[];
-  };
-
-  if (typeof removableParent.removeLayer === "function") {
-    removableParent.removeLayer(layer as FlatLayer);
-    return;
-  }
-
-  if (typeof layer.remove === "function") {
-    layer.remove();
-  }
-
-  if (Array.isArray(removableParent.layers)) {
-    const index = removableParent.layers.indexOf(layer);
-
-    if (index >= 0) {
-      removableParent.layers.splice(index, 1);
-    }
-  }
+  removeFlatLayerEntry(parent, { layers: [layer], signature: "" });
 }
 
 function bindHeatLayerTooltip(layer: unknown, content: string) {

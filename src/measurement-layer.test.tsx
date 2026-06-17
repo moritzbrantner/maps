@@ -51,6 +51,10 @@ const flatMock = vi.hoisted(() => {
     clearLayers() {
       this.layers = [];
     }
+
+    removeLayer(layer: Layer) {
+      this.layers = this.layers.filter((candidate) => candidate !== layer);
+    }
   }
 
   class MockMap {
@@ -145,6 +149,7 @@ const flatMock = vi.hoisted(() => {
       bindTooltip: (content: string, tooltipOptions?: Record<string, unknown>) => typeof layer;
       on: (event: string, handler: Handler) => typeof layer;
       openTooltip: (latLng?: [number, number]) => typeof layer;
+      remove: () => typeof layer;
     } = {
       handlers: new Map<string, Handler[]>(),
       latLng,
@@ -152,6 +157,7 @@ const flatMock = vi.hoisted(() => {
       options,
       type,
       addTo(group: MockLayerGroup) {
+        (this as typeof layer & { group?: MockLayerGroup }).group = group;
         group.addLayer(this);
         return this;
       },
@@ -177,6 +183,15 @@ const flatMock = vi.hoisted(() => {
       openTooltip(latLng?: [number, number]) {
         if (this.tooltip) {
           this.tooltip.latLng = latLng;
+        }
+
+        return this;
+      },
+      remove() {
+        const group = (this as typeof layer & { group?: MockLayerGroup }).group;
+
+        if (group) {
+          group.layers = group.layers.filter((candidate) => candidate !== this);
         }
 
         return this;
@@ -319,6 +334,58 @@ describe("@moritzbrantner/maps bee-line measurement layer", () => {
       },
       type: "polyline",
     });
+  });
+
+  test("completed measurements remove stale rendered layers", async () => {
+    const measurements: MapBeeLineMeasurement[] = [
+      {
+        id: "berlin-paris",
+        from: [13.405, 52.52],
+        to: [2.3522, 48.8566],
+      },
+    ];
+    const { rerender } = render(<PointMap measurements={measurements} points={[]} />);
+
+    await waitForReadyMap("Interactive point map");
+
+    const measurementLayer = flatMock.getLayerGroups()[1];
+
+    expect(measurementLayer?.layers).toHaveLength(3);
+
+    rerender(<PointMap measurements={[]} points={[]} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(measurementLayer?.layers).toHaveLength(0);
+  });
+
+  test("draft measurement replacement does not accumulate stale layers", async () => {
+    render(<PointMap measurementMode="bee-line" points={[]} />);
+
+    const map = await waitForReadyMap("Interactive point map");
+    await waitForMeasurementHandlers(map);
+
+    act(() => {
+      map.fire("click", { latlng: { lat: 10, lng: 20 } });
+      map.fire("mousemove", { latlng: { lat: 11, lng: 21 } });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const measurementLayer = flatMock.getLayerGroups()[1];
+
+    expect(measurementLayer?.layers).toHaveLength(3);
+
+    act(() => {
+      map.fire("mousemove", { latlng: { lat: 12, lng: 22 } });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(measurementLayer?.layers).toHaveLength(3);
   });
 
   test("Escape clears an active draft", async () => {

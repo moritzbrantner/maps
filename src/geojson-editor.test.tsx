@@ -587,8 +587,12 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     const map = flatMock.getMaps()[0];
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 1, lng: 2 } });
-      map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 3, lng: 4 } });
+      for (const handler of map?.handlers.get("click") ?? []) {
+        handler({ latlng: { lat: 1, lng: 2 } });
+      }
+      for (const handler of map?.handlers.get("mousemove") ?? []) {
+        handler({ latlng: { lat: 3, lng: 4 } });
+      }
     });
 
     await waitFor(() => {

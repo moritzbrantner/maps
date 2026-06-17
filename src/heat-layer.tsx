@@ -22,8 +22,8 @@ import {
   type HeatLayerProps,
 } from "./heat-layer-types";
 import {
-  clearHeatLayerManagedLayers,
-  clearHeatLayerNonSurfaceLayers,
+  clearHeatLayerContourLayers,
+  clearHeatLayerDataPointLayers,
   createHeatLayerFlatRenderState,
   getHeatLayerSurfaceQueryBounds,
   getHeatLayerViewportBounds,
@@ -388,6 +388,14 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   const registerMapLibreLayer = surface?.registerMapLibreLayer;
 
   useEffect(() => {
+    const flatRenderState = flatRenderStateRef.current;
+
+    return () => {
+      resetHeatLayerFlatRenderState(flatRenderState);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!registerMapLibreLayer || (surfaceDisplay !== "flat" && surfaceDisplay !== "globe")) {
       return;
     }
@@ -396,11 +404,9 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     const unregister = registerMapLibreLayer(
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
-        clearHeatLayerManagedLayers(layer, flatRenderState.dataLayers);
-        clearHeatLayerManagedLayers(layer, flatRenderState.contourLayers);
-        clearHeatLayerNonSurfaceLayers(layer, flatRenderState);
-
         if (map.getZoom() > heatmapMaxZoom) {
+          clearHeatLayerDataPointLayers(layer, flatRenderState);
+          clearHeatLayerContourLayers(layer, flatRenderState);
           removeHeatLayerSurfaceLayer(layer, flatRenderState);
           return;
         }
@@ -429,6 +435,8 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
               lineWidth: fieldContourLineWidth,
               state: flatRenderState,
             });
+          } else {
+            clearHeatLayerContourLayers(layer, flatRenderState);
           }
 
           if (showDataPoints) {
@@ -449,10 +457,14 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
               strokeColor: dataPointStrokeColor,
               strokeWidth: dataPointStrokeWidth,
             });
+          } else {
+            clearHeatLayerDataPointLayers(layer, flatRenderState);
           }
 
           return;
         }
+
+        clearHeatLayerContourLayers(layer, flatRenderState);
 
         const data = heatIndex.getFeatureCollection(
           getHeatLayerSurfaceQueryBounds({
@@ -499,13 +511,14 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
             strokeColor: dataPointStrokeColor,
             strokeWidth: dataPointStrokeWidth,
           });
+        } else {
+          clearHeatLayerDataPointLayers(layer, flatRenderState);
         }
       },
       { preserveOnRender: true },
     );
 
     return () => {
-      resetHeatLayerFlatRenderState(flatRenderState);
       unregister();
     };
   }, [

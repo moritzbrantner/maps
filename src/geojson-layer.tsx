@@ -13,6 +13,7 @@ import {
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-view";
 import { cloneGeometry, normalizeGeometryParts } from "./temporal-geojson-geometry";
+import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
 import type {
   TemporalGeoJsonGeometryFeatureCollection,
   TemporalGeoJsonSupportedGeometry,
@@ -98,93 +99,85 @@ export function GeoJsonLayer<
           return;
         }
 
-        const cache = flatFeatureCacheRef.current;
-        const seen = new Set<string>();
+        reconcileFlatLayerEntries<FlatGeoJsonCacheEntry>({
+          cache: flatFeatureCacheRef.current,
+          layer,
+          plans: features.map((feature) => {
+            const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
+            const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+            const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
+            const className = joinClassNames(
+              "mb-maps__geojson-feature",
+              hovered && "mb-maps__feature--hovered",
+              selected && "mb-maps__feature--selected",
+            );
+            const featureKey = getFlatGeoJsonFeatureKey(feature, getFeatureId);
+            const geometryKey = createFlatGeoJsonGeometryKey(feature.geometry);
+            const signature = createFlatGeoJsonSignature({
+              className,
+              feature,
+              interactionMode,
+              selected,
+              style,
+            });
 
-        for (const feature of features) {
-          const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
-          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-          const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-          const className = joinClassNames(
-            "mb-maps__geojson-feature",
-            hovered && "mb-maps__feature--hovered",
-            selected && "mb-maps__feature--selected",
-          );
-          const featureKey = getFlatGeoJsonFeatureKey(feature, getFeatureId);
-          const geometryKey = createFlatGeoJsonGeometryKey(feature.geometry);
-          const signature = createFlatGeoJsonSignature({
-            className,
-            feature,
-            interactionMode,
-            selected,
-            style,
-          });
-          const cached = cache.get(featureKey);
+            return {
+              key: featureKey,
+              render: () => {
+                const layers = createFlatGeometryLayers(feature.geometry, {
+                  bubblingMouseEvents: false,
+                  className,
+                  interactive: interactionMode === "none",
+                  flat,
+                  selected,
+                  style,
+                });
 
-          seen.add(featureKey);
+                for (const geometryLayer of layers) {
+                  if (interactionMode === "none") {
+                    bindFlatLayerInteraction(geometryLayer, {
+                      feature,
+                      getFeatureId,
+                      getPosition: (event) => getFlatFeaturePosition(map, feature.geometry, event),
+                      map,
+                      onHoveredFeatureIdChange,
+                      onFeatureContextMenu,
+                      onFeatureHover,
+                      onFeatureSelect,
+                      onSelectedFeatureIdChange,
+                      renderFeatureContextMenu,
+                      renderFeaturePopup,
+                      renderFeatureTooltip,
+                      surface: currentSurface,
+                    });
+                  }
 
-          if (cached?.signature === signature) {
-            if (cached.geometryKey !== geometryKey) {
-              if (updateFlatGeoJsonCachedGeometry(cached.layers, feature.geometry)) {
-                cached.geometryKey = geometryKey;
-                continue;
-              }
+                  geometryLayer.addTo(layer);
+                }
 
-              removeFlatGeoJsonCacheEntry(layer, cached);
-              cache.delete(featureKey);
-            } else {
-              continue;
-            }
-          } else if (cached) {
-            removeFlatGeoJsonCacheEntry(layer, cached);
-          }
+                return {
+                  geometryKey,
+                  layers,
+                  signature,
+                };
+              },
+              signature,
+              update: (entry) => {
+                if (entry.geometryKey === geometryKey) {
+                  return true;
+                }
 
-          const layers = createFlatGeometryLayers(feature.geometry, {
-            bubblingMouseEvents: false,
-            className,
-            interactive: interactionMode === "none",
-            flat,
-            selected,
-            style,
-          });
+                const updated = updateFlatGeoJsonCachedGeometry(entry.layers, feature.geometry);
 
-          for (const geometryLayer of layers) {
-            if (interactionMode === "none") {
-              bindFlatLayerInteraction(geometryLayer, {
-                feature,
-                getFeatureId,
-                getPosition: (event) => getFlatFeaturePosition(map, feature.geometry, event),
-                map,
-                onHoveredFeatureIdChange,
-                onFeatureContextMenu,
-                onFeatureHover,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeatureContextMenu,
-                renderFeaturePopup,
-                renderFeatureTooltip,
-                surface: currentSurface,
-              });
-            }
+                if (updated) {
+                  entry.geometryKey = geometryKey;
+                }
 
-            geometryLayer.addTo(layer);
-          }
-
-          cache.set(featureKey, {
-            geometryKey,
-            layers,
-            signature,
-          });
-        }
-
-        for (const [featureKey, cached] of cache) {
-          if (seen.has(featureKey)) {
-            continue;
-          }
-
-          removeFlatGeoJsonCacheEntry(layer, cached);
-          cache.delete(featureKey);
-        }
+                return updated;
+              },
+            };
+          }),
+        });
       },
       { preserveOnRender: true, renderOnViewStateChange: false },
     );
@@ -308,15 +301,6 @@ function updateFlatGeoJsonCachedGeometry(
       return geometry.coordinates.every((coordinates, index) =>
         Boolean(layers[index]?.setLatLngs?.(coordinates.map((ring) => ring.map(toLatLng)))),
       );
-  }
-}
-
-function removeFlatGeoJsonCacheEntry(
-  layer: { removeLayer: (cachedLayer: FlatGeometryLayer) => unknown },
-  entry: FlatGeoJsonCacheEntry,
-) {
-  for (const cachedLayer of entry.layers) {
-    layer.removeLayer(cachedLayer);
   }
 }
 

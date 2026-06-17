@@ -494,6 +494,10 @@ abstract class MapLibreSourceLayer implements FlatLayer {
         continue;
       }
 
+      if (typeof this.map.queryRenderedFeatures !== "function") {
+        continue;
+      }
+
       const fallbackHandler = (mapEventObject: unknown) => {
         const point = (mapEventObject as { point?: { x: number; y: number } } | undefined)?.point;
 

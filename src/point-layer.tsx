@@ -10,7 +10,8 @@ import {
 import { joinClassNames, toLatLng, type MapViewportProps } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
-import type { FlatLayer, FlatLayerGroup } from "./maplibre-compat";
+import type { FlatLayer } from "./maplibre-compat";
+import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
 
 export type PointLayerFeature<TProperties = Record<string, unknown>> = {
   coordinates: [longitude: number, latitude: number];
@@ -203,8 +204,6 @@ function PointFeatureLayer<
           return;
         }
 
-        const cache = flatMarkerCacheRef.current;
-        const seen = new Set<string>();
         const preparedFeatures = features.map((feature) => {
           const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
           const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
@@ -235,138 +234,149 @@ function PointFeatureLayer<
           };
         });
 
-        if (
-          (cache.size === 0 && layer.layers.length > 0) ||
-          preparedFeatures.some((entry) => {
-            const cached = cache.get(entry.featureKey);
+        reconcileFlatLayerEntries<FlatPointCacheEntry>({
+          cache: flatMarkerCacheRef.current,
+          layer,
+          plans: preparedFeatures.map(
+            ({
+              coordinatesKey,
+              feature,
+              featureDraggable,
+              featureKey,
+              fillColor,
+              hovered,
+              radius,
+              selected,
+              signature,
+            }) => ({
+              key: featureKey,
+              render: () => {
+                const marker = flat.circleMarker(toLatLng(feature.coordinates), {
+                  bubblingMouseEvents: false,
+                  className: joinClassNames(
+                    "mb-maps__point-marker",
+                    featureDraggable && "mb-maps__feature--draggable",
+                    hovered && "mb-maps__feature--hovered",
+                    selected && "mb-maps__feature--selected",
+                  ),
+                  color: "#ffffff",
+                  fillColor,
+                  fillOpacity: 0.92,
+                  interactive: !isMeasuring,
+                  opacity: 1,
+                  radius,
+                  weight: selected ? 3 : 2,
+                });
 
-            return cached && cached.signature !== entry.signature;
-          })
-        ) {
-          layer.clearLayers();
-          cache.clear();
-        }
+                if (!isMeasuring) {
+                  const entry: FlatPointCacheEntry = {
+                    coordinatesKey,
+                    layers: [marker],
+                    signature,
+                  };
 
-        for (const {
-          coordinatesKey,
-          feature,
-          featureDraggable,
-          featureKey,
-          fillColor,
-          hovered,
-          radius,
-          selected,
-          signature,
-        } of preparedFeatures) {
-          const cached = cache.get(featureKey);
+                  marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                    currentSurface.handleFeatureClick(
+                      feature,
+                      getFlatFeaturePosition(map, feature.coordinates, event),
+                      {
+                        getFeatureId,
+                        onFeatureSelect,
+                        onSelectedFeatureIdChange,
+                        renderFeaturePopup,
+                      },
+                    );
+                  });
+                  marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
+                    suppressNativeContextMenu(event);
+                    currentSurface.handleFeatureContextMenu(
+                      feature,
+                      getFlatFeaturePosition(map, feature.coordinates, event),
+                      {
+                        coordinates: feature.coordinates,
+                        getFeatureId,
+                        onFeatureContextMenu,
+                        onFeatureSelect,
+                        onSelectedFeatureIdChange,
+                        renderFeatureContextMenu,
+                        renderFeaturePopup,
+                      },
+                    );
+                  });
+                  if (featureDraggable) {
+                    bindFlatPointDrag(marker as FlatPointMarker, {
+                      coordinates: feature.coordinates,
+                      feature,
+                      map: map as FlatDragMap,
+                      onFeatureDrag,
+                      onFeatureDragEnd,
+                    });
+                  }
+                  marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                    map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
+                    currentSurface.handleFeatureHover(
+                      feature,
+                      getFlatFeaturePosition(map, feature.coordinates, event),
+                      {
+                        getFeatureId,
+                        onHoveredFeatureIdChange,
+                        onFeatureHover,
+                        renderFeatureTooltip,
+                      },
+                    );
+                  });
+                  marker.on("mousemove", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                    currentSurface.handleFeatureHover(
+                      feature,
+                      getFlatFeaturePosition(map, feature.coordinates, event),
+                      {
+                        getFeatureId,
+                        onHoveredFeatureIdChange,
+                        onFeatureHover,
+                        renderFeatureTooltip,
+                      },
+                    );
+                  });
+                  marker.on("mouseout", () => {
+                    map.getContainer().style.cursor = "";
+                    currentSurface.handleFeatureHover(null, null, {
+                      getFeatureId,
+                      onHoveredFeatureIdChange,
+                      onFeatureHover,
+                      renderFeatureTooltip,
+                    });
+                  });
 
-          seen.add(featureKey);
+                  marker.addTo(layer);
+                  return entry;
+                }
 
-          if (cached?.signature === signature) {
-            if (cached.coordinatesKey !== coordinatesKey) {
-              for (const cachedLayer of cached.layers) {
-                cachedLayer.setLatLng?.(toLatLng(feature.coordinates));
-              }
-              cached.coordinatesKey = coordinatesKey;
-            }
-            continue;
-          }
+                marker.addTo(layer);
+                return {
+                  coordinatesKey,
+                  layers: [marker],
+                  signature,
+                };
+              },
+              signature,
+              update: (entry) => {
+                if (entry.coordinatesKey === coordinatesKey) {
+                  return true;
+                }
 
-          if (cached) {
-            removeFlatPointCacheEntry(layer, cached);
-          }
+                const updated = entry.layers.every((cachedLayer) =>
+                  Boolean(cachedLayer.setLatLng?.(toLatLng(feature.coordinates))),
+                );
 
-          const marker = flat.circleMarker(toLatLng(feature.coordinates), {
-            bubblingMouseEvents: false,
-            className: joinClassNames(
-              "mb-maps__point-marker",
-              featureDraggable && "mb-maps__feature--draggable",
-              hovered && "mb-maps__feature--hovered",
-              selected && "mb-maps__feature--selected",
-            ),
-            color: "#ffffff",
-            fillColor,
-            fillOpacity: 0.92,
-            interactive: !isMeasuring,
-            opacity: 1,
-            radius,
-            weight: selected ? 3 : 2,
-          });
+                if (updated) {
+                  entry.coordinatesKey = coordinatesKey;
+                }
 
-          if (!isMeasuring) {
-            marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-              currentSurface.handleFeatureClick(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-                getFeatureId,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeaturePopup,
-              });
-            });
-            marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
-              suppressNativeContextMenu(event);
-              currentSurface.handleFeatureContextMenu(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-                coordinates: feature.coordinates,
-                getFeatureId,
-                onFeatureContextMenu,
-                onFeatureSelect,
-                onSelectedFeatureIdChange,
-                renderFeatureContextMenu,
-                renderFeaturePopup,
-              });
-            });
-            if (featureDraggable) {
-              bindFlatPointDrag(marker as FlatPointMarker, {
-                coordinates: feature.coordinates,
-                feature,
-                map: map as FlatDragMap,
-                onFeatureDrag,
-                onFeatureDragEnd,
-              });
-            }
-            marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-              map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
-              currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            });
-            marker.on("mousemove", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-              currentSurface.handleFeatureHover(feature, getFlatFeaturePosition(map, feature.coordinates, event), {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            });
-            marker.on("mouseout", () => {
-              map.getContainer().style.cursor = "";
-              currentSurface.handleFeatureHover(null, null, {
-                getFeatureId,
-                onHoveredFeatureIdChange,
-                onFeatureHover,
-                renderFeatureTooltip,
-              });
-            });
-          }
-
-          marker.addTo(layer);
-          cache.set(featureKey, {
-            coordinatesKey,
-            layers: [marker],
-            signature,
-          });
-        }
-
-        for (const [featureKey, cached] of cache) {
-          if (seen.has(featureKey)) {
-            continue;
-          }
-
-          removeFlatPointCacheEntry(layer, cached);
-          cache.delete(featureKey);
-        }
+                return updated;
+              },
+            }),
+          ),
+        });
       },
       { preserveOnRender: true, renderOnViewStateChange: false },
     );
@@ -573,6 +583,8 @@ function bindFlatPointDrag<TFeature>(
 
     document.removeEventListener("mousemove", handleDocumentMove);
     document.removeEventListener("mouseup", handleDocumentUp);
+    options.map.off?.("mousemove", handleMove);
+    options.map.off?.("mouseup", handleUp);
     if (dragStart?.active) {
       options.map.dragging?.enable?.();
     }
@@ -614,6 +626,8 @@ function bindFlatPointDrag<TFeature>(
     }
     document.addEventListener("mousemove", handleDocumentMove);
     document.addEventListener("mouseup", handleDocumentUp);
+    options.map.on?.("mousemove", handleMove);
+    options.map.on?.("mouseup", handleUp);
   });
 }
 
@@ -697,6 +711,8 @@ type FlatDragMap = {
     getBoundingClientRect?: () => { left: number; top: number };
     style: { cursor: string };
   };
+  off?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
+  on?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
 };
 
 type FlatDragEvent = FlatFeaturePointerEvent & {
@@ -801,12 +817,6 @@ function createFlatPointSignature({
     radius,
     selected,
   });
-}
-
-function removeFlatPointCacheEntry(layer: FlatLayerGroup, entry: FlatPointCacheEntry) {
-  for (const cachedLayer of entry.layers) {
-    layer.removeLayer(cachedLayer);
-  }
 }
 
 export type { MapViewportProps };

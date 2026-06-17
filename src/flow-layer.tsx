@@ -6,6 +6,7 @@ import { joinClassNames, toLatLng } from "./map-display";
 import type { FlatLayer, FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
+import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
 
 export type MapFlow<TProperties = Record<string, unknown>> = {
   from: [longitude: number, latitude: number];
@@ -140,185 +141,178 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
         return;
       }
 
-      const cache = flatFlowCacheRef.current;
-      const seen = new Set<string>();
       const hasHoveredFlow = features.some((feature) =>
         currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId)
       );
 
-      for (const feature of features) {
-        const color = getFlowColor?.(feature) ?? flowColor;
-        const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-        const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-        const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
-        const flowLatLngs = flowCoordinates.map(toLatLng);
-        const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
-        const active = selected || hovered;
-        const opacity = active
-          ? hovered
-            ? hoveredFlowOpacity
-            : selectedFlowOpacity
-          : hasActiveFlow
-            ? inactiveFlowOpacity
-            : 0.72;
-        const featureKey = getFlatFlowFeatureKey(feature, getFeatureId);
-        const geometryKey = createFlatFlowGeometryKey(feature, flowCoordinates);
-        const signature = createFlatFlowSignature({
-          color,
-          directionMarker,
-          feature,
-          hasActiveFlow,
-          hovered,
-          isMeasuring,
-          opacity,
-          selected,
-          showDirection,
-          showEndpoints,
-        });
-        const cached = cache.get(featureKey);
-
-        seen.add(featureKey);
-
-        if (cached?.signature === signature) {
-          if (cached.geometryKey !== geometryKey) {
-            if (updateFlatFlowCachedGeometry(cached, feature, flowCoordinates)) {
-              cached.geometryKey = geometryKey;
-              continue;
-            }
-
-            removeFlatFlowCacheEntry(layer, cached);
-            cache.delete(featureKey);
-          } else {
-            continue;
-          }
-        } else if (cached) {
-          removeFlatFlowCacheEntry(layer, cached);
-        }
-
-        const line = flat.polyline(flowLatLngs, {
-          className: joinClassNames(
-            "mb-maps__flow-line",
-            active && "mb-maps__flow-line--active",
-            hasActiveFlow && !active && "mb-maps__flow-line--inactive",
-            hovered && "mb-maps__feature--hovered",
-            selected && "mb-maps__feature--selected",
-          ),
-          color,
-          interactive: !isMeasuring,
-          opacity,
-          weight: selected ? feature.width + 1.5 : feature.width,
-        });
-
-        if (!isMeasuring) {
-          line.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            currentSurface.handleFeatureClick(feature, getFlowPosition(map, feature, event), {
-              getFeatureId,
-              onFeatureSelect,
-              onSelectedFeatureIdChange,
-              renderFeaturePopup,
-            });
-          });
-          line.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
-            suppressNativeContextMenu(event);
-            currentSurface.handleFeatureContextMenu(feature, getFlowPosition(map, feature, event), {
-              coordinates: getFlowCenter(feature),
-              getFeatureId,
-              onFeatureContextMenu,
-              onFeatureSelect,
-              onSelectedFeatureIdChange,
-              renderFeatureContextMenu,
-              renderFeaturePopup,
-            });
-          });
-          line.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-            map.getContainer().style.cursor = "pointer";
-            currentSurface.handleFeatureHover(feature, getFlowPosition(map, feature, event), {
-              getFeatureId,
-              onHoveredFeatureIdChange,
-              onFeatureHover,
-              renderFeatureTooltip,
-            });
-          });
-          line.on("mouseout", () => {
-            map.getContainer().style.cursor = "";
-            currentSurface.handleFeatureHover(null, null, {
-              getFeatureId,
-              onHoveredFeatureIdChange,
-              onFeatureHover,
-              renderFeatureTooltip,
-            });
-          });
-        }
-
-        line.addTo(layer);
-        const layers: FlatLayer[] = [line];
-        let arrowLayer: FlatLayer | null = null;
-        let fromEndpointLayer: FlatLayer | null = null;
-        let toEndpointLayer: FlatLayer | null = null;
-
-        if (showDirection && directionMarker === "arrow") {
-          arrowLayer = addFlowArrowMarker({
+      reconcileFlatLayerEntries<FlatFlowCacheEntry>({
+        cache: flatFlowCacheRef.current,
+        layer,
+        plans: features.map((feature) => {
+          const color = getFlowColor?.(feature) ?? flowColor;
+          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+          const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
+          const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
+          const flowLatLngs = flowCoordinates.map(toLatLng);
+          const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
+          const active = selected || hovered;
+          const opacity = active
+            ? hovered
+              ? hoveredFlowOpacity
+              : selectedFlowOpacity
+            : hasActiveFlow
+              ? inactiveFlowOpacity
+              : 0.72;
+          const featureKey = getFlatFlowFeatureKey(feature, getFeatureId);
+          const geometryKey = createFlatFlowGeometryKey(feature, flowCoordinates);
+          const signature = createFlatFlowSignature({
             color,
+            directionMarker,
             feature,
-            flowCoordinates,
-            flat,
-            map,
+            hasActiveFlow,
+            hovered,
+            isMeasuring,
             opacity,
-            overlay: layer,
-          }) ?? null;
-          if (arrowLayer) {
-            layers.push(arrowLayer);
-          }
-        }
+            selected,
+            showDirection,
+            showEndpoints,
+          });
 
-        if (showEndpoints) {
-          fromEndpointLayer = flat
-            .circleMarker(toLatLng(feature.flow.from), {
-              className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--from",
-              color: "#ffffff",
-              fillColor: color,
-              fillOpacity: 0.9,
-              interactive: false,
-              opacity: 1,
-              radius: Math.max(3, feature.width * 0.55),
-              weight: 1.5,
-            })
-            .addTo(layer);
-          layers.push(fromEndpointLayer);
-          toEndpointLayer = flat
-            .circleMarker(toLatLng(feature.flow.to), {
-              className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--to",
-              color: "#ffffff",
-              fillColor: color,
-              fillOpacity: 0.95,
-              interactive: false,
-              opacity: 1,
-              radius: Math.max(4, feature.width * 0.75),
-              weight: 1.5,
-            })
-            .addTo(layer);
-          layers.push(toEndpointLayer);
-        }
+          return {
+            key: featureKey,
+            render: () => {
+              const line = flat.polyline(flowLatLngs, {
+                className: joinClassNames(
+                  "mb-maps__flow-line",
+                  active && "mb-maps__flow-line--active",
+                  hasActiveFlow && !active && "mb-maps__flow-line--inactive",
+                  hovered && "mb-maps__feature--hovered",
+                  selected && "mb-maps__feature--selected",
+                ),
+                color,
+                interactive: !isMeasuring,
+                opacity,
+                weight: selected ? feature.width + 1.5 : feature.width,
+              });
 
-        cache.set(featureKey, {
-          arrowLayer,
-          fromEndpointLayer,
-          geometryKey,
-          layers,
-          lineLayer: line,
-          signature,
-          toEndpointLayer,
-        });
-      }
+              if (!isMeasuring) {
+                line.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                  currentSurface.handleFeatureClick(feature, getFlowPosition(map, feature, event), {
+                    getFeatureId,
+                    onFeatureSelect,
+                    onSelectedFeatureIdChange,
+                    renderFeaturePopup,
+                  });
+                });
+                line.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
+                  suppressNativeContextMenu(event);
+                  currentSurface.handleFeatureContextMenu(feature, getFlowPosition(map, feature, event), {
+                    coordinates: getFlowCenter(feature),
+                    getFeatureId,
+                    onFeatureContextMenu,
+                    onFeatureSelect,
+                    onSelectedFeatureIdChange,
+                    renderFeatureContextMenu,
+                    renderFeaturePopup,
+                  });
+                });
+                line.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                  map.getContainer().style.cursor = "pointer";
+                  currentSurface.handleFeatureHover(feature, getFlowPosition(map, feature, event), {
+                    getFeatureId,
+                    onHoveredFeatureIdChange,
+                    onFeatureHover,
+                    renderFeatureTooltip,
+                  });
+                });
+                line.on("mouseout", () => {
+                  map.getContainer().style.cursor = "";
+                  currentSurface.handleFeatureHover(null, null, {
+                    getFeatureId,
+                    onHoveredFeatureIdChange,
+                    onFeatureHover,
+                    renderFeatureTooltip,
+                  });
+                });
+              }
 
-      for (const [featureKey, cached] of cache) {
-        if (seen.has(featureKey)) {
-          continue;
-        }
+              line.addTo(layer);
+              const layers: FlatLayer[] = [line];
+              let arrowLayer: FlatLayer | null = null;
+              let fromEndpointLayer: FlatLayer | null = null;
+              let toEndpointLayer: FlatLayer | null = null;
 
-        removeFlatFlowCacheEntry(layer, cached);
-        cache.delete(featureKey);
-      }
+              if (showDirection && directionMarker === "arrow") {
+                arrowLayer = addFlowArrowMarker({
+                  color,
+                  feature,
+                  flowCoordinates,
+                  flat,
+                  map,
+                  opacity,
+                  overlay: layer,
+                }) ?? null;
+                if (arrowLayer) {
+                  layers.push(arrowLayer);
+                }
+              }
+
+              if (showEndpoints) {
+                fromEndpointLayer = flat
+                  .circleMarker(toLatLng(feature.flow.from), {
+                    className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--from",
+                    color: "#ffffff",
+                    fillColor: color,
+                    fillOpacity: 0.9,
+                    interactive: false,
+                    opacity: 1,
+                    radius: Math.max(3, feature.width * 0.55),
+                    weight: 1.5,
+                  })
+                  .addTo(layer);
+                layers.push(fromEndpointLayer);
+                toEndpointLayer = flat
+                  .circleMarker(toLatLng(feature.flow.to), {
+                    className: "mb-maps__flow-endpoint mb-maps__flow-endpoint--to",
+                    color: "#ffffff",
+                    fillColor: color,
+                    fillOpacity: 0.95,
+                    interactive: false,
+                    opacity: 1,
+                    radius: Math.max(4, feature.width * 0.75),
+                    weight: 1.5,
+                  })
+                  .addTo(layer);
+                layers.push(toEndpointLayer);
+              }
+
+              return {
+                arrowLayer,
+                fromEndpointLayer,
+                geometryKey,
+                layers,
+                lineLayer: line,
+                signature,
+                toEndpointLayer,
+              };
+            },
+            signature,
+            update: (entry) => {
+              if (entry.geometryKey === geometryKey) {
+                return true;
+              }
+
+              const updated = updateFlatFlowCachedGeometry(entry, feature, flowCoordinates);
+
+              if (updated) {
+                entry.geometryKey = geometryKey;
+              }
+
+              return updated;
+            },
+          };
+        }),
+      });
     }, { preserveOnRender: true, renderOnViewStateChange: false });
   }, [
     directionMarker,
@@ -485,15 +479,6 @@ function updateFlatFlowCachedGeometry<TProperties>(
   entry.toEndpointLayer?.setLatLng?.(toLatLng(feature.flow.to));
 
   return true;
-}
-
-function removeFlatFlowCacheEntry(
-  layer: { removeLayer: (cachedLayer: FlatLayer) => unknown },
-  entry: FlatFlowCacheEntry,
-) {
-  for (const cachedLayer of entry.layers) {
-    layer.removeLayer(cachedLayer);
-  }
 }
 
 export function getBoundsFromFlows<TProperties>(flows: readonly MapFlow<TProperties>[]) {

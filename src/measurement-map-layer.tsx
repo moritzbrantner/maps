@@ -6,6 +6,12 @@ import { toLatLng } from "./map-display";
 import type { FlatLayer, FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
 import { MapSurfaceContext } from "./map-view";
 import {
+  createFlatLayerResourceState,
+  reconcileFlatLayerEntries,
+  removeFlatLayerEntry,
+  resetFlatLayerResourceState,
+} from "./flat-layer-reconciler";
+import {
   formatMapDistance,
   getBeeLineDistanceMeters,
   getBeeLineMeasurementLabel,
@@ -42,7 +48,7 @@ export function BeeLineMeasurementLayer({
   const generatedLayerId = useId();
   const resolvedLayerId = layerId ?? `measurement-layer-${generatedLayerId}`;
   const flatMeasurementCacheRef = useRef<Map<string, FlatMeasurementCacheEntry>>(new Map());
-  const flatDraftCacheRef = useRef<FlatMeasurementCacheEntry | null>(null);
+  const flatDraftStateRef = useRef(createFlatLayerResourceState<FlatMeasurementCacheEntry>());
   const [draft, setDraft] = useState<MapBeeLineMeasurementDraft | null>(null);
   const isMeasuring = measurementMode === "bee-line";
   const draftLineColor = measurementDraftLineColor ?? measurementLineColor;
@@ -74,64 +80,50 @@ export function BeeLineMeasurementLayer({
   useEffect(() => {
     if (!registerMapLibreLayer || (display !== "flat" && display !== "globe")) {
       flatMeasurementCacheRef.current.clear();
-      flatDraftCacheRef.current = null;
+      flatDraftStateRef.current.resource = null;
+      flatDraftStateRef.current.signature = null;
       return;
     }
 
     return registerMapLibreLayer(resolvedLayerId, ({ layer, flat, map }) => {
-      const cache = flatMeasurementCacheRef.current;
-      const seen = new Set<string>();
+      reconcileFlatLayerEntries<FlatMeasurementCacheEntry>({
+        cache: flatMeasurementCacheRef.current,
+        layer,
+        plans: measurements.map((measurement) => {
+          const signature = createFlatMeasurementSignature(
+            measurement,
+            measurementDistanceFormat,
+            measurementLineColor,
+          );
 
-      for (const measurement of measurements) {
-        const signature = createFlatMeasurementSignature(
-          measurement,
-          measurementDistanceFormat,
-          measurementLineColor,
-        );
-        const cached = cache.get(measurement.id);
+          return {
+            key: measurement.id,
+            render: () => {
+              const layers = renderCompletedFlatMeasurement({
+                flat,
+                layer,
+                measurement,
+                measurementDistanceFormat,
+                measurementLineColor,
+                onSelect: emitSelect,
+              });
 
-        seen.add(measurement.id);
-
-        if (cached?.signature === signature) {
-          continue;
-        }
-
-        if (cached) {
-          removeFlatMeasurementCacheEntry(layer, cached);
-        }
-
-        const layers = renderCompletedFlatMeasurement({
-          flat,
-          layer,
-          measurement,
-          measurementDistanceFormat,
-          measurementLineColor,
-          onSelect: emitSelect,
-        });
-
-        if (layers.length > 0) {
-          cache.set(measurement.id, { layers, signature });
-        } else {
-          cache.delete(measurement.id);
-        }
-      }
-
-      for (const [measurementId, cached] of cache) {
-        if (seen.has(measurementId)) {
-          continue;
-        }
-
-        removeFlatMeasurementCacheEntry(layer, cached);
-        cache.delete(measurementId);
-      }
+              return layers.length > 0 ? { layers, signature } : null;
+            },
+            signature,
+          };
+        }),
+      });
 
       if (draft?.to && draft.distanceMeters !== undefined) {
         const signature = createFlatMeasurementDraftSignature(draft, draftLineColor);
+        const draftState = flatDraftStateRef.current;
 
-        if (flatDraftCacheRef.current?.signature !== signature) {
-          if (flatDraftCacheRef.current) {
-            removeFlatMeasurementCacheEntry(layer, flatDraftCacheRef.current);
-          }
+        if (draftState.signature !== signature) {
+          resetFlatLayerResourceState({
+            remove: (entry) => removeFlatLayerEntry(layer, entry),
+            state: draftState,
+          });
 
           const layers = renderDraftFlatMeasurement({
             draft,
@@ -139,11 +131,15 @@ export function BeeLineMeasurementLayer({
             layer,
             measurementDraftLineColor: draftLineColor,
           });
-          flatDraftCacheRef.current = layers.length > 0 ? { layers, signature } : null;
+
+          draftState.resource = layers.length > 0 ? { layers, signature } : null;
+          draftState.signature = draftState.resource ? signature : null;
         }
-      } else if (flatDraftCacheRef.current) {
-        removeFlatMeasurementCacheEntry(layer, flatDraftCacheRef.current);
-        flatDraftCacheRef.current = null;
+      } else if (flatDraftStateRef.current.resource) {
+        resetFlatLayerResourceState({
+          remove: (entry) => removeFlatLayerEntry(layer, entry),
+          state: flatDraftStateRef.current,
+        });
       }
 
       const container = map.getContainer();
@@ -399,15 +395,6 @@ function createFlatMeasurementDraftSignature(
     draft,
     measurementDraftLineColor,
   });
-}
-
-function removeFlatMeasurementCacheEntry(
-  layer: { removeLayer: (cachedLayer: FlatLayer) => unknown },
-  entry: FlatMeasurementCacheEntry,
-) {
-  for (const cachedLayer of entry.layers) {
-    layer.removeLayer(cachedLayer);
-  }
 }
 
 function getEventCoordinate(event: {

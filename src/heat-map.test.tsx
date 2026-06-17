@@ -50,6 +50,10 @@ const flatMock = vi.hoisted(() => {
     clearLayers() {
       this.layers = [];
     }
+
+    removeLayer(layer: Layer) {
+      this.layers = this.layers.filter((candidate) => candidate !== layer);
+    }
   }
 
   class MockMap {
@@ -900,7 +904,33 @@ describe("@moritzbrantner/maps heat maps", () => {
   });
 
   test("renders field mode as vector contour level lines", async () => {
-    render(
+    const points = [
+      {
+        id: "reykjavik",
+        latitude: 64.1466,
+        longitude: -21.9426,
+        metrics: {
+          temperature: 14.3,
+        },
+      },
+      {
+        id: "paris",
+        latitude: 48.8566,
+        longitude: 2.3522,
+        metrics: {
+          temperature: 24.1,
+        },
+      },
+      {
+        id: "madrid",
+        latitude: 40.4168,
+        longitude: -3.7038,
+        metrics: {
+          temperature: 30.4,
+        },
+      },
+    ];
+    const { rerender } = render(
       <HeatMap
         domainBounds={[-11, 35, 31, 62]}
         fieldColumns={18}
@@ -913,32 +943,7 @@ describe("@moritzbrantner/maps heat maps", () => {
         fieldValueDomain={[12, 34]}
         heatmapSurfaceMode="field"
         mapLabel="Temperature contour map"
-        points={[
-          {
-            id: "reykjavik",
-            latitude: 64.1466,
-            longitude: -21.9426,
-            metrics: {
-              temperature: 14.3,
-            },
-          },
-          {
-            id: "paris",
-            latitude: 48.8566,
-            longitude: 2.3522,
-            metrics: {
-              temperature: 24.1,
-            },
-          },
-          {
-            id: "madrid",
-            latitude: 40.4168,
-            longitude: -3.7038,
-            metrics: {
-              temperature: 30.4,
-            },
-          },
-        ]}
+        points={points}
         showAttributionControl={false}
         valueMetric="temperature"
       />,
@@ -972,6 +977,34 @@ describe("@moritzbrantner/maps heat maps", () => {
     expect(
       flatMock.getLayerGroups()[0]?.layers.some((layer) => layer.type === "imageOverlay"),
     ).toBe(false);
+
+    rerender(
+      <HeatMap
+        domainBounds={[-11, 35, 31, 62]}
+        fieldColumns={18}
+        fieldContourColor="#111827"
+        fieldContourLevels={8}
+        fieldContourLineWidth={0.75}
+        fieldRenderMode="raster"
+        fieldContourValueFormat={(value) => `${value.toFixed(1)} C`}
+        fieldRows={12}
+        fieldValueDomain={[12, 34]}
+        heatmapSurfaceMode="field"
+        mapLabel="Temperature contour map"
+        points={points}
+        showAttributionControl={false}
+        valueMetric="temperature"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      flatMock
+        .getLayerGroups()[0]
+        ?.layers.filter((layer) => layer.options?.className === "mb-maps__heat-contour"),
+    ).toHaveLength(0);
   });
 
   test("renders field colors and hoverable level lines together", async () => {
@@ -1057,31 +1090,32 @@ describe("@moritzbrantner/maps heat maps", () => {
   });
 
   test("can overlay original data points on a field heat map", async () => {
-    render(
+    const points = [
+      {
+        id: "berlin",
+        latitude: 52.52,
+        longitude: 13.405,
+        metrics: {
+          temperature: 21.5,
+        },
+      },
+      {
+        id: "paris",
+        latitude: 48.8566,
+        longitude: 2.3522,
+        metrics: {
+          temperature: 24.1,
+        },
+      },
+    ];
+    const { rerender } = render(
       <HeatMap
         domainBounds={[-11, 35, 31, 62]}
         fieldColumns={12}
         fieldRows={8}
         heatmapSurfaceMode="field"
         mapLabel="Temperature points map"
-        points={[
-          {
-            id: "berlin",
-            latitude: 52.52,
-            longitude: 13.405,
-            metrics: {
-              temperature: 21.5,
-            },
-          },
-          {
-            id: "paris",
-            latitude: 48.8566,
-            longitude: 2.3522,
-            metrics: {
-              temperature: 24.1,
-            },
-          },
-        ]}
+        points={points}
         showAttributionControl={false}
         showDataPoints
         dataPointValueFormat={(value) => `${value.toFixed(1)} C`}
@@ -1110,6 +1144,29 @@ describe("@moritzbrantner/maps heat maps", () => {
       },
       type: "circleMarker",
     });
+
+    rerender(
+      <HeatMap
+        domainBounds={[-11, 35, 31, 62]}
+        fieldColumns={12}
+        fieldRows={8}
+        heatmapSurfaceMode="field"
+        mapLabel="Temperature points map"
+        points={points}
+        showAttributionControl={false}
+        dataPointValueFormat={(value) => `${value.toFixed(1)} C`}
+        valueMetric="temperature"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      flatMock
+        .getLayerGroups()[0]
+        ?.layers.filter((layer) => layer.options?.className === "mb-maps__heat-data-point"),
+    ).toHaveLength(0);
   });
 
   test("projects a data-space heat radius when zoom changes", async () => {
