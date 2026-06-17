@@ -13,6 +13,7 @@ const visualBaselineViews = [
   "Flows",
   "Composed",
   "Interpolation",
+  "History",
   "GeoJSON",
   "Editor",
 ] as const;
@@ -29,6 +30,7 @@ const topLevelViews = [
   "Composed",
   "Timeline",
   "Interpolation",
+  "History",
   "Globe",
   "GeoJSON",
   "Editor",
@@ -181,6 +183,28 @@ test("Interpolation view renders every algorithm option without console errors",
   await expect(page.getByText("Topology strategy")).toBeVisible();
   await interpolationPanel.getByLabel("Topology strategy").selectOption("voronoi-partition");
   await expect(page.getByText("Topology strategy")).toBeVisible();
+});
+
+test("History view exposes polity timeline controls", async ({ page }) => {
+  await openView(page, "History");
+
+  await expect(page.getByLabel("European polity history")).toBeVisible();
+  await expect(page.getByRole("slider", { name: "Historical year" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show 1648 AD" })).toBeVisible();
+  await expect(
+    page.getByText("Illustrative, simplified borders for demonstrating polygon timeline transitions."),
+  ).toBeVisible();
+});
+
+test("History slider updates the active year and keeps the map visible", async ({ page }) => {
+  await openView(page, "History");
+
+  const slider = page.getByRole("slider", { name: "Historical year" });
+
+  await expect(page.getByText("800 AD").first()).toBeVisible();
+  await slider.fill("1648");
+  await expect(page.getByText("1648 AD").first()).toBeVisible();
+  await expect(page.getByLabel("European polity history")).toBeVisible();
 });
 
 test("Timeline view samples topology transitions at start, middle, and end", async ({ page }) => {
