@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { createMapLibreFlatLayerFactory, resolveMapLibreMarkerOffset } from "./maplibre-compat";
+import {
+  createMapLibreFlatLayerFactory,
+  removeMapLibreLayerIfExists,
+  removeMapLibreSourceIfExists,
+  resolveMapLibreMarkerOffset,
+} from "./maplibre-compat";
 
 describe("@moritzbrantner/maps maplibre compatibility", () => {
   test("centers Leaflet-style div icons when the anchor is in the middle", () => {
@@ -58,6 +63,26 @@ describe("@moritzbrantner/maps maplibre compatibility", () => {
     expect(markers[0]?.element.querySelector("[data-marker='trusted']")?.textContent).toBe("B");
     expect(markers[0]?.element.style.opacity).toBe("0.5");
     expect(markers[0]?.options.offset).toEqual([0, -12]);
+  });
+
+  test("ignores cleanup when MapLibre internals are already disposed", () => {
+    const disposedMap = {
+      getLayer() {
+        throw new TypeError("Cannot read properties of undefined (reading 'getLayer')");
+      },
+      getSource() {
+        throw new TypeError("Cannot read properties of undefined (reading 'getSource')");
+      },
+      removeLayer() {
+        throw new Error("removeLayer should not be called");
+      },
+      removeSource() {
+        throw new Error("removeSource should not be called");
+      },
+    } as unknown as import("maplibre-gl").Map;
+
+    expect(() => removeMapLibreLayerIfExists(disposedMap, "heat-layer:surface")).not.toThrow();
+    expect(() => removeMapLibreSourceIfExists(disposedMap, "heat-layer:surface")).not.toThrow();
   });
 });
 

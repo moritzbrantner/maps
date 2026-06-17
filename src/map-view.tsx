@@ -558,7 +558,7 @@ export function MapView({
     map.setMaxZoom?.(resolvedMaxZoom ?? 22);
     syncFlatBoundsConstraints();
 
-    if (map.getZoom() > currentViewState.zoom) {
+    if (resolvedMaxZoom !== undefined && map.getZoom() > resolvedMaxZoom) {
       lastCommittedFlatStateRef.current = currentViewState;
       map.jumpTo({ zoom: currentViewState.zoom });
     }

@@ -895,6 +895,68 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     ).toBe(marker);
   });
 
+  test("keeps flat GeoJSON polygon layers mounted while hovering", async () => {
+    render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Hoverable GeoJSON"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            type: "FeatureCollection",
+            features: [
+              {
+                id: "zone-1",
+                type: "Feature",
+                properties: { label: "Zone 1" },
+                geometry: {
+                  type: "Polygon",
+                  coordinates: [
+                    [
+                      [-75, 39],
+                      [-73, 39],
+                      [-73, 41],
+                      [-75, 41],
+                      [-75, 39],
+                    ],
+                  ],
+                },
+              },
+            ],
+          }}
+          renderFeatureTooltip={(feature) => String(feature.properties.label)}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Hoverable GeoJSON").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const group = flatMock.getLayerGroups()[0];
+    const polygon = group?.layers.find((layer) =>
+      hasLayerClassName(layer, "mb-maps__geojson-feature"),
+    );
+
+    await act(async () => {
+      polygon?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+
+    expect(screen.getByText("Zone 1")).toBeTruthy();
+    expect(
+      group?.layers.find((layer) =>
+        hasLayerClassName(layer, "mb-maps__geojson-feature"),
+      ),
+    ).toBe(polygon);
+  });
+
   test("clears flat cluster hover tooltip on click", async () => {
     render(
       <ClusteredMap
@@ -2990,3 +3052,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(screen.getByText("NYC to Boston: 9 trips")).toBeTruthy();
   });
 });
+
+function hasLayerClassName(layer: { options?: { className?: unknown } }, className: string) {
+  return typeof layer.options?.className === "string" && layer.options.className.includes(className);
+}

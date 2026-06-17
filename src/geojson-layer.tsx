@@ -65,7 +65,15 @@ export function GeoJsonLayer<
   renderFeaturePopup,
   renderFeatureTooltip,
   selectedFeatureId,
-  ...styleProps
+  lineColor,
+  lineOpacity,
+  lineWidth,
+  pointColor,
+  pointRadius,
+  polygonFillColor,
+  polygonFillOpacity,
+  polygonStrokeColor,
+  polygonStrokeWidth,
 }: GeoJsonLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
   const generatedLayerId = useId();
@@ -76,6 +84,31 @@ export function GeoJsonLayer<
   const features = useMemo(
     () => createGeoJsonLayerFeatures(deferredFeatureCollection),
     [deferredFeatureCollection],
+  );
+  const styleProps = useMemo(
+    () =>
+      compactGeoJsonLayerStyle({
+        lineColor,
+        lineOpacity,
+        lineWidth,
+        pointColor,
+        pointRadius,
+        polygonFillColor,
+        polygonFillOpacity,
+        polygonStrokeColor,
+        polygonStrokeWidth,
+      }),
+    [
+      lineColor,
+      lineOpacity,
+      lineWidth,
+      pointColor,
+      pointRadius,
+      polygonFillColor,
+      polygonFillOpacity,
+      polygonStrokeColor,
+      polygonStrokeWidth,
+    ],
   );
   const surfaceDisplay = surface?.display;
   const registerMapLibreLayer = surface?.registerMapLibreLayer;
@@ -203,6 +236,12 @@ export function GeoJsonLayer<
   ]);
 
   return null;
+}
+
+function compactGeoJsonLayerStyle(style: GeoJsonLayerStyle) {
+  return Object.fromEntries(
+    Object.entries(style).filter(([, value]) => value !== undefined),
+  ) as GeoJsonLayerStyle;
 }
 
 export function createGeoJsonLayerFeatures<

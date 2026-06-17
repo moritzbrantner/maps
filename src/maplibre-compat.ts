@@ -171,15 +171,37 @@ export function createMapLibreFlatLayerFactory(
 }
 
 export function removeMapLibreLayerIfExists(map: MapLibreMap, layerId: string) {
-  if (map.getLayer(layerId)) {
-    map.removeLayer(layerId);
+  try {
+    if (map.getLayer(layerId)) {
+      map.removeLayer(layerId);
+    }
+  } catch (error) {
+    if (!isDisposedMapLibreStyleAccessError(error, ["getLayer", "removeLayer"])) {
+      throw error;
+    }
   }
 }
 
 export function removeMapLibreSourceIfExists(map: MapLibreMap, sourceId: string) {
-  if (map.getSource(sourceId)) {
-    map.removeSource(sourceId);
+  try {
+    if (map.getSource(sourceId)) {
+      map.removeSource(sourceId);
+    }
+  } catch (error) {
+    if (!isDisposedMapLibreStyleAccessError(error, ["getSource", "removeSource"])) {
+      throw error;
+    }
   }
+}
+
+function isDisposedMapLibreStyleAccessError(error: unknown, properties: string[]) {
+  if (!(error instanceof TypeError)) {
+    return false;
+  }
+
+  const message = String(error.message);
+
+  return properties.some((property) => message.includes(property)) && message.includes("undefined");
 }
 
 export function upsertGeoJsonSource(

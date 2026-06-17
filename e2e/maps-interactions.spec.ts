@@ -145,6 +145,18 @@ test("selection interaction targets points, flows, and rendered GeoJSON", async 
   await expect(page.locator(".mb-maps__feature-popup")).toContainText("Paris checkpoint");
 });
 
+test("wheel zoom works while hovering rendered GeoJSON features", async ({ page }) => {
+  await openView(page, "GeoJSON");
+
+  const feature = await projectFeature(page, await getGeoJsonCenter(page, "geojson-polygon"));
+  await page.mouse.move(feature.x, feature.y);
+  await expect(page.locator(".mb-maps__feature-tooltip")).toBeVisible();
+
+  const beforeWheel = await getProbeViewState(page);
+  await page.mouse.wheel(0, -500);
+  await expectViewStateChanged(page, beforeWheel, "zoom");
+});
+
 test("interaction point dragging updates coordinates and releases map drag state", async ({ page }) => {
   await openView(page, "Points");
 
