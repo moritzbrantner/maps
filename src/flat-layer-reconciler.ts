@@ -30,23 +30,19 @@ export function reconcileFlatLayerEntries<TEntry extends FlatLayerEntry<unknown>
   remove?: (layer: FlatLayerParent<TEntry>, entry: TEntry) => void;
 }) {
   const latestPlans = new Map<string, FlatLayerPlan<TEntry>>();
-  const duplicateKeys = new Set<string>();
 
   for (const plan of plans) {
+    // Last plan wins for duplicate keys, so any cached entry is replaced deterministically.
     if (latestPlans.has(plan.key)) {
-      duplicateKeys.add(plan.key);
+      const cached = cache.get(plan.key);
+
+      if (cached) {
+        remove(layer, cached);
+        cache.delete(plan.key);
+      }
     }
 
     latestPlans.set(plan.key, plan);
-  }
-
-  for (const key of duplicateKeys) {
-    const cached = cache.get(key);
-
-    if (cached) {
-      remove(layer, cached);
-      cache.delete(key);
-    }
   }
 
   for (const [key, plan] of latestPlans) {
@@ -134,6 +130,7 @@ export function resetFlatLayerResourceState<TResource, TMetadata>({
   revokeMetadata?: (metadata: TMetadata) => void;
   state: FlatLayerResourceState<TResource, TMetadata>;
 }) {
+  // Resetting also invalidates async completions that captured an older request id.
   state.requestId += 1;
 
   if (state.resource) {

@@ -131,7 +131,7 @@ function getStaticImports(filePath) {
   const contents = readFileSync(filePath, "utf8");
   const imports = new Set();
   const importPattern =
-    /(?:import\s*(?:[^"'()]+?\s+from\s*)?["'](\.\/[^"']+\.js)["']|from\s+["'](\.\/[^"']+\.js)["'])/g;
+    /(?:import\s*(?:[^"'()]+?\s*from\s*)?["'](\.\/[^"']+\.js)["']|from\s+["'](\.\/[^"']+\.js)["'])/g;
 
   for (const match of contents.matchAll(importPattern)) {
     const importPath = match[1] ?? match[2];

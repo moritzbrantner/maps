@@ -1,4 +1,3 @@
-@source "../dist/**/*.{js,mjs}";
 @source "./**/*.{ts,tsx}";
 @source "../node_modules/@moritzbrantner/timeline-editor/dist/**/*.{js,mjs}";
 

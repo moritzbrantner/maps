@@ -16,6 +16,7 @@ export default defineConfig({
     temporal: "src/entries/temporal.ts",
   },
   format: ["esm"],
+  minifyWhitespace: true,
   outDir: "dist",
   splitting: true,
 });

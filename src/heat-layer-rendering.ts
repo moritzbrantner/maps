@@ -13,7 +13,6 @@ import {
   createFlatLayerResourceState,
   isCurrentFlatLayerResourceRequest,
   reconcileFlatLayerEntries,
-  removeFlatLayerEntry,
   resetFlatLayerResourceState,
   type FlatLayerEntry,
   type FlatLayerResourceState,
@@ -608,7 +607,7 @@ function updateHeatLayerImageOverlay(
 }
 
 function removeHeatLayerManagedLayer(parent: FlatLayerGroup, layer: HeatLayerManagedLayer) {
-  removeFlatLayerEntry(parent, { layers: [layer], signature: "" });
+  parent.removeLayer(layer);
 }
 
 function bindHeatLayerTooltip(layer: unknown, content: string) {

@@ -204,51 +204,27 @@ function PointFeatureLayer<
           return;
         }
 
-        const preparedFeatures = features.map((feature) => {
-          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-          const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
-          const featureDraggable = isFeatureDraggable(feature, draggable);
-          const featureKey = getFlatPointFeatureKey(feature, getFeatureId);
-          const coordinatesKey = createFlatPointCoordinatesKey(feature.coordinates);
-          const fillColor = getPointColor?.(feature) ?? pointColor;
-          const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius);
-          const signature = createFlatPointSignature({
-            featureDraggable,
-            fillColor,
-            hovered,
-            isMeasuring,
-            radius,
-            selected,
-          });
-
-          return {
-            coordinatesKey,
-            feature,
-            featureDraggable,
-            featureKey,
-            fillColor,
-            hovered,
-            radius,
-            selected,
-            signature,
-          };
-        });
-
         reconcileFlatLayerEntries<FlatPointCacheEntry>({
           cache: flatMarkerCacheRef.current,
           layer,
-          plans: preparedFeatures.map(
-            ({
-              coordinatesKey,
-              feature,
+          plans: features.map((feature) => {
+            const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
+            const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
+            const featureDraggable = isFeatureDraggable(feature, draggable);
+            const featureKey = getFlatPointFeatureKey(feature, getFeatureId);
+            const coordinatesKey = createFlatPointCoordinatesKey(feature.coordinates);
+            const fillColor = getPointColor?.(feature) ?? pointColor;
+            const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius);
+            const signature = createFlatPointSignature({
               featureDraggable,
-              featureKey,
               fillColor,
               hovered,
+              isMeasuring,
               radius,
               selected,
-              signature,
-            }) => ({
+            });
+
+            return {
               key: featureKey,
               render: () => {
                 const marker = flat.circleMarker(toLatLng(feature.coordinates), {
@@ -374,8 +350,8 @@ function PointFeatureLayer<
 
                 return updated;
               },
-            }),
-          ),
+            };
+          }),
         });
       },
       { preserveOnRender: true, renderOnViewStateChange: false },
