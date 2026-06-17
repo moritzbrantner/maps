@@ -4,6 +4,7 @@ import {
   demoHistoricalPolityScenes,
   formatDemoHistoricalPolityYear,
   getDemoHistoricalPolityFrame,
+  getDemoHistoricalPolityPlaybackFrame,
 } from "./data/history-polities";
 
 describe("History demo polities", () => {
@@ -28,5 +29,37 @@ describe("History demo polities", () => {
     expect(getDemoHistoricalPolityFrame(2100)).toBe(demoHistoricalPolityScenes.at(-1)?.collection);
     expect(formatDemoHistoricalPolityYear(800)).toBe("800 AD");
     expect(formatDemoHistoricalPolityYear(2000)).toBe("2000 AD");
+  });
+
+  test("returns continuity frames for playback at internal epoch milestones", () => {
+    const playbackFrame = getDemoHistoricalPolityPlaybackFrame(1000);
+
+    expect(playbackFrame).not.toBe(demoHistoricalPolityScenes[1]?.collection);
+    expect(playbackFrame.features.length).toBeGreaterThan(0);
+    expect(
+      playbackFrame.features.some(
+        (feature) => String(feature.properties?.transitionKind ?? "").length > 0,
+      ),
+    ).toBe(true);
+  });
+
+  test("uses more detailed polygon rings than simple bounding boxes", () => {
+    const ringLengths = demoHistoricalPolityScenes.flatMap((scene) =>
+      scene.collection.features.flatMap((feature) => {
+        if (feature.geometry?.type === "Polygon") {
+          return feature.geometry.coordinates.map((ring) => ring.length);
+        }
+
+        if (feature.geometry?.type === "MultiPolygon") {
+          return feature.geometry.coordinates.flatMap((polygon) =>
+            polygon.map((ring) => ring.length),
+          );
+        }
+
+        return [];
+      }),
+    );
+
+    expect(Math.min(...ringLengths)).toBeGreaterThan(5);
   });
 });

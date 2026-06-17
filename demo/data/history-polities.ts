@@ -24,6 +24,7 @@ export type DemoHistoricalPolityProperties = {
   precision: DemoHistoricalPolityPrecision;
   sceneYear: number;
   note?: string;
+  transitionKind?: string;
 };
 
 type HistoricalPolityInput = {
@@ -271,22 +272,64 @@ export function getDemoHistoricalPolityFrameWithPlanCache(
     return exactScene.collection;
   }
 
-  const nextSceneIndex = demoHistoricalPolityScenes.findIndex((scene) => scene.year > clampedYear);
+  return getInterpolatedDemoHistoricalPolityFrame(clampedYear, planCache);
+}
+
+export function getDemoHistoricalPolityPlaybackFrame(
+  year: number,
+  planCache?: Map<string, GeoJsonTransitionPlan<DemoHistoricalPolityProperties>>,
+): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
+  const clampedYear = clamp(
+    year,
+    demoHistoricalPolityScenes[0]!.year,
+    demoHistoricalPolityScenes.at(-1)!.year,
+  );
+
+  if (clampedYear === demoHistoricalPolityScenes[0]!.year) {
+    return demoHistoricalPolityScenes[0]!.collection;
+  }
+
+  if (clampedYear === demoHistoricalPolityScenes.at(-1)!.year) {
+    return demoHistoricalPolityScenes.at(-1)!.collection;
+  }
+
+  return getInterpolatedDemoHistoricalPolityFrame(clampedYear, planCache);
+}
+
+function getInterpolatedDemoHistoricalPolityFrame(
+  year: number,
+  planCache?: Map<string, GeoJsonTransitionPlan<DemoHistoricalPolityProperties>>,
+): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
+  const nextSceneIndex = demoHistoricalPolityScenes.findIndex((scene) => scene.year > year);
   const previousScene = demoHistoricalPolityScenes[nextSceneIndex - 1]!;
   const nextScene = demoHistoricalPolityScenes[nextSceneIndex]!;
-  const progress = (clampedYear - previousScene.year) / (nextScene.year - previousScene.year);
+  const progress = (year - previousScene.year) / (nextScene.year - previousScene.year);
+  const plan = getDemoHistoricalPolityTransitionPlan(previousScene, nextScene, planCache);
+
+  return interpolateGeoJsonTransitionPlan(plan, progress);
+}
+
+function getDemoHistoricalPolityTransitionPlan(
+  previousScene: DemoHistoricalPolityScene,
+  nextScene: DemoHistoricalPolityScene,
+  planCache?: Map<string, GeoJsonTransitionPlan<DemoHistoricalPolityProperties>>,
+) {
   const planKey = `${previousScene.year}-${nextScene.year}`;
-  const plan =
-    planCache?.get(planKey) ??
-    createGeoJsonTransitionPlan(previousScene.collection, nextScene.collection, {
-      algorithm: "topology-plan",
-      partMatchingStrategy: "auto",
-      topologyStrategy: "voronoi-partition",
-    });
+  const cachedPlan = planCache?.get(planKey);
+
+  if (cachedPlan) {
+    return cachedPlan;
+  }
+
+  const plan = createGeoJsonTransitionPlan(previousScene.collection, nextScene.collection, {
+    algorithm: "topology-plan",
+    partMatchingStrategy: "auto",
+    topologyStrategy: "voronoi-partition",
+  });
 
   planCache?.set(planKey, plan);
 
-  return interpolateGeoJsonTransitionPlan(plan, progress);
+  return plan;
 }
 
 function scene(year: number, polities: HistoricalPolityInput[]): DemoHistoricalPolityScene {
@@ -330,14 +373,29 @@ function rect(
   east: number,
   north: number,
 ): Extract<TemporalGeoJsonSupportedGeometry, { type: "Polygon" }> {
+  const width = east - west;
+  const height = north - south;
+
   return {
     coordinates: [
       [
-        [west, south],
-        [east, south],
-        [east, north],
-        [west, north],
-        [west, south],
+        [west, south + height * 0.15],
+        [west + width * 0.22, south],
+        [west + width * 0.42, south + height * 0.1],
+        [west + width * 0.66, south + height * 0.02],
+        [east, south + height * 0.18],
+        [east - width * 0.18, south + height * 0.34],
+        [east - width * 0.03, south + height * 0.5],
+        [east - width * 0.16, south + height * 0.72],
+        [east - width * 0.06, north],
+        [west + width * 0.7, north - height * 0.16],
+        [west + width * 0.52, north - height * 0.06],
+        [west + width * 0.25, north - height * 0.13],
+        [west, north - height * 0.05],
+        [west + width * 0.15, south + height * 0.7],
+        [west + width * 0.04, south + height * 0.52],
+        [west + width * 0.12, south + height * 0.3],
+        [west, south + height * 0.15],
       ],
     ],
     type: "Polygon",

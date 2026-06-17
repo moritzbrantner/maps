@@ -16,7 +16,7 @@ import { demoMapStyle } from "../data/map-style";
 import {
   demoHistoricalPolityScenes,
   formatDemoHistoricalPolityYear,
-  getDemoHistoricalPolityFrameWithPlanCache,
+  getDemoHistoricalPolityPlaybackFrame,
   type DemoHistoricalPolityProperties,
   type DemoHistoricalPolityRegion,
 } from "../data/history-polities";
@@ -67,8 +67,8 @@ export function HistoryDemoView({
   >(new Map());
   const roundedYear = Math.round(year);
   const activeFrame = useMemo(
-    () => getDemoHistoricalPolityFrameWithPlanCache(roundedYear, transitionPlanCacheRef.current),
-    [roundedYear],
+    () => getDemoHistoricalPolityPlaybackFrame(year, transitionPlanCacheRef.current),
+    [year],
   );
   const activeSegment = getDemoHistoricalPolitySegmentLabel(roundedYear);
 
