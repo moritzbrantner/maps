@@ -495,7 +495,19 @@ abstract class MapLibreSourceLayer implements FlatLayer {
       }
 
       const fallbackHandler = (mapEventObject: unknown) => {
-        const point = (mapEventObject as { point?: { x: number; y: number } } | undefined)?.point;
+        const event = mapEventObject as
+          | {
+              latlng?: { lat: number; lng: number };
+              lngLat?: { lat: number; lng: number };
+              point?: { x: number; y: number };
+            }
+          | undefined;
+        const point =
+          event?.lngLat
+            ? this.map.project([event.lngLat.lng, event.lngLat.lat])
+            : event?.latlng
+              ? this.map.project([event.latlng.lng, event.latlng.lat])
+              : event?.point;
 
         if (!point || !this.map.getLayer(layerId)) {
           return;
@@ -515,6 +527,11 @@ abstract class MapLibreSourceLayer implements FlatLayer {
 
         emit(mapEventObject);
       };
+      (
+        fallbackHandler as typeof fallbackHandler & {
+          __mbLayerHitTestFallback?: boolean;
+        }
+      ).__mbLayerHitTestFallback = true;
 
       (this.map as unknown as EventedMap).on(mapEvent, fallbackHandler);
       this.handlers.push({
@@ -963,6 +980,7 @@ function latLngToLngLat([latitude, longitude]: [number, number]) {
 
 function toFlatPointerEvent(event: unknown): FlatPointerEvent {
   const record = event as {
+    latlng?: { lat: number; lng: number };
     lngLat?: { lat: number; lng: number };
     originalEvent?: FlatPointerEvent["originalEvent"];
     point?: { x: number; y: number };
@@ -970,7 +988,7 @@ function toFlatPointerEvent(event: unknown): FlatPointerEvent {
 
   return {
     containerPoint: record.point,
-    latlng: record.lngLat ? { lat: record.lngLat.lat, lng: record.lngLat.lng } : undefined,
+    latlng: record.latlng ?? (record.lngLat ? { lat: record.lngLat.lat, lng: record.lngLat.lng } : undefined),
     originalEvent: record.originalEvent,
   };
 }

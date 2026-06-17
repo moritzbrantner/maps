@@ -325,7 +325,9 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0.05, lng: 0.05 } });
+      for (const handler of map?.handlers.get("click") ?? []) {
+        handler({ latlng: { lat: 0.05, lng: 0.05 } });
+      }
     });
 
     await waitFor(() => {

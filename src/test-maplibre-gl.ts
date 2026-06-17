@@ -295,6 +295,21 @@ export class Map {
     return this.layers.get(id);
   }
 
+  queryRenderedFeatures(
+    _geometry?: unknown,
+    options: {
+      layers?: string[];
+    } = {},
+  ) {
+    const layerIds = options.layers ?? [...this.mockLayers.keys()];
+
+    return layerIds
+      .filter((layerId) => this.layers.has(layerId))
+      .map((layerId) => ({
+        layer: this.layers.get(layerId),
+      }));
+  }
+
   getSource(id: string) {
     return this.sources.get(id);
   }
@@ -369,10 +384,18 @@ export class Map {
 
   on(event: string, ...args: unknown[]) {
     const handler = args.at(-1) as Handler;
-    const handlers = this.handlers.get(event) ?? [];
+    const isLayerFallback = (
+      handler as Handler & {
+        __mbLayerHitTestFallback?: boolean;
+      }
+    ).__mbLayerHitTestFallback;
 
-    handlers.push(handler);
-    this.handlers.set(event, handlers);
+    if (args.length === 1 && !isLayerFallback) {
+      const handlers = this.handlers.get(event) ?? [];
+
+      handlers.push(handler);
+      this.handlers.set(event, handlers);
+    }
 
     if (args.length === 1) {
       (this.baseMap as unknown as { on?: (event: string, handler: Handler) => void }).on?.(

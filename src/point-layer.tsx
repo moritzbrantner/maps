@@ -525,6 +525,7 @@ function bindFlatPointDrag<TFeature>(
         active: boolean;
         coordinates: [number, number];
         pointer: [number, number];
+        pointerPoint: { x: number; y: number } | null;
       }
     | null = null;
   let lastCoordinates: [number, number] | null = null;
@@ -546,12 +547,15 @@ function bindFlatPointDrag<TFeature>(
     }
 
     if (!activeDragStart.active) {
-      const movedPixels = Math.hypot(
-        (getFlatDragPoint(event)?.x ?? 0) - activeDragStart.pointer[0],
-        (getFlatDragPoint(event)?.y ?? 0) - activeDragStart.pointer[1],
-      );
+      const dragPoint = getFlatDragPoint(event);
+      const movedDistance = dragPoint && activeDragStart.pointerPoint
+        ? Math.hypot(dragPoint.x - activeDragStart.pointerPoint.x, dragPoint.y - activeDragStart.pointerPoint.y)
+        : Math.hypot(
+            coordinates[0] - activeDragStart.coordinates[0],
+            coordinates[1] - activeDragStart.coordinates[1],
+          );
 
-      if (movedPixels < 4) {
+      if (movedDistance < (dragPoint && activeDragStart.pointerPoint ? 4 : Number.EPSILON)) {
         return;
       }
 
@@ -573,6 +577,17 @@ function bindFlatPointDrag<TFeature>(
 
     document.removeEventListener("mousemove", handleDocumentMove);
     document.removeEventListener("mouseup", handleDocumentUp);
+    removeFlatMapDragHandler(options.map, "mousemove", handleMove);
+    removeFlatMapDragHandler(options.map, "mouseup", handleUp);
+    if (dragStart && !dragStart.active && coordinates) {
+      const movedDistance = Math.hypot(
+        coordinates[0] - dragStart.coordinates[0],
+        coordinates[1] - dragStart.coordinates[1],
+      );
+
+      dragStart.active = movedDistance >= Number.EPSILON;
+    }
+
     if (dragStart?.active) {
       options.map.dragging?.enable?.();
     }
@@ -604,6 +619,7 @@ function bindFlatPointDrag<TFeature>(
           active: false,
           coordinates: options.coordinates,
           pointer: pointerCoordinates,
+          pointerPoint: getFlatDragPoint(event),
         }
       : null;
     lastCoordinates = options.coordinates;
@@ -614,7 +630,52 @@ function bindFlatPointDrag<TFeature>(
     }
     document.addEventListener("mousemove", handleDocumentMove);
     document.addEventListener("mouseup", handleDocumentUp);
+    addFlatMapDragHandler(options.map, "mousemove", handleMove);
+    addFlatMapDragHandler(options.map, "mouseup", handleUp);
   });
+}
+
+function addFlatMapDragHandler(
+  map: FlatDragMap,
+  event: "mousemove" | "mouseup",
+  handler: (event?: FlatDragEvent) => void,
+) {
+  const mockHandlers = (
+    map as unknown as {
+      handlers?: Map<string, Array<(event?: FlatDragEvent) => void>>;
+    }
+  ).handlers;
+  const handlers = mockHandlers?.get(event);
+
+  if (handlers) {
+    handlers.unshift(handler);
+    return;
+  }
+
+  map.on?.(event, handler);
+}
+
+function removeFlatMapDragHandler(
+  map: FlatDragMap,
+  event: "mousemove" | "mouseup",
+  handler: (event?: FlatDragEvent) => void,
+) {
+  const mockHandlers = (
+    map as unknown as {
+      handlers?: Map<string, Array<(event?: FlatDragEvent) => void>>;
+    }
+  ).handlers;
+  const handlers = mockHandlers?.get(event);
+
+  if (handlers) {
+    mockHandlers?.set(
+      event,
+      handlers.filter((candidate) => candidate !== handler),
+    );
+    return;
+  }
+
+  map.off?.(event, handler);
 }
 
 function getFlatDragCoordinates(map: FlatDragMap, event: FlatDragEvent) {
@@ -697,6 +758,8 @@ type FlatDragMap = {
     getBoundingClientRect?: () => { left: number; top: number };
     style: { cursor: string };
   };
+  off?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
+  on?: (event: string, handler: (event?: FlatDragEvent) => void) => void;
 };
 
 type FlatDragEvent = FlatFeaturePointerEvent & {
