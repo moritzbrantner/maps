@@ -7,7 +7,6 @@ import {
   MapView,
   getBoundsFromGeoJson,
   type GeoJsonLayerFeature,
-  type GeoJsonTransitionPlan,
   type MapSurfaceController,
   type MapViewState,
 } from "@moritzbrantner/maps";
@@ -63,14 +62,8 @@ export function HistoryDemoView({
   const [isPlaying, setIsPlaying] = useState(false);
   const animationFrameRef = useRef<number | null>(null);
   const previousTimestampRef = useRef<number | null>(null);
-  const transitionPlanCacheRef = useRef<
-    Map<string, GeoJsonTransitionPlan<DemoHistoricalPolityProperties>>
-  >(new Map());
   const roundedYear = Math.round(year);
-  const activeFrame = useMemo(
-    () => getDemoHistoricalPolityPlaybackFrame(year, transitionPlanCacheRef.current),
-    [year],
-  );
+  const activeFrame = useMemo(() => getDemoHistoricalPolityPlaybackFrame(year), [year]);
   const activeSegment = getDemoHistoricalPolitySegmentLabel(roundedYear);
 
   useEffect(() => {
@@ -216,12 +209,13 @@ export function HistoryDemoView({
 function getHistoricalPolityStyle(feature: GeoJsonLayerFeature<DemoHistoricalPolityProperties>) {
   const color = historicalPolityRegionColors[feature.properties.region] ?? "#475569";
   const approximate = feature.properties.precision === "approximate";
+  const displayOpacity = feature.properties.displayOpacity ?? 1;
 
   return {
     polygonFillColor: color,
-    polygonFillOpacity: approximate ? 0.22 : 0.32,
+    polygonFillOpacity: (approximate ? 0.22 : 0.32) * displayOpacity,
     polygonStrokeColor: color,
-    polygonStrokeWidth: approximate ? 1.2 : 1.6,
+    polygonStrokeWidth: displayOpacity < 0.22 ? 0 : approximate ? 1.2 : 1.6,
   };
 }
 

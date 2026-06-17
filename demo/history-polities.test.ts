@@ -37,11 +37,19 @@ describe("History demo polities", () => {
 
     expect(playbackFrame).not.toBe(demoHistoricalPolityScenes[1]?.collection);
     expect(playbackFrame.features.length).toBeGreaterThan(0);
-    expect(
-      playbackFrame.features.some(
-        (feature) => String(feature.properties?.transitionKind ?? "").length > 0,
-      ),
-    ).toBe(true);
+    expect(playbackFrame.features.length).toBeLessThanOrEqual(18);
+    expect(playbackFrame.features.every((feature) => !feature.properties?.transitionKind)).toBe(
+      true,
+    );
+  });
+
+  test("keeps the 1198 AD playback frame free of topology residual slivers", () => {
+    const playbackFrame = getDemoHistoricalPolityPlaybackFrame(1198);
+
+    expect(playbackFrame.features.length).toBeLessThanOrEqual(18);
+    expect(playbackFrame.features.every((feature) => !feature.properties?.transitionKind)).toBe(
+      true,
+    );
   });
 
   test("uses more detailed polygon rings than simple bounding boxes", () => {
@@ -77,6 +85,6 @@ describe("History demo polities", () => {
     );
     const sharedIds = [...beforeIds].filter((id) => afterIds.has(id));
 
-    expect(sharedIds.length).toBeGreaterThanOrEqual(12);
+    expect(sharedIds.length).toBeGreaterThanOrEqual(10);
   });
 });

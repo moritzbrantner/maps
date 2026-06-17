@@ -1,8 +1,10 @@
 import {
   createGeoJsonTransitionPlan,
+  interpolateTemporalGeoJsonGeometry,
   interpolateGeoJsonTransitionPlan,
   type GeoJsonTransitionPlan,
   type TemporalGeoJsonGeometryFeatureCollection,
+  type TemporalGeoJsonGeometryFeature,
   type TemporalGeoJsonSupportedGeometry,
 } from "@moritzbrantner/maps";
 
@@ -24,6 +26,7 @@ export type DemoHistoricalPolityProperties = {
   precision: DemoHistoricalPolityPrecision;
   sceneYear: number;
   note?: string;
+  displayOpacity?: number;
   sourceIds?: Array<string | number>;
   sourcePartPath?: string;
   targetIds?: Array<string | number>;
@@ -51,7 +54,7 @@ type HistoricalPolityRenderableFeature = {
   properties?: Partial<DemoHistoricalPolityProperties> | null;
 };
 
-const historyMilestoneRenderKeyWindowYears = 2;
+const historyFadeVisibilityThreshold = 0.08;
 
 export const demoHistoricalPolityScenes: DemoHistoricalPolityScene[] = [
   scene(800, [
@@ -288,7 +291,6 @@ export function getDemoHistoricalPolityFrameWithPlanCache(
 
 export function getDemoHistoricalPolityPlaybackFrame(
   year: number,
-  planCache?: Map<string, GeoJsonTransitionPlan<DemoHistoricalPolityProperties>>,
 ): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
   const clampedYear = clamp(
     year,
@@ -297,41 +299,149 @@ export function getDemoHistoricalPolityPlaybackFrame(
   );
 
   if (clampedYear === demoHistoricalPolityScenes[0]!.year) {
-    return demoHistoricalPolityScenes[0]!.collection;
+    return withDemoHistoricalPolityDisplayOpacity(demoHistoricalPolityScenes[0]!.collection);
   }
 
   if (clampedYear === demoHistoricalPolityScenes.at(-1)!.year) {
-    return demoHistoricalPolityScenes.at(-1)!.collection;
+    return withDemoHistoricalPolityDisplayOpacity(demoHistoricalPolityScenes.at(-1)!.collection);
   }
 
-  return getInterpolatedDemoHistoricalPolityFrame(clampedYear, planCache);
+  return getDemoHistoricalPolityDisplayFrame(clampedYear);
 }
 
 export function getDemoHistoricalPolityRenderFeatureId(
   feature: HistoricalPolityRenderableFeature,
-  year: number,
+  _year: number,
 ) {
-  const milestoneYear = getNearbyDemoHistoricalPolityMilestoneYear(year);
   const properties = feature.properties;
 
-  if (milestoneYear && properties) {
-    const boundaryIds = year < milestoneYear ? properties.targetIds : properties.sourceIds;
-    const boundaryPartPath =
-      year < milestoneYear ? properties.targetPartPath : properties.sourcePartPath;
-    const primaryBoundaryId = boundaryIds?.[0];
+  return String(feature.id ?? properties?.polityId ?? properties?.label ?? "historical-polity");
+}
 
-    if (primaryBoundaryId !== undefined) {
-      const partKey = boundaryPartPath ? `:${boundaryPartPath}` : "";
-      const residualKey =
-        properties.transitionKind && !boundaryPartPath
-          ? `:${properties.transitionKind}:${String(feature.id ?? "feature")}`
-          : "";
+function getDemoHistoricalPolityDisplayFrame(
+  year: number,
+): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
+  const exactScene = demoHistoricalPolityScenes.find((scene) => scene.year === year);
 
-      return `history:${milestoneYear}:${primaryBoundaryId}${partKey}${residualKey}`;
-    }
+  if (exactScene) {
+    return withDemoHistoricalPolityDisplayOpacity(exactScene.collection);
   }
 
-  return String(feature.id ?? properties?.polityId ?? properties?.label ?? "historical-polity");
+  const nextSceneIndex = demoHistoricalPolityScenes.findIndex((scene) => scene.year > year);
+  const previousScene = demoHistoricalPolityScenes[nextSceneIndex - 1]!;
+  const nextScene = demoHistoricalPolityScenes[nextSceneIndex]!;
+  const progress = (year - previousScene.year) / (nextScene.year - previousScene.year);
+  const previousById = new Map(
+    previousScene.collection.features.map((feature) => [feature.properties?.polityId, feature]),
+  );
+  const nextById = new Map(
+    nextScene.collection.features.map((feature) => [feature.properties?.polityId, feature]),
+  );
+  const polityIds = [...new Set([...previousById.keys(), ...nextById.keys()])].filter(
+    (id): id is string => typeof id === "string",
+  );
+
+  return {
+    features: polityIds.flatMap((polityId) => {
+      const previousFeature = previousById.get(polityId);
+      const nextFeature = nextById.get(polityId);
+
+      if (previousFeature && nextFeature) {
+        return [
+          createDemoHistoricalPolityDisplayFeature(
+            nextFeature,
+            interpolateDemoHistoricalPolityGeometry(previousFeature, nextFeature, progress),
+            1,
+          ),
+        ];
+      }
+
+      if (previousFeature) {
+        const displayOpacity = 1 - progress;
+
+        return displayOpacity >= historyFadeVisibilityThreshold
+          ? [
+              createDemoHistoricalPolityDisplayFeature(
+                previousFeature,
+                previousFeature.geometry,
+                displayOpacity,
+              ),
+            ]
+          : [];
+      }
+
+      if (nextFeature) {
+        const displayOpacity = progress;
+
+        return displayOpacity >= historyFadeVisibilityThreshold
+          ? [
+              createDemoHistoricalPolityDisplayFeature(
+                nextFeature,
+                nextFeature.geometry,
+                displayOpacity,
+              ),
+            ]
+          : [];
+      }
+
+      return [];
+    }),
+    type: "FeatureCollection",
+  };
+}
+
+function interpolateDemoHistoricalPolityGeometry(
+  previousFeature: TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>,
+  nextFeature: TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>,
+  progress: number,
+) {
+  const previousGeometry = previousFeature.geometry;
+  const nextGeometry = nextFeature.geometry;
+
+  if (!previousGeometry || !nextGeometry) {
+    return nextGeometry ?? previousGeometry;
+  }
+
+  return (
+    interpolateTemporalGeoJsonGeometry(previousGeometry, nextGeometry, progress, {
+      fallback: "hold",
+      minResampleCoordinates: 24,
+      partMatchingStrategy: "auto",
+      strategy: "vertex-union",
+    }) ?? (progress < 0.5 ? previousGeometry : nextGeometry)
+  );
+}
+
+function createDemoHistoricalPolityDisplayFeature(
+  feature: TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>,
+  geometry: TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>["geometry"],
+  displayOpacity: number,
+): TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties> {
+  return {
+    geometry,
+    id: feature.properties?.polityId ?? feature.id,
+    properties: {
+      ...feature.properties!,
+      displayOpacity,
+      sourceIds: undefined,
+      sourcePartPath: undefined,
+      targetIds: undefined,
+      targetPartPath: undefined,
+      transitionKind: undefined,
+    },
+    type: "Feature",
+  };
+}
+
+function withDemoHistoricalPolityDisplayOpacity(
+  collection: TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties>,
+): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
+  return {
+    features: collection.features.map((feature) =>
+      createDemoHistoricalPolityDisplayFeature(feature, feature.geometry, 1),
+    ),
+    type: "FeatureCollection",
+  };
 }
 
 function getInterpolatedDemoHistoricalPolityFrame(
@@ -451,13 +561,4 @@ function multi(
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-function getNearbyDemoHistoricalPolityMilestoneYear(year: number) {
-  return (
-    demoHistoricalPolityScenes
-      .slice(1, -1)
-      .find((scene) => Math.abs(scene.year - year) <= historyMilestoneRenderKeyWindowYears)?.year ??
-    null
-  );
 }
