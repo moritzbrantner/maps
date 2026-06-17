@@ -63,7 +63,7 @@ jobs:
       bun_version: "1.3.14"
       bun_cache_dependency_path: bun.lock
       pre_command: bunx playwright install --with-deps chromium
-      e2e_command: bun run test:browser -- --grep @smoke --project=chromium
+      e2e_command: bun run test:browser:smoke
       install_playwright: false
       artifact_paths: |
         playwright-report

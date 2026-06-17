@@ -21,6 +21,27 @@ bun run dev
 bun run verify:fast
 ```
 
+## Agent TDD Harness
+
+Agents should follow `AGENTS.md`: one behavior test, one minimal implementation,
+then the same test back to green before continuing.
+
+Useful red/green commands:
+
+```sh
+bun run test:tdd:run -- src/example.test.ts
+bun run test:tdd:related -- src/example.ts
+bun run test:tdd -- src/example.test.ts
+bun run verify:agent
+```
+
+Run browser smoke tests for Map View, Map UI, MapLibre, interaction, or demo
+changes:
+
+```sh
+bun run test:browser:smoke
+```
+
 ## Release Validation
 
 ```sh

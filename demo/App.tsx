@@ -1209,8 +1209,12 @@ export function App() {
       getFeatureCount: () => editableGeoJson.features.length,
       getFlowMidpoint: (id) => getDemoFlowMidpoint(id),
       getGeoJsonFeatureCenter: (id) =>
-        getDemoGeometryCenter(getDemoGeoJsonFeatureByProbeId(editableGeoJson, id)?.geometry ?? null) ??
-        getDemoGeometryCenter(getDemoGeoJsonFeatureByProbeId(demoGeoJsonCollection, id)?.geometry ?? null),
+        getDemoGeometryCenter(
+          getDemoGeoJsonFeatureByProbeId(editableGeoJson, id)?.geometry ?? null,
+        ) ??
+        getDemoGeometryCenter(
+          getDemoGeoJsonFeatureByProbeId(demoGeoJsonCollection, id)?.geometry ?? null,
+        ),
       getGeoJsonSelection: () => geoJsonSelection,
       getMapDisplay: () => e2eControllerRef.current?.display ?? null,
       getMapProjection: () => e2eMapRef.current?.getProjection?.().type ?? null,
@@ -3952,11 +3956,7 @@ function setDemoInterpolationRingPosition(
   });
 }
 
-function GeoJsonGeometryExample({
-  e2eRegistration,
-}: {
-  e2eRegistration: DemoE2ERegistration;
-}) {
+function GeoJsonGeometryExample({ e2eRegistration }: { e2eRegistration: DemoE2ERegistration }) {
   const tracks = createTemporalGeoJsonTracksFromGeoJson(demoGeoJsonCollection);
   const frame = createTemporalGeoJsonPlaybackIndex(tracks).getFeatureCollectionAtTime(0);
 
