@@ -24,6 +24,10 @@ export type DemoHistoricalPolityProperties = {
   precision: DemoHistoricalPolityPrecision;
   sceneYear: number;
   note?: string;
+  sourceIds?: Array<string | number>;
+  sourcePartPath?: string;
+  targetIds?: Array<string | number>;
+  targetPartPath?: string;
   transitionKind?: string;
 };
 
@@ -41,6 +45,13 @@ type DemoHistoricalPolityScene = {
   year: number;
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties>;
 };
+
+type HistoricalPolityRenderableFeature = {
+  id?: string | number;
+  properties?: Partial<DemoHistoricalPolityProperties> | null;
+};
+
+const historyMilestoneRenderKeyWindowYears = 2;
 
 export const demoHistoricalPolityScenes: DemoHistoricalPolityScene[] = [
   scene(800, [
@@ -296,6 +307,33 @@ export function getDemoHistoricalPolityPlaybackFrame(
   return getInterpolatedDemoHistoricalPolityFrame(clampedYear, planCache);
 }
 
+export function getDemoHistoricalPolityRenderFeatureId(
+  feature: HistoricalPolityRenderableFeature,
+  year: number,
+) {
+  const milestoneYear = getNearbyDemoHistoricalPolityMilestoneYear(year);
+  const properties = feature.properties;
+
+  if (milestoneYear && properties) {
+    const boundaryIds = year < milestoneYear ? properties.targetIds : properties.sourceIds;
+    const boundaryPartPath =
+      year < milestoneYear ? properties.targetPartPath : properties.sourcePartPath;
+    const primaryBoundaryId = boundaryIds?.[0];
+
+    if (primaryBoundaryId !== undefined) {
+      const partKey = boundaryPartPath ? `:${boundaryPartPath}` : "";
+      const residualKey =
+        properties.transitionKind && !boundaryPartPath
+          ? `:${properties.transitionKind}:${String(feature.id ?? "feature")}`
+          : "";
+
+      return `history:${milestoneYear}:${primaryBoundaryId}${partKey}${residualKey}`;
+    }
+  }
+
+  return String(feature.id ?? properties?.polityId ?? properties?.label ?? "historical-polity");
+}
+
 function getInterpolatedDemoHistoricalPolityFrame(
   year: number,
   planCache?: Map<string, GeoJsonTransitionPlan<DemoHistoricalPolityProperties>>,
@@ -413,4 +451,13 @@ function multi(
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getNearbyDemoHistoricalPolityMilestoneYear(year: number) {
+  return (
+    demoHistoricalPolityScenes
+      .slice(1, -1)
+      .find((scene) => Math.abs(scene.year - year) <= historyMilestoneRenderKeyWindowYears)?.year ??
+    null
+  );
 }

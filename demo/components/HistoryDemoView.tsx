@@ -17,6 +17,7 @@ import {
   demoHistoricalPolityScenes,
   formatDemoHistoricalPolityYear,
   getDemoHistoricalPolityPlaybackFrame,
+  getDemoHistoricalPolityRenderFeatureId,
   type DemoHistoricalPolityProperties,
   type DemoHistoricalPolityRegion,
 } from "../data/history-polities";
@@ -117,7 +118,7 @@ export function HistoryDemoView({
           <GeoJsonLayer
             featureCollection={activeFrame}
             getFeatureStyle={getHistoricalPolityStyle}
-            getFeatureId={(feature) => feature.id}
+            getFeatureId={(feature) => getDemoHistoricalPolityRenderFeatureId(feature, year)}
             layerId="history-polities"
             renderFeaturePopup={renderHistoricalPolityPopup}
             renderFeatureTooltip={(feature) => feature.properties.label}

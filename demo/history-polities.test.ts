@@ -5,6 +5,7 @@ import {
   formatDemoHistoricalPolityYear,
   getDemoHistoricalPolityFrame,
   getDemoHistoricalPolityPlaybackFrame,
+  getDemoHistoricalPolityRenderFeatureId,
 } from "./data/history-polities";
 
 describe("History demo polities", () => {
@@ -61,5 +62,21 @@ describe("History demo polities", () => {
     );
 
     expect(Math.min(...ringLengths)).toBeGreaterThan(5);
+  });
+
+  test("keeps render feature ids stable while passing 1200 AD", () => {
+    const beforeIds = new Set(
+      getDemoHistoricalPolityPlaybackFrame(1199.9).features.map((feature) =>
+        getDemoHistoricalPolityRenderFeatureId(feature, 1199.9),
+      ),
+    );
+    const afterIds = new Set(
+      getDemoHistoricalPolityPlaybackFrame(1200.1).features.map((feature) =>
+        getDemoHistoricalPolityRenderFeatureId(feature, 1200.1),
+      ),
+    );
+    const sharedIds = [...beforeIds].filter((id) => afterIds.has(id));
+
+    expect(sharedIds.length).toBeGreaterThanOrEqual(12);
   });
 });
