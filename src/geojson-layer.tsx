@@ -44,6 +44,7 @@ export type GeoJsonLayerProps<
   GeoJsonLayerStyle & {
     featureCollection: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
     getFeatureStyle?: (feature: GeoJsonLayerFeature<TProperties>) => GeoJsonLayerStyle;
+    isFeatureInteractive?: (feature: GeoJsonLayerFeature<TProperties>) => boolean;
     layerId?: string;
     onFeatureSelect?: (feature: GeoJsonLayerFeature<TProperties> | null) => void;
   };
@@ -54,6 +55,7 @@ export function GeoJsonLayer<
   featureCollection,
   getFeatureId,
   getFeatureStyle,
+  isFeatureInteractive,
   hoveredFeatureId,
   layerId,
   onHoveredFeatureIdChange,
@@ -139,6 +141,7 @@ export function GeoJsonLayer<
             const style = resolveFeatureStyle(feature, styleProps, getFeatureStyle);
             const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
             const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
+            const featureInteractive = isFeatureInteractive?.(feature) ?? true;
             const className = joinClassNames(
               "mb-maps__geojson-feature",
               hovered && "mb-maps__feature--hovered",
@@ -160,14 +163,14 @@ export function GeoJsonLayer<
                 const layers = createFlatGeometryLayers(feature.geometry, {
                   bubblingMouseEvents: false,
                   className,
-                  interactive: interactionMode === "none",
+                  interactive: interactionMode === "none" && featureInteractive,
                   flat,
                   selected,
                   style,
                 });
 
                 for (const geometryLayer of layers) {
-                  if (interactionMode === "none") {
+                  if (interactionMode === "none" && featureInteractive) {
                     bindFlatLayerInteraction(geometryLayer, {
                       feature,
                       getFeatureId,
@@ -190,12 +193,17 @@ export function GeoJsonLayer<
 
                 return {
                   geometryKey,
+                  interactive: featureInteractive,
                   layers,
                   signature,
                 };
               },
               signature,
               update: (entry) => {
+                if (entry.interactive !== featureInteractive) {
+                  return false;
+                }
+
                 const geometryUpdated =
                   entry.geometryKey === geometryKey ||
                   updateFlatGeoJsonCachedGeometry(entry.layers, feature.geometry);
@@ -224,6 +232,7 @@ export function GeoJsonLayer<
     features,
     getFeatureId,
     getFeatureStyle,
+    isFeatureInteractive,
     hoveredFeatureId,
     onFeatureContextMenu,
     onFeatureHover,
@@ -272,6 +281,7 @@ export function createGeoJsonLayerFeatures<
 
 type FlatGeoJsonCacheEntry = {
   geometryKey: string;
+  interactive: boolean;
   layers: FlatGeometryLayer[];
   signature: string;
 };

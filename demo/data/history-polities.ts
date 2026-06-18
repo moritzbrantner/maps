@@ -18,6 +18,12 @@ export type DemoHistoricalPolityRegion =
 
 export type DemoHistoricalPolityPrecision = "approximate" | "generalized";
 
+export type DemoHistoricalPolityLineage = {
+  entersFrom: string[];
+  exitsTo: string[];
+  morphGroup: string;
+};
+
 export type DemoHistoricalPolityProperties = {
   kind: "historical-polity";
   label: string;
@@ -25,6 +31,8 @@ export type DemoHistoricalPolityProperties = {
   region: DemoHistoricalPolityRegion;
   precision: DemoHistoricalPolityPrecision;
   sceneYear: number;
+  conditioned?: true;
+  lineage?: DemoHistoricalPolityLineage;
   note?: string;
   displayOpacity?: number;
   sourceIds?: Array<string | number>;
@@ -32,6 +40,13 @@ export type DemoHistoricalPolityProperties = {
   targetIds?: Array<string | number>;
   targetPartPath?: string;
   transitionKind?: string;
+};
+
+export type DemoHistoricalPolitySceneValidationIssue = {
+  code: "invalid-geometry" | "missing-lineage" | "unclosed-ring" | "undetailed-ring";
+  message: string;
+  polityId: string;
+  sceneYear: number;
 };
 
 type HistoricalPolityInput = {
@@ -55,8 +70,13 @@ type HistoricalPolityRenderableFeature = {
 };
 
 const historyVisibleOpacityThreshold = 0.05;
+const historyMinimumRingCoordinateCount = 24;
+const demoHistoricalPolityPlaybackFrameCache = new Map<
+  number,
+  TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties>
+>();
 
-export const demoHistoricalPolityScenes: DemoHistoricalPolityScene[] = [
+const rawDemoHistoricalPolityScenes: DemoHistoricalPolityScene[] = [
   scene(800, [
     polity("carolingian-empire", "Carolingian Empire", "central", rect(-5, 42, 15, 54)),
     polity(
@@ -298,6 +318,26 @@ export function getDemoHistoricalPolityPlaybackFrame(
     demoHistoricalPolityScenes.at(-1)!.year,
   );
 
+  if (Number.isInteger(clampedYear)) {
+    const cachedFrame = demoHistoricalPolityPlaybackFrameCache.get(clampedYear);
+
+    if (cachedFrame) {
+      return cachedFrame;
+    }
+
+    const frame = createDemoHistoricalPolityPlaybackFrame(clampedYear);
+
+    demoHistoricalPolityPlaybackFrameCache.set(clampedYear, frame);
+
+    return frame;
+  }
+
+  return createDemoHistoricalPolityPlaybackFrame(clampedYear);
+}
+
+function createDemoHistoricalPolityPlaybackFrame(
+  clampedYear: number,
+): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
   if (clampedYear === demoHistoricalPolityScenes[0]!.year) {
     return withDemoHistoricalPolityDisplayOpacity(demoHistoricalPolityScenes[0]!.collection);
   }
@@ -352,17 +392,35 @@ function getDemoHistoricalPolityDisplayFrame(
       }
 
       if (previousFeature) {
+        const lineageTargetFeature = getDemoHistoricalPolityLineageFeature(
+          previousFeature.properties?.lineage?.exitsTo,
+          nextById,
+        );
+
         return createDemoHistoricalPolityDisplayFeature(
           previousFeature,
-          previousFeature.geometry,
+          lineageTargetFeature
+            ? interpolateDemoHistoricalPolityGeometry(
+                previousFeature,
+                lineageTargetFeature,
+                progress,
+              )
+            : previousFeature.geometry,
           1 - progress,
         );
       }
 
       if (nextFeature) {
+        const lineageSourceFeature = getDemoHistoricalPolityLineageFeature(
+          nextFeature.properties?.lineage?.entersFrom,
+          previousById,
+        );
+
         return createDemoHistoricalPolityDisplayFeature(
           nextFeature,
-          nextFeature.geometry,
+          lineageSourceFeature
+            ? interpolateDemoHistoricalPolityGeometry(lineageSourceFeature, nextFeature, progress)
+            : nextFeature.geometry,
           progress,
         );
       }
@@ -371,6 +429,24 @@ function getDemoHistoricalPolityDisplayFrame(
     }),
     type: "FeatureCollection",
   };
+}
+
+function getDemoHistoricalPolityLineageFeature(
+  polityIds: readonly string[] | undefined,
+  featuresById: Map<
+    string | undefined,
+    TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>
+  >,
+) {
+  for (const polityId of polityIds ?? []) {
+    const feature = featuresById.get(polityId);
+
+    if (feature) {
+      return feature;
+    }
+  }
+
+  return null;
 }
 
 function interpolateDemoHistoricalPolityGeometry(
@@ -489,6 +565,422 @@ function getDemoHistoricalPolityTransitionPlan(
   planCache?.set(planKey, plan);
 
   return plan;
+}
+
+function prepareDemoHistoricalPolityScenes(
+  scenes: DemoHistoricalPolityScene[],
+): DemoHistoricalPolityScene[] {
+  return scenes.map((inputScene) => ({
+    ...inputScene,
+    collection: {
+      features: inputScene.collection.features.map((feature) => ({
+        ...feature,
+        geometry: conditionDemoHistoricalPolityGeometry(feature.geometry),
+        properties: {
+          ...feature.properties!,
+          conditioned: true,
+          lineage: getDemoHistoricalPolityLineage(feature.properties!.polityId),
+        },
+      })),
+      type: "FeatureCollection",
+    },
+  }));
+}
+
+function getDemoHistoricalPolityLineage(polityId: string): DemoHistoricalPolityLineage {
+  return (
+    demoHistoricalPolityLineage[polityId] ?? {
+      entersFrom: [polityId],
+      exitsTo: [polityId],
+      morphGroup: polityId,
+    }
+  );
+}
+
+const demoHistoricalPolityLineage: Record<string, DemoHistoricalPolityLineage> = {
+  "al-andalus": {
+    entersFrom: ["emirate-cordoba"],
+    exitsTo: ["castile", "aragon", "portugal"],
+    morphGroup: "iberia",
+  },
+  "anglo-saxon-kingdoms": {
+    entersFrom: ["anglo-saxon-kingdoms"],
+    exitsTo: ["england"],
+    morphGroup: "britain",
+  },
+  aragon: {
+    entersFrom: ["christian-iberian-kingdoms", "al-andalus"],
+    exitsTo: ["spain"],
+    morphGroup: "iberia",
+  },
+  "austrian-empire": {
+    entersFrom: ["habsburg-monarchy"],
+    exitsTo: ["austrian-empire"],
+    morphGroup: "danube",
+  },
+  benelux: {
+    entersFrom: ["netherlands", "dutch-republic"],
+    exitsTo: ["benelux"],
+    morphGroup: "low-countries",
+  },
+  "byzantine-empire": {
+    entersFrom: ["byzantine-empire"],
+    exitsTo: ["byzantine-empire", "ottoman-empire"],
+    morphGroup: "eastern-mediterranean",
+  },
+  "carolingian-empire": {
+    entersFrom: ["carolingian-empire"],
+    exitsTo: ["france", "holy-roman-empire"],
+    morphGroup: "carolingian-successors",
+  },
+  castile: {
+    entersFrom: ["christian-iberian-kingdoms", "al-andalus"],
+    exitsTo: ["spain"],
+    morphGroup: "iberia",
+  },
+  "christian-iberian-kingdoms": {
+    entersFrom: ["kingdom-asturias"],
+    exitsTo: ["castile", "aragon", "portugal"],
+    morphGroup: "iberia",
+  },
+  "denmark-norway": {
+    entersFrom: ["denmark", "norway"],
+    exitsTo: ["denmark", "sweden-norway"],
+    morphGroup: "nordic-unions",
+  },
+  "emirate-cordoba": {
+    entersFrom: ["emirate-cordoba"],
+    exitsTo: ["al-andalus", "christian-iberian-kingdoms"],
+    morphGroup: "iberia",
+  },
+  england: {
+    entersFrom: ["anglo-saxon-kingdoms"],
+    exitsTo: ["angevin-lands", "england-scotland", "united-kingdom"],
+    morphGroup: "britain",
+  },
+  "england-scotland": {
+    entersFrom: ["england"],
+    exitsTo: ["united-kingdom"],
+    morphGroup: "britain",
+  },
+  france: {
+    entersFrom: ["carolingian-empire", "france"],
+    exitsTo: ["france"],
+    morphGroup: "france",
+  },
+  "german-confederation": {
+    entersFrom: ["holy-roman-empire"],
+    exitsTo: ["germany", "prussia", "austrian-empire"],
+    morphGroup: "central-europe",
+  },
+  germany: {
+    entersFrom: ["german-confederation", "prussia"],
+    exitsTo: ["germany"],
+    morphGroup: "central-europe",
+  },
+  "habsburg-monarchy": {
+    entersFrom: ["hungary", "holy-roman-empire"],
+    exitsTo: ["austrian-empire"],
+    morphGroup: "danube",
+  },
+  "holy-roman-empire": {
+    entersFrom: ["carolingian-empire", "holy-roman-empire"],
+    exitsTo: ["german-confederation", "habsburg-monarchy"],
+    morphGroup: "central-europe",
+  },
+  "kingdom-asturias": {
+    entersFrom: ["kingdom-asturias"],
+    exitsTo: ["christian-iberian-kingdoms"],
+    morphGroup: "iberia",
+  },
+  "kievan-rus": {
+    entersFrom: ["kievan-rus"],
+    exitsTo: ["rus-principalities"],
+    morphGroup: "rus",
+  },
+  "nordic-states": {
+    entersFrom: ["sweden-norway", "denmark", "sweden"],
+    exitsTo: ["nordic-states"],
+    morphGroup: "nordic",
+  },
+  "norse-realms": {
+    entersFrom: ["norse-realms"],
+    exitsTo: ["denmark", "norway", "sweden"],
+    morphGroup: "nordic",
+  },
+  "ottoman-empire": {
+    entersFrom: ["byzantine-empire", "ottoman-empire"],
+    exitsTo: ["turkey", "balkan-states", "greece"],
+    morphGroup: "ottoman-successors",
+  },
+  "poland-lithuania": {
+    entersFrom: ["poland"],
+    exitsTo: ["polish-lithuanian-commonwealth", "poland", "ukraine", "belarus"],
+    morphGroup: "poland-lithuania",
+  },
+  "polish-lithuanian-commonwealth": {
+    entersFrom: ["poland-lithuania"],
+    exitsTo: ["poland", "ukraine", "belarus", "russian-empire"],
+    morphGroup: "poland-lithuania",
+  },
+  prussia: {
+    entersFrom: ["german-confederation"],
+    exitsTo: ["germany"],
+    morphGroup: "central-europe",
+  },
+  russia: {
+    entersFrom: ["muscovy", "russian-empire"],
+    exitsTo: ["russian-empire", "russia"],
+    morphGroup: "russia",
+  },
+  "russian-empire": {
+    entersFrom: ["russia", "polish-lithuanian-commonwealth"],
+    exitsTo: ["russia", "ukraine", "belarus", "poland"],
+    morphGroup: "russia",
+  },
+  "rus-principalities": {
+    entersFrom: ["kievan-rus"],
+    exitsTo: ["muscovy", "poland-lithuania"],
+    morphGroup: "rus",
+  },
+  "second-bulgarian-empire": {
+    entersFrom: ["first-bulgarian-empire"],
+    exitsTo: ["ottoman-empire", "balkan-states"],
+    morphGroup: "balkans",
+  },
+  "sweden-norway": {
+    entersFrom: ["sweden", "norway"],
+    exitsTo: ["nordic-states"],
+    morphGroup: "nordic",
+  },
+  "united-kingdom": {
+    entersFrom: ["england", "england-scotland"],
+    exitsTo: ["united-kingdom"],
+    morphGroup: "britain",
+  },
+};
+
+export const demoHistoricalPolityScenes: DemoHistoricalPolityScene[] =
+  prepareDemoHistoricalPolityScenes(rawDemoHistoricalPolityScenes);
+
+export function validateDemoHistoricalPolityScenes(
+  scenes: readonly DemoHistoricalPolityScene[] = demoHistoricalPolityScenes,
+): DemoHistoricalPolitySceneValidationIssue[] {
+  return scenes.flatMap((scene) =>
+    scene.collection.features.flatMap((feature) => {
+      const polityId = feature.properties?.polityId ?? String(feature.id ?? "historical-polity");
+      const sceneYear = feature.properties?.sceneYear ?? scene.year;
+      const issues: DemoHistoricalPolitySceneValidationIssue[] = [];
+
+      if (!feature.properties?.lineage && feature.properties?.conditioned) {
+        issues.push({
+          code: "missing-lineage",
+          message: "Historical Polity Scenes must include explicit lineage metadata.",
+          polityId,
+          sceneYear,
+        });
+      }
+
+      if (feature.geometry?.type === "Polygon") {
+        issues.push(
+          ...validateDemoHistoricalPolityPolygon(feature.geometry.coordinates, polityId, sceneYear),
+        );
+
+        return issues;
+      }
+
+      if (feature.geometry?.type === "MultiPolygon") {
+        issues.push(
+          ...feature.geometry.coordinates.flatMap((polygon) =>
+            validateDemoHistoricalPolityPolygon(polygon, polityId, sceneYear),
+          ),
+        );
+
+        return issues;
+      }
+
+      issues.push({
+        code: "invalid-geometry",
+        message: "Historical Polity Scenes must use Polygon or MultiPolygon geometries.",
+        polityId,
+        sceneYear,
+      });
+
+      return issues;
+    }),
+  );
+}
+
+function conditionDemoHistoricalPolityGeometry(
+  geometry: TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>["geometry"],
+): TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>["geometry"] {
+  if (!geometry) {
+    return geometry;
+  }
+
+  if (geometry.type === "Polygon") {
+    return {
+      coordinates: conditionDemoHistoricalPolityPolygon(geometry.coordinates),
+      type: "Polygon",
+    };
+  }
+
+  if (geometry.type === "MultiPolygon") {
+    return {
+      coordinates: geometry.coordinates.map(conditionDemoHistoricalPolityPolygon),
+      type: "MultiPolygon",
+    };
+  }
+
+  return geometry;
+}
+
+function validateDemoHistoricalPolityPolygon(
+  polygon: readonly (readonly (readonly number[])[])[],
+  polityId: string,
+  sceneYear: number,
+): DemoHistoricalPolitySceneValidationIssue[] {
+  return polygon.flatMap((ring) => validateDemoHistoricalPolityRing(ring, polityId, sceneYear));
+}
+
+function validateDemoHistoricalPolityRing(
+  ring: readonly (readonly number[])[],
+  polityId: string,
+  sceneYear: number,
+): DemoHistoricalPolitySceneValidationIssue[] {
+  const issues: DemoHistoricalPolitySceneValidationIssue[] = [];
+  const first = ring[0];
+  const last = ring.at(-1);
+
+  if (ring.length < historyMinimumRingCoordinateCount) {
+    issues.push({
+      code: "undetailed-ring",
+      message: "Historical Polity polygon rings must use at least 24 coordinates.",
+      polityId,
+      sceneYear,
+    });
+  }
+
+  if (!first || !last || first[0] !== last[0] || first[1] !== last[1]) {
+    issues.push({
+      code: "unclosed-ring",
+      message: "Historical Polity polygon rings must be closed.",
+      polityId,
+      sceneYear,
+    });
+  }
+
+  return issues;
+}
+
+function conditionDemoHistoricalPolityPolygon(
+  polygon: readonly (readonly (readonly number[])[])[],
+) {
+  return polygon.map((ring, ringIndex) =>
+    conditionDemoHistoricalPolityRing(
+      ring.map((position) => [Number(position[0]), Number(position[1])] as [number, number]),
+      ringIndex === 0,
+    ),
+  );
+}
+
+function conditionDemoHistoricalPolityRing(ring: readonly [number, number][], isShell: boolean) {
+  const finiteRing = ring.filter(
+    (position) => Number.isFinite(position[0]) && Number.isFinite(position[1]),
+  );
+  const openRing = removeClosingDemoHistoricalPolityPosition(finiteRing);
+  const detailedRing = resampleDemoHistoricalPolityOpenRing(
+    openRing,
+    Math.max(historyMinimumRingCoordinateCount - 1, openRing.length),
+  );
+  const closedRing = closeDemoHistoricalPolityRing(detailedRing);
+  const shouldReverse = isShell
+    ? getDemoHistoricalPolityRingArea(closedRing) < 0
+    : getDemoHistoricalPolityRingArea(closedRing) > 0;
+
+  return shouldReverse ? [...closedRing].reverse() : closedRing;
+}
+
+function resampleDemoHistoricalPolityOpenRing(ring: readonly [number, number][], count: number) {
+  if (ring.length < 3) {
+    return ring.map(cloneDemoHistoricalPolityPosition);
+  }
+
+  const closedRing = closeDemoHistoricalPolityRing(ring);
+  const segmentLengths = closedRing.slice(0, -1).map((position, index) => {
+    const nextPosition = closedRing[index + 1]!;
+
+    return Math.hypot(nextPosition[0] - position[0], nextPosition[1] - position[1]);
+  });
+  const perimeter = segmentLengths.reduce((sum, length) => sum + length, 0);
+
+  if (perimeter <= 0) {
+    return ring.map(cloneDemoHistoricalPolityPosition);
+  }
+
+  return Array.from({ length: count }, (_, sampleIndex) => {
+    const targetDistance = (perimeter * sampleIndex) / count;
+    let elapsedDistance = 0;
+
+    for (let segmentIndex = 0; segmentIndex < segmentLengths.length; segmentIndex += 1) {
+      const segmentLength = segmentLengths[segmentIndex]!;
+
+      if (elapsedDistance + segmentLength >= targetDistance) {
+        const start = closedRing[segmentIndex]!;
+        const end = closedRing[segmentIndex + 1]!;
+        const ratio = segmentLength === 0 ? 0 : (targetDistance - elapsedDistance) / segmentLength;
+
+        return [start[0] + (end[0] - start[0]) * ratio, start[1] + (end[1] - start[1]) * ratio] as [
+          number,
+          number,
+        ];
+      }
+
+      elapsedDistance += segmentLength;
+    }
+
+    return cloneDemoHistoricalPolityPosition(closedRing.at(-2)!);
+  });
+}
+
+function closeDemoHistoricalPolityRing(ring: readonly [number, number][]) {
+  if (ring.length === 0) {
+    return [];
+  }
+
+  const openRing = removeClosingDemoHistoricalPolityPosition(ring);
+  const first = openRing[0]!;
+
+  return [
+    ...openRing.map(cloneDemoHistoricalPolityPosition),
+    cloneDemoHistoricalPolityPosition(first),
+  ];
+}
+
+function removeClosingDemoHistoricalPolityPosition(ring: readonly [number, number][]) {
+  if (ring.length >= 2 && sameDemoHistoricalPolityPosition(ring[0]!, ring.at(-1)!)) {
+    return ring.slice(0, -1);
+  }
+
+  return [...ring];
+}
+
+function sameDemoHistoricalPolityPosition(left: [number, number], right: [number, number]) {
+  return left[0] === right[0] && left[1] === right[1];
+}
+
+function cloneDemoHistoricalPolityPosition(position: [number, number]) {
+  return [position[0], position[1]] as [number, number];
+}
+
+function getDemoHistoricalPolityRingArea(ring: readonly [number, number][]) {
+  return (
+    ring.slice(0, -1).reduce((sum, position, index) => {
+      const nextPosition = ring[index + 1]!;
+
+      return sum + position[0] * nextPosition[1] - nextPosition[0] * position[1];
+    }, 0) / 2
+  );
 }
 
 function scene(year: number, polities: HistoricalPolityInput[]): DemoHistoricalPolityScene {

@@ -7,6 +7,7 @@ import {
   getDemoHistoricalPolityPlaybackFrame,
   getDemoHistoricalPolityRenderFeatureId,
   isDemoHistoricalPolityVisibleFeature,
+  validateDemoHistoricalPolityScenes,
 } from "./data/history-polities";
 
 describe("History demo polities", () => {
@@ -70,7 +71,72 @@ describe("History demo polities", () => {
       }),
     );
 
-    expect(Math.min(...ringLengths)).toBeGreaterThan(5);
+    expect(Math.min(...ringLengths)).toBeGreaterThanOrEqual(24);
+  });
+
+  test("publishes conditioned Historical Polity Scenes with explicit lineage metadata", () => {
+    for (const scene of demoHistoricalPolityScenes) {
+      for (const feature of scene.collection.features) {
+        expect(feature.properties?.lineage).toEqual({
+          entersFrom: expect.any(Array),
+          exitsTo: expect.any(Array),
+          morphGroup: expect.any(String),
+        });
+        expect(feature.properties?.conditioned).toBe(true);
+      }
+    }
+  });
+
+  test("validates Historical Polity Scene polygon quality", () => {
+    expect(validateDemoHistoricalPolityScenes(demoHistoricalPolityScenes)).toEqual([]);
+    expect(
+      validateDemoHistoricalPolityScenes([
+        {
+          collection: {
+            features: [
+              {
+                geometry: {
+                  coordinates: [
+                    [
+                      [0, 0],
+                      [1, 0],
+                      [0, 1],
+                    ],
+                  ],
+                  type: "Polygon",
+                },
+                id: "bad-polity",
+                properties: {
+                  kind: "historical-polity",
+                  label: "Bad polity",
+                  polityId: "bad-polity",
+                  precision: "approximate",
+                  region: "central",
+                  sceneYear: 900,
+                },
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          },
+          label: "900 AD",
+          year: 900,
+        },
+      ]),
+    ).toEqual([
+      {
+        code: "undetailed-ring",
+        message: "Historical Polity polygon rings must use at least 24 coordinates.",
+        polityId: "bad-polity",
+        sceneYear: 900,
+      },
+      {
+        code: "unclosed-ring",
+        message: "Historical Polity polygon rings must be closed.",
+        polityId: "bad-polity",
+        sceneYear: 900,
+      },
+    ]);
   });
 
   test("keeps render feature ids stable while passing 1200 AD", () => {
@@ -96,6 +162,26 @@ describe("History demo polities", () => {
 
       expect(nextIds).toEqual(currentIds);
     }
+  });
+
+  test("reuses prepared playback frames for integer timeline years", () => {
+    expect(getDemoHistoricalPolityPlaybackFrame(1198)).toBe(
+      getDemoHistoricalPolityPlaybackFrame(1198),
+    );
+    expect(getDemoHistoricalPolityPlaybackFrame(1200)).toBe(
+      getDemoHistoricalPolityPlaybackFrame(1200),
+    );
+  });
+
+  test("uses lineage metadata to seed entering Historical Polity geometry", () => {
+    const frame = getDemoHistoricalPolityPlaybackFrame(900);
+    const france = frame.features.find((feature) => feature.properties?.polityId === "france");
+    const sceneFrance = demoHistoricalPolityScenes[1]?.collection.features.find(
+      (feature) => feature.properties?.polityId === "france",
+    );
+
+    expect(france?.properties?.displayOpacity).toBeCloseTo(0.5);
+    expect(france?.geometry).not.toEqual(sceneFrance?.geometry);
   });
 });
 

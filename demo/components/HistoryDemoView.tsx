@@ -116,6 +116,7 @@ export function HistoryDemoView({
             featureCollection={activeFrame}
             getFeatureStyle={getHistoricalPolityStyle}
             getFeatureId={(feature) => getDemoHistoricalPolityRenderFeatureId(feature, year)}
+            isFeatureInteractive={isDemoHistoricalPolityVisibleFeature}
             layerId="history-polities"
             renderFeaturePopup={renderHistoricalPolityPopup}
             renderFeatureTooltip={(feature) => feature.properties.label}
