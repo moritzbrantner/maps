@@ -17,6 +17,7 @@ import {
   formatDemoHistoricalPolityYear,
   getDemoHistoricalPolityPlaybackFrame,
   getDemoHistoricalPolityRenderFeatureId,
+  isDemoHistoricalPolityVisibleFeature,
   type DemoHistoricalPolityProperties,
   type DemoHistoricalPolityRegion,
 } from "../data/history-polities";
@@ -65,6 +66,9 @@ export function HistoryDemoView({
   const roundedYear = Math.round(year);
   const activeFrame = useMemo(() => getDemoHistoricalPolityPlaybackFrame(year), [year]);
   const activeSegment = getDemoHistoricalPolitySegmentLabel(roundedYear);
+  const visiblePolityCount = activeFrame.features.filter(
+    isDemoHistoricalPolityVisibleFeature,
+  ).length;
 
   useEffect(() => {
     if (!isPlaying) {
@@ -144,7 +148,7 @@ export function HistoryDemoView({
           </div>
           <div>
             <dt>Polities</dt>
-            <dd>{activeFrame.features.length}</dd>
+            <dd>{visiblePolityCount}</dd>
           </div>
         </dl>
 

@@ -54,7 +54,7 @@ type HistoricalPolityRenderableFeature = {
   properties?: Partial<DemoHistoricalPolityProperties> | null;
 };
 
-const historyFadeVisibilityThreshold = 0.08;
+const historyVisibleOpacityThreshold = 0.05;
 
 export const demoHistoricalPolityScenes: DemoHistoricalPolityScene[] = [
   scene(800, [
@@ -309,6 +309,10 @@ export function getDemoHistoricalPolityPlaybackFrame(
   return getDemoHistoricalPolityDisplayFrame(clampedYear);
 }
 
+export function isDemoHistoricalPolityVisibleFeature(feature: HistoricalPolityRenderableFeature) {
+  return (feature.properties?.displayOpacity ?? 1) > historyVisibleOpacityThreshold;
+}
+
 export function getDemoHistoricalPolityRenderFeatureId(
   feature: HistoricalPolityRenderableFeature,
   _year: number,
@@ -321,12 +325,6 @@ export function getDemoHistoricalPolityRenderFeatureId(
 function getDemoHistoricalPolityDisplayFrame(
   year: number,
 ): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
-  const exactScene = demoHistoricalPolityScenes.find((scene) => scene.year === year);
-
-  if (exactScene) {
-    return withDemoHistoricalPolityDisplayOpacity(exactScene.collection);
-  }
-
   const nextSceneIndex = demoHistoricalPolityScenes.findIndex((scene) => scene.year > year);
   const previousScene = demoHistoricalPolityScenes[nextSceneIndex - 1]!;
   const nextScene = demoHistoricalPolityScenes[nextSceneIndex]!;
@@ -337,54 +335,39 @@ function getDemoHistoricalPolityDisplayFrame(
   const nextById = new Map(
     nextScene.collection.features.map((feature) => [feature.properties?.polityId, feature]),
   );
-  const polityIds = [...new Set([...previousById.keys(), ...nextById.keys()])].filter(
-    (id): id is string => typeof id === "string",
-  );
+  const polityIds = getAllDemoHistoricalPolityIds();
 
   return {
-    features: polityIds.flatMap((polityId) => {
+    features: polityIds.map((polityId) => {
       const previousFeature = previousById.get(polityId);
       const nextFeature = nextById.get(polityId);
+      const fallbackFeature = getAnyDemoHistoricalPolityFeature(polityId)!;
 
       if (previousFeature && nextFeature) {
-        return [
-          createDemoHistoricalPolityDisplayFeature(
-            nextFeature,
-            interpolateDemoHistoricalPolityGeometry(previousFeature, nextFeature, progress),
-            1,
-          ),
-        ];
+        return createDemoHistoricalPolityDisplayFeature(
+          nextFeature,
+          interpolateDemoHistoricalPolityGeometry(previousFeature, nextFeature, progress),
+          1,
+        );
       }
 
       if (previousFeature) {
-        const displayOpacity = 1 - progress;
-
-        return displayOpacity >= historyFadeVisibilityThreshold
-          ? [
-              createDemoHistoricalPolityDisplayFeature(
-                previousFeature,
-                previousFeature.geometry,
-                displayOpacity,
-              ),
-            ]
-          : [];
+        return createDemoHistoricalPolityDisplayFeature(
+          previousFeature,
+          previousFeature.geometry,
+          1 - progress,
+        );
       }
 
       if (nextFeature) {
-        const displayOpacity = progress;
-
-        return displayOpacity >= historyFadeVisibilityThreshold
-          ? [
-              createDemoHistoricalPolityDisplayFeature(
-                nextFeature,
-                nextFeature.geometry,
-                displayOpacity,
-              ),
-            ]
-          : [];
+        return createDemoHistoricalPolityDisplayFeature(
+          nextFeature,
+          nextFeature.geometry,
+          progress,
+        );
       }
 
-      return [];
+      return createDemoHistoricalPolityDisplayFeature(fallbackFeature, fallbackFeature.geometry, 0);
     }),
     type: "FeatureCollection",
   };
@@ -436,12 +419,40 @@ function createDemoHistoricalPolityDisplayFeature(
 function withDemoHistoricalPolityDisplayOpacity(
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties>,
 ): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
+  const featuresById = new Map(
+    collection.features.map((feature) => [feature.properties?.polityId, feature]),
+  );
+
   return {
-    features: collection.features.map((feature) =>
-      createDemoHistoricalPolityDisplayFeature(feature, feature.geometry, 1),
-    ),
+    features: getAllDemoHistoricalPolityIds().map((polityId) => {
+      const feature = featuresById.get(polityId) ?? getAnyDemoHistoricalPolityFeature(polityId)!;
+
+      return createDemoHistoricalPolityDisplayFeature(
+        feature,
+        feature.geometry,
+        featuresById.has(polityId) ? 1 : 0,
+      );
+    }),
     type: "FeatureCollection",
   };
+}
+
+function getAllDemoHistoricalPolityIds() {
+  return [
+    ...new Set(
+      demoHistoricalPolityScenes.flatMap((scene) =>
+        scene.collection.features.flatMap((feature) => feature.properties?.polityId ?? []),
+      ),
+    ),
+  ];
+}
+
+function getAnyDemoHistoricalPolityFeature(polityId: string) {
+  return (
+    demoHistoricalPolityScenes
+      .flatMap((scene) => scene.collection.features)
+      .find((feature) => feature.properties?.polityId === polityId) ?? null
+  );
 }
 
 function getInterpolatedDemoHistoricalPolityFrame(

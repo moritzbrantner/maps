@@ -6,6 +6,7 @@ import {
   getDemoHistoricalPolityFrame,
   getDemoHistoricalPolityPlaybackFrame,
   getDemoHistoricalPolityRenderFeatureId,
+  isDemoHistoricalPolityVisibleFeature,
 } from "./data/history-polities";
 
 describe("History demo polities", () => {
@@ -37,7 +38,7 @@ describe("History demo polities", () => {
 
     expect(playbackFrame).not.toBe(demoHistoricalPolityScenes[1]?.collection);
     expect(playbackFrame.features.length).toBeGreaterThan(0);
-    expect(playbackFrame.features.length).toBeLessThanOrEqual(18);
+    expect(countVisiblePolities(playbackFrame)).toBeLessThanOrEqual(18);
     expect(playbackFrame.features.every((feature) => !feature.properties?.transitionKind)).toBe(
       true,
     );
@@ -46,7 +47,7 @@ describe("History demo polities", () => {
   test("keeps the 1198 AD playback frame free of topology residual slivers", () => {
     const playbackFrame = getDemoHistoricalPolityPlaybackFrame(1198);
 
-    expect(playbackFrame.features.length).toBeLessThanOrEqual(18);
+    expect(countVisiblePolities(playbackFrame)).toBeLessThanOrEqual(18);
     expect(playbackFrame.features.every((feature) => !feature.properties?.transitionKind)).toBe(
       true,
     );
@@ -87,4 +88,23 @@ describe("History demo polities", () => {
 
     expect(sharedIds.length).toBeGreaterThanOrEqual(10);
   });
+
+  test("keeps render feature ids stable between adjacent dragged years", () => {
+    for (let year = 1000; year < 1200; year += 1) {
+      const currentIds = getPlaybackRenderFeatureIds(year);
+      const nextIds = getPlaybackRenderFeatureIds(year + 1);
+
+      expect(nextIds).toEqual(currentIds);
+    }
+  });
 });
+
+function getPlaybackRenderFeatureIds(year: number) {
+  return getDemoHistoricalPolityPlaybackFrame(year)
+    .features.map((feature) => getDemoHistoricalPolityRenderFeatureId(feature, year))
+    .sort();
+}
+
+function countVisiblePolities(frame: ReturnType<typeof getDemoHistoricalPolityPlaybackFrame>) {
+  return frame.features.filter(isDemoHistoricalPolityVisibleFeature).length;
+}

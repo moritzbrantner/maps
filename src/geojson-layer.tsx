@@ -196,18 +196,23 @@ export function GeoJsonLayer<
               },
               signature,
               update: (entry) => {
-                if (entry.geometryKey === geometryKey) {
-                  return true;
-                }
+                const geometryUpdated =
+                  entry.geometryKey === geometryKey ||
+                  updateFlatGeoJsonCachedGeometry(entry.layers, feature.geometry);
+                const styleUpdated = updateFlatGeoJsonCachedStyle(
+                  entry.layers,
+                  feature.geometry,
+                  selected,
+                  style,
+                );
 
-                const updated = updateFlatGeoJsonCachedGeometry(entry.layers, feature.geometry);
-
-                if (updated) {
+                if (geometryUpdated) {
                   entry.geometryKey = geometryKey;
                 }
 
-                return updated;
+                return geometryUpdated && styleUpdated;
               },
+              updateOnSignatureChange: true,
             };
           }),
         });
@@ -341,6 +346,72 @@ function updateFlatGeoJsonCachedGeometry(
         Boolean(layers[index]?.setLatLngs?.(coordinates.map((ring) => ring.map(toLatLng)))),
       );
   }
+}
+
+function updateFlatGeoJsonCachedStyle(
+  layers: FlatGeometryLayer[],
+  geometry: TemporalGeoJsonSupportedGeometry,
+  selected: boolean,
+  style: Required<GeoJsonLayerStyle>,
+) {
+  switch (geometry.type) {
+    case "Point":
+      return Boolean(layers[0]?.setStyle?.(getFlatPointLayerStyle(style, selected)));
+    case "MultiPoint":
+      if (layers.length !== geometry.coordinates.length) {
+        return false;
+      }
+      return layers.every((layer) =>
+        Boolean(layer.setStyle?.(getFlatPointLayerStyle(style, selected)))
+      );
+    case "LineString":
+      return Boolean(layers[0]?.setStyle?.(getFlatLineLayerStyle(style, selected)));
+    case "MultiLineString":
+      if (layers.length !== geometry.coordinates.length) {
+        return false;
+      }
+      return layers.every((layer) =>
+        Boolean(layer.setStyle?.(getFlatLineLayerStyle(style, selected)))
+      );
+    case "Polygon":
+      return Boolean(layers[0]?.setStyle?.(getFlatPolygonLayerStyle(style, selected)));
+    case "MultiPolygon":
+      if (layers.length !== geometry.coordinates.length) {
+        return false;
+      }
+      return layers.every((layer) =>
+        Boolean(layer.setStyle?.(getFlatPolygonLayerStyle(style, selected)))
+      );
+  }
+}
+
+function getFlatPointLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+  return {
+    color: "#ffffff",
+    fillColor: style.pointColor,
+    fillOpacity: 0.94,
+    opacity: 1,
+    radius: style.pointRadius,
+    weight: selected ? 3 : 2,
+  };
+}
+
+function getFlatLineLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+  return {
+    color: style.lineColor,
+    opacity: style.lineOpacity,
+    weight: selected ? style.lineWidth + 1.5 : style.lineWidth,
+  };
+}
+
+function getFlatPolygonLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+  return {
+    color: style.polygonStrokeColor,
+    fillColor: style.polygonFillColor,
+    fillOpacity: style.polygonFillOpacity,
+    opacity: 0.9,
+    weight: selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth,
+  };
 }
 
 function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
