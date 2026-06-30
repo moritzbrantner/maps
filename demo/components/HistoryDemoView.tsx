@@ -17,6 +17,7 @@ import {
   formatDemoHistoricalPolityYear,
   getDemoHistoricalPolityPlaybackFrame,
   getDemoHistoricalPolityRenderFeatureId,
+  getDemoHistoricalPolitySceneForYear,
   isDemoHistoricalPolityVisibleFeature,
   type DemoHistoricalPolityProperties,
   type DemoHistoricalPolityRegion,
@@ -65,7 +66,8 @@ export function HistoryDemoView({
   const previousTimestampRef = useRef<number | null>(null);
   const roundedYear = Math.round(year);
   const activeFrame = useMemo(() => getDemoHistoricalPolityPlaybackFrame(year), [year]);
-  const activeSegment = getDemoHistoricalPolitySegmentLabel(roundedYear);
+  const activeScene = getDemoHistoricalPolitySceneForYear(roundedYear);
+  const activeSegment = `${activeScene.label} snapshot`;
   const visiblePolityCount = activeFrame.features.filter(
     isDemoHistoricalPolityVisibleFeature,
   ).length;
@@ -204,7 +206,8 @@ export function HistoryDemoView({
         </div>
 
         <p className="demo-history-caveat">
-          Illustrative, simplified borders for demonstrating polygon timeline transitions.
+          Boundaries derived from CShapes-Europe. Demo snapshots are not an authoritative historical
+          boundary source.
         </p>
       </div>
     </section>
@@ -213,19 +216,17 @@ export function HistoryDemoView({
 
 function getHistoricalPolityStyle(feature: GeoJsonLayerFeature<DemoHistoricalPolityProperties>) {
   const color = historicalPolityRegionColors[feature.properties.region] ?? "#475569";
-  const approximate = feature.properties.precision === "approximate";
-  const displayOpacity = feature.properties.displayOpacity ?? 1;
 
   return {
     polygonFillColor: color,
-    polygonFillOpacity: (approximate ? 0.22 : 0.32) * displayOpacity,
+    polygonFillOpacity: 0.3,
     polygonStrokeColor: color,
-    polygonStrokeWidth: displayOpacity < 0.22 ? 0 : approximate ? 1.2 : 1.6,
+    polygonStrokeWidth: 1.4,
   };
 }
 
 function renderHistoricalPolityPopup(feature: GeoJsonLayerFeature<DemoHistoricalPolityProperties>) {
-  const { label, note, precision, region, sceneYear } = feature.properties;
+  const { label, precision, region, sceneYear, sourceFrom, sourceTo } = feature.properties;
 
   return (
     <div className="demo-popup">
@@ -233,23 +234,9 @@ function renderHistoricalPolityPopup(feature: GeoJsonLayerFeature<DemoHistorical
       <span>{formatDemoHistoricalPolityYear(sceneYear)}</span>
       <span>{historicalPolityRegionLabels[region]} region</span>
       <span>{precision}</span>
-      {note ? <span>{note}</span> : null}
+      <span>
+        CShapes-Europe {sourceFrom}-{sourceTo}
+      </span>
     </div>
   );
-}
-
-function getDemoHistoricalPolitySegmentLabel(year: number) {
-  const exactScene = demoHistoricalPolityScenes.find((scene) => scene.year === year);
-
-  if (exactScene) {
-    return exactScene.label;
-  }
-
-  const nextSceneIndex = demoHistoricalPolityScenes.findIndex((scene) => scene.year > year);
-  const previousScene =
-    demoHistoricalPolityScenes[nextSceneIndex - 1] ?? demoHistoricalPolityScenes[0]!;
-  const nextScene =
-    demoHistoricalPolityScenes[nextSceneIndex] ?? demoHistoricalPolityScenes.at(-1)!;
-
-  return `${previousScene.label} -> ${nextScene.label}`;
 }

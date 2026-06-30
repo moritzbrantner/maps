@@ -190,9 +190,12 @@ test("History view exposes polity timeline controls", async ({ page }) => {
 
   await expect(page.getByLabel("European polity history")).toBeVisible();
   await expect(page.getByRole("slider", { name: "Historical year" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Show 1648 AD" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show 1816 AD" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show 2019 AD" })).toBeVisible();
   await expect(
-    page.getByText("Illustrative, simplified borders for demonstrating polygon timeline transitions."),
+    page.getByText(
+      "Boundaries derived from CShapes-Europe. Demo snapshots are not an authoritative historical boundary source.",
+    ),
   ).toBeVisible();
 });
 
@@ -201,9 +204,9 @@ test("History slider updates the active year and keeps the map visible", async (
 
   const slider = page.getByRole("slider", { name: "Historical year" });
 
-  await expect(page.getByText("800 AD").first()).toBeVisible();
-  await slider.fill("1648");
-  await expect(page.getByText("1648 AD").first()).toBeVisible();
+  await expect(page.getByText("1816 AD").first()).toBeVisible();
+  await slider.fill("1989");
+  await expect(page.getByText("1989 AD").first()).toBeVisible();
   await expect(page.getByLabel("European polity history")).toBeVisible();
 });
 

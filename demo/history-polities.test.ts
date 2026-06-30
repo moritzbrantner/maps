@@ -11,50 +11,69 @@ import {
 } from "./data/history-polities";
 
 describe("History demo polities", () => {
-  test("returns exact and interpolated Historical Polity frames with AD labels", () => {
-    const exactFrame = getDemoHistoricalPolityFrame(800);
+  test("publishes CShapes-Europe Historical Polity Scene snapshots for supported milestone years", () => {
+    expect(demoHistoricalPolityScenes.map((scene) => scene.year)).toEqual([
+      1816, 1886, 1914, 1939, 1945, 1989, 2019,
+    ]);
+
+    for (const scene of demoHistoricalPolityScenes) {
+      expect(scene.collection.features.length).toBeGreaterThan(0);
+
+      for (const feature of scene.collection.features) {
+        expect(feature.properties).toMatchObject({
+          kind: "historical-polity",
+          sceneYear: scene.year,
+          source: "CShapes-Europe",
+          sourceId: expect.any(Number),
+          sourceFrom: expect.any(Number),
+          sourceTo: expect.any(Number),
+          sourceStatus: "independent",
+        });
+      }
+    }
+  });
+
+  test("returns exact and snapped Historical Polity frames with AD labels", () => {
+    const exactFrame = getDemoHistoricalPolityFrame(1816);
 
     expect(exactFrame).toBe(demoHistoricalPolityScenes[0]?.collection);
-    expect(exactFrame.features[0]?.properties?.sceneYear).toBe(800);
+    expect(exactFrame.features[0]?.properties?.sceneYear).toBe(1816);
 
-    const interpolatedFrame = getDemoHistoricalPolityFrame(900);
+    const snappedFrame = getDemoHistoricalPolityFrame(1900);
 
-    expect(interpolatedFrame).not.toBe(exactFrame);
-    expect(interpolatedFrame.features.length).toBeGreaterThan(0);
+    expect(snappedFrame).toBe(demoHistoricalPolityScenes[1]?.collection);
+    expect(snappedFrame.features.length).toBeGreaterThan(0);
     expect(
-      interpolatedFrame.features.every(
+      snappedFrame.features.every(
         (feature) =>
           feature.geometry?.type === "Polygon" || feature.geometry?.type === "MultiPolygon",
       ),
     ).toBe(true);
 
-    expect(getDemoHistoricalPolityFrame(700)).toBe(demoHistoricalPolityScenes[0]?.collection);
+    expect(getDemoHistoricalPolityFrame(1800)).toBe(demoHistoricalPolityScenes[0]?.collection);
     expect(getDemoHistoricalPolityFrame(2100)).toBe(demoHistoricalPolityScenes.at(-1)?.collection);
-    expect(formatDemoHistoricalPolityYear(800)).toBe("800 AD");
-    expect(formatDemoHistoricalPolityYear(2000)).toBe("2000 AD");
+    expect(formatDemoHistoricalPolityYear(1816)).toBe("1816 AD");
+    expect(formatDemoHistoricalPolityYear(2019)).toBe("2019 AD");
   });
 
-  test("returns continuity frames for playback at internal epoch milestones", () => {
-    const playbackFrame = getDemoHistoricalPolityPlaybackFrame(1000);
+  test("snaps playback to previous CShapes-Europe milestone without fade metadata", () => {
+    const playbackFrame = getDemoHistoricalPolityPlaybackFrame(1900);
 
-    expect(playbackFrame).not.toBe(demoHistoricalPolityScenes[1]?.collection);
+    expect(playbackFrame).toBe(demoHistoricalPolityScenes[1]?.collection);
     expect(playbackFrame.features.length).toBeGreaterThan(0);
-    expect(countVisiblePolities(playbackFrame)).toBeLessThanOrEqual(18);
-    expect(playbackFrame.features.every((feature) => !feature.properties?.transitionKind)).toBe(
-      true,
-    );
+    expect(countVisiblePolities(playbackFrame)).toBe(playbackFrame.features.length);
+    expect(
+      playbackFrame.features.every(
+        (feature) =>
+          !("displayOpacity" in feature.properties!) &&
+          !("sourceIds" in feature.properties!) &&
+          !("targetIds" in feature.properties!) &&
+          !("transitionKind" in feature.properties!),
+      ),
+    ).toBe(true);
   });
 
-  test("keeps the 1198 AD playback frame free of topology residual slivers", () => {
-    const playbackFrame = getDemoHistoricalPolityPlaybackFrame(1198);
-
-    expect(countVisiblePolities(playbackFrame)).toBeLessThanOrEqual(18);
-    expect(playbackFrame.features.every((feature) => !feature.properties?.transitionKind)).toBe(
-      true,
-    );
-  });
-
-  test("uses more detailed polygon rings than simple bounding boxes", () => {
+  test("uses detailed source polygon rings rather than simple bounding boxes", () => {
     const ringLengths = demoHistoricalPolityScenes.flatMap((scene) =>
       scene.collection.features.flatMap((feature) => {
         if (feature.geometry?.type === "Polygon") {
@@ -71,20 +90,7 @@ describe("History demo polities", () => {
       }),
     );
 
-    expect(Math.min(...ringLengths)).toBeGreaterThanOrEqual(24);
-  });
-
-  test("publishes conditioned Historical Polity Scenes with explicit lineage metadata", () => {
-    for (const scene of demoHistoricalPolityScenes) {
-      for (const feature of scene.collection.features) {
-        expect(feature.properties?.lineage).toEqual({
-          entersFrom: expect.any(Array),
-          exitsTo: expect.any(Array),
-          morphGroup: expect.any(String),
-        });
-        expect(feature.properties?.conditioned).toBe(true);
-      }
-    }
+    expect(Math.max(...ringLengths)).toBeGreaterThan(100);
   });
 
   test("validates Historical Polity Scene polygon quality", () => {
@@ -110,7 +116,7 @@ describe("History demo polities", () => {
                   kind: "historical-polity",
                   label: "Bad polity",
                   polityId: "bad-polity",
-                  precision: "approximate",
+                  precision: "source-derived",
                   region: "central",
                   sceneYear: 900,
                 },
@@ -125,8 +131,8 @@ describe("History demo polities", () => {
       ]),
     ).toEqual([
       {
-        code: "undetailed-ring",
-        message: "Historical Polity polygon rings must use at least 24 coordinates.",
+        code: "missing-source",
+        message: "Historical Polity Scenes must include CShapes-Europe source metadata.",
         polityId: "bad-polity",
         sceneYear: 900,
       },
@@ -139,24 +145,48 @@ describe("History demo polities", () => {
     ]);
   });
 
-  test("keeps render feature ids stable while passing 1200 AD", () => {
+  test("reports overlapping Historical Polities in the same scene", () => {
+    expect(
+      validateDemoHistoricalPolityScenes([
+        {
+          collection: {
+            features: [
+              squareFeature("left-polity", "Left polity", 0, 0, 2, 2),
+              squareFeature("right-polity", "Right polity", 1, 1, 3, 3),
+            ],
+            type: "FeatureCollection",
+          },
+          label: "1900 AD",
+          year: 1900,
+        },
+      ]),
+    ).toEqual([
+      {
+        code: "overlapping-polities",
+        message: "Historical Polity Scene features must not overlap each other.",
+        polityId: "left-polity / right-polity",
+        sceneYear: 1900,
+      },
+    ]);
+  });
+
+  test("keeps render feature ids stable inside a snapped milestone segment", () => {
     const beforeIds = new Set(
-      getDemoHistoricalPolityPlaybackFrame(1199.9).features.map((feature) =>
-        getDemoHistoricalPolityRenderFeatureId(feature, 1199.9),
+      getDemoHistoricalPolityPlaybackFrame(1900).features.map((feature) =>
+        getDemoHistoricalPolityRenderFeatureId(feature, 1900),
       ),
     );
     const afterIds = new Set(
-      getDemoHistoricalPolityPlaybackFrame(1200.1).features.map((feature) =>
-        getDemoHistoricalPolityRenderFeatureId(feature, 1200.1),
+      getDemoHistoricalPolityPlaybackFrame(1910).features.map((feature) =>
+        getDemoHistoricalPolityRenderFeatureId(feature, 1910),
       ),
     );
-    const sharedIds = [...beforeIds].filter((id) => afterIds.has(id));
 
-    expect(sharedIds.length).toBeGreaterThanOrEqual(10);
+    expect(afterIds).toEqual(beforeIds);
   });
 
   test("keeps render feature ids stable between adjacent dragged years", () => {
-    for (let year = 1000; year < 1200; year += 1) {
+    for (let year = 1886; year < 1913; year += 1) {
       const currentIds = getPlaybackRenderFeatureIds(year);
       const nextIds = getPlaybackRenderFeatureIds(year + 1);
 
@@ -165,23 +195,12 @@ describe("History demo polities", () => {
   });
 
   test("reuses prepared playback frames for integer timeline years", () => {
-    expect(getDemoHistoricalPolityPlaybackFrame(1198)).toBe(
-      getDemoHistoricalPolityPlaybackFrame(1198),
+    expect(getDemoHistoricalPolityPlaybackFrame(1900)).toBe(
+      getDemoHistoricalPolityPlaybackFrame(1900),
     );
-    expect(getDemoHistoricalPolityPlaybackFrame(1200)).toBe(
-      getDemoHistoricalPolityPlaybackFrame(1200),
+    expect(getDemoHistoricalPolityPlaybackFrame(1914)).toBe(
+      getDemoHistoricalPolityPlaybackFrame(1914),
     );
-  });
-
-  test("uses lineage metadata to seed entering Historical Polity geometry", () => {
-    const frame = getDemoHistoricalPolityPlaybackFrame(900);
-    const france = frame.features.find((feature) => feature.properties?.polityId === "france");
-    const sceneFrance = demoHistoricalPolityScenes[1]?.collection.features.find(
-      (feature) => feature.properties?.polityId === "france",
-    );
-
-    expect(france?.properties?.displayOpacity).toBeCloseTo(0.5);
-    expect(france?.geometry).not.toEqual(sceneFrance?.geometry);
   });
 });
 
@@ -193,4 +212,43 @@ function getPlaybackRenderFeatureIds(year: number) {
 
 function countVisiblePolities(frame: ReturnType<typeof getDemoHistoricalPolityPlaybackFrame>) {
   return frame.features.filter(isDemoHistoricalPolityVisibleFeature).length;
+}
+
+function squareFeature(
+  polityId: string,
+  label: string,
+  west: number,
+  south: number,
+  east: number,
+  north: number,
+) {
+  return {
+    geometry: {
+      coordinates: [
+        [
+          [west, south],
+          [east, south],
+          [east, north],
+          [west, north],
+          [west, south],
+        ],
+      ],
+      type: "Polygon" as const,
+    },
+    id: polityId,
+    properties: {
+      kind: "historical-polity" as const,
+      label,
+      polityId,
+      precision: "source-derived" as const,
+      region: "central" as const,
+      sceneYear: 1900,
+      source: "CShapes-Europe" as const,
+      sourceFrom: 1900,
+      sourceId: Number(polityId.length),
+      sourceStatus: "independent" as const,
+      sourceTo: 1900,
+    },
+    type: "Feature" as const,
+  };
 }
