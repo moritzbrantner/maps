@@ -2161,6 +2161,72 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     ).toEqual([false, false, false]);
   });
 
+  test("keeps filtered GeoJSON features mounted without pointer handlers", async () => {
+    render(
+      <MapView
+        defaultViewState={{ center: [-73, 41], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Filtered GeoJSON layers"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            features: [
+              {
+                geometry: {
+                  coordinates: [
+                    [
+                      [-75, 39],
+                      [-73, 39],
+                      [-73, 41],
+                      [-75, 41],
+                      [-75, 39],
+                    ],
+                  ],
+                  type: "Polygon",
+                },
+                id: "visible",
+                properties: { interactive: true },
+                type: "Feature",
+              },
+              {
+                geometry: {
+                  coordinates: [
+                    [
+                      [-72, 39],
+                      [-70, 39],
+                      [-70, 41],
+                      [-72, 41],
+                      [-72, 39],
+                    ],
+                  ],
+                  type: "Polygon",
+                },
+                id: "hidden",
+                properties: { interactive: false },
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          }}
+          isFeatureInteractive={(feature) => Boolean(feature.properties.interactive)}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Filtered GeoJSON layers").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+
+    const layers = flatMock.getLayerGroups()[0]?.layers ?? [];
+
+    expect(layers).toHaveLength(2);
+    expect(layers[0]?.handlers.size).toBeGreaterThan(0);
+    expect(layers[1]?.handlers.size).toBe(0);
+  });
+
   test("renders MultiPoint and GeometryCollection GeoJSON layers", async () => {
     render(
       <MapView

@@ -7,7 +7,7 @@ import {
   type Ring as ClippingRing,
 } from "polygon-clipping";
 
-import { cloneGeometry, closeRing } from "./temporal-geojson-geometry";
+import { cloneGeometry, clonePosition, closeRing } from "./temporal-geojson-geometry";
 import type {
   GeoJsonPosition,
   TemporalGeoJsonGeometryFeature,
@@ -44,6 +44,7 @@ export type TopologyBounds = {
 };
 
 const AREA_EPSILON = 1e-9;
+const DEFAULT_EARTH_RADIUS_METERS = 6_371_008.8;
 
 export function intersectPolygonLike(
   left: PolygonLikeGeometry,
@@ -92,12 +93,89 @@ export function clipPolygonLikeToVoronoiCell(
   return cell ? intersectPolygonLike(subject, cell) : null;
 }
 
+export function simplifyPolygonLike(
+  geometry: PolygonLikeGeometry,
+  tolerance: number,
+): PolygonLikeGeometry | null {
+  const safeTolerance = Number.isFinite(tolerance) ? Math.max(0, tolerance) : 0;
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  const simplified = polygons
+    .map((polygon) => simplifyPolygonCoordinates(polygon, safeTolerance))
+    .filter((polygon) => polygon !== null);
+
+  if (simplified.length === 0) {
+    return null;
+  }
+
+  return simplified.length === 1
+    ? { coordinates: simplified[0]!, type: "Polygon" }
+    : { coordinates: simplified, type: "MultiPolygon" };
+}
+
 export function getPolygonLikeArea(geometry: PolygonLikeGeometry): number {
   if (geometry.type === "Polygon") {
     return getPolygonArea(geometry.coordinates);
   }
 
   return geometry.coordinates.reduce((sum, polygon) => sum + getPolygonArea(polygon), 0);
+}
+
+export function getPolygonLikeGeodesicAreaSquareMeters(
+  geometry: PolygonLikeGeometry,
+  earthRadiusMeters = DEFAULT_EARTH_RADIUS_METERS,
+): number {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+
+  return Math.abs(
+    polygons.reduce(
+      (sum, polygon) =>
+        sum +
+        polygon.reduce((polygonArea, ring, ringIndex) => {
+          const area = Math.abs(getRingGeodesicAreaSquareMeters(ring, earthRadiusMeters));
+
+          return ringIndex === 0 ? polygonArea + area : polygonArea - area;
+        }, 0),
+      0,
+    ),
+  );
+}
+
+export function getPolygonLikePerimeterMeters(
+  geometry: PolygonLikeGeometry,
+  earthRadiusMeters = DEFAULT_EARTH_RADIUS_METERS,
+): number {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+
+  return polygons.reduce(
+    (sum, polygon) =>
+      sum + polygon.reduce((polygonSum, ring) => polygonSum + getRingGeodesicLengthMeters(ring, earthRadiusMeters), 0),
+    0,
+  );
+}
+
+export function getGeoJsonRingGeodesicLengthMeters(
+  ring: readonly GeoJsonPosition[],
+  earthRadiusMeters = DEFAULT_EARTH_RADIUS_METERS,
+): number {
+  return getRingGeodesicLengthMeters(ring, earthRadiusMeters);
+}
+
+export function getGeoJsonRingPlanarLength(ring: readonly GeoJsonPosition[]): number {
+  if (ring.length < 2) {
+    return 0;
+  }
+
+  const closed = closeRing(ring);
+  let total = 0;
+
+  for (let index = 0; index < closed.length - 1; index += 1) {
+    const left = closed[index]!;
+    const right = closed[index + 1]!;
+
+    total += Math.hypot(right[0] - left[0], right[1] - left[1]);
+  }
+
+  return total;
 }
 
 export function getPolygonLikeCentroid(geometry: PolygonLikeGeometry): GeoJsonPosition {
@@ -229,6 +307,122 @@ function normalizeGeoJsonRing(ring: readonly GeoJsonPosition[] | ClippingRing): 
   return positions.length >= 4 ? positions : [];
 }
 
+function simplifyPolygonCoordinates(
+  polygon: readonly (readonly GeoJsonPosition[])[],
+  tolerance: number,
+): GeoJsonPosition[][] | null {
+  const shell = simplifyRing(polygon[0] ?? [], tolerance);
+
+  if (!shell || Math.abs(getRingSignedArea(shell)) <= AREA_EPSILON) {
+    return null;
+  }
+
+  const holes = polygon
+    .slice(1)
+    .map((ring) => simplifyRing(ring, tolerance))
+    .filter(
+      (ring): ring is GeoJsonPosition[] =>
+        ring !== null && Math.abs(getRingSignedArea(ring)) > AREA_EPSILON,
+    );
+
+  return [shell, ...holes];
+}
+
+function simplifyRing(ring: readonly GeoJsonPosition[], tolerance: number): GeoJsonPosition[] | null {
+  const closed = closeRing(ring);
+  const open = closed.slice(0, -1);
+
+  if (open.length < 3) {
+    return null;
+  }
+
+  const simplifiedOpen = tolerance <= 0 ? open.map(clonePosition) : simplifyOpenRing(open, tolerance);
+  const distinct = countDistinctPositions(simplifiedOpen);
+
+  if (distinct < 3) {
+    return null;
+  }
+
+  return closeRing(simplifiedOpen);
+}
+
+function simplifyOpenRing(
+  positions: readonly GeoJsonPosition[],
+  tolerance: number,
+): GeoJsonPosition[] {
+  if (positions.length <= 3) {
+    return positions.map(clonePosition);
+  }
+
+  const keep = Array.from({ length: positions.length }, () => false);
+
+  keep[0] = true;
+  keep[positions.length - 1] = true;
+  simplifyRange(positions, 0, positions.length - 1, tolerance * tolerance, keep);
+
+  return positions.filter((_, index) => keep[index]).map(clonePosition);
+}
+
+function simplifyRange(
+  positions: readonly GeoJsonPosition[],
+  firstIndex: number,
+  lastIndex: number,
+  toleranceSquared: number,
+  keep: boolean[],
+) {
+  if (lastIndex <= firstIndex + 1) {
+    return;
+  }
+
+  let maxDistanceSquared = -1;
+  let maxIndex = firstIndex;
+  const first = positions[firstIndex]!;
+  const last = positions[lastIndex]!;
+
+  for (let index = firstIndex + 1; index < lastIndex; index += 1) {
+    const distanceSquared = getPointSegmentDistanceSquared(positions[index]!, first, last);
+
+    if (distanceSquared > maxDistanceSquared) {
+      maxDistanceSquared = distanceSquared;
+      maxIndex = index;
+    }
+  }
+
+  if (maxDistanceSquared <= toleranceSquared) {
+    return;
+  }
+
+  keep[maxIndex] = true;
+  simplifyRange(positions, firstIndex, maxIndex, toleranceSquared, keep);
+  simplifyRange(positions, maxIndex, lastIndex, toleranceSquared, keep);
+}
+
+function getPointSegmentDistanceSquared(
+  point: GeoJsonPosition,
+  start: GeoJsonPosition,
+  end: GeoJsonPosition,
+) {
+  const deltaX = end[0] - start[0];
+  const deltaY = end[1] - start[1];
+
+  if (deltaX === 0 && deltaY === 0) {
+    return (point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2;
+  }
+
+  const ratio = Math.max(
+    0,
+    Math.min(1, ((point[0] - start[0]) * deltaX + (point[1] - start[1]) * deltaY) / (deltaX ** 2 + deltaY ** 2)),
+  );
+  const projectedX = start[0] + ratio * deltaX;
+  const projectedY = start[1] + ratio * deltaY;
+
+  return (point[0] - projectedX) ** 2 + (point[1] - projectedY) ** 2;
+}
+
+function countDistinctPositions(positions: readonly GeoJsonPosition[]) {
+  return new Set(positions.map((position) => `${position[0]},${position[1]}`)).size;
+}
+
 function getPolygonLikePositions(geometry: PolygonLikeGeometry): GeoJsonPosition[] {
   return geometry.type === "Polygon" ? geometry.coordinates.flat() : geometry.coordinates.flat(2);
 }
@@ -258,6 +452,69 @@ function getRingSignedArea(ring: readonly GeoJsonPosition[]) {
   }
 
   return area / 2;
+}
+
+function getRingGeodesicAreaSquareMeters(
+  ring: readonly GeoJsonPosition[],
+  earthRadiusMeters: number,
+) {
+  if (ring.length < 3 || earthRadiusMeters <= 0) {
+    return 0;
+  }
+
+  const closed = closeRing(ring);
+  let total = 0;
+
+  for (let index = 0; index < closed.length - 1; index += 1) {
+    const left = closed[index]!;
+    const right = closed[index + 1]!;
+    const leftLongitude = toRadians(left[0]);
+    const rightLongitude = toRadians(right[0]);
+    const leftLatitude = toRadians(left[1]);
+    const rightLatitude = toRadians(right[1]);
+
+    total += (rightLongitude - leftLongitude) * (Math.sin(leftLatitude) + Math.sin(rightLatitude));
+  }
+
+  return (total * earthRadiusMeters * earthRadiusMeters) / 2;
+}
+
+function getRingGeodesicLengthMeters(
+  ring: readonly GeoJsonPosition[],
+  earthRadiusMeters: number,
+) {
+  if (ring.length < 2 || earthRadiusMeters <= 0) {
+    return 0;
+  }
+
+  const closed = closeRing(ring);
+  let total = 0;
+
+  for (let index = 0; index < closed.length - 1; index += 1) {
+    total += getGeodesicDistanceMeters(closed[index]!, closed[index + 1]!, earthRadiusMeters);
+  }
+
+  return total;
+}
+
+function getGeodesicDistanceMeters(
+  from: GeoJsonPosition,
+  to: GeoJsonPosition,
+  earthRadiusMeters: number,
+) {
+  const fromLatitude = toRadians(from[1]);
+  const toLatitude = toRadians(to[1]);
+  const deltaLatitude = toRadians(to[1] - from[1]);
+  const deltaLongitude = toRadians(to[0] - from[0]);
+  const haversine =
+    Math.sin(deltaLatitude / 2) ** 2 +
+    Math.cos(fromLatitude) * Math.cos(toLatitude) * Math.sin(deltaLongitude / 2) ** 2;
+
+  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function toRadians(value: number) {
+  return (value * Math.PI) / 180;
 }
 
 function getPolygonCentroidParts(geometry: PolygonLikeGeometry) {

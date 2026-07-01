@@ -12,6 +12,7 @@ export type FlatLayerPlan<TEntry extends FlatLayerEntry<unknown>> = {
   render: () => TEntry | null;
   signature: string;
   update?: (entry: TEntry) => boolean;
+  updateOnSignatureChange?: boolean;
 };
 
 export type FlatLayerParent<TEntry extends FlatLayerEntry<unknown>> = {
@@ -55,6 +56,9 @@ export function reconcileFlatLayerEntries<TEntry extends FlatLayerEntry<unknown>
 
       remove(layer, cached);
       cache.delete(key);
+    } else if (cached && plan.updateOnSignatureChange && plan.update?.(cached)) {
+      cached.signature = plan.signature;
+      continue;
     } else if (cached) {
       remove(layer, cached);
       cache.delete(key);
