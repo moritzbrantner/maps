@@ -122,11 +122,7 @@ export function getDemoHistoricalPolitySceneForYear(
 ) {
   const scenes = getDemoHistoricalPolityScenario(scenarioId).scenes;
   const timelineYear = scenarioId === "european-states" ? Math.floor(year) : year;
-  const clampedYear = clamp(
-    timelineYear,
-    scenes[0]!.year,
-    scenes.at(-1)!.year,
-  );
+  const clampedYear = clamp(timelineYear, scenes[0]!.year, scenes.at(-1)!.year);
   const nextSceneIndex = scenes.findIndex((scene) => scene.year > clampedYear);
 
   if (nextSceneIndex === -1) {
@@ -179,12 +175,17 @@ function getInterpolatedDemoHistoricalPolityScenarioFrame(
       }
 
       const geometry =
-        interpolateTemporalGeoJsonGeometry(previousFeature.geometry, nextFeature.geometry, progress, {
-          fallback: "hold",
-          minResampleCoordinates: 64,
-          partMatchingStrategy: "auto",
-          strategy: "vertex-union",
-        }) ?? previousFeature.geometry;
+        interpolateTemporalGeoJsonGeometry(
+          previousFeature.geometry,
+          nextFeature.geometry,
+          progress,
+          {
+            fallback: "hold",
+            minResampleCoordinates: 64,
+            partMatchingStrategy: "auto",
+            strategy: "vertex-union",
+          },
+        ) ?? previousFeature.geometry;
 
       return {
         geometry,
@@ -284,7 +285,9 @@ function validateDemoHistoricalPolitySceneOverlaps(
   scene: DemoHistoricalPolityScene,
 ): DemoHistoricalPolitySceneValidationIssue[] {
   const polygonFeatures = scene.collection.features.flatMap((feature) =>
-    isPolygonLikeGeometry(feature.geometry) ? [{ bounds: getGeometryBounds(feature.geometry), feature }] : [],
+    isPolygonLikeGeometry(feature.geometry)
+      ? [{ bounds: getGeometryBounds(feature.geometry), feature }]
+      : [],
   );
   const issues: DemoHistoricalPolitySceneValidationIssue[] = [];
 
@@ -369,8 +372,12 @@ function fromClippingMultiPolygon(output: ClippingMultiPolygon): PolygonLikeGeom
   const polygons = output
     .map((polygon) =>
       polygon
-        .map((ring) => closeRing(ring.map((position) => [position[0], position[1]] as [number, number])))
-        .filter((ring) => ring.length >= 4 && Math.abs(getRingArea(ring)) > historyOverlapAreaThreshold),
+        .map((ring) =>
+          closeRing(ring.map((position) => [position[0], position[1]] as [number, number])),
+        )
+        .filter(
+          (ring) => ring.length >= 4 && Math.abs(getRingArea(ring)) > historyOverlapAreaThreshold,
+        ),
     )
     .filter(
       (polygon) =>
@@ -387,9 +394,9 @@ function fromClippingMultiPolygon(output: ClippingMultiPolygon): PolygonLikeGeom
 }
 
 function normalizeClippingRing(ring: readonly (readonly number[])[]) {
-  return closeRing(ring.map((position) => [Number(position[0]), Number(position[1])] as [number, number])).map(
-    (position) => [position[0], position[1]],
-  );
+  return closeRing(
+    ring.map((position) => [Number(position[0]), Number(position[1])] as [number, number]),
+  ).map((position) => [position[0], position[1]]);
 }
 
 function closeRing(ring: readonly [number, number][]) {
@@ -437,7 +444,9 @@ function getRingArea(ring: readonly (readonly number[])[]) {
 }
 
 function getGeometryBounds(geometry: PolygonLikeGeometry) {
-  const positions = (geometry.type === "Polygon" ? geometry.coordinates : geometry.coordinates.flat())
+  const positions = (
+    geometry.type === "Polygon" ? geometry.coordinates : geometry.coordinates.flat()
+  )
     .flat()
     .filter((position) => Array.isArray(position) && position.length >= 2);
 

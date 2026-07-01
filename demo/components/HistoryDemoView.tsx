@@ -246,9 +246,7 @@ export function HistoryDemoView({
           ))}
         </div>
 
-        <p className="demo-history-caveat">
-          {activeScenario.caveat}
-        </p>
+        <p className="demo-history-caveat">{activeScenario.caveat}</p>
       </div>
     </section>
   );

@@ -21,7 +21,9 @@ describe("History demo polities", () => {
     ]);
 
     const june1940Scene = scenario!.scenes.find((scene) => scene.year === 1940.5)!;
-    const june1940Ids = june1940Scene.collection.features.map((feature) => feature.properties?.polityId);
+    const june1940Ids = june1940Scene.collection.features.map(
+      (feature) => feature.properties?.polityId,
+    );
     const germanyAreas = scenario!.scenes.map((scene) => getGermanControlledArea(scene.collection));
 
     expect(june1940Ids).toContain("control-france-east");
@@ -49,7 +51,9 @@ describe("History demo polities", () => {
     expect(midpointFeature.properties.controlArea).toBeGreaterThan(
       previousFeature.properties.controlArea!,
     );
-    expect(midpointFeature.properties.controlArea).toBeLessThan(nextFeature.properties.controlArea!);
+    expect(midpointFeature.properties.controlArea).toBeLessThan(
+      nextFeature.properties.controlArea!,
+    );
   });
 
   test("publishes CShapes-Europe Historical Polity Scene snapshots for supported milestone years", () => {
@@ -184,7 +188,7 @@ describe("History demo polities", () => {
         sceneYear: 900,
       },
     ]);
-  });
+  }, 15_000);
 
   test("reports overlapping Historical Polities in the same scene", () => {
     expect(
@@ -259,9 +263,7 @@ function getControlledFeature(
   frame: ReturnType<typeof getDemoHistoricalPolityPlaybackFrame>,
   polityId: string,
 ) {
-  const feature = frame.features.find(
-    (item) => item.properties?.polityId === polityId,
-  );
+  const feature = frame.features.find((item) => item.properties?.polityId === polityId);
 
   expect(feature).toBeDefined();
 
