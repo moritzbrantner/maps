@@ -67,6 +67,7 @@ export type FlatLayer = {
   setLatLng?: (latLng: [number, number]) => FlatLayer;
   setLatLngs?: (latLngs: unknown) => FlatLayer;
   setOpacity?: (opacity: number) => FlatLayer;
+  setStyle?: (options: FlatLayerOptions) => FlatLayer;
   setUrl?: (url: string) => FlatLayer;
 };
 
@@ -570,6 +571,26 @@ class MapLibrePointLayer extends MapLibreSourceLayer {
     return this;
   }
 
+  setStyle(options: FlatLayerOptions) {
+    Object.assign(this.options, options);
+    const layerId = this.layerIds[0];
+
+    if (layerId && this.map.getLayer(layerId)) {
+      this.map.setPaintProperty(layerId, "circle-color", this.options.fillColor ?? "#0f172a");
+      this.map.setPaintProperty(
+        layerId,
+        "circle-opacity",
+        this.options.fillOpacity ?? this.options.opacity ?? 1,
+      );
+      this.map.setPaintProperty(layerId, "circle-radius", this.options.radius ?? 6);
+      this.map.setPaintProperty(layerId, "circle-stroke-color", this.options.color ?? "#ffffff");
+      this.map.setPaintProperty(layerId, "circle-stroke-opacity", this.options.opacity ?? 1);
+      this.map.setPaintProperty(layerId, "circle-stroke-width", this.options.weight ?? 1);
+    }
+
+    return this;
+  }
+
   protected render() {
     upsertGeoJsonSource(this.map, this.sourceId, this.getData());
     const layerId = `${this.id}:circle`;
@@ -616,6 +637,19 @@ class MapLibreLineLayer extends MapLibreSourceLayer {
     this.coordinates = normalizeLineCoordinates(latLngs);
     const source = this.map.getSource(this.sourceId) as GeoJSONSource | undefined;
     source?.setData?.(this.getData());
+
+    return this;
+  }
+
+  setStyle(options: FlatLayerOptions) {
+    Object.assign(this.options, options);
+    const layerId = this.layerIds[0];
+
+    if (layerId && this.map.getLayer(layerId)) {
+      this.map.setPaintProperty(layerId, "line-color", this.options.color ?? "#2563eb");
+      this.map.setPaintProperty(layerId, "line-opacity", this.options.opacity ?? 1);
+      this.map.setPaintProperty(layerId, "line-width", this.options.weight ?? 2);
+    }
 
     return this;
   }
@@ -673,6 +707,29 @@ class MapLibrePolygonLayer extends MapLibreSourceLayer {
     this.coordinates = normalizePolygonCoordinates(latLngs);
     const source = this.map.getSource(this.sourceId) as GeoJSONSource | undefined;
     source?.setData?.(this.getData());
+
+    return this;
+  }
+
+  setStyle(options: FlatLayerOptions) {
+    Object.assign(this.options, options);
+    const fillLayerId = this.layerIds[0];
+    const lineLayerId = this.layerIds[1];
+
+    if (fillLayerId && this.map.getLayer(fillLayerId)) {
+      this.map.setPaintProperty(
+        fillLayerId,
+        "fill-color",
+        this.options.fillColor ?? this.options.color ?? "#14b8a6",
+      );
+      this.map.setPaintProperty(fillLayerId, "fill-opacity", this.options.fillOpacity ?? 0.2);
+    }
+
+    if (lineLayerId && this.map.getLayer(lineLayerId)) {
+      this.map.setPaintProperty(lineLayerId, "line-color", this.options.color ?? "#0f766e");
+      this.map.setPaintProperty(lineLayerId, "line-opacity", this.options.opacity ?? 1);
+      this.map.setPaintProperty(lineLayerId, "line-width", this.options.weight ?? 2);
+    }
 
     return this;
   }

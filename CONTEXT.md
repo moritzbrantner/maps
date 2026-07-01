@@ -62,6 +62,17 @@ Temporal behavior that produces map states, GeoJSON scene states, or map
 playback.
 _Avoid_: general timeline toolkit
 
+**Historical Polity**:
+An illustrative political entity shown in a historical Map-Scoped Timeline scene,
+such as a kingdom, empire, republic, union, realm, or modern nation-state.
+_Avoid_: nation when referring to pre-modern entities; country when the entity is
+not a modern state
+
+**Historical Polity Scene**:
+A GeoJSON Source representing the visible Historical Polities at one labeled year
+in the History demo.
+_Avoid_: historical truth layer, authoritative border dataset
+
 **Map UI**:
 Map-specific controls, overlays, legends, editor handles, and interaction
 affordances owned by this package.

@@ -1,4 +1,7 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": []
+  "ignorePatterns": [
+    "demo/data/cshapes-europe-polity-scenes.json",
+    "demo/data/wwii-control-scenes.json"
+  ]
 }
