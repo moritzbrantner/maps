@@ -1,8 +1,13 @@
 import { flattenGeoJsonFeatures, type GeoJsonMapSource } from "./geojson-source";
 import {
   differencePolygonLike,
+  getGeoJsonRingGeodesicLengthMeters,
+  getGeoJsonRingPlanarLength,
   getPolygonLikeArea,
+  getPolygonLikeGeodesicAreaSquareMeters,
+  getPolygonLikePerimeterMeters,
   intersectPolygonLike,
+  simplifyPolygonLike,
   unionPolygonLikes,
   type PolygonLikeGeometry,
 } from "./geojson-topology";
@@ -117,6 +122,56 @@ export type GeoJsonRelationshipOptions<
     partIndex?: number,
   ) => string | number | undefined;
   includeBoundary?: boolean;
+};
+
+export type GeoJsonPolygonMeasurementOptions<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = GeoJsonRelationshipOptions<TProperties> & {
+  earthRadiusMeters?: number;
+};
+
+export type GeoJsonPolygonMeasurementRecord = {
+  areaSquareMeters: number;
+  featureId: string;
+  featureIndex: number;
+  partIndex?: number;
+  perimeterMeters: number;
+  planarArea: number;
+};
+
+export type GeoJsonPolygonOutlineRingRole = "shell" | "hole";
+
+export type GeoJsonPolygonOutlineProperties = {
+  featureId: string;
+  featureIndex: number;
+  lengthMeters: number;
+  partIndex?: number;
+  planarLength: number;
+  polygonIndex: number;
+  ringIndex: number;
+  role: GeoJsonPolygonOutlineRingRole;
+};
+
+export type GeoJsonPolygonOverlapResolutionStrategy = "later-wins" | "earlier-wins";
+
+export type GeoJsonPolygonOverlapResolutionOptions<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = GeoJsonRelationshipOptions<TProperties> & {
+  strategy?: GeoJsonPolygonOverlapResolutionStrategy;
+};
+
+export type GeoJsonPolygonOverlapResolutionResult<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = {
+  collection: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
+  issues: GeoJsonOperationIssue[];
+  overlaps: GeoJsonOverlapRecord[];
+};
+
+export type GeoJsonPolygonSimplifyOptions<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = GeoJsonRelationshipOptions<TProperties> & {
+  tolerance: number;
 };
 
 type GeoJsonFeatureInput<TProperties extends Record<string, unknown>> =
@@ -349,6 +404,65 @@ export function getGeoJsonIntersections<
   return records;
 }
 
+export function getGeoJsonPolygonMeasurements<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>(
+  source: GeoJsonMapSource<TProperties>,
+  options: GeoJsonPolygonMeasurementOptions<TProperties> = {},
+): GeoJsonPolygonMeasurementRecord[] {
+  return collectPolygonEntries(source, options).map((entry) => ({
+    areaSquareMeters: getPolygonLikeGeodesicAreaSquareMeters(
+      entry.geometry,
+      options.earthRadiusMeters,
+    ),
+    featureId: entry.id,
+    featureIndex: entry.index,
+    partIndex: entry.partIndex,
+    perimeterMeters: getPolygonLikePerimeterMeters(entry.geometry, options.earthRadiusMeters),
+    planarArea: getPolygonLikeArea(entry.geometry),
+  }));
+}
+
+export function createGeoJsonPolygonOutlines<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>(
+  source: GeoJsonMapSource<TProperties>,
+  options: GeoJsonPolygonMeasurementOptions<TProperties> = {},
+): GeoJsonOperationResult<GeoJsonPolygonOutlineProperties> {
+  const issues: GeoJsonOperationIssue[] = [];
+  const entries = collectPolygonEntries(source, options, issues);
+  const features = entries.flatMap((entry) => {
+    const polygons = entry.geometry.type === "Polygon" ? [entry.geometry.coordinates] : entry.geometry.coordinates;
+
+    return polygons.flatMap((polygon, polygonIndex) =>
+      polygon.map((ring, ringIndex) => {
+        const properties: GeoJsonPolygonOutlineProperties = {
+          featureId: entry.id,
+          featureIndex: entry.index,
+          lengthMeters: getGeoJsonRingGeodesicLengthMeters(ring, options.earthRadiusMeters),
+          partIndex: entry.partIndex,
+          planarLength: getGeoJsonRingPlanarLength(ring),
+          polygonIndex,
+          ringIndex,
+          role: ringIndex === 0 ? "shell" : "hole",
+        };
+
+        return {
+          geometry: {
+            coordinates: ring.map(clonePosition),
+            type: "LineString" as const,
+          },
+          id: `${entry.id}-outline-${polygonIndex}-${ringIndex}`,
+          properties,
+          type: "Feature" as const,
+        };
+      }),
+    );
+  });
+
+  return { collection: { features, type: "FeatureCollection" }, issues };
+}
+
 export function findContainingGeoJsonFeatures<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 >(
@@ -419,6 +533,84 @@ export function findOverlappingGeoJsonFeatures<
   }
 
   return records;
+}
+
+export function resolveGeoJsonPolygonOverlaps<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>(
+  source: GeoJsonMapSource<TProperties>,
+  options: GeoJsonPolygonOverlapResolutionOptions<TProperties> = {},
+): GeoJsonPolygonOverlapResolutionResult<TProperties> {
+  const issues: GeoJsonOperationIssue[] = [];
+  const areaEpsilon = options.areaEpsilon ?? DEFAULT_AREA_EPSILON;
+  const strategy = options.strategy ?? "later-wins";
+  const entries = collectPolygonEntries(source, options, issues);
+  const overlaps = findOverlappingGeoJsonFeatures(source, options);
+  const features: Array<TemporalGeoJsonGeometryFeature<TProperties>> = [];
+
+  entries.forEach((entry, entryIndex) => {
+    const maskEntries =
+      strategy === "later-wins"
+        ? entries.slice(entryIndex + 1)
+        : entries.slice(0, entryIndex);
+    const maskUnion = runPolygonOperation(
+      () => unionPolygonLikes(maskEntries.map((mask) => mask.geometry)),
+      issues,
+      "overlap resolution mask union failed.",
+    );
+    const geometry = runPolygonOperation(
+      () =>
+        maskUnion
+          ? differencePolygonLike(entry.geometry, maskUnion)
+          : (cloneGeometry(entry.geometry) as PolygonLikeGeometry),
+      issues,
+      "overlap resolution failed.",
+    );
+    const area = geometry ? getPolygonLikeArea(geometry) : 0;
+
+    if (!geometry || area <= areaEpsilon) {
+      return;
+    }
+
+    features.push({
+      geometry,
+      id: entry.feature.id,
+      properties: cloneProperties(entry.feature.properties),
+      type: "Feature",
+    });
+  });
+
+  return { collection: { features, type: "FeatureCollection" }, issues, overlaps };
+}
+
+export function simplifyGeoJsonPolygons<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>(
+  source: GeoJsonMapSource<TProperties>,
+  options: GeoJsonPolygonSimplifyOptions<TProperties>,
+): GeoJsonOperationResult<TProperties> {
+  const issues: GeoJsonOperationIssue[] = [];
+  const areaEpsilon = options.areaEpsilon ?? DEFAULT_AREA_EPSILON;
+  const entries = collectPolygonEntries(source, options, issues);
+  const features = entries.flatMap((entry) => {
+    const geometry = simplifyPolygonLike(entry.geometry, options.tolerance);
+    const area = geometry ? getPolygonLikeArea(geometry) : 0;
+
+    if (!geometry || area <= areaEpsilon) {
+      return [];
+    }
+
+    return [
+      {
+        geometry,
+        id: entry.feature.id,
+        properties: cloneProperties(entry.feature.properties),
+        type: "Feature" as const,
+      },
+    ];
+  });
+
+  return { collection: { features, type: "FeatureCollection" }, issues };
 }
 
 function toFeatureCollection<TProperties extends Record<string, unknown>>(
@@ -595,6 +787,12 @@ function isPolygonLikeGeometry(
   geometry: TemporalGeoJsonSupportedGeometry,
 ): geometry is PolygonLikeGeometry {
   return geometry.type === "Polygon" || geometry.type === "MultiPolygon";
+}
+
+function cloneProperties<TProperties extends Record<string, unknown>>(
+  properties: TProperties | null | undefined,
+): TProperties | null | undefined {
+  return properties ? ({ ...properties } as TProperties) : properties;
 }
 
 function containsPoint(

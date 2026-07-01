@@ -56,6 +56,7 @@ export type DemoView =
   | "composed"
   | "temporal"
   | "interpolation"
+  | "history"
   | "globe"
   | "geojson"
   | "editor";

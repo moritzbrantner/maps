@@ -1,0 +1,21 @@
+{
+  "baselineEstimatedTokens": 1480,
+  "diagnosticsFailures": 0,
+  "estimatedSavingsPercent": -1.01,
+  "estimatedTokensObserved": 1495,
+  "estimatedTokensSaved": -15,
+  "eventsLogged": 13,
+  "lastCycle": 1,
+  "lastEventId": "dfde6587-d814-41ca-b006-e0d868405046",
+  "lastEventType": "diagnostic_summary_written",
+  "lastStatus": "selected-but-no-subtask-spawned",
+  "latestReportPath": "/home/moenarch/moritzbrantner/maps/.agent-loop/diagnostics/reports/20260626-094911-moritzbrantner-maps-summary-cycle-1.md",
+  "ok": true,
+  "path": "/home/moenarch/moritzbrantner/maps/.agent-loop/diagnostics/runs/20260626-094911-moritzbrantner-maps.jsonl",
+  "repo": "moritzbrantner/maps",
+  "resumed": false,
+  "runId": "20260626-094911-moritzbrantner-maps",
+  "startedAt": "2026-06-26T09:49:11Z",
+  "tokenEstimatesLogged": 1,
+  "updatedAt": "2026-06-26T09:51:03Z"
+}
