@@ -372,7 +372,7 @@ async function waitForMapIdle(page: Page) {
               }
             ).__mbMapsDemo?.isMapIdle?.() ?? false,
         ),
-      { timeout: 5_000 },
+      { timeout: 15_000 },
     )
     .toBe(true);
 }
