@@ -83,6 +83,49 @@ source and target indexes, planar area, and source/target area ratios. Pass
 `getProperties` to replace those properties. Areas are calculated in the input
 longitude/latitude coordinate plane; they are not geodesic square meters.
 
+## Polygon Measurements And Cleanup
+
+Use the polygon helper actions when applications need derived polygon data
+without adding Map UI controls.
+
+```ts
+import {
+  createGeoJsonPolygonOutlines,
+  getGeoJsonPolygonMeasurements,
+  resolveGeoJsonPolygonOverlaps,
+  simplifyGeoJsonPolygons,
+} from "@moritzbrantner/maps/geojson";
+
+const measurements = getGeoJsonPolygonMeasurements(parcels);
+const outlines = createGeoJsonPolygonOutlines(parcels);
+const nonOverlapping = resolveGeoJsonPolygonOverlaps(parcels);
+const simplified = simplifyGeoJsonPolygons(parcels, { tolerance: 0.0005 });
+```
+
+`getGeoJsonPolygonMeasurements(...)` returns one record for each `Polygon` or
+`MultiPolygon` part with planar coordinate area, approximate spherical
+`areaSquareMeters`, and approximate spherical perimeter meters. Holes subtract
+from area and add to perimeter. The geodesic values assume longitude/latitude
+coordinates on a spherical Earth and are not ellipsoidal survey measurements.
+
+`createGeoJsonPolygonOutlines(...)` converts polygon shells and holes into
+`LineString` GeoJSON Features. Each outline includes `role: "shell" | "hole"`,
+ring indexes, planar length in input coordinate units, and approximate
+geodesic length in meters.
+
+`resolveGeoJsonPolygonOverlaps(...)` reports the original overlaps and returns a
+derived `FeatureCollection` with overlaps removed. The default strategy is
+`"later-wins"`, so earlier polygons are trimmed by later polygons in source
+order. Use `{ strategy: "earlier-wins" }` when earlier source order should take
+priority.
+
+`simplifyGeoJsonPolygons(...)` applies tolerance-based ring simplification. The
+tolerance uses input coordinate units, so longitude/latitude GeoJSON uses
+degrees. Rings remain closed, degenerate shells are removed, and degenerate
+holes are dropped. Simplification is per feature and does not preserve shared
+topology between adjacent polygons, so it can introduce small gaps or overlaps
+between neighboring shapes.
+
 ## Spatial Relationships
 
 ```ts

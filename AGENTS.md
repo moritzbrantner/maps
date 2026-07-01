@@ -4,6 +4,19 @@ This repository is built for red/green development. Work in vertical slices:
 write one failing behavior test, make it pass with the smallest production
 change, then repeat.
 
+## Agent skills
+
+This repository is configured for the Matt Pocock workflow skills and the agent-loop control plane.
+
+- Issue tracker: `docs/agents/issue-tracker.md`
+- Triage labels: `docs/agents/triage-labels.md`
+- Domain context: `docs/agents/domain.md`
+- Planning workflow: `docs/agents/planning-workflow.md`
+
+### Planning workflow
+
+Substantial new work should be planned into GitHub PRD issues instead of implemented directly. See `docs/agents/planning-workflow.md`.
+
 ## Project Vocabulary
 
 Read `CONTEXT.md` before naming tests or public interfaces. Use the map library

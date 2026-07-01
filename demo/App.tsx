@@ -71,6 +71,7 @@ import {
   renderDemoFlowPopup,
   renderDemoFlowTooltip,
 } from "./components/FlowVolumeLegend";
+import { HistoryDemoView } from "./components/HistoryDemoView";
 import { demoMapStyle } from "./data/map-style";
 import { formatTemperatureValue, getHeatLayerColorRamp } from "./lib/format";
 import type {
@@ -767,6 +768,7 @@ const views: Array<{ id: DemoView; label: string }> = [
   { id: "composed", label: "Composed" },
   { id: "temporal", label: "Timeline" },
   { id: "interpolation", label: "Interpolation" },
+  { id: "history", label: "History" },
   { id: "globe", label: "Globe" },
   { id: "geojson", label: "GeoJSON" },
   { id: "editor", label: "Editor" },
@@ -1950,6 +1952,14 @@ function renderMap(
       );
     case "interpolation":
       return <GeoJsonInterpolationWorkbench e2eRegistration={e2eRegistration} />;
+    case "history":
+      return (
+        <HistoryDemoView
+          onMapControllerReady={e2eRegistration.onMapControllerReady}
+          onMapReady={e2eRegistration.onMapReady}
+          onViewStateChange={setViewport}
+        />
+      );
     case "globe":
       return (
         <BubbleMap
