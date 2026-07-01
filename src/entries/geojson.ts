@@ -28,11 +28,15 @@ export {
 } from "../geojson-validation";
 export {
   clipGeoJsonToPolygon,
+  createGeoJsonPolygonOutlines,
   differenceGeoJsonFeatures,
   findContainingGeoJsonFeatures,
   findOverlappingGeoJsonFeatures,
   getGeoJsonIntersections,
+  getGeoJsonPolygonMeasurements,
   intersectGeoJsonFeatures,
+  resolveGeoJsonPolygonOverlaps,
+  simplifyGeoJsonPolygons,
   unionGeoJsonFeatures,
   type GeoJsonBooleanOperation,
   type GeoJsonContainmentRecord,
@@ -43,6 +47,14 @@ export {
   type GeoJsonOperationOptions,
   type GeoJsonOperationResult,
   type GeoJsonOverlapRecord,
+  type GeoJsonPolygonMeasurementOptions,
+  type GeoJsonPolygonMeasurementRecord,
+  type GeoJsonPolygonOverlapResolutionOptions,
+  type GeoJsonPolygonOverlapResolutionResult,
+  type GeoJsonPolygonOverlapResolutionStrategy,
+  type GeoJsonPolygonOutlineProperties,
+  type GeoJsonPolygonOutlineRingRole,
+  type GeoJsonPolygonSimplifyOptions,
   type GeoJsonRelationshipOptions,
 } from "../geojson-operations";
 export { GeoJsonMap, type GeoJsonMapProps } from "../geojson-map";

@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@moritzbrantner/maps": new URL("./src/index.ts", import.meta.url).pathname,
       "flat": new URL("./src/flat-shim.ts", import.meta.url).pathname,
       "maplibre-gl": new URL("./src/test-maplibre-gl.ts", import.meta.url).pathname,
     },
@@ -10,6 +11,6 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "demo/**/*.test.ts"],
   },
 });
