@@ -2,13 +2,17 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { difference } from "polygon-clipping";
+import { difference, intersection } from "polygon-clipping";
 
 const sourceUrl = "https://icr.ethz.ch/data/cshapes/CShapes-Europe.geojson";
 const milestoneYears = [1816, 1886, 1914, 1939, 1945, 1989, 2019];
 const outputPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../demo/data/cshapes-europe-polity-scenes.json",
+);
+const wwiiOutputPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../demo/data/wwii-control-scenes.json",
 );
 const noticePath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -28,6 +32,7 @@ const source = inputPath
     });
 
 const scenes = milestoneYears.map((year) => buildScene(source.features ?? [], year));
+const wwiiScenes = buildWwiiControlScenes(source.features ?? []);
 
 await mkdir(path.dirname(outputPath), { recursive: true });
 await writeFile(
@@ -57,8 +62,19 @@ await writeFile(
     "",
   ].join("\n"),
 );
+await writeFile(
+  wwiiOutputPath,
+  `${JSON.stringify({
+    license: "CC BY-NC-SA 4.0",
+    source: "CShapes-Europe",
+    sourceUrl,
+    scenes: wwiiScenes,
+    scenario: "wwii-control",
+  })}\n`,
+);
 
 console.log(`Wrote ${scenes.length} CShapes-Europe Historical Polity Scenes to ${outputPath}`);
+console.log(`Wrote ${wwiiScenes.length} WWII control scenes to ${wwiiOutputPath}`);
 
 function buildScene(features, year) {
   const activeFeatures = features
@@ -97,6 +113,150 @@ function buildScene(features, year) {
     },
     label: `${year} AD`,
     year,
+  };
+}
+
+function buildWwiiControlScenes(features) {
+  return [
+    wwiiControlScene(features, 1939.67, "Aug 1939", {
+      countryNames: ["Germany (Prussia)", "Austria", "Czechoslovakia"],
+    }),
+    wwiiControlScene(features, 1939.75, "Sep 1939", {
+      countryNames: ["Germany (Prussia)", "Austria", "Czechoslovakia"],
+      partials: [{ fraction: 0.42, name: "Poland", side: "west" }],
+    }),
+    wwiiControlScene(features, 1939.83, "Oct 1939", {
+      countryNames: ["Germany (Prussia)", "Austria", "Czechoslovakia"],
+      partials: [{ fraction: 0.62, name: "Poland", side: "west" }],
+    }),
+    wwiiControlScene(features, 1940.42, "May 1940", {
+      countryNames: [
+        "Germany (Prussia)",
+        "Austria",
+        "Czechoslovakia",
+        "Denmark",
+        "Netherlands",
+        "Luxembourg",
+      ],
+      partials: [
+        { fraction: 0.62, name: "Poland", side: "west" },
+        { fraction: 0.45, name: "Belgium", side: "east" },
+        { fraction: 0.28, name: "France", side: "east" },
+      ],
+    }),
+    wwiiControlScene(features, 1940.5, "Jun 1940", {
+      countryNames: [
+        "Germany (Prussia)",
+        "Austria",
+        "Czechoslovakia",
+        "Denmark",
+        "Norway",
+        "Netherlands",
+        "Belgium",
+        "Luxembourg",
+      ],
+      partials: [
+        { fraction: 0.62, name: "Poland", side: "west" },
+        { fraction: 0.78, name: "France", side: "east" },
+      ],
+    }),
+    wwiiControlScene(features, 1942.92, "Nov 1942", {
+      countryNames: [
+        "Germany (Prussia)",
+        "Austria",
+        "Czechoslovakia",
+        "Denmark",
+        "Norway",
+        "Netherlands",
+        "Belgium",
+        "Luxembourg",
+        "Yugoslavia",
+        "Greece",
+      ],
+      partials: [
+        { fraction: 0.62, name: "Poland", side: "west" },
+        { fraction: 0.82, name: "France", side: "east" },
+        { fraction: 0.18, name: "Russia (Soviet Union)", side: "west" },
+      ],
+    }),
+    wwiiControlScene(features, 1944.5, "Jun 1944", {
+      countryNames: [
+        "Germany (Prussia)",
+        "Austria",
+        "Czechoslovakia",
+        "Denmark",
+        "Norway",
+        "Netherlands",
+        "Belgium",
+      ],
+      partials: [
+        { fraction: 0.42, name: "Poland", side: "west" },
+        { fraction: 0.35, name: "France", side: "east" },
+      ],
+    }),
+    wwiiControlScene(features, 1944.92, "Nov 1944", {
+      countryNames: ["Germany (Prussia)", "Austria", "Czechoslovakia", "Denmark", "Norway"],
+      partials: [
+        { fraction: 0.2, name: "Poland", side: "west" },
+        { fraction: 0.35, name: "Netherlands", side: "east" },
+      ],
+    }),
+    wwiiControlScene(features, 1945.33, "Apr 1945", {
+      partials: [{ fraction: 0.35, name: "Germany (Prussia)", side: "west" }],
+    }),
+  ];
+}
+
+function wwiiControlScene(features, year, label, control) {
+  const baseYear = 1939;
+  const fullFeatures = (control.countryNames ?? []).flatMap((name) => {
+    const geometry = getCountryGeometry(features, baseYear, name);
+
+    return geometry ? [toWwiiControlFeature(name, geometry, year)] : [];
+  });
+  const partialFeatures = (control.partials ?? []).flatMap((partial) => {
+    const geometry = getCountryGeometry(features, baseYear, partial.name);
+    const clippedGeometry = geometry ? clipGeometryBySide(geometry, partial.side, partial.fraction) : null;
+
+    return clippedGeometry ? [toWwiiControlFeature(partial.name, clippedGeometry, year, partial.side)] : [];
+  });
+
+  const sceneFeatures = [...fullFeatures, ...partialFeatures].sort((left, right) =>
+    String(left.id).localeCompare(String(right.id)),
+  );
+
+  return {
+    collection: {
+      features: sceneFeatures,
+      type: "FeatureCollection",
+    },
+    label,
+    year,
+  };
+}
+
+function toWwiiControlFeature(name, geometry, year, side = "all") {
+  const slug = slugify(name.replace(/\(.+?\)/g, ""));
+  const polityId = side === "all" ? `control-${slug}` : `control-${slug}-${side}`;
+
+  return {
+    geometry,
+    id: polityId,
+    properties: {
+      controlArea: getPolygonLikeArea(geometry),
+      kind: "historical-polity",
+      label: "German-controlled territory",
+      polityId,
+      precision: "source-derived",
+      region: "central",
+      sceneYear: year,
+      source: "CShapes-Europe",
+      sourceFrom: 1939,
+      sourceId: 0,
+      sourceStatus: "independent",
+      sourceTo: 1945,
+    },
+    type: "Feature",
   };
 }
 
@@ -225,6 +385,55 @@ function clipGeometryAgainstAcceptedFeatures(geometry, accepted) {
   }
 
   return currentGeometry;
+}
+
+function getCountryGeometry(features, year, name) {
+  const feature = features.find(
+    (item) =>
+      item.properties?.Name === name &&
+      item.properties?.Status === "independent" &&
+      item.properties?.From <= year &&
+      year <= item.properties?.To,
+  );
+
+  return feature ? normalizePolygonLikeGeometry(feature.geometry) : null;
+}
+
+function clipGeometryBySide(geometry, side, fraction) {
+  const bounds = getGeometryBounds(geometry);
+  const width = bounds.east - bounds.west;
+  const height = bounds.north - bounds.south;
+  const safeFraction = Math.min(Math.max(fraction, 0), 1);
+  let clipBounds = bounds;
+
+  if (side === "west") {
+    clipBounds = { ...bounds, east: bounds.west + width * safeFraction };
+  } else if (side === "east") {
+    clipBounds = { ...bounds, west: bounds.east - width * safeFraction };
+  } else if (side === "north") {
+    clipBounds = { ...bounds, south: bounds.north - height * safeFraction };
+  } else if (side === "south") {
+    clipBounds = { ...bounds, north: bounds.south + height * safeFraction };
+  }
+
+  return fromClippingMultiPolygon(
+    intersection(toClippingMultiPolygon(geometry), toClippingMultiPolygon(boundsToPolygon(clipBounds))),
+  );
+}
+
+function boundsToPolygon(bounds) {
+  return {
+    coordinates: [
+      [
+        [bounds.west, bounds.south],
+        [bounds.east, bounds.south],
+        [bounds.east, bounds.north],
+        [bounds.west, bounds.north],
+        [bounds.west, bounds.south],
+      ],
+    ],
+    type: "Polygon",
+  };
 }
 
 function toClippingMultiPolygon(geometry) {

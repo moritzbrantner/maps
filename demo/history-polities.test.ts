@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  demoHistoricalPolityScenarios,
   demoHistoricalPolityScenes,
   formatDemoHistoricalPolityYear,
   getDemoHistoricalPolityFrame,
@@ -11,6 +12,46 @@ import {
 } from "./data/history-polities";
 
 describe("History demo polities", () => {
+  test("publishes a second WWII control scenario with expanding and shrinking German-controlled territory", () => {
+    const scenario = demoHistoricalPolityScenarios.find((item) => item.id === "wwii-control");
+
+    expect(scenario?.label).toBe("WWII control");
+    expect(scenario?.scenes.map((scene) => scene.year)).toEqual([
+      1939.67, 1939.75, 1939.83, 1940.42, 1940.5, 1942.92, 1944.5, 1944.92, 1945.33,
+    ]);
+
+    const june1940Scene = scenario!.scenes.find((scene) => scene.year === 1940.5)!;
+    const june1940Ids = june1940Scene.collection.features.map((feature) => feature.properties?.polityId);
+    const germanyAreas = scenario!.scenes.map((scene) => getGermanControlledArea(scene.collection));
+
+    expect(june1940Ids).toContain("control-france-east");
+    expect(june1940Ids).toContain("control-poland-west");
+    expect(june1940Scene.collection.features.length).toBeGreaterThan(1);
+    expect(germanyAreas[1]).toBeGreaterThan(germanyAreas[0]);
+    expect(germanyAreas[4]).toBeGreaterThan(germanyAreas[2]);
+    expect(germanyAreas[5]).toBeGreaterThan(germanyAreas[4]);
+    expect(germanyAreas.at(-1)).toBeLessThan(germanyAreas[5]!);
+  });
+
+  test("interpolates WWII control geometry between campaign snapshots while dragging", () => {
+    const scenario = demoHistoricalPolityScenarios.find((item) => item.id === "wwii-control")!;
+    const previousScene = scenario.scenes.find((scene) => scene.year === 1940.42)!;
+    const nextScene = scenario.scenes.find((scene) => scene.year === 1940.5)!;
+    const midpointFrame = getDemoHistoricalPolityPlaybackFrame(1940.46, "wwii-control");
+    const previousFeature = getControlledFeature(previousScene.collection, "control-france-east");
+    const nextFeature = getControlledFeature(nextScene.collection, "control-france-east");
+    const midpointFeature = getControlledFeature(midpointFrame, "control-france-east");
+
+    expect(midpointFrame).not.toBe(previousScene.collection);
+    expect(midpointFrame).not.toBe(nextScene.collection);
+    expect(midpointFeature.geometry).not.toEqual(previousFeature.geometry);
+    expect(midpointFeature.geometry).not.toEqual(nextFeature.geometry);
+    expect(midpointFeature.properties.controlArea).toBeGreaterThan(
+      previousFeature.properties.controlArea!,
+    );
+    expect(midpointFeature.properties.controlArea).toBeLessThan(nextFeature.properties.controlArea!);
+  });
+
   test("publishes CShapes-Europe Historical Polity Scene snapshots for supported milestone years", () => {
     expect(demoHistoricalPolityScenes.map((scene) => scene.year)).toEqual([
       1816, 1886, 1914, 1939, 1945, 1989, 2019,
@@ -212,6 +253,23 @@ function getPlaybackRenderFeatureIds(year: number) {
 
 function countVisiblePolities(frame: ReturnType<typeof getDemoHistoricalPolityPlaybackFrame>) {
   return frame.features.filter(isDemoHistoricalPolityVisibleFeature).length;
+}
+
+function getControlledFeature(
+  frame: ReturnType<typeof getDemoHistoricalPolityPlaybackFrame>,
+  polityId: string,
+) {
+  const feature = frame.features.find(
+    (item) => item.properties?.polityId === polityId,
+  );
+
+  expect(feature).toBeDefined();
+
+  return feature!;
+}
+
+function getGermanControlledArea(frame: ReturnType<typeof getDemoHistoricalPolityPlaybackFrame>) {
+  return frame.features.reduce((sum, feature) => sum + (feature.properties?.controlArea ?? 0), 0);
 }
 
 function squareFeature(

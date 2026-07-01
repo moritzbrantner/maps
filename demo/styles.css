@@ -26,6 +26,11 @@ select {
   font: inherit;
 }
 
+[data-slot="native-select"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .demo-shell {
   display: grid;
   gap: 18px;
@@ -737,6 +742,12 @@ select {
 .demo-history-timeline input {
   width: 100%;
   accent-color: #2563eb;
+}
+
+.demo-history-scenarios {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .demo-history-epoch-buttons {

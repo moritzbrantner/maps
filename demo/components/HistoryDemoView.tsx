@@ -13,12 +13,14 @@ import {
 
 import { demoMapStyle } from "../data/map-style";
 import {
-  demoHistoricalPolityScenes,
+  demoHistoricalPolityScenarios,
   formatDemoHistoricalPolityYear,
   getDemoHistoricalPolityPlaybackFrame,
   getDemoHistoricalPolityRenderFeatureId,
+  getDemoHistoricalPolityScenario,
   getDemoHistoricalPolitySceneForYear,
   isDemoHistoricalPolityVisibleFeature,
+  type DemoHistoricalPolityScenarioId,
   type DemoHistoricalPolityProperties,
   type DemoHistoricalPolityRegion,
 } from "../data/history-polities";
@@ -48,29 +50,47 @@ const historicalPolityRegionLabels: Record<DemoHistoricalPolityRegion, string> =
 };
 
 const historyPlaybackRateYearsPerSecond = 80;
-const historyStartYear = demoHistoricalPolityScenes[0]!.year;
-const historyEndYear = demoHistoricalPolityScenes.at(-1)!.year;
-const historySceneBounds = getBoundsFromGeoJson({
-  features: demoHistoricalPolityScenes.flatMap((scene) => scene.collection.features),
-  type: "FeatureCollection",
-});
+const wwiiPlaybackRateYearsPerSecond = 0.45;
 
 export function HistoryDemoView({
   onMapControllerReady,
   onMapReady,
   onViewStateChange,
 }: HistoryDemoViewProps) {
+  const [scenarioId, setScenarioId] = useState<DemoHistoricalPolityScenarioId>("european-states");
+  const activeScenario = getDemoHistoricalPolityScenario(scenarioId);
+  const historyStartYear = activeScenario.scenes[0]!.year;
+  const historyEndYear = activeScenario.scenes.at(-1)!.year;
   const [year, setYear] = useState(historyStartYear);
   const [isPlaying, setIsPlaying] = useState(false);
   const animationFrameRef = useRef<number | null>(null);
   const previousTimestampRef = useRef<number | null>(null);
   const roundedYear = Math.round(year);
-  const activeFrame = useMemo(() => getDemoHistoricalPolityPlaybackFrame(year), [year]);
-  const activeScene = getDemoHistoricalPolitySceneForYear(roundedYear);
-  const activeSegment = `${activeScene.label} snapshot`;
+  const activeFrame = useMemo(
+    () => getDemoHistoricalPolityPlaybackFrame(year, scenarioId),
+    [scenarioId, year],
+  );
+  const activeScene = getDemoHistoricalPolitySceneForYear(year, scenarioId);
+  const activeYearLabel =
+    scenarioId === "wwii-control" ? activeScene.label : formatDemoHistoricalPolityYear(roundedYear);
+  const activeSegment =
+    scenarioId === "wwii-control" ? "German-controlled territory" : `${activeScene.label} snapshot`;
+  const historySceneBounds = useMemo(
+    () =>
+      getBoundsFromGeoJson({
+        features: activeScenario.scenes.flatMap((scene) => scene.collection.features),
+        type: "FeatureCollection",
+      }),
+    [activeScenario],
+  );
   const visiblePolityCount = activeFrame.features.filter(
     isDemoHistoricalPolityVisibleFeature,
   ).length;
+
+  useEffect(() => {
+    setIsPlaying(false);
+    setYear(historyStartYear);
+  }, [historyStartYear, scenarioId]);
 
   useEffect(() => {
     if (!isPlaying) {
@@ -84,7 +104,11 @@ export function HistoryDemoView({
 
       previousTimestampRef.current = timestamp;
       setYear((currentYear) => {
-        const nextYear = currentYear + elapsedSeconds * historyPlaybackRateYearsPerSecond;
+        const playbackRate =
+          scenarioId === "wwii-control"
+            ? wwiiPlaybackRateYearsPerSecond
+            : historyPlaybackRateYearsPerSecond;
+        const nextYear = currentYear + elapsedSeconds * playbackRate;
 
         return nextYear >= historyEndYear ? historyStartYear : nextYear;
       });
@@ -98,7 +122,7 @@ export function HistoryDemoView({
         window.cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isPlaying]);
+  }, [historyEndYear, historyStartYear, isPlaying, scenarioId]);
 
   return (
     <section className="demo-history-workbench" aria-label="History demo">
@@ -140,10 +164,27 @@ export function HistoryDemoView({
           </Button>
         </div>
 
+        <div className="demo-history-scenarios" aria-label="History scenarios">
+          {demoHistoricalPolityScenarios.map((scenario) => (
+            <Button
+              aria-label={`Show ${scenario.label}`}
+              key={scenario.id}
+              size="sm"
+              variant={scenario.id === scenarioId ? "default" : "secondary"}
+              type="button"
+              onClick={() => {
+                setScenarioId(scenario.id);
+              }}
+            >
+              {scenario.label}
+            </Button>
+          ))}
+        </div>
+
         <dl className="demo-interpolation-facts">
           <div>
             <dt>Active year</dt>
-            <dd>{formatDemoHistoricalPolityYear(roundedYear)}</dd>
+            <dd>{activeYearLabel}</dd>
           </div>
           <div>
             <dt>Segment</dt>
@@ -157,16 +198,16 @@ export function HistoryDemoView({
 
         <label className="demo-history-timeline">
           <span>
-            <strong>{formatDemoHistoricalPolityYear(roundedYear)}</strong>
+            <strong>{activeYearLabel}</strong>
             <em>{activeSegment}</em>
           </span>
           <input
             aria-label="Historical year"
             max={historyEndYear}
             min={historyStartYear}
-            step={1}
+            step={scenarioId === "wwii-control" ? 0.01 : 1}
             type="range"
-            value={roundedYear}
+            value={scenarioId === "wwii-control" ? year : roundedYear}
             onChange={(event) => {
               setIsPlaying(false);
               setYear(Number(event.currentTarget.value));
@@ -175,12 +216,12 @@ export function HistoryDemoView({
         </label>
 
         <div className="demo-history-epoch-buttons" aria-label="Historical epochs">
-          {demoHistoricalPolityScenes.map((scene) => (
+          {activeScenario.scenes.map((scene) => (
             <Button
               aria-label={`Show ${scene.label}`}
               key={scene.year}
               size="sm"
-              variant={roundedYear === scene.year ? "default" : "secondary"}
+              variant={activeScene.year === scene.year ? "default" : "secondary"}
               type="button"
               onClick={() => {
                 setIsPlaying(false);
@@ -206,8 +247,7 @@ export function HistoryDemoView({
         </div>
 
         <p className="demo-history-caveat">
-          Boundaries derived from CShapes-Europe. Demo snapshots are not an authoritative historical
-          boundary source.
+          {activeScenario.caveat}
         </p>
       </div>
     </section>

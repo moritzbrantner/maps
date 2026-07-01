@@ -5,8 +5,10 @@ import type {
   TemporalGeoJsonGeometryFeatureCollection,
   TemporalGeoJsonSupportedGeometry,
 } from "@moritzbrantner/maps";
+import { interpolateTemporalGeoJsonGeometry } from "@moritzbrantner/maps";
 
 import cshapesEuropePolityScenesFixture from "./cshapes-europe-polity-scenes.json";
+import wwiiControlScenesFixture from "./wwii-control-scenes.json";
 
 export type DemoHistoricalPolityRegion =
   | "atlantic"
@@ -19,6 +21,7 @@ export type DemoHistoricalPolityRegion =
 export type DemoHistoricalPolityPrecision = "source-derived";
 
 export type DemoHistoricalPolityProperties = {
+  controlArea?: number;
   kind: "historical-polity";
   label: string;
   polityId: string;
@@ -45,6 +48,15 @@ type DemoHistoricalPolityScene = {
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties>;
 };
 
+export type DemoHistoricalPolityScenarioId = "european-states" | "wwii-control";
+
+export type DemoHistoricalPolityScenario = {
+  caveat: string;
+  id: DemoHistoricalPolityScenarioId;
+  label: string;
+  scenes: DemoHistoricalPolityScene[];
+};
+
 type HistoricalPolityRenderableFeature = {
   id?: string | number;
   properties?: Partial<DemoHistoricalPolityProperties> | null;
@@ -58,9 +70,29 @@ const historyOverlapAreaThreshold = 1e-9;
 const cshapesEuropePolityScenes = cshapesEuropePolityScenesFixture as {
   scenes: DemoHistoricalPolityScene[];
 };
+const wwiiControlScenes = wwiiControlScenesFixture as {
+  scenes: DemoHistoricalPolityScene[];
+};
+
+export const demoHistoricalPolityScenarios: DemoHistoricalPolityScenario[] = [
+  {
+    caveat:
+      "Boundaries derived from CShapes-Europe. Demo snapshots are not an authoritative historical boundary source.",
+    id: "european-states",
+    label: "European states",
+    scenes: cshapesEuropePolityScenes.scenes,
+  },
+  {
+    caveat:
+      "WWII control uses CShapes-Europe country outlines with illustrative campaign-phase control clipping; internal moving fronts are not authoritative.",
+    id: "wwii-control",
+    label: "WWII control",
+    scenes: wwiiControlScenes.scenes,
+  },
+];
 
 export const demoHistoricalPolityScenes: DemoHistoricalPolityScene[] =
-  cshapesEuropePolityScenes.scenes;
+  getDemoHistoricalPolityScenario("european-states").scenes;
 
 export function formatDemoHistoricalPolityYear(year: number) {
   return `${Math.round(year)} AD`;
@@ -68,29 +100,110 @@ export function formatDemoHistoricalPolityYear(year: number) {
 
 export function getDemoHistoricalPolityFrame(
   year: number,
+  scenarioId: DemoHistoricalPolityScenarioId = "european-states",
 ): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
-  return getDemoHistoricalPolityPlaybackFrame(year);
+  return getDemoHistoricalPolityPlaybackFrame(year, scenarioId);
 }
 
 export function getDemoHistoricalPolityPlaybackFrame(
   year: number,
+  scenarioId: DemoHistoricalPolityScenarioId = "european-states",
 ): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
-  return getDemoHistoricalPolitySceneForYear(year).collection;
-}
-
-export function getDemoHistoricalPolitySceneForYear(year: number) {
-  const clampedYear = clamp(
-    Math.floor(year),
-    demoHistoricalPolityScenes[0]!.year,
-    demoHistoricalPolityScenes.at(-1)!.year,
-  );
-  const nextSceneIndex = demoHistoricalPolityScenes.findIndex((scene) => scene.year > clampedYear);
-
-  if (nextSceneIndex === -1) {
-    return demoHistoricalPolityScenes.at(-1)!;
+  if (scenarioId === "wwii-control") {
+    return getInterpolatedDemoHistoricalPolityScenarioFrame(year, scenarioId);
   }
 
-  return demoHistoricalPolityScenes[Math.max(0, nextSceneIndex - 1)]!;
+  return getDemoHistoricalPolitySceneForYear(year, scenarioId).collection;
+}
+
+export function getDemoHistoricalPolitySceneForYear(
+  year: number,
+  scenarioId: DemoHistoricalPolityScenarioId = "european-states",
+) {
+  const scenes = getDemoHistoricalPolityScenario(scenarioId).scenes;
+  const timelineYear = scenarioId === "european-states" ? Math.floor(year) : year;
+  const clampedYear = clamp(
+    timelineYear,
+    scenes[0]!.year,
+    scenes.at(-1)!.year,
+  );
+  const nextSceneIndex = scenes.findIndex((scene) => scene.year > clampedYear);
+
+  if (nextSceneIndex === -1) {
+    return scenes.at(-1)!;
+  }
+
+  return scenes[Math.max(0, nextSceneIndex - 1)]!;
+}
+
+export function getDemoHistoricalPolityScenario(scenarioId: DemoHistoricalPolityScenarioId) {
+  return (
+    demoHistoricalPolityScenarios.find((scenario) => scenario.id === scenarioId) ??
+    demoHistoricalPolityScenarios[0]!
+  );
+}
+
+function getInterpolatedDemoHistoricalPolityScenarioFrame(
+  year: number,
+  scenarioId: DemoHistoricalPolityScenarioId,
+): TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties> {
+  const scenario = getDemoHistoricalPolityScenario(scenarioId);
+  const scenes = scenario.scenes;
+  const clampedYear = clamp(year, scenes[0]!.year, scenes.at(-1)!.year);
+  const exactScene = scenes.find((scene) => scene.year === clampedYear);
+
+  if (exactScene) {
+    return exactScene.collection;
+  }
+
+  const nextSceneIndex = scenes.findIndex((scene) => scene.year > clampedYear);
+  const previousScene = scenes[Math.max(0, nextSceneIndex - 1)]!;
+  const nextScene = scenes[nextSceneIndex] ?? scenes.at(-1)!;
+  const progress = (clampedYear - previousScene.year) / (nextScene.year - previousScene.year);
+  const nextById = new Map(
+    nextScene.collection.features.map((feature) => [feature.properties?.polityId, feature]),
+  );
+
+  return {
+    features: previousScene.collection.features.map((previousFeature) => {
+      const nextFeature = nextById.get(previousFeature.properties?.polityId);
+
+      if (!previousFeature.geometry || !nextFeature?.geometry) {
+        return {
+          ...previousFeature,
+          properties: {
+            ...previousFeature.properties!,
+            sceneYear: clampedYear,
+          },
+        };
+      }
+
+      const geometry =
+        interpolateTemporalGeoJsonGeometry(previousFeature.geometry, nextFeature.geometry, progress, {
+          fallback: "hold",
+          minResampleCoordinates: 64,
+          partMatchingStrategy: "auto",
+          strategy: "vertex-union",
+        }) ?? previousFeature.geometry;
+
+      return {
+        geometry,
+        id: previousFeature.id,
+        properties: {
+          ...previousFeature.properties!,
+          controlArea: interpolateNumber(
+            previousFeature.properties!.controlArea,
+            nextFeature.properties!.controlArea,
+            progress,
+          ),
+          sceneYear: clampedYear,
+          sourceTo: nextFeature.properties!.sourceTo,
+        },
+        type: "Feature" as const,
+      };
+    }),
+    type: "FeatureCollection",
+  };
 }
 
 export function isDemoHistoricalPolityVisibleFeature(feature: HistoricalPolityRenderableFeature) {
@@ -354,6 +467,14 @@ function boundsIntersect(
     left.south <= right.north &&
     left.north >= right.south
   );
+}
+
+function interpolateNumber(left: number | undefined, right: number | undefined, progress: number) {
+  if (typeof left !== "number" || typeof right !== "number") {
+    return left ?? right;
+  }
+
+  return left + (right - left) * progress;
 }
 
 function clamp(value: number, min: number, max: number) {
