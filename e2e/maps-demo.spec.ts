@@ -13,6 +13,7 @@ const visualBaselineViews = [
   "Flows",
   "Composed",
   "Interpolation",
+  "History",
   "GeoJSON",
   "Editor",
 ] as const;
@@ -29,6 +30,7 @@ const topLevelViews = [
   "Composed",
   "Timeline",
   "Interpolation",
+  "History",
   "Globe",
   "GeoJSON",
   "Editor",
@@ -163,6 +165,28 @@ test("Interpolation view exposes algorithm and keyframe controls", async ({ page
   await expect(interpolationPanel.getByText("The geometry type changes")).toBeVisible();
 });
 
+test("Interpolation view hides native select carets", async ({ page }) => {
+  await openView(page, "Interpolation");
+
+  const selectAppearances = await page
+    .locator('.demo-interpolation-panel select[data-slot="native-select"]')
+    .evaluateAll((selects) =>
+      selects.map((select) => {
+        const style = window.getComputedStyle(select);
+
+        return {
+          appearance: style.appearance,
+          webkitAppearance: style.webkitAppearance,
+        };
+      }),
+    );
+
+  expect(selectAppearances).toHaveLength(3);
+  expect(selectAppearances).toEqual(
+    selectAppearances.map(() => ({ appearance: "none", webkitAppearance: "none" })),
+  );
+});
+
 test("Interpolation view renders every algorithm option without console errors", async ({ page }) => {
   await openView(page, "Interpolation");
 
@@ -181,6 +205,52 @@ test("Interpolation view renders every algorithm option without console errors",
   await expect(page.getByText("Topology strategy")).toBeVisible();
   await interpolationPanel.getByLabel("Topology strategy").selectOption("voronoi-partition");
   await expect(page.getByText("Topology strategy")).toBeVisible();
+});
+
+test("History view exposes polity timeline controls", async ({ page }) => {
+  await openView(page, "History");
+
+  await expect(page.getByLabel("European polity history")).toBeVisible();
+  await expect(page.getByRole("slider", { name: "Historical year" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show European states" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show WWII control" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show 1816 AD" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show 2019 AD" })).toBeVisible();
+  await expect(
+    page.getByText(
+      "Boundaries derived from CShapes-Europe. Demo snapshots are not an authoritative historical boundary source.",
+    ),
+  ).toBeVisible();
+});
+
+test("History slider updates the active year and keeps the map visible", async ({ page }) => {
+  await openView(page, "History");
+
+  const slider = page.getByRole("slider", { name: "Historical year" });
+
+  await expect(page.getByText("1816 AD").first()).toBeVisible();
+  await slider.fill("1989");
+  await expect(page.getByText("1989 AD").first()).toBeVisible();
+  await expect(page.getByLabel("European polity history")).toBeVisible();
+});
+
+test("History view switches to WWII control and drags through German territorial advance", async ({
+  page,
+}) => {
+  await openView(page, "History");
+
+  await page.getByRole("button", { name: "Show WWII control" }).click();
+  await expect(page.getByRole("button", { name: "Show Jun 1940" })).toBeVisible();
+  await expect(page.getByText("German-controlled territory").first()).toBeVisible();
+  await expect(
+    page.getByText(
+      "WWII control uses CShapes-Europe country outlines with illustrative campaign-phase control clipping; internal moving fronts are not authoritative.",
+    ),
+  ).toBeVisible();
+
+  await page.getByRole("slider", { name: "Historical year" }).fill("1940.5");
+  await expect(page.getByText("Jun 1940").first()).toBeVisible();
+  await expect(page.getByLabel("European polity history")).toBeVisible();
 });
 
 test("Timeline view samples topology transitions at start, middle, and end", async ({ page }) => {
