@@ -2,11 +2,15 @@ import { describe, expect, test } from "vitest";
 
 import {
   clipGeoJsonToPolygon,
+  createGeoJsonPolygonOutlines,
   differenceGeoJsonFeatures,
   findContainingGeoJsonFeatures,
   findOverlappingGeoJsonFeatures,
   getGeoJsonIntersections,
+  getGeoJsonPolygonMeasurements,
   intersectGeoJsonFeatures,
+  resolveGeoJsonPolygonOverlaps,
+  simplifyGeoJsonPolygons,
   unionGeoJsonFeatures,
   type GeoJsonMapSource,
   type GeoJsonPosition,
@@ -203,6 +207,65 @@ describe("@moritzbrantner/maps GeoJSON operations", () => {
 });
 
 describe("@moritzbrantner/maps GeoJSON relationship helpers", () => {
+  test("measures polygon planar area and geodesic surface area", () => {
+    const records = getGeoJsonPolygonMeasurements(
+      collection([
+        polygonFeature("square", squareRing(0, 0, 1, 1)),
+        polygonFeature("holed", squareRing(0, 0, 2, 2), [squareRing(0.5, 0.5, 1.5, 1.5)]),
+      ]),
+    );
+
+    expect(records).toHaveLength(2);
+    expect(records[0]).toEqual(
+      expect.objectContaining({
+        featureId: "square",
+        featureIndex: 0,
+        planarArea: 1,
+      }),
+    );
+    expect(records[0]?.areaSquareMeters).toBeCloseTo(12_363_683_990, -5);
+    expect(records[0]?.perimeterMeters).toBeGreaterThan(440_000);
+    expect(records[1]).toEqual(
+      expect.objectContaining({
+        featureId: "holed",
+        featureIndex: 1,
+        planarArea: 3,
+      }),
+    );
+    expect(records[1]!.areaSquareMeters).toBeLessThan(records[0]!.areaSquareMeters * 4);
+    expect(records[1]!.perimeterMeters).toBeGreaterThan(records[0]!.perimeterMeters * 2);
+  });
+
+  test("creates outline features for polygon shells and holes", () => {
+    const result = createGeoJsonPolygonOutlines(
+      collection([polygonFeature("parcel", squareRing(0, 0, 4, 4), [squareRing(1, 1, 2, 2)])]),
+    );
+
+    expect(result.issues).toEqual([]);
+    expect(result.collection.features).toHaveLength(2);
+    expect(result.collection.features.map((feature) => feature.geometry)).toEqual([
+      { coordinates: squareRing(0, 0, 4, 4), type: "LineString" },
+      { coordinates: squareRing(1, 1, 2, 2), type: "LineString" },
+    ]);
+    expect(result.collection.features.map((feature) => feature.properties)).toEqual([
+      expect.objectContaining({
+        featureId: "parcel",
+        featureIndex: 0,
+        planarLength: 16,
+        ringIndex: 0,
+        role: "shell",
+      }),
+      expect.objectContaining({
+        featureId: "parcel",
+        featureIndex: 0,
+        planarLength: 4,
+        ringIndex: 1,
+        role: "hole",
+      }),
+    ]);
+    expect(result.collection.features[0]?.properties?.lengthMeters).toBeGreaterThan(1_700_000);
+  });
+
   test("finds point containment inside polygons", () => {
     const records = findContainingGeoJsonFeatures(
       collection([pointFeature("point", [1, 1])]),
@@ -297,6 +360,70 @@ describe("@moritzbrantner/maps GeoJSON relationship helpers", () => {
     );
 
     expect(records).toEqual([]);
+  });
+
+  test("resolves polygon overlaps with later features winning by default", () => {
+    const result = resolveGeoJsonPolygonOverlaps(
+      collection([
+        polygonFeature("a", squareRing(0, 0, 2, 2)),
+        polygonFeature("b", squareRing(1, 1, 3, 3)),
+      ]),
+    );
+
+    expect(result.issues).toEqual([]);
+    expect(result.overlaps).toEqual([
+      expect.objectContaining({
+        area: 1,
+        leftId: "a",
+        rightId: "b",
+      }),
+    ]);
+    expect(getGeoJsonPolygonMeasurements(result.collection).map((record) => record.planarArea)).toEqual([
+      3,
+      4,
+    ]);
+    expect(findOverlappingGeoJsonFeatures(result.collection)).toEqual([]);
+    expect(result.collection.features.map((feature) => feature.id)).toEqual(["a", "b"]);
+  });
+
+  test("simplifies polygon rings without mutating source features", () => {
+    const source = collection([
+      {
+        ...polygonFeature("parcel", [
+          [0, 0],
+          [1, 0.01],
+          [2, 0],
+          [2, 2],
+          [0, 2],
+          [0, 0],
+        ]),
+        properties: { name: "Parcel" },
+      },
+    ]);
+    const before = cloneJson(source);
+    const result = simplifyGeoJsonPolygons(source, { tolerance: 0.05 });
+
+    expect(result.issues).toEqual([]);
+    expect(source).toEqual(before);
+    expect(result.collection.features).toHaveLength(1);
+    expect(result.collection.features[0]).toEqual(
+      expect.objectContaining({
+        id: "parcel",
+        properties: { name: "Parcel" },
+      }),
+    );
+    expect(result.collection.features[0]?.geometry).toEqual({
+      coordinates: [
+        [
+          [0, 0],
+          [2, 0],
+          [2, 2],
+          [0, 2],
+          [0, 0],
+        ],
+      ],
+      type: "Polygon",
+    });
   });
 });
 

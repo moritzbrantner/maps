@@ -43,6 +43,34 @@ describe("flat layer reconciler", () => {
     expect(cache.get("a")).toBe(next);
   });
 
+  test("keeps and updates entries when signature changes are updatable", () => {
+    const layer = createTestLayerParent();
+    const entry = createEntry("existing", "old");
+    const cache = new Map([["a", entry]]);
+    const update = vi.fn(() => true);
+    const render = vi.fn(() => createEntry("next", "new"));
+
+    reconcileFlatLayerEntries({
+      cache,
+      layer,
+      plans: [
+        {
+          key: "a",
+          render,
+          signature: "new",
+          update,
+          updateOnSignatureChange: true,
+        },
+      ],
+    });
+
+    expect(update).toHaveBeenCalledWith(entry);
+    expect(render).not.toHaveBeenCalled();
+    expect(cache.get("a")).toBe(entry);
+    expect(cache.get("a")?.signature).toBe("new");
+    expect(layer.removed).toEqual([]);
+  });
+
   test("calls update and keeps the entry when update returns true", () => {
     const layer = createTestLayerParent();
     const entry = createEntry("existing", "same");
