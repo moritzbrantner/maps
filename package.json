@@ -120,7 +120,7 @@
   "devDependencies": {
     "@moritzbrantner/timeline-editor": "^1.0.1",
     "@moritzbrantner/ui": "^1.0.0",
-    "@playwright/test": "^1.62.0-alpha-2026-06-17",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.0",
     "@tanstack/react-query": "^5.100.14",
     "@testing-library/react": "^16.3.2",
