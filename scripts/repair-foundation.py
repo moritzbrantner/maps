@@ -109,12 +109,12 @@ package["devDependencies"]["@moritzbrantner/ui"] = "^1.1.0"
 overrides = package.setdefault("overrides", {})
 overrides.update(
     {
-        "brace-expansion": "5.0.8",
+        "brace-expansion": "5.0.9",
         "browserslist": "4.28.7",
         "fast-uri": "3.1.5",
         "ip-address": "10.3.1",
-        "js-yaml": "4.3.0",
-        "nanoid": "3.3.16",
+        "js-yaml": "4.3.1",
+        "nanoid": "3.3.18",
         "postcss": "8.5.18",
         "undici": "7.29.0",
     }
