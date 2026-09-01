@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "registry": "coding-agent-conventions",
+  "modules": [
+    "environment",
+    "git",
+    "moritzbrantner-ui",
+    "playwright",
+    "react",
+    "tanstack-query",
+    "testing-library",
+    "typescript",
+    "ui",
+    "vite",
+    "vitest"
+  ]
+}
