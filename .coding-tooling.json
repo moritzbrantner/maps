@@ -41,5 +41,10 @@
     "test:e2e",
     "test:e2e:smoke",
     "test:accessibility"
-  ]
+  ],
+  "capabilityCommands": {
+    ".": {
+      "lint": ["bun", "run", "lint:static"]
+    }
+  }
 }
