@@ -4324,6 +4324,7 @@ function getDemoTimelineGeographyStyle(feature: { properties: Partial<DemoGeoJso
         polygonStrokeColor: "#b45309",
         polygonStrokeWidth: 2,
       };
+    case undefined:
     default:
       return {
         polygonFillColor: "#14b8a6",
