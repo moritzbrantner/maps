@@ -1656,6 +1656,16 @@ export function EditableGeoJsonMap<
   );
   const [uncontrolledTimelineDocument, setUncontrolledTimelineDocument] =
     useState(generatedTimelineDocument);
+  const [previousGeneratedTimelineDocument, setPreviousGeneratedTimelineDocument] =
+    useState(generatedTimelineDocument);
+
+  if (
+    !timelineDocument &&
+    previousGeneratedTimelineDocument !== generatedTimelineDocument
+  ) {
+    setPreviousGeneratedTimelineDocument(generatedTimelineDocument);
+    setUncontrolledTimelineDocument(generatedTimelineDocument);
+  }
   const handleEditorMapReady = useCallback(
     (map: MapLibreMap) => {
       map.boxZoom?.disable();
@@ -1677,12 +1687,6 @@ export function EditableGeoJsonMap<
           },
         )
       : geoJson;
-
-  useEffect(() => {
-    if (!timelineDocument) {
-      setUncontrolledTimelineDocument(generatedTimelineDocument);
-    }
-  }, [generatedTimelineDocument, timelineDocument]);
 
   const map = (
     <MapView

@@ -59,20 +59,6 @@ export function useFlatBeeLineMeasurementLayer(options: {
   });
 
   useEffect(() => {
-    if (isMeasuring) {
-      return;
-    }
-
-    setDraft((current) => {
-      if (current) {
-        emitDraftChange(null);
-      }
-
-      return null;
-    });
-  }, [emitDraftChange, isMeasuring]);
-
-  useEffect(() => {
     if (!map) {
       return;
     }

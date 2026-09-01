@@ -52,13 +52,9 @@ export function useControllableMapViewState({
     onViewStateChangeRef.current = onViewStateChange;
   }, [onViewStateChange]);
 
-  useEffect(() => {
-    if (controlled || areMapViewStatesEqual(uncontrolledViewState, latestViewState)) {
-      return;
-    }
-
+  if (!controlled && !areMapViewStatesEqual(uncontrolledViewState, latestViewState)) {
     setUncontrolledViewState(latestViewState);
-  }, [controlled, latestViewState, uncontrolledViewState]);
+  }
 
   const setViewState = useCallback(
     (next: MapViewState, reason: MapViewStateChangeReason = "programmatic") => {

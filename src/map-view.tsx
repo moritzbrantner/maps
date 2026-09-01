@@ -147,7 +147,8 @@ export function MapView({
   const lastFlatViewportRenderKeyRef = useRef<string | null>(null);
   const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const isFlatStyleReadyRef = useRef(false);
-  const [isReady, setIsReady] = useState(false);
+  const [mapLibreReady, setMapLibreReady] = useState(false);
+  const isReady = !usesMapLibreRuntime || mapLibreReady;
   const [renderVersion, setRenderVersion] = useState(0);
   const interactionModesRef = useRef<Map<string, Exclude<MapInteractionMode, "none">>>(new Map());
   const [interactionMode, setInteractionMode] = useState<MapInteractionMode>("none");
@@ -432,7 +433,6 @@ export function MapView({
 
   useEffect(() => {
     if (!usesMapLibreRuntime) {
-      setIsReady(true);
       return;
     }
 
@@ -510,7 +510,7 @@ export function MapView({
           return;
         }
 
-        setIsReady(true);
+        setMapLibreReady(true);
         handleMapReady(localMap);
       });
     }
@@ -519,7 +519,7 @@ export function MapView({
 
     return () => {
       isCancelled = true;
-      setIsReady(false);
+      setMapLibreReady(false);
 
       for (const layer of layersRef.current.values()) {
         layer.group?.clearLayers();
@@ -992,7 +992,7 @@ export function MapView({
               });
             }}
             onReady={() => {
-              setIsReady(true);
+              setMapLibreReady(true);
             }}
             onViewStateChange={setViewState}
           />
