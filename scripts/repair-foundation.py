@@ -106,5 +106,17 @@ replace_in_section(
 package_path = Path("package.json")
 package = json.loads(package_path.read_text())
 package["devDependencies"]["@moritzbrantner/ui"] = "^1.1.0"
-package.setdefault("overrides", {})["undici"] = "7.29.0"
+overrides = package.setdefault("overrides", {})
+overrides.update(
+    {
+        "brace-expansion": "5.0.8",
+        "browserslist": "4.28.7",
+        "fast-uri": "3.1.5",
+        "ip-address": "10.3.1",
+        "js-yaml": "4.3.0",
+        "nanoid": "3.3.16",
+        "postcss": "8.5.18",
+        "undici": "7.29.0",
+    }
+)
 package_path.write_text(json.dumps(package, indent=2) + "\n")
