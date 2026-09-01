@@ -35,6 +35,9 @@ jobs:
       - name: Verify dependency audit
         if: steps.state.outputs.applied != 'true'
         run: bun run verify:audit
+      - name: Prepare type-aware Oxlint runtime
+        if: steps.state.outputs.applied != 'true'
+        run: bun add --no-save oxlint-tsgolint@7.0.2001
       - name: Diagnose exhaustive switches
         if: steps.state.outputs.applied != 'true'
         shell: bash
