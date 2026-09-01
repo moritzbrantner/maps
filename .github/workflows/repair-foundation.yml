@@ -1,0 +1,60 @@
+name: Repair foundation
+
+on:
+  push:
+    branches:
+      - chore/repository-foundation-v1
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: chore/repository-foundation-v1
+      - id: state
+        shell: bash
+        run: |
+          if [[ "$(git log -1 --pretty=%s)" == "fix: clear foundation conformance and audit blockers" ]]; then
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Prepare declared environment
+        if: steps.state.outputs.applied != 'true'
+        run: bash scripts/codex-environment.sh setup
+      - name: Apply focused repairs
+        if: steps.state.outputs.applied != 'true'
+        run: python3 scripts/repair-foundation.py
+      - name: Refresh compatible dependency graph
+        if: steps.state.outputs.applied != 'true'
+        run: bun update
+      - name: Verify dependency audit
+        if: steps.state.outputs.applied != 'true'
+        run: bun run verify:audit
+      - name: Verify repository conformance
+        if: steps.state.outputs.applied != 'true'
+        uses: moritzbrantner/coding-tooling@c9e071995abf65d2326930efb05e47e585af0efd
+        with:
+          operation: conformance
+          bun-version: 1.3.14
+          install-mode: none
+          config: .coding-tooling.json
+          report-path: .artifacts/coding-tooling/conformance-repair.json
+          strict: true
+      - name: Verify fast repository gate
+        if: steps.state.outputs.applied != 'true'
+        run: bun run verify:fast
+      - name: Commit verified repair
+        if: steps.state.outputs.applied != 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm scripts/repair-foundation.py
+          git add package.json bun.lock src/temporal-geojson-geometry.ts src/geojson-source.ts src/map-engine.tsx src/geojson-editor.tsx
+          git commit -m "fix: clear foundation conformance and audit blockers"
+          git push origin HEAD:chore/repository-foundation-v1
