@@ -1,0 +1,39 @@
+name: TypeScript convention fix
+
+on:
+  push:
+    branches:
+      - chore/repository-foundation-v1
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          ref: chore/repository-foundation-v1
+          fetch-depth: 0
+      - name: Replace global Window interface augmentation with a local type
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('demo/App.tsx')
+          text = path.read_text()
+          old = '''declare global {\n  interface Window {\n    __mbMapsDemo?: DemoE2EProbe;\n    __mbMapsDemoMap?: MapLibreMap;\n  }\n}\n'''
+          new = '''type DemoWindow = Window & {\n  __mbMapsDemo?: DemoE2EProbe;\n  __mbMapsDemoMap?: MapLibreMap;\n};\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one Window augmentation, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          text = text.replace('window.__mbMapsDemoMap', '(window as DemoWindow).__mbMapsDemoMap')
+          text = text.replace('window.__mbMapsDemo', '(window as DemoWindow).__mbMapsDemo')
+          path.write_text(text)
+          PY
+          git add demo/App.tsx
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor: use local demo window type"
+          git push origin HEAD:chore/repository-foundation-v1
