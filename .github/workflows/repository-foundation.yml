@@ -1,0 +1,56 @@
+name: Repository foundation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Prepare declared environment
+        run: bash scripts/codex-environment.sh setup
+
+      - name: Require setup to preserve environment identity inputs
+        run: |
+          git diff --exit-code -- \
+            package.json \
+            bun.lock \
+            .repository-environment.toml
+
+      - name: Verify environment identity
+        uses: moritzbrantner/coding-tooling@1ae066da5dac3b8b1aecd9fb7b75888538f61ed4
+        with:
+          operation: environment-verify
+          bun-version: 1.3.14
+          install-mode: none
+          report-path: .artifacts/coding-tooling/environment.json
+
+      - name: Verify repository conformance
+        uses: moritzbrantner/coding-tooling@1ae066da5dac3b8b1aecd9fb7b75888538f61ed4
+        with:
+          operation: conformance
+          bun-version: 1.3.14
+          install-mode: none
+          report-path: .artifacts/coding-tooling/conformance.json
+
+      - name: Run fast repository gate
+        uses: moritzbrantner/coding-tooling@1ae066da5dac3b8b1aecd9fb7b75888538f61ed4
+        with:
+          operation: run
+          tier: fast
+          strict: true
+          bun-version: 1.3.14
+          install-mode: none
+          report-path: .artifacts/coding-tooling/fast.json
