@@ -44,10 +44,23 @@ jobs:
       timeout_minutes: 20
       concurrency_group: maps-demo-smoke-${{ github.ref }}
 
+  performance:
+    name: Demo performance evidence
+    uses: moritzbrantner/reusable-workflows/.github/workflows/performance-validation.yml@89a5e75c3f818289790a4c9bcf2d756537380bd6
+    with:
+      node_version: ""
+      bun_version: "1.3.14"
+      install_command: bun install --frozen-lockfile
+      build_command: bunx vite build --base /maps/ --outDir dist-demo
+      benchmark_command: bun run verify:benchmarks
+      bundle_size_command: bun run verify:package-size
+      timeout_minutes: 20
+      concurrency_group: maps-demo-performance-${{ github.ref }}
+
   deploy:
     name: Deploy verified demo
     if: ${{ github.event_name != 'pull_request' }}
-    needs: [links, smoke]
+    needs: [links, smoke, performance]
     uses: moritzbrantner/reusable-workflows/.github/workflows/deploy-pages.yml@89a5e75c3f818289790a4c9bcf2d756537380bd6
     with:
       node_version: ""
