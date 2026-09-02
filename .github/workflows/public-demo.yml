@@ -1,0 +1,60 @@
+name: Public Demo
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: public-demo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    name: Demo links
+    uses: moritzbrantner/reusable-workflows/.github/workflows/link-validation.yml@89a5e75c3f818289790a4c9bcf2d756537380bd6
+    with:
+      node_version: ""
+      bun_version: "1.3.14"
+      install_command: bun install --frozen-lockfile
+      build_command: bunx vite build --base /maps/ --outDir dist-demo
+      start_command: python3 -m http.server 4173 --bind 127.0.0.1 --directory dist-demo
+      link_check_url: http://127.0.0.1:4173
+      timeout_minutes: 15
+      concurrency_group: maps-demo-links-${{ github.ref }}
+
+  smoke:
+    name: Demo interaction smoke
+    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@89a5e75c3f818289790a4c9bcf2d756537380bd6
+    with:
+      node_version: ""
+      bun_version: "1.3.14"
+      install_command: bun install --frozen-lockfile
+      install_playwright: true
+      install_playwright_browsers: chromium
+      e2e_command: bun run test:browser:smoke
+      timeout_minutes: 20
+      concurrency_group: maps-demo-smoke-${{ github.ref }}
+
+  deploy:
+    name: Deploy verified demo
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: [links, smoke]
+    uses: moritzbrantner/reusable-workflows/.github/workflows/deploy-pages.yml@89a5e75c3f818289790a4c9bcf2d756537380bd6
+    with:
+      node_version: ""
+      bun_version: "1.3.14"
+      install_command: bun install --frozen-lockfile
+      build_command: bunx vite build --base /maps/ --outDir dist-demo
+      artifact_path: dist-demo
+      timeout_minutes: 15
+      concurrency_group: maps-demo-pages
+      cancel_in_progress: true
