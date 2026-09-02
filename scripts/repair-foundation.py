@@ -23,6 +23,16 @@ def replace_in_section(
     file_path.write_text(text[:start] + section + text[end:])
 
 
+def replace_exact(path: str, old: str, new: str) -> None:
+    file_path = Path(path)
+    text = file_path.read_text()
+    if new in text:
+        return
+    if old not in text:
+        raise RuntimeError(f"expected exact repair target not found in {path}")
+    file_path.write_text(text.replace(old, new, 1))
+
+
 replace_in_section(
     "src/temporal-geojson-geometry.ts",
     "function decomposeGeometryPart(",
@@ -121,16 +131,64 @@ replace_in_section(
     "    });",
 )
 
-replace_in_section(
+replace_exact(
     "src/heat-layer-rendering.ts",
-    "  if (asyncRender) {",
-    "    return;\n  }",
-    "      });\n    });\n    return;",
-    '      });\n'
-    '    }).catch((error: unknown) => {\n'
-    '      if (isCurrentFlatLayerResourceRequest(state.surface, requestId)) {\n'
-    '        console.error("Failed to render the heat-layer surface.", error);\n'
-    "      }\n"
-    "    });\n"
-    "    return;",
+    """  if (asyncRender) {
+    createHeatLayerSurfaceImage(plan).then((image) => {
+      if (!isCurrentFlatLayerResourceRequest(state.surface, requestId)) {
+        revokeHeatLayerSurfaceImage(image);
+        return;
+      }
+
+      setHeatLayerSurfaceCache(state, {
+        ...plan.cacheMetadata,
+        objectUrl: image.objectUrl,
+        url: image.url,
+      });
+
+      renderOrUpdateHeatLayerImageOverlay({
+        bounds: heatLayerBoundsToLatLngBounds(plan.overlayBounds),
+        className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
+        layer,
+        flat,
+        opacity: safeOpacity,
+        state,
+        url: image.url,
+      });
+    });
+    return;
+  }
+""",
+    """  if (asyncRender) {
+    createHeatLayerSurfaceImage(plan)
+      .then((image) => {
+        if (!isCurrentFlatLayerResourceRequest(state.surface, requestId)) {
+          revokeHeatLayerSurfaceImage(image);
+          return;
+        }
+
+        setHeatLayerSurfaceCache(state, {
+          ...plan.cacheMetadata,
+          objectUrl: image.objectUrl,
+          url: image.url,
+        });
+
+        renderOrUpdateHeatLayerImageOverlay({
+          bounds: heatLayerBoundsToLatLngBounds(plan.overlayBounds),
+          className: `mb-maps__heat-surface mb-maps__heat-surface--${mode}`,
+          layer,
+          flat,
+          opacity: safeOpacity,
+          state,
+          url: image.url,
+        });
+      })
+      .catch((error: unknown) => {
+        if (isCurrentFlatLayerResourceRequest(state.surface, requestId)) {
+          console.error("Failed to render the heat-layer surface.", error);
+        }
+      });
+    return;
+  }
+""",
 )
