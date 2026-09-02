@@ -17,16 +17,23 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "secondary" | "outline" | "ghost";
 };
 
-export function Button({ className, size = "default", variant = "default", ...props }: ButtonProps) {
+export function Button({
+  className,
+  size = "default",
+  variant = "default",
+  ...props
+}: ButtonProps) {
   return (
     <button
       className={cn(
         "inline-flex cursor-pointer items-center justify-center rounded-md border font-semibold transition-colors disabled:pointer-events-none disabled:opacity-50",
         size === "sm" ? "min-h-8 px-3 text-sm" : "min-h-9 px-4 text-sm",
         variant === "default" && "border-[#0f766e] bg-[#0f766e] text-white hover:bg-[#115e59]",
-        variant === "secondary" && "border-[#d8e0ea] bg-[#eef2f6] text-[#172233] hover:bg-[#e2e8f0]",
+        variant === "secondary" &&
+          "border-[#d8e0ea] bg-[#eef2f6] text-[#172233] hover:bg-[#e2e8f0]",
         variant === "outline" && "border-[#c9d3df] bg-white text-[#172233] hover:bg-[#f8fafc]",
-        variant === "ghost" && "border-transparent bg-transparent text-[#172233] hover:bg-[#eef2f6]",
+        variant === "ghost" &&
+          "border-transparent bg-transparent text-[#172233] hover:bg-[#eef2f6]",
         className,
       )}
       {...props}
@@ -54,7 +61,12 @@ export function Badge({ className, variant = "default", ...props }: BadgeProps) 
 }
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("grid rounded-lg border border-[#c6d2de] bg-white p-5 shadow-sm", className)} {...props} />;
+  return (
+    <div
+      className={cn("grid rounded-lg border border-[#c6d2de] bg-white p-5 shadow-sm", className)}
+      {...props}
+    />
+  );
 }
 
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
