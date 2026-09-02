@@ -135,6 +135,7 @@
     "jsdom": "^29.1.1",
     "oxfmt": "^0.56.0",
     "oxlint": "1.80.0",
+    "oxlint-tsgolint": "7.0.2001",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwindcss": "^4.3.0",
