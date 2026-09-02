@@ -36,7 +36,7 @@ jobs:
       - name: Prepare declared environment
         if: steps.state.outputs.applied != 'true'
         run: bash scripts/codex-environment.sh setup
-      - name: Apply focused TS-005 repairs
+      - name: Apply focused conformance repairs
         if: steps.state.outputs.applied != 'true'
         run: python3 scripts/repair-foundation.py
       - name: Prepare type-aware Oxlint runtime
@@ -60,7 +60,6 @@ jobs:
           ./node_modules/.bin/oxlint --config /tmp/ts005.json .
       - name: Diagnose floating promises
         if: steps.state.outputs.applied != 'true'
-        continue-on-error: true
         shell: bash
         run: |
           cat > /tmp/ts006.json <<'EOF'
@@ -95,6 +94,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm scripts/repair-foundation.py
-          git add src/temporal-geojson-geometry.ts src/geojson-source.ts src/map-engine.tsx src/geojson-editor.tsx
+          git add src/temporal-geojson-geometry.ts src/geojson-source.ts src/map-engine.tsx src/geojson-editor.tsx src/map-view.tsx src/heat-layer-rendering.ts
           git commit -m "fix: clear foundation conformance blockers"
           git push origin HEAD:chore/repository-foundation-v1
