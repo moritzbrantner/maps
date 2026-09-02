@@ -15,6 +15,18 @@ minimal security issue without exploit details and request maintainer contact.
 Security reports may cover package code, published artifacts, and dependency
 vulnerabilities that affect consumers.
 
+## Dependency Audit Baseline
+
+The repository's high-severity dependency audit has an explicit temporary
+baseline for 15 transitive advisories that were already present before the
+repository-foundation rollout on 2026-09-01. The observed dependency paths were
+through development tooling rather than the published runtime dependency path.
+
+`scripts/verify-dependency-audit.ts` ignores only those exact GHSA identifiers.
+Any additional high-severity advisory still fails the audit. Baseline entries
+should be removed individually as upstream dependency updates eliminate them;
+the baseline must not be broadened to make an unrelated foundation change pass.
+
 ## Consumer-Controlled Markup
 
 `FlatDivIconOptions.html` is treated as trusted markup for compatibility with
