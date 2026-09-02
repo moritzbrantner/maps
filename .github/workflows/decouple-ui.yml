@@ -49,10 +49,27 @@ jobs:
             'import { Button } from "../ui";',
           );
 
-          for (const path of ['README.md', 'docs/getting-started.md']) {
-            const source = fs.readFileSync(path, 'utf8');
-            fs.writeFileSync(path, source.replaceAll(' @moritzbrantner/ui', ''));
-          }
+          let readme = fs.readFileSync('README.md', 'utf8');
+          readme = readme
+            .replaceAll(' @moritzbrantner/ui', '')
+            .replace(
+              '- Rendered React maps require the `react`, `react-dom`, and\n  `@moritzbrantner/ui` peer dependencies.',
+              '- Rendered React maps require the `react` and `react-dom` peer dependencies.',
+            )
+            .replace(
+              'free of React, DOM, MapLibre, Three, `@moritzbrantner/ui`, and timeline editor',
+              'free of React, DOM, MapLibre, Three, UI component packages, and timeline editor',
+            );
+          fs.writeFileSync('README.md', readme);
+
+          let gettingStarted = fs.readFileSync('docs/getting-started.md', 'utf8');
+          gettingStarted = gettingStarted
+            .replaceAll(' @moritzbrantner/ui', '')
+            .replace(
+              'React, React DOM, and `@moritzbrantner/ui` are required peers for rendered map\ncomponents.',
+              'React and React DOM are required peers for rendered map components.',
+            );
+          fs.writeFileSync('docs/getting-started.md', gettingStarted);
 
           const dependencyTable = `| Entry point | React required | Timeline editor required | Server-safe |\n| --- | --- | --- | --- |\n| \`@moritzbrantner/maps/core\` | No | No | Yes |\n| \`@moritzbrantner/maps\` | Yes | Only for timeline editor exports | No |\n| \`@moritzbrantner/maps/layers\` | Yes | No | No |\n| \`@moritzbrantner/maps/flat\` | Yes | No | No |\n| \`@moritzbrantner/maps/editor\` | Yes | Only when using timeline editor integration | No |\n| \`@moritzbrantner/maps/timeline\` | Yes | Yes for \`GeoJsonTimelineEditor\` | No |\n| \`@moritzbrantner/maps/geojson\` | Yes | No | No |\n| \`@moritzbrantner/maps/heat\` | Yes | No | No |\n| \`@moritzbrantner/maps/measurement\` | Layer: Yes, helpers: No | No | Helper imports only |\n| \`@moritzbrantner/maps/temporal\` | Maps: Yes, helpers: No | No | Helper imports only |`;
           let entrypoints = fs.readFileSync('docs/entrypoints.md', 'utf8');
@@ -67,11 +84,11 @@ jobs:
           fs.writeFileSync('docs/adr/0002-keep-core-entrypoint-server-safe.md', adr);
 
           let consumer = fs.readFileSync('scripts/verify-package-consumer.mjs', 'utf8');
-          consumer = consumer.replace(/^\s*"@moritzbrantner\/ui": version\("@moritzbrantner\/ui"\),\n/m, '');
+          consumer = consumer.replace(/^\s*"@moritzbrantner\/ui".*\n/gm, '');
           fs.writeFileSync('scripts/verify-package-consumer.mjs', consumer);
 
           let bundles = fs.readFileSync('scripts/verify-entry-bundles.mjs', 'utf8');
-          bundles = bundles.replace(/^\s*"@moritzbrantner\/ui",\n/m, '');
+          bundles = bundles.replace(/^\s*"@moritzbrantner\/ui".*\n/gm, '');
           fs.writeFileSync('scripts/verify-entry-bundles.mjs', bundles);
 
           let demoStyles = fs.readFileSync('demo/styles.css', 'utf8');
@@ -227,10 +244,13 @@ jobs:
 
           bun install
 
-          if grep -R --line-number --exclude=CHANGELOG.md '@moritzbrantner/ui' package.json bun.lock src demo docs README.md scripts; then
-            echo 'Active @moritzbrantner/ui references remain' >&2
+          if grep -R --line-number --exclude=CHANGELOG.md '@moritzbrantner/ui' package.json src demo docs README.md scripts; then
+            echo 'Direct @moritzbrantner/ui references remain' >&2
             exit 1
           fi
+
+          bun run check-types
+          bun run lint
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
