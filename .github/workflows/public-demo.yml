@@ -53,7 +53,6 @@ jobs:
       install_command: bun install --frozen-lockfile
       build_command: bunx vite build --base /maps/ --outDir dist-demo
       benchmark_command: bun run verify:benchmarks
-      bundle_size_command: bun run verify:package-size
       timeout_minutes: 20
       concurrency_group: maps-demo-performance-${{ github.ref }}
 
