@@ -2,8 +2,6 @@
 
 import { useMemo, type ChangeEvent } from "react";
 
-import { Button } from "@moritzbrantner/ui";
-
 import type { TemporalMapTimeRange } from "./temporal-points";
 
 export type TemporalPlaybackControlsProps = {
@@ -85,7 +83,7 @@ export function TemporalPlaybackControls({
         </output>
       </div>
       <div className="mb-temporal-map__controls" role="toolbar" aria-label={`${timelineLabel} playback controls`}>
-        <Button
+        <button
           type="button"
           className="mb-temporal-map__control-button"
           disabled={!canSeekBackward}
@@ -93,8 +91,8 @@ export function TemporalPlaybackControls({
           aria-label="Jump to start"
         >
           Start
-        </Button>
-        <Button
+        </button>
+        <button
           type="button"
           className="mb-temporal-map__control-button"
           disabled={!canSeekBackward}
@@ -102,8 +100,8 @@ export function TemporalPlaybackControls({
           aria-label="Previous time step"
         >
           Back
-        </Button>
-        <Button
+        </button>
+        <button
           type="button"
           className="mb-temporal-map__playback-toggle"
           disabled={!hasPlayableRange}
@@ -111,8 +109,8 @@ export function TemporalPlaybackControls({
           aria-pressed={isPlaying}
         >
           {isPlaying ? "Pause" : "Play"}
-        </Button>
-        <Button
+        </button>
+        <button
           type="button"
           className="mb-temporal-map__control-button"
           disabled={!canSeekForward}
@@ -120,8 +118,8 @@ export function TemporalPlaybackControls({
           aria-label="Next time step"
         >
           Next
-        </Button>
-        <Button
+        </button>
+        <button
           type="button"
           className="mb-temporal-map__control-button"
           disabled={!canSeekForward}
@@ -129,7 +127,7 @@ export function TemporalPlaybackControls({
           aria-label="Jump to end"
         >
           End
-        </Button>
+        </button>
       </div>
       <div className="mb-temporal-map__axis">
         <span className="mb-temporal-map__axis-boundary">

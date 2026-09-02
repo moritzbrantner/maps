@@ -21,7 +21,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from "@moritzbrantner/ui";
+} from "./ui";
 import {
   BubbleMap,
   BeeLineMeasurementLayer,

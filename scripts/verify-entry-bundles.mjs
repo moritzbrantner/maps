@@ -26,7 +26,6 @@ verifyMissingImports("core", [
   "react/jsx-runtime",
   "flat",
   "three",
-  "@moritzbrantner/ui",
   "@moritzbrantner/timeline-editor",
   "@moritzbrantner/viz-engine",
 ]);

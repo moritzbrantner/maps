@@ -6,11 +6,11 @@ geo utilities for interactive spatial views.
 ## Install
 
 ```sh
-bun add @moritzbrantner/maps @moritzbrantner/ui react react-dom
+bun add @moritzbrantner/maps react react-dom
 ```
 
 ```sh
-npm install @moritzbrantner/maps @moritzbrantner/ui react react-dom
+npm install @moritzbrantner/maps react react-dom
 ```
 
 Import the stylesheet once in your app shell:
@@ -111,8 +111,7 @@ controller?.fitPoints(points, { padding: 72 });
 
 ## Runtime Notes
 
-- Rendered React maps require the `react`, `react-dom`, and
-  `@moritzbrantner/ui` peer dependencies.
+- Rendered React maps require the `react` and `react-dom` peer dependencies.
 - `@moritzbrantner/timeline-editor` is an optional peer required only for
   timeline editor components.
 - MapLibre, Three, Turf helpers, supercluster, d3-delaunay, polygon-clipping,
@@ -124,7 +123,7 @@ controller?.fitPoints(points, { padding: 72 });
 - `@moritzbrantner/maps/styles.full.css` is a compatibility stylesheet that
   includes Tailwind preflight/global reset.
 - `@moritzbrantner/maps/core` is intended for data-only usage and must remain
-  free of React, DOM, MapLibre, Three, `@moritzbrantner/ui`, and timeline editor
+  free of React, DOM, MapLibre, Three, UI component packages, and timeline editor
   runtime imports.
 
 ## Verification
