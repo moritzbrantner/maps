@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 
@@ -102,21 +101,3 @@ replace_in_section(
     '    case "ungroup-selection":\n'
     "      return null;",
 )
-
-package_path = Path("package.json")
-package = json.loads(package_path.read_text())
-package["devDependencies"]["@moritzbrantner/ui"] = "^1.1.0"
-overrides = package.setdefault("overrides", {})
-overrides.update(
-    {
-        "brace-expansion": "5.0.9",
-        "browserslist": "4.28.7",
-        "fast-uri": "3.1.5",
-        "ip-address": "10.3.1",
-        "js-yaml": "4.3.1",
-        "nanoid": "3.3.18",
-        "postcss": "8.5.18",
-        "undici": "7.29.0",
-    }
-)
-package_path.write_text(json.dumps(package, indent=2) + "\n")
