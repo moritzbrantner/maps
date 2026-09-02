@@ -128,11 +128,17 @@ type TabsTriggerProps = ButtonHTMLAttributes<HTMLButtonElement> & { value: strin
 
 function getEnabledTabs(currentTarget: HTMLButtonElement) {
   return Array.from(
-    currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)') ?? [],
+    currentTarget
+      .closest('[role="tablist"]')
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)') ?? [],
   );
 }
 
-function getKeyboardTargetIndex(event: KeyboardEvent<HTMLButtonElement>, currentIndex: number, count: number) {
+function getKeyboardTargetIndex(
+  event: KeyboardEvent<HTMLButtonElement>,
+  currentIndex: number,
+  count: number,
+) {
   switch (event.key) {
     case "ArrowRight":
     case "ArrowDown":
