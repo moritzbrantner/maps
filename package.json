@@ -96,7 +96,7 @@
     "test:browser:update": "playwright test --update-snapshots",
     "verify:api-surface": "node ./scripts/verify-api-surface.mjs",
     "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
-    "verify:audit": "bun audit --audit-level high",
+    "verify:audit": "bun scripts/verify-dependency-audit.ts",
     "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
@@ -134,7 +134,8 @@
     "@vitejs/plugin-react": "^6.0.2",
     "jsdom": "^29.1.1",
     "oxfmt": "^0.56.0",
-    "oxlint": "^1.67.0",
+    "oxlint": "1.80.0",
+    "oxlint-tsgolint": "7.0.2001",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwindcss": "^4.3.0",
@@ -158,5 +159,5 @@
     "hono": "4.12.27",
     "undici": "7.28.0"
   },
-  "packageManager": "bun@1.3.14"
+  "packageManager": "bun@1.4.0"
 }

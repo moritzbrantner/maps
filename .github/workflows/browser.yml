@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@workflow-standard-v1.3
+    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@3b15546083e66aeba487a2e653e3ffaacbfe7220 # workflow-standard-v1.3
     with:
       node_version: "24"
       bun_version: "1.3.14"

@@ -116,12 +116,10 @@ type DemoE2ERegistration = {
   onMapReady?: (map: MapLibreMap) => void;
 };
 
-declare global {
-  interface Window {
-    __mbMapsDemo?: DemoE2EProbe;
-    __mbMapsDemoMap?: MapLibreMap;
-  }
-}
+type DemoWindow = Window & {
+  __mbMapsDemo?: DemoE2EProbe;
+  __mbMapsDemoMap?: MapLibreMap;
+};
 
 const demoPointFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties> =
   {
@@ -1175,7 +1173,7 @@ export function App() {
       }
 
       e2eMapRef.current = map;
-      window.__mbMapsDemoMap = map;
+      (window as DemoWindow).__mbMapsDemoMap = map;
     },
     [e2eEnabled],
   );
@@ -1255,11 +1253,11 @@ export function App() {
       },
     };
 
-    window.__mbMapsDemo = probe;
+    (window as DemoWindow).__mbMapsDemo = probe;
 
     return () => {
-      if (window.__mbMapsDemo === probe) {
-        delete window.__mbMapsDemo;
+      if ((window as DemoWindow).__mbMapsDemo === probe) {
+        delete (window as DemoWindow).__mbMapsDemo;
       }
     };
   }, [
@@ -4326,6 +4324,7 @@ function getDemoTimelineGeographyStyle(feature: { properties: Partial<DemoGeoJso
         polygonStrokeColor: "#b45309",
         polygonStrokeWidth: 2,
       };
+    case undefined:
     default:
       return {
         polygonFillColor: "#14b8a6",

@@ -71,13 +71,6 @@ export function BeeLineMeasurementLayer({
   }, [isMeasuring, setMeasurementActive]);
 
   useEffect(() => {
-    if (!isMeasuring && draft) {
-      setDraft(null);
-      emitDraftChange(null);
-    }
-  }, [draft, isMeasuring]);
-
-  useEffect(() => {
     if (!registerMapLibreLayer || (display !== "flat" && display !== "globe")) {
       flatMeasurementCacheRef.current.clear();
       flatDraftStateRef.current.resource = null;

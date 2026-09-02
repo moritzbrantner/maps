@@ -18,7 +18,7 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: moritzbrantner/reusable-workflows/.github/workflows/package-publish.yml@workflow-standard-v1.2
+    uses: moritzbrantner/reusable-workflows/.github/workflows/package-publish.yml@458c85c1a58cac26a5ab978e12ab8e9a27d4e0ee # workflow-standard-v1.2
     with:
       package_manager: npm
       publish_enabled: true

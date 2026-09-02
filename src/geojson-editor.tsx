@@ -1656,6 +1656,16 @@ export function EditableGeoJsonMap<
   );
   const [uncontrolledTimelineDocument, setUncontrolledTimelineDocument] =
     useState(generatedTimelineDocument);
+  const [previousGeneratedTimelineDocument, setPreviousGeneratedTimelineDocument] =
+    useState(generatedTimelineDocument);
+
+  if (
+    !timelineDocument &&
+    previousGeneratedTimelineDocument !== generatedTimelineDocument
+  ) {
+    setPreviousGeneratedTimelineDocument(generatedTimelineDocument);
+    setUncontrolledTimelineDocument(generatedTimelineDocument);
+  }
   const handleEditorMapReady = useCallback(
     (map: MapLibreMap) => {
       map.boxZoom?.disable();
@@ -1677,12 +1687,6 @@ export function EditableGeoJsonMap<
           },
         )
       : geoJson;
-
-  useEffect(() => {
-    if (!timelineDocument) {
-      setUncontrolledTimelineDocument(generatedTimelineDocument);
-    }
-  }, [generatedTimelineDocument, timelineDocument]);
 
   const map = (
     <MapView
@@ -2321,7 +2325,15 @@ function getCommandEditMode(command: GeoJsonEditorCommand): GeoJsonEditMode | nu
       return "move";
     case "start-reshape":
       return "reshape";
-    default:
+    case "cancel-draft":
+    case "clear-selection":
+    case "delete-selection":
+    case "duplicate-selection":
+    case "finish-draft":
+    case "group-selection":
+    case "remove-selected-vertex":
+    case "select-all":
+    case "ungroup-selection":
       return null;
   }
 }

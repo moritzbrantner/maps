@@ -128,7 +128,9 @@ function decomposeGeometryPart(
         },
         partPath: `${partPath}.coordinates[${index}]`,
       }));
-    default:
+    case "LineString":
+    case "Point":
+    case "Polygon":
       return [{ geometry, partPath }];
   }
 }

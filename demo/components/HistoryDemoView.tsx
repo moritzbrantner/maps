@@ -88,11 +88,6 @@ export function HistoryDemoView({
   ).length;
 
   useEffect(() => {
-    setIsPlaying(false);
-    setYear(historyStartYear);
-  }, [historyStartYear, scenarioId]);
-
-  useEffect(() => {
     if (!isPlaying) {
       previousTimestampRef.current = null;
       return;
@@ -173,7 +168,14 @@ export function HistoryDemoView({
               variant={scenario.id === scenarioId ? "default" : "secondary"}
               type="button"
               onClick={() => {
+                if (scenario.id === scenarioId) {
+                  return;
+                }
+
+                const nextScenario = getDemoHistoricalPolityScenario(scenario.id);
+                setIsPlaying(false);
                 setScenarioId(scenario.id);
+                setYear(nextScenario.scenes[0]!.year);
               }}
             >
               {scenario.label}

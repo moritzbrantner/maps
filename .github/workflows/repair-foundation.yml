@@ -1,0 +1,99 @@
+name: Repair foundation
+
+on:
+  push:
+    branches:
+      - chore/repository-foundation-v1
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: chore/repository-foundation-v1
+      - id: state
+        shell: bash
+        run: |
+          if [[ "$(git log -1 --pretty=%s)" == "fix: clear foundation conformance blockers" ]]; then
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up exact Node
+        if: steps.state.outputs.applied != 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version-file: .node-version
+      - name: Set up exact Bun
+        if: steps.state.outputs.applied != 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.0
+      - name: Prepare declared environment
+        if: steps.state.outputs.applied != 'true'
+        run: bash scripts/codex-environment.sh setup
+      - name: Apply focused conformance repairs
+        if: steps.state.outputs.applied != 'true'
+        run: python3 scripts/repair-foundation.py
+      - name: Prepare type-aware Oxlint runtime
+        if: steps.state.outputs.applied != 'true'
+        run: bun add --no-save oxlint-tsgolint@7.0.2001
+      - name: Diagnose exhaustive switches
+        if: steps.state.outputs.applied != 'true'
+        shell: bash
+        run: |
+          cat > /tmp/ts005.json <<'EOF'
+          {
+            "options": {"typeAware": true},
+            "rules": {
+              "typescript/switch-exhaustiveness-check": [
+                "error",
+                {"considerDefaultExhaustiveForUnions": false}
+              ]
+            }
+          }
+          EOF
+          ./node_modules/.bin/oxlint --config /tmp/ts005.json .
+      - name: Diagnose floating promises
+        if: steps.state.outputs.applied != 'true'
+        shell: bash
+        run: |
+          cat > /tmp/ts006.json <<'EOF'
+          {
+            "options": {"typeAware": true},
+            "rules": {
+              "typescript/no-floating-promises": [
+                "error",
+                {"ignoreVoid": false}
+              ]
+            }
+          }
+          EOF
+          ./node_modules/.bin/oxlint --config /tmp/ts006.json .
+      - name: Verify repository conformance
+        if: steps.state.outputs.applied != 'true'
+        uses: moritzbrantner/coding-tooling@b6abbc6428c78639a32521ec23297dfc357690b1
+        with:
+          operation: conformance
+          bun-version: 1.4.0
+          install-mode: none
+          config: .coding-tooling.json
+          report-path: .artifacts/coding-tooling/conformance-repair.json
+          strict: true
+      - name: Verify fast repository gate
+        if: steps.state.outputs.applied != 'true'
+        run: bun run verify:fast
+      - name: Commit verified repair
+        if: steps.state.outputs.applied != 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm scripts/repair-foundation.py
+          git add src/temporal-geojson-geometry.ts src/geojson-source.ts src/map-engine.tsx src/geojson-editor.tsx src/map-view.tsx src/heat-layer-rendering.ts
+          git commit -m "fix: clear foundation conformance blockers"
+          git push origin HEAD:chore/repository-foundation-v1

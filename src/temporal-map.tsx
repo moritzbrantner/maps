@@ -142,6 +142,20 @@ export function TemporalClusteredMap<TProperties extends Record<string, unknown>
     getInitialTime(defaultTime, timeRange),
   );
   const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const [previousAutoPlay, setPreviousAutoPlay] = useState(autoPlay);
+
+  if (previousAutoPlay !== autoPlay) {
+    setPreviousAutoPlay(autoPlay);
+    setIsPlaying(autoPlay);
+  }
+
+  if (currentTime === undefined && timeRange) {
+    const constrainedUncontrolledTime = clampTime(uncontrolledTime, timeRange);
+    if (constrainedUncontrolledTime !== uncontrolledTime) {
+      setUncontrolledTime(constrainedUncontrolledTime);
+    }
+  }
+
   const resolvedTime = currentTime ?? uncontrolledTime;
   const clampedTime = timeRange ? clampTime(resolvedTime, timeRange) : 0;
   const activeTime = useMemo(
@@ -204,18 +218,6 @@ export function TemporalClusteredMap<TProperties extends Record<string, unknown>
     setIsPlaying(false);
     commitTime(nextTime);
   });
-
-  useEffect(() => {
-    setIsPlaying(autoPlay);
-  }, [autoPlay]);
-
-  useEffect(() => {
-    if (!timeRange || currentTime !== undefined) {
-      return;
-    }
-
-    setUncontrolledTime((value) => clampTime(value, timeRange));
-  }, [currentTime, timeRange]);
 
   useEffect(() => {
     if (!isPlaying || !timeRange || !hasPlayableRange) {

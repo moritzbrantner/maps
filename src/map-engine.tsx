@@ -817,6 +817,16 @@ function renderFlatEngineLayer(
         }
       }
       break;
+    case "binned-series":
+    case "finance-candles":
+    case "finance-line":
+    case "finance-returns":
+    case "geo-scalar-field":
+    case "heatmap":
+    case "histogram":
+    case "rolling-series":
+    case "table":
+      break;
   }
 }
 
