@@ -10,8 +10,6 @@ permissions:
   actions: read
   contents: read
   packages: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: public-demo-${{ github.ref }}
@@ -60,6 +58,12 @@ jobs:
     name: Deploy verified demo
     if: ${{ github.event_name != 'pull_request' }}
     needs: [links, smoke, performance]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pages: write
+      id-token: write
     uses: moritzbrantner/reusable-workflows/.github/workflows/deploy-pages.yml@89a5e75c3f818289790a4c9bcf2d756537380bd6
     with:
       node_version: ""
