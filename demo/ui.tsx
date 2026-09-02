@@ -3,6 +3,7 @@ import {
   useContext,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
+  type KeyboardEvent,
   type SelectHTMLAttributes,
 } from "react";
 
@@ -125,7 +126,30 @@ export function TabsList({ className, ...props }: HTMLAttributes<HTMLDivElement>
 
 type TabsTriggerProps = ButtonHTMLAttributes<HTMLButtonElement> & { value: string };
 
-export function TabsTrigger({ className, onClick, value, ...props }: TabsTriggerProps) {
+function getEnabledTabs(currentTarget: HTMLButtonElement) {
+  return Array.from(
+    currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)') ?? [],
+  );
+}
+
+function getKeyboardTargetIndex(event: KeyboardEvent<HTMLButtonElement>, currentIndex: number, count: number) {
+  switch (event.key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      return (currentIndex + 1) % count;
+    case "ArrowLeft":
+    case "ArrowUp":
+      return (currentIndex - 1 + count) % count;
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+export function TabsTrigger({ className, onClick, onKeyDown, value, ...props }: TabsTriggerProps) {
   const context = useContext(TabsContext);
   if (!context) throw new Error("TabsTrigger must be rendered inside Tabs");
   const active = context.value === value;
@@ -136,6 +160,7 @@ export function TabsTrigger({ className, onClick, value, ...props }: TabsTrigger
       role="tab"
       aria-selected={active}
       data-state={active ? "active" : "inactive"}
+      tabIndex={active ? 0 : -1}
       className={cn(
         "min-h-9 rounded-md border px-3 text-sm font-semibold transition-colors",
         active
@@ -146,6 +171,20 @@ export function TabsTrigger({ className, onClick, value, ...props }: TabsTrigger
       onClick={(event) => {
         onClick?.(event);
         if (!event.defaultPrevented) context.onValueChange?.(value);
+      }}
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        if (event.defaultPrevented) return;
+
+        const tabs = getEnabledTabs(event.currentTarget);
+        const currentIndex = tabs.indexOf(event.currentTarget);
+        const targetIndex = getKeyboardTargetIndex(event, currentIndex, tabs.length);
+        if (targetIndex === null || targetIndex === currentIndex || tabs.length === 0) return;
+
+        event.preventDefault();
+        const target = tabs[targetIndex];
+        target?.focus();
+        target?.click();
       }}
       {...props}
     />
