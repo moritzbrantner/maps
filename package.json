@@ -96,7 +96,7 @@
     "test:browser:update": "playwright test --update-snapshots",
     "verify:api-surface": "node ./scripts/verify-api-surface.mjs",
     "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
-    "verify:audit": "bun audit --audit-level high",
+    "verify:audit": "bun scripts/verify-dependency-audit.ts",
     "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
