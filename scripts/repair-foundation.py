@@ -101,3 +101,34 @@ replace_in_section(
     '    case "ungroup-selection":\n'
     "      return null;",
 )
+
+replace_in_section(
+    "src/map-view.tsx",
+    '      localMap.on("style.load", handleStyleLoad);',
+    "    return () => {",
+    '      localMap.once("load", () => {\n',
+    '      // MapLibre returns `this` for the listener overload, but its implementation signature also includes Promise.\n'
+    '      // oxlint-disable-next-line typescript/no-floating-promises\n'
+    '      localMap.once("load", () => {\n',
+)
+replace_in_section(
+    "src/map-view.tsx",
+    "    async function initializeMap()",
+    "    return () => {",
+    "    initializeMap();",
+    '    initializeMap().catch((error: unknown) => {\n'
+    '      console.error("Failed to initialize the MapLibre map.", error);\n'
+    "    });",
+)
+
+replace_in_section(
+    "src/heat-layer-rendering.ts",
+    "  if (asyncRender) {",
+    "    return;\n  }",
+    "    });\n",
+    '    }).catch((error: unknown) => {\n'
+    '      if (isCurrentFlatLayerResourceRequest(state.surface, requestId)) {\n'
+    '        console.error("Failed to render the heat-layer surface.", error);\n'
+    "      }\n"
+    "    });\n",
+)
