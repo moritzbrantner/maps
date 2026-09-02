@@ -125,10 +125,12 @@ replace_in_section(
     "src/heat-layer-rendering.ts",
     "  if (asyncRender) {",
     "    return;\n  }",
-    "    });\n",
+    "      });\n    });\n    return;",
+    '      });\n'
     '    }).catch((error: unknown) => {\n'
     '      if (isCurrentFlatLayerResourceRequest(state.surface, requestId)) {\n'
     '        console.error("Failed to render the heat-layer surface.", error);\n'
     "      }\n"
-    "    });\n",
+    "    });\n"
+    "    return;",
 )
