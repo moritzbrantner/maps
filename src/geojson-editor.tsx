@@ -2325,7 +2325,15 @@ function getCommandEditMode(command: GeoJsonEditorCommand): GeoJsonEditMode | nu
       return "move";
     case "start-reshape":
       return "reshape";
-    default:
+    case "cancel-draft":
+    case "clear-selection":
+    case "delete-selection":
+    case "duplicate-selection":
+    case "finish-draft":
+    case "group-selection":
+    case "remove-selected-vertex":
+    case "select-all":
+    case "ungroup-selection":
       return null;
   }
 }

@@ -77,7 +77,10 @@ export function createMapPointsFromGeoJson<
             createNestedPartIndex(entry.partIndex, pointIndex),
           ),
         );
-      default:
+      case "LineString":
+      case "MultiLineString":
+      case "MultiPolygon":
+      case "Polygon":
         return [];
     }
   });
@@ -103,7 +106,10 @@ export function createMapFlowsFromGeoJson<
             createNestedPartIndex(entry.partIndex, lineIndex),
           ),
         );
-      default:
+      case "MultiPoint":
+      case "MultiPolygon":
+      case "Point":
+      case "Polygon":
         return [];
     }
   });
@@ -263,7 +269,10 @@ function shouldOverlayGeometry(
       return geometry.coordinates.length > 2;
     case "MultiLineString":
       return geometry.coordinates.some((line) => line.length > 2);
-    default:
+    case "MultiPoint":
+    case "MultiPolygon":
+    case "Point":
+    case "Polygon":
       return true;
   }
 }
