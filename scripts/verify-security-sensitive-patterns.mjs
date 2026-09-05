@@ -62,6 +62,13 @@ const allowlist = [
     text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
     rationale: "Optional WASM kernel dynamic import avoids bundling optional runtime modules.",
   },
+  {
+    path: "src/aggregation-wasm.ts",
+    ruleId: "function-constructor",
+    text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
+    rationale:
+      "Maps loads the optional repository-owned WASM candidate by caller-provided package specifier without forcing it into core bundles.",
+  },
 ];
 
 const findings = [];
