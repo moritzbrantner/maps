@@ -7,6 +7,8 @@ import type {
 } from "./aggregation-runtime";
 import type { ViewportAggregationQuery } from "./aggregation";
 
+const DEFAULT_MAPS_WASM_PACKAGE = "@moritzbrantner/maps/wasm";
+
 type MapsAggregationWasmIndex = {
   free?: () => void;
   getClusterExpansionZoom(clusterId: number): number;
@@ -26,12 +28,8 @@ type MapsAggregationWasmModule = {
 };
 
 export async function loadMapsAggregationWasmRuntime(
-  packageName?: string,
+  packageName = DEFAULT_MAPS_WASM_PACKAGE,
 ): Promise<MapsAggregationWasmRuntime> {
-  if (!packageName) {
-    throw new Error("No public Maps WASM package configured.");
-  }
-
   const wasmModule = await importOptionalWasmModule(packageName);
   await wasmModule.default?.();
   const Constructor = wasmModule.MapsPointAggregationIndex;
