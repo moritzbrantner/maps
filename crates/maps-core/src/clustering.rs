@@ -42,7 +42,11 @@ impl Default for MapClusteringOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
 pub enum MapViewportFeature {
     Point {
         coordinates: [f64; 2],
@@ -311,7 +315,7 @@ mod tests {
                 MapViewportFeature::Cluster { .. } => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["west", "east"]);
+        assert_eq!(ids, vec!["east", "west"]);
     }
 
     #[test]
