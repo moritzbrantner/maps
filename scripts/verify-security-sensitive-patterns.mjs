@@ -67,7 +67,7 @@ const allowlist = [
     ruleId: "function-constructor",
     text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
     rationale:
-      "Maps loads the optional repository-owned WASM candidate by caller-provided package specifier without forcing it into core bundles.",
+      "Maps lazy-loads its version-matched package-owned WASM entrypoint without pulling browser initialization into the server-safe core bundle; explicit overrides remain test/integration hooks.",
   },
 ];
 
