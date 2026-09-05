@@ -35,7 +35,6 @@ function verifyFullViteConsumer(directory, packageTarball) {
   writePackage(directory, {
     "@moritzbrantner/maps": `file:${packageTarball}`,
     "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
-    "@moritzbrantner/ui": version("@moritzbrantner/ui"),
     "@vitejs/plugin-react": version("@vitejs/plugin-react"),
     react: version("react"),
     "react-dom": version("react-dom"),
@@ -95,7 +94,6 @@ createRoot(document.getElementById("root")!).render(
 function verifyFlatOnlyViteConsumer(directory, packageTarball) {
   writePackage(directory, {
     "@moritzbrantner/maps": `file:${packageTarball}`,
-    "@moritzbrantner/ui": version("@moritzbrantner/ui"),
     "@vitejs/plugin-react": version("@vitejs/plugin-react"),
     react: version("react"),
     "react-dom": version("react-dom"),
@@ -158,7 +156,6 @@ const forbiddenImports = [
   "react/jsx-runtime",
   "maplibre-gl",
   "three",
-  "@moritzbrantner/ui",
   "@moritzbrantner/timeline-editor",
 ];
 
@@ -187,7 +184,6 @@ function verifyNextStyleBoundaries(directory, packageTarball) {
   writePackage(directory, {
     "@moritzbrantner/maps": `file:${packageTarball}`,
     "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
-    "@moritzbrantner/ui": version("@moritzbrantner/ui"),
     "@types/geojson": version("@types/geojson"),
     "@types/react": version("@types/react"),
     "@types/react-dom": version("@types/react-dom"),

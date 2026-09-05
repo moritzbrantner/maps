@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import { Button } from "@moritzbrantner/ui";
+import { Button } from "../ui";
 import {
   GeoJsonLayer,
   MapView,

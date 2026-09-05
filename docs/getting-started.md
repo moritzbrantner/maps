@@ -5,11 +5,11 @@
 For full React map usage:
 
 ```sh
-bun add @moritzbrantner/maps @moritzbrantner/ui react react-dom
+bun add @moritzbrantner/maps react react-dom
 ```
 
 ```sh
-npm install @moritzbrantner/maps @moritzbrantner/ui react react-dom
+npm install @moritzbrantner/maps react react-dom
 ```
 
 For timeline editor components:
@@ -41,8 +41,7 @@ compatibility stylesheet instead:
 import "@moritzbrantner/maps/styles.full.css";
 ```
 
-React, React DOM, and `@moritzbrantner/ui` are required peers for rendered map
-components. The optional `@moritzbrantner/timeline-editor` peer is only required
+React and React DOM are required peers for rendered map components. The optional `@moritzbrantner/timeline-editor` peer is only required
 when using timeline editor components.
 
 ## Basic Clustered Map

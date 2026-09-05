@@ -119,7 +119,6 @@
   },
   "devDependencies": {
     "@moritzbrantner/timeline-editor": "^1.0.1",
-    "@moritzbrantner/ui": "^1.0.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.0",
     "@tanstack/react-query": "^5.100.14",
@@ -145,7 +144,6 @@
   },
   "peerDependencies": {
     "@moritzbrantner/timeline-editor": "^1.0.1",
-    "@moritzbrantner/ui": "^1.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
