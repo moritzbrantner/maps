@@ -1,4 +1,7 @@
-use maps_core::{normalize_points_with_bounds, MapBounds, MapPoint, MapPointInput};
+use maps_core::{
+    aggregate_viewport as aggregate_viewport_core, normalize_points_with_bounds, MapBounds,
+    MapClusterPoint, MapClusteringOptions, MapPoint, MapPointInput, MapViewportQuery,
+};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -16,4 +19,22 @@ pub fn normalize_points(points: JsValue) -> Result<JsValue, JsValue> {
 
     serde_wasm_bindgen::to_value(&NormalizePointsResponse { bounds, points })
         .map_err(|error| JsValue::from_str(&format!("failed to serialize map points: {error}")))
+}
+
+#[wasm_bindgen(js_name = aggregateViewport)]
+pub fn aggregate_viewport(
+    points: JsValue,
+    query: JsValue,
+    options: JsValue,
+) -> Result<JsValue, JsValue> {
+    let points: Vec<MapClusterPoint> = serde_wasm_bindgen::from_value(points)
+        .map_err(|error| JsValue::from_str(&format!("invalid cluster points: {error}")))?;
+    let query: MapViewportQuery = serde_wasm_bindgen::from_value(query)
+        .map_err(|error| JsValue::from_str(&format!("invalid viewport query: {error}")))?;
+    let options: MapClusteringOptions = serde_wasm_bindgen::from_value(options)
+        .map_err(|error| JsValue::from_str(&format!("invalid clustering options: {error}")))?;
+    let result = aggregate_viewport_core(&points, query, options);
+
+    serde_wasm_bindgen::to_value(&result)
+        .map_err(|error| JsValue::from_str(&format!("failed to serialize viewport: {error}")))
 }
