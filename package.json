@@ -97,6 +97,7 @@
     "verify:api-surface": "node ./scripts/verify-api-surface.mjs",
     "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
     "verify:audit": "bun audit --audit-level high",
+    "verify:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --lib --tests --locked && cargo check -p maps-wasm --target wasm32-unknown-unknown --locked",
     "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
@@ -104,7 +105,7 @@
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
     "verify:agent": "bun run check-types && bun run lint && bun run test:tdd:run",
     "verify:fast": "bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
-    "verify:release": "bun run verify:fast && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
+    "verify:release": "bun run verify:rust && bun run verify:fast && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
   },
   "dependencies": {
     "@moritzbrantner/viz-engine": "^0.3.0",
