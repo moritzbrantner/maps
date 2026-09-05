@@ -3,9 +3,13 @@ import { afterEach, describe, expect, test } from "vitest";
 import { createPointAggregationIndex } from "./aggregation";
 import {
   configureMapsAggregationRuntime,
+  createMapsAggregationCandidateIndex,
   initializeMapsAggregationWasm,
   resetMapsAggregationRuntimeForTests,
   setMapsAggregationWasmRuntimeForTests,
+  type MapsAggregationCandidateIndex,
+  type MapsAggregationCandidatePoint,
+  type MapsAggregationCandidateResult,
   type MapsAggregationDiagnostic,
 } from "./aggregation-runtime";
 
@@ -14,24 +18,15 @@ afterEach(() => {
 });
 
 describe("Maps aggregation Rust candidate", () => {
-  test("compares a matching candidate without changing the control result", () => {
+  test("builds the candidate once and reuses it across viewport queries", () => {
     const diagnostics: MapsAggregationDiagnostic[] = [];
-    const calls: Array<{ ids: string[]; zoom: number }> = [];
+    const builds: string[][] = [];
+    const queries: number[] = [];
 
     setMapsAggregationWasmRuntimeForTests({
-      aggregateViewport(points, query) {
-        calls.push({
-          ids: points.map((point) => point.id),
-          zoom: query.zoom,
-        });
-        return {
-          features: points.map((point) => ({
-            coordinates: [point.longitude, point.latitude],
-            kind: "point" as const,
-            metrics: point.metrics,
-            pointId: point.id,
-          })),
-        };
+      createIndex(points) {
+        builds.push(points.map((point) => point.id));
+        return createPointCandidateIndex(points, queries);
       },
     });
     configureMapsAggregationRuntime({
@@ -45,32 +40,44 @@ describe("Maps aggregation Rust candidate", () => {
       ],
       { maxZoom: 16 },
     );
-    const result = index.getViewportAggregation({
-      bounds: [8, 47, 14, 53],
+    const query = {
+      bounds: [8, 47, 14, 53] as [number, number, number, number],
       zoom: 17,
-    });
+    };
 
-    expect(result.features).toHaveLength(2);
-    expect(calls).toEqual([{ ids: ["berlin", "stuttgart"], zoom: 17 }]);
-    expect(diagnostics).toEqual([
-      expect.objectContaining({
-        backend: "wasm",
-        candidateFeatureCount: 2,
-        controlFeatureCount: 2,
-        matched: true,
-        mode: "candidate",
-      }),
-    ]);
+    expect(index.getViewportAggregation(query).features).toHaveLength(2);
+    expect(index.getViewportAggregation({ ...query, zoom: 18 }).features).toHaveLength(2);
+    expect(builds).toEqual([["berlin", "stuttgart"]]);
+    expect(queries).toEqual([17, 18]);
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics.every((event) => event.matched === true)).toBe(true);
   });
 
-  test("disables the candidate after the first semantic mismatch", () => {
+  test("disables and disposes the candidate after the first semantic mismatch", () => {
     const diagnostics: MapsAggregationDiagnostic[] = [];
-    let calls = 0;
+    let queries = 0;
+    let disposals = 0;
 
     setMapsAggregationWasmRuntimeForTests({
-      aggregateViewport() {
-        calls += 1;
-        return { features: [] };
+      createIndex() {
+        return {
+          dispose() {
+            disposals += 1;
+          },
+          getClusterExpansionZoom() {
+            return 0;
+          },
+          getClusterLeaves() {
+            return [];
+          },
+          getPointById() {
+            return null;
+          },
+          getViewportAggregation(query) {
+            queries += 1;
+            return emptyCandidateResult(query.bounds, query.zoom);
+          },
+        };
       },
     });
     configureMapsAggregationRuntime({
@@ -82,7 +89,8 @@ describe("Maps aggregation Rust candidate", () => {
 
     expect(index.getViewportAggregation(query).features).toHaveLength(1);
     expect(index.getViewportAggregation(query).features).toHaveLength(1);
-    expect(calls).toBe(1);
+    expect(queries).toBe(1);
+    expect(disposals).toBe(1);
     expect(diagnostics).toEqual([
       expect.objectContaining({ matched: false, mode: "candidate" }),
       expect.objectContaining({
@@ -90,6 +98,43 @@ describe("Maps aggregation Rust candidate", () => {
         mode: "fallback",
       }),
     ]);
+  });
+
+  test("exposes the complete persistent candidate contract and explicit disposal", () => {
+    const points: MapsAggregationCandidatePoint[] = [
+      { id: "a", label: "A", latitude: 52.52, longitude: 13.405, metrics: { demand: 2 } },
+    ];
+    let disposed = false;
+
+    setMapsAggregationWasmRuntimeForTests({
+      createIndex() {
+        return {
+          dispose() {
+            disposed = true;
+          },
+          getClusterExpansionZoom() {
+            return 7;
+          },
+          getClusterLeaves() {
+            return points;
+          },
+          getPointById(pointId) {
+            return pointId === "a" ? points[0] : null;
+          },
+          getViewportAggregation(query) {
+            return pointCandidateResult(points, query.bounds, query.zoom);
+          },
+        };
+      },
+    });
+
+    const candidate = createMapsAggregationCandidateIndex(points, {});
+
+    expect(candidate?.getPointById("a")?.label).toBe("A");
+    expect(candidate?.getClusterLeaves(5)).toEqual(points);
+    expect(candidate?.getClusterExpansionZoom(5)).toBe(7);
+    candidate?.dispose();
+    expect(disposed).toBe(true);
   });
 
   test("fails closed when no public WASM package is configured", async () => {
@@ -108,3 +153,65 @@ describe("Maps aggregation Rust candidate", () => {
     ]);
   });
 });
+
+function createPointCandidateIndex(
+  points: readonly MapsAggregationCandidatePoint[],
+  queries: number[],
+): MapsAggregationCandidateIndex {
+  return {
+    dispose() {},
+    getClusterExpansionZoom() {
+      return 0;
+    },
+    getClusterLeaves() {
+      return [...points];
+    },
+    getPointById(pointId) {
+      return points.find((point) => point.id === pointId) ?? null;
+    },
+    getViewportAggregation(query) {
+      queries.push(query.zoom);
+      return pointCandidateResult(points, query.bounds, query.zoom);
+    },
+  };
+}
+
+function pointCandidateResult(
+  points: readonly MapsAggregationCandidatePoint[],
+  bounds: [number, number, number, number],
+  zoom: number,
+): MapsAggregationCandidateResult {
+  return {
+    features: points.map((point) => ({
+      coordinates: [point.longitude, point.latitude],
+      kind: "point" as const,
+      metrics: point.metrics,
+      pointId: point.id,
+    })),
+    summary: {
+      bounds,
+      metrics: {},
+      visibleClusterCount: 0,
+      visiblePointCount: points.length,
+      visibleUnclusteredCount: points.length,
+      zoom,
+    },
+  };
+}
+
+function emptyCandidateResult(
+  bounds: [number, number, number, number],
+  zoom: number,
+): MapsAggregationCandidateResult {
+  return {
+    features: [],
+    summary: {
+      bounds,
+      metrics: {},
+      visibleClusterCount: 0,
+      visiblePointCount: 0,
+      visibleUnclusteredCount: 0,
+      zoom,
+    },
+  };
+}
