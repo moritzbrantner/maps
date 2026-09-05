@@ -39,21 +39,9 @@ export type MapEngineProviderProps = LegacyMapEngineProviderProps;
 export type MapDatasetProps<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 > =
-  | {
-      id: string;
-      kind: "geo-points";
-      points: readonly MapPoint<TProperties>[];
-    }
-  | {
-      featureCollection: GeoJsonMapSource<TProperties>;
-      id: string;
-      kind: "geojson";
-    }
-  | {
-      flows: readonly MapFlow<TProperties>[];
-      id: string;
-      kind: "geo-flows";
-    };
+  | { id: string; kind: "geo-points"; points: readonly MapPoint<TProperties>[] }
+  | { featureCollection: GeoJsonMapSource<TProperties>; id: string; kind: "geojson" }
+  | { flows: readonly MapFlow<TProperties>[]; id: string; kind: "geo-flows" };
 
 type MapRuntimeContextValue = {
   getDataset(publicId: string): MapRuntimeDataset | null;
@@ -104,27 +92,30 @@ export function MapEngineProvider({ children, ...legacyProps }: MapEngineProvide
 export function MapDataset<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 >(props: MapDatasetProps<TProperties>) {
-  const runtime = useMapRuntime();
+  const { registerDataset } = useMapRuntime();
 
   useEffect(() => {
-    switch (props.kind) {
-      case "geo-points":
-        return runtime.registerDataset(props.id, {
-          kind: props.kind,
-          points: props.points,
-        });
-      case "geojson":
-        return runtime.registerDataset(props.id, {
-          featureCollection: props.featureCollection,
-          kind: props.kind,
-        });
-      case "geo-flows":
-        return runtime.registerDataset(props.id, {
-          flows: props.flows,
-          kind: props.kind,
-        });
-    }
-  }, [props, runtime]);
+    if (props.kind !== "geo-points") return;
+    return registerDataset(props.id, { kind: "geo-points", points: props.points });
+  }, [props.id, props.kind, props.kind === "geo-points" ? props.points : null, registerDataset]);
+
+  useEffect(() => {
+    if (props.kind !== "geojson") return;
+    return registerDataset(props.id, {
+      featureCollection: props.featureCollection,
+      kind: "geojson",
+    });
+  }, [
+    props.id,
+    props.kind,
+    props.kind === "geojson" ? props.featureCollection : null,
+    registerDataset,
+  ]);
+
+  useEffect(() => {
+    if (props.kind !== "geo-flows") return;
+    return registerDataset(props.id, { flows: props.flows, kind: "geo-flows" });
+  }, [props.id, props.kind, props.kind === "geo-flows" ? props.flows : null, registerDataset]);
 
   // Keep not-yet-migrated cluster/heat/flow consumers alive while their
   // computation moves into Maps-owned implementations in the next slice.
@@ -144,9 +135,7 @@ export function GeoPointLayer(props: GeoPointLayerProps) {
   const dataset = getDataset(props.datasetId);
   void version;
 
-  if (dataset?.kind !== "geo-points") {
-    return null;
-  }
+  if (dataset?.kind !== "geo-points") return null;
 
   return (
     <PointLayer
@@ -159,16 +148,16 @@ export function GeoPointLayer(props: GeoPointLayerProps) {
       }
       hoveredFeatureId={props.hoveredFeatureId}
       layerId={props.layerId ?? `geo-points-${props.datasetId}`}
-      onFeatureContextMenu={adaptPointCallback(props.onFeatureContextMenu)}
-      onFeatureHover={adaptNullablePointCallback(props.onFeatureHover)}
-      onFeatureSelect={adaptNullablePointCallback(props.onFeatureSelect)}
-      onHoveredFeatureIdChange={adaptPointInteractionChange(props.onHoveredFeatureIdChange)}
-      onSelectedFeatureIdChange={adaptPointInteractionChange(props.onSelectedFeatureIdChange)}
+      onFeatureContextMenu={mapPointCallback(props.onFeatureContextMenu)}
+      onFeatureHover={mapNullablePointCallback(props.onFeatureHover)}
+      onFeatureSelect={mapNullablePointCallback(props.onFeatureSelect)}
+      onHoveredFeatureIdChange={mapPointInteractionChange(props.onHoveredFeatureIdChange)}
+      onSelectedFeatureIdChange={mapPointInteractionChange(props.onSelectedFeatureIdChange)}
       points={dataset.points}
       pointRadius={5}
-      renderFeatureContextMenu={adaptPointContextMenu(props.renderFeatureContextMenu)}
-      renderFeaturePopup={adaptPointRenderer(props.renderFeaturePopup)}
-      renderFeatureTooltip={adaptPointRenderer(props.renderFeatureTooltip)}
+      renderFeatureContextMenu={mapPointContextMenu(props.renderFeatureContextMenu)}
+      renderFeaturePopup={mapPointRenderer(props.renderFeaturePopup)}
+      renderFeatureTooltip={mapPointRenderer(props.renderFeatureTooltip)}
       selectedFeatureId={props.selectedFeatureId}
     />
   );
@@ -197,9 +186,7 @@ export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
   const dataset = getDataset(props.datasetId);
   void version;
 
-  if (dataset?.kind !== "geojson") {
-    return null;
-  }
+  if (dataset?.kind !== "geojson") return null;
 
   return (
     <GeoJsonLayer
@@ -215,20 +202,20 @@ export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
       lineColor={props.lineColor}
       lineOpacity={props.lineOpacity}
       lineWidth={props.lineWidth}
-      onFeatureContextMenu={adaptGeoJsonCallback(props.onFeatureContextMenu)}
-      onFeatureHover={adaptNullableGeoJsonCallback(props.onFeatureHover)}
-      onFeatureSelect={adaptNullableGeoJsonCallback(props.onFeatureSelect)}
-      onHoveredFeatureIdChange={adaptGeoJsonInteractionChange(props.onHoveredFeatureIdChange)}
-      onSelectedFeatureIdChange={adaptGeoJsonInteractionChange(props.onSelectedFeatureIdChange)}
+      onFeatureContextMenu={mapGeoJsonCallback(props.onFeatureContextMenu)}
+      onFeatureHover={mapNullableGeoJsonCallback(props.onFeatureHover)}
+      onFeatureSelect={mapNullableGeoJsonCallback(props.onFeatureSelect)}
+      onHoveredFeatureIdChange={mapGeoJsonInteractionChange(props.onHoveredFeatureIdChange)}
+      onSelectedFeatureIdChange={mapGeoJsonInteractionChange(props.onSelectedFeatureIdChange)}
       pointColor={props.pointColor}
       pointRadius={props.pointRadius}
       polygonFillColor={props.polygonFillColor}
       polygonFillOpacity={props.polygonFillOpacity}
       polygonStrokeColor={props.polygonStrokeColor}
       polygonStrokeWidth={props.polygonStrokeWidth}
-      renderFeatureContextMenu={adaptGeoJsonContextMenu(props.renderFeatureContextMenu)}
-      renderFeaturePopup={adaptGeoJsonRenderer(props.renderFeaturePopup)}
-      renderFeatureTooltip={adaptGeoJsonRenderer(props.renderFeatureTooltip)}
+      renderFeatureContextMenu={mapGeoJsonContextMenu(props.renderFeatureContextMenu)}
+      renderFeaturePopup={mapGeoJsonRenderer(props.renderFeaturePopup)}
+      renderFeatureTooltip={mapGeoJsonRenderer(props.renderFeatureTooltip)}
       selectedFeatureId={props.selectedFeatureId}
     />
   );
@@ -236,33 +223,31 @@ export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
 
 function useMapRuntime() {
   const context = useContext(MapRuntimeContext);
-
   if (!context) {
     throw new Error("Maps-native dataset components must be used within a MapEngineProvider.");
   }
-
   return context;
 }
 
-function adaptPointCallback(
+function mapPointCallback(
   callback: ((feature: IndexedMapPoint) => void) | undefined,
 ): ((feature: PointLayerFeature) => void) | undefined {
   return callback ? (feature) => callback(feature.point) : undefined;
 }
 
-function adaptNullablePointCallback(
+function mapNullablePointCallback(
   callback: ((feature: IndexedMapPoint | null) => void) | undefined,
 ): ((feature: PointLayerFeature | null) => void) | undefined {
   return callback ? (feature) => callback(feature?.point ?? null) : undefined;
 }
 
-function adaptPointRenderer(
+function mapPointRenderer(
   renderer: ((feature: IndexedMapPoint) => ReactNode) | undefined,
 ): ((feature: PointLayerFeature) => ReactNode) | undefined {
   return renderer ? (feature) => renderer(feature.point) : undefined;
 }
 
-function adaptPointContextMenu(
+function mapPointContextMenu(
   renderer:
     | ((feature: IndexedMapPoint, context: MapFeatureContextMenuContext<IndexedMapPoint>) => ReactNode)
     | undefined,
@@ -270,15 +255,11 @@ function adaptPointContextMenu(
   | ((feature: PointLayerFeature, context: MapFeatureContextMenuContext<PointLayerFeature>) => ReactNode)
   | undefined {
   return renderer
-    ? (feature, context) =>
-        renderer(feature.point, {
-          ...context,
-          feature: feature.point,
-        })
+    ? (feature, context) => renderer(feature.point, { ...context, feature: feature.point })
     : undefined;
 }
 
-function adaptPointInteractionChange(
+function mapPointInteractionChange(
   callback:
     | ((featureId: string | null, context: MapFeatureInteractionChange<IndexedMapPoint>) => void)
     | undefined,
@@ -287,29 +268,21 @@ function adaptPointInteractionChange(
   | undefined {
   return callback
     ? (featureId, context) =>
-        callback(featureId, {
-          ...context,
-          feature: context.feature?.point ?? null,
-        })
+        callback(featureId, { ...context, feature: context.feature?.point ?? null })
     : undefined;
 }
 
-function toEngineGeoJsonFeature(
-  feature: GeoJsonLayerFeature,
-): EngineGeoJsonLayerFeature {
-  return {
-    ...feature,
-    type: "Feature",
-  };
+function toEngineGeoJsonFeature(feature: GeoJsonLayerFeature): EngineGeoJsonLayerFeature {
+  return { ...feature, type: "Feature" };
 }
 
-function adaptGeoJsonCallback(
+function mapGeoJsonCallback(
   callback: ((feature: EngineGeoJsonLayerFeature) => void) | undefined,
 ): ((feature: GeoJsonLayerFeature) => void) | undefined {
   return callback ? (feature) => callback(toEngineGeoJsonFeature(feature)) : undefined;
 }
 
-function adaptNullableGeoJsonCallback(
+function mapNullableGeoJsonCallback(
   callback: ((feature: EngineGeoJsonLayerFeature | null) => void) | undefined,
 ): ((feature: GeoJsonLayerFeature | null) => void) | undefined {
   return callback
@@ -317,13 +290,13 @@ function adaptNullableGeoJsonCallback(
     : undefined;
 }
 
-function adaptGeoJsonRenderer(
+function mapGeoJsonRenderer(
   renderer: ((feature: EngineGeoJsonLayerFeature) => ReactNode) | undefined,
 ): ((feature: GeoJsonLayerFeature) => ReactNode) | undefined {
   return renderer ? (feature) => renderer(toEngineGeoJsonFeature(feature)) : undefined;
 }
 
-function adaptGeoJsonContextMenu(
+function mapGeoJsonContextMenu(
   renderer:
     | ((
         feature: EngineGeoJsonLayerFeature,
@@ -336,15 +309,12 @@ function adaptGeoJsonContextMenu(
   return renderer
     ? (feature, context) => {
         const engineFeature = toEngineGeoJsonFeature(feature);
-        return renderer(engineFeature, {
-          ...context,
-          feature: engineFeature,
-        });
+        return renderer(engineFeature, { ...context, feature: engineFeature });
       }
     : undefined;
 }
 
-function adaptGeoJsonInteractionChange(
+function mapGeoJsonInteractionChange(
   callback:
     | ((featureId: string | null, context: MapFeatureInteractionChange<EngineGeoJsonLayerFeature>) => void)
     | undefined,
