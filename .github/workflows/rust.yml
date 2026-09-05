@@ -25,12 +25,14 @@ jobs:
 
       # Temporary bootstrap for #38; remove once the expanded Cargo.lock is committed.
       - name: Bootstrap Cargo.lock
-        run: |
-          cargo generate-lockfile
-          echo "-----BEGIN CARGO LOCK BASE64-----"
-          base64 -w0 Cargo.lock
-          echo
-          echo "-----END CARGO LOCK BASE64-----"
+        run: cargo generate-lockfile
+
+      - name: Upload Cargo.lock bootstrap
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock-bootstrap
+          path: Cargo.lock
+          retention-days: 1
 
       - name: Check formatting
         run: cargo fmt --all -- --check
