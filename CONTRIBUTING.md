@@ -4,6 +4,8 @@
 
 - Bun `1.3.14`, matching `packageManager` in `package.json`.
 - Node/npm available for `npm pack`.
+- Rust `1.98.1` with `clippy`, `rustfmt`, and the `wasm32-unknown-unknown`
+  target when changing Maps-owned Rust computation.
 - Playwright Chromium installed with
   `bunx playwright install --with-deps chromium` when running browser tests
   locally.
@@ -20,6 +22,18 @@ bun run dev
 ```sh
 bun run verify:fast
 ```
+
+## Rust Validation
+
+Changes under `crates/` or the direct Maps WASM boundary must also run:
+
+```sh
+bun run verify:rust
+```
+
+The Rust workspace is Maps-owned. It may reuse lower-level geospatial crates,
+but map-domain behavior stays in this repository and new behavior must not be
+routed through `@moritzbrantner/viz-engine`.
 
 ## Agent TDD Harness
 

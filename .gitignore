@@ -14,4 +14,7 @@ storybook-static/
 packages/*/storybook-static/
 packages/*/*.tgz
 
+target/
+crates/maps-wasm/pkg/
+
 /backups/

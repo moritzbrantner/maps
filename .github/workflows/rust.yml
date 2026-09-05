@@ -1,0 +1,44 @@
+name: Rust
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-validation:
+    name: Rust Validation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt --target wasm32-unknown-unknown
+          rustup default 1.98.1
+
+      # Temporary bootstrap: remove this step once Cargo.lock is committed.
+      - name: Bootstrap Cargo.lock
+        run: |
+          cargo generate-lockfile
+          echo "-----BEGIN CARGO LOCK-----"
+          cat Cargo.lock
+          echo "-----END CARGO LOCK-----"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Check WASM target
+        run: cargo check -p maps-wasm --target wasm32-unknown-unknown --locked

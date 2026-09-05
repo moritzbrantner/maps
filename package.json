@@ -103,6 +103,7 @@
     "verify:package-size": "node ./scripts/verify-package-size.mjs",
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
     "verify:agent": "bun run check-types && bun run lint && bun run test:tdd:run",
+    "verify:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && cargo check -p maps-wasm --target wasm32-unknown-unknown --locked",
     "verify:fast": "bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
     "verify:release": "bun run verify:fast && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
   },
