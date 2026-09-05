@@ -137,17 +137,18 @@ describe("Maps aggregation Rust candidate", () => {
     expect(disposed).toBe(true);
   });
 
-  test("fails closed when no public WASM package is configured", async () => {
+  test("fails closed when an explicit WASM package override cannot load", async () => {
     const diagnostics: MapsAggregationDiagnostic[] = [];
 
     const initialized = await initializeMapsAggregationWasm({
       onDiagnostic: (event) => diagnostics.push(event),
+      wasmPackage: "@moritzbrantner/maps-missing-wasm-test",
     });
 
     expect(initialized).toBe(false);
     expect(diagnostics).toEqual([
       expect.objectContaining({
-        fallbackReason: "No public Maps WASM package configured.",
+        fallbackReason: expect.any(String),
         mode: "fallback",
       }),
     ]);
