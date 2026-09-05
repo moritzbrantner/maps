@@ -1,4 +1,4 @@
-export type { MapDatasetProps, MapEngineProviderProps } from "../map-engine";
+export type { MapDatasetProps, MapEngineProviderProps } from "../map-native-components";
 export {
   createMapDensityViewportSummary,
   createPointAggregationIndex,
