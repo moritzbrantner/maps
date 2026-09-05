@@ -303,7 +303,8 @@ impl PointAggregationIndex {
             }
         }
 
-        self.cluster_metric_cache.insert(cluster_id, metrics.clone());
+        self.cluster_metric_cache
+            .insert(cluster_id, metrics.clone());
         Ok(metrics)
     }
 
@@ -456,11 +457,7 @@ fn zero_metrics(metric_keys: &[String]) -> MapMetricRecord {
         .collect()
 }
 
-fn add_metrics(
-    target: &mut MapMetricRecord,
-    source: &MapMetricRecord,
-    metric_keys: &[String],
-) {
+fn add_metrics(target: &mut MapMetricRecord, source: &MapMetricRecord, metric_keys: &[String]) {
     for metric_key in metric_keys {
         *target.entry(metric_key.clone()).or_insert(0.0) +=
             source.get(metric_key).copied().unwrap_or(0.0);
