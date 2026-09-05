@@ -15,6 +15,7 @@ repository = "https://github.com/moritzbrantner/maps"
 [workspace.dependencies]
 geo-core = { package = "moenarch-geo-core", version = "=0.1.0" }
 geojson = "=0.24.2"
+getrandom = "=0.4.3"
 maps-core = { path = "crates/maps-core" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde-json = { package = "serde_json", version = "=1.0.151" }
