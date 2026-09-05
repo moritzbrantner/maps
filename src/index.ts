@@ -1,24 +1,26 @@
 "use client";
 
 export {
-  EngineGeoJsonLayer,
   GeoClusterLayer,
   GeoFlowLayer,
   GeoHeatLayer,
-  GeoPointLayer,
-  MapDataset,
-  MapEngineProvider,
   useMapEngine,
   useMapFrame,
-  type EngineGeoJsonLayerProps,
-  type EngineGeoJsonLayerFeature,
   type GeoClusterLayerProps,
   type GeoFlowLayerProps,
   type GeoHeatLayerProps,
+} from "./map-engine";
+export {
+  EngineGeoJsonLayer,
+  GeoPointLayer,
+  MapDataset,
+  MapEngineProvider,
+  type EngineGeoJsonLayerProps,
+  type EngineGeoJsonLayerFeature,
   type GeoPointLayerProps,
   type MapDatasetProps,
   type MapEngineProviderProps,
-} from "./map-engine";
+} from "./map-native-components";
 export {
   createMapDensityViewportSummary,
   createPointAggregationIndex,
