@@ -62,6 +62,13 @@ const allowlist = [
     text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
     rationale: "Optional WASM kernel dynamic import avoids bundling optional runtime modules.",
   },
+  {
+    path: "src/rust-runtime.ts",
+    ruleId: "function-constructor",
+    text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
+    rationale:
+      "Direct Maps-owned WASM import remains runtime-selected so the core package does not bundle a browser-only transport.",
+  },
 ];
 
 const findings = [];
