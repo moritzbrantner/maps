@@ -27,9 +27,10 @@ jobs:
       - name: Bootstrap Cargo.lock
         run: |
           cargo generate-lockfile
-          echo "-----BEGIN CARGO LOCK-----"
-          cat Cargo.lock
-          echo "-----END CARGO LOCK-----"
+          echo "-----BEGIN CARGO LOCK BASE64-----"
+          base64 -w0 Cargo.lock
+          echo
+          echo "-----END CARGO LOCK BASE64-----"
 
       - name: Check formatting
         run: cargo fmt --all -- --check
