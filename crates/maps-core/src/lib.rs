@@ -60,7 +60,9 @@ pub fn bounds_from_points(points: &[MapPoint]) -> Option<MapBounds> {
     Some(bounds)
 }
 
-pub fn normalize_points_with_bounds(points: &[MapPointInput]) -> (Vec<MapPoint>, Option<MapBounds>) {
+pub fn normalize_points_with_bounds(
+    points: &[MapPointInput],
+) -> (Vec<MapPoint>, Option<MapBounds>) {
     let normalized = normalize_points(points);
     let bounds = bounds_from_points(&normalized);
     (normalized, bounds)
