@@ -9,6 +9,7 @@ import { loadMapsAggregationWasmRuntime } from "./aggregation-wasm";
 
 export type MapsAggregationCandidatePoint = {
   id: string;
+  label: string;
   latitude: number;
   longitude: number;
   metrics: MapMetricRecord;
@@ -35,18 +36,34 @@ export type MapsAggregationCandidateFeature =
       kind: "cluster";
       metrics: MapMetricRecord;
       pointCount: number;
+      pointCountAbbreviated: string;
     };
 
 export type MapsAggregationCandidateResult = {
   features: MapsAggregationCandidateFeature[];
+  summary: {
+    bounds: ViewportAggregationQuery["bounds"];
+    metrics: MapMetricRecord;
+    visibleClusterCount: number;
+    visiblePointCount: number;
+    visibleUnclusteredCount: number;
+    zoom: number;
+  };
+};
+
+export type MapsAggregationCandidateIndex = {
+  dispose(): void;
+  getClusterExpansionZoom(clusterId: number): number;
+  getClusterLeaves(clusterId: number, limit?: number, offset?: number): MapsAggregationCandidatePoint[];
+  getPointById(pointId: string): MapsAggregationCandidatePoint | null;
+  getViewportAggregation(query: ViewportAggregationQuery): MapsAggregationCandidateResult;
 };
 
 export type MapsAggregationWasmRuntime = {
-  aggregateViewport(
+  createIndex(
     points: readonly MapsAggregationCandidatePoint[],
-    query: ViewportAggregationQuery,
     options: MapsAggregationCandidateOptions,
-  ): MapsAggregationCandidateResult;
+  ): MapsAggregationCandidateIndex;
 };
 
 export type MapsAggregationDiagnostic = {
@@ -112,25 +129,23 @@ export function getMapsAggregationWasmLoadError() {
   return wasmLoadError;
 }
 
-export function compareMapsAggregationCandidate<TProperties>(
+export function createMapsAggregationCandidateIndex<TProperties>(
   points: readonly IndexedMapPoint<TProperties>[],
   options: PointAggregationIndexOptions<TProperties>,
-  query: ViewportAggregationQuery,
-  control: ViewportAggregation<TProperties>,
-) {
+): MapsAggregationCandidateIndex | null {
   if (!wasmRuntime || wasmDisabledForSession) {
-    return;
+    return null;
   }
 
   try {
-    const candidate = wasmRuntime.aggregateViewport(
+    return wasmRuntime.createIndex(
       points.map((point) => ({
         id: point.id,
+        label: point.label,
         latitude: point.latitude,
         longitude: point.longitude,
         metrics: point.metrics,
       })),
-      query,
       {
         extent: options.extent ?? 512,
         maxZoom: options.maxZoom ?? 16,
@@ -138,32 +153,50 @@ export function compareMapsAggregationCandidate<TProperties>(
         radius: options.radius ?? 72,
       },
     );
-    const matched = aggregationSemanticsMatch(control, candidate);
+  } catch (error) {
+    disableCandidate(error);
+    return null;
+  }
+}
+
+export function compareMapsAggregationCandidate<TProperties>(
+  candidate: MapsAggregationCandidateIndex | null,
+  query: ViewportAggregationQuery,
+  control: ViewportAggregation<TProperties>,
+) {
+  if (!candidate || wasmDisabledForSession) {
+    return;
+  }
+
+  try {
+    const candidateResult = candidate.getViewportAggregation(query);
+    const matched = aggregationSemanticsMatch(control, candidateResult);
 
     configuredOptions.onDiagnostic?.({
       backend: "wasm",
-      candidateFeatureCount: candidate.features.length,
+      candidateFeatureCount: candidateResult.features.length,
       controlFeatureCount: control.features.length,
       matched,
       mode: "candidate",
     });
 
     if (!matched) {
-      wasmDisabledForSession = true;
-      configuredOptions.onDiagnostic?.({
-        backend: "wasm",
-        fallbackReason: "WASM aggregation candidate did not match the Supercluster control",
-        mode: "fallback",
-      });
+      candidate.dispose();
+      disableCandidate("WASM aggregation candidate did not match the Supercluster control");
     }
   } catch (error) {
-    wasmDisabledForSession = true;
-    configuredOptions.onDiagnostic?.({
-      backend: "wasm",
-      fallbackReason: getErrorMessage(error),
-      mode: "fallback",
-    });
+    candidate.dispose();
+    disableCandidate(error);
   }
+}
+
+function disableCandidate(error: unknown) {
+  wasmDisabledForSession = true;
+  configuredOptions.onDiagnostic?.({
+    backend: "wasm",
+    fallbackReason: getErrorMessage(error),
+    mode: "fallback",
+  });
 }
 
 function aggregationSemanticsMatch<TProperties>(
