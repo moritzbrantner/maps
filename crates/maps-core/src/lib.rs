@@ -1,3 +1,10 @@
+mod clustering;
+
+pub use clustering::{
+    aggregate_viewport, MapClusterPoint, MapClusteringOptions, MapMetricRecord,
+    MapViewportAggregation, MapViewportFeature, MapViewportQuery,
+};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
