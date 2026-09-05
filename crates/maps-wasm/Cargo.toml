@@ -1,0 +1,17 @@
+[package]
+name = "maps-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "WASM bindings for Maps-owned deterministic geographic computation."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+maps-core.workspace = true
+serde.workspace = true
+serde-wasm-bindgen.workspace = true
+wasm-bindgen.workspace = true
