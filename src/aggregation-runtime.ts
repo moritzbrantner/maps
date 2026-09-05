@@ -1,5 +1,4 @@
 import type {
-  IndexedMapPoint,
   MapMetricRecord,
   PointAggregationIndexOptions,
   ViewportAggregation,
@@ -21,6 +20,11 @@ export type MapsAggregationCandidateOptions = {
   minZoom: number;
   radius: number;
 };
+
+type MapsAggregationCandidateBuildOptions = Pick<
+  PointAggregationIndexOptions,
+  "extent" | "maxZoom" | "minZoom" | "radius"
+>;
 
 export type MapsAggregationCandidateFeature =
   | {
@@ -129,9 +133,9 @@ export function getMapsAggregationWasmLoadError() {
   return wasmLoadError;
 }
 
-export function createMapsAggregationCandidateIndex<TProperties>(
-  points: readonly IndexedMapPoint<TProperties>[],
-  options: PointAggregationIndexOptions<TProperties>,
+export function createMapsAggregationCandidateIndex(
+  points: readonly MapsAggregationCandidatePoint[],
+  options: MapsAggregationCandidateBuildOptions,
 ): MapsAggregationCandidateIndex | null {
   if (!wasmRuntime || wasmDisabledForSession) {
     return null;
