@@ -23,6 +23,14 @@ jobs:
           rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt --target wasm32-unknown-unknown
           rustup default 1.98.1
 
+      # Temporary bootstrap for #38; remove once the expanded Cargo.lock is committed.
+      - name: Bootstrap Cargo.lock
+        run: |
+          cargo generate-lockfile
+          echo "-----BEGIN CARGO LOCK-----"
+          cat Cargo.lock
+          echo "-----END CARGO LOCK-----"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -34,3 +42,36 @@ jobs:
 
       - name: Check WASM target
         run: cargo check -p maps-wasm --target wasm32-unknown-unknown --locked
+
+  aggregation-parity:
+    name: Aggregation Parity
+    needs: rust-validation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Bootstrap Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build TypeScript control
+        run: bun run build:js
+
+      - name: Run Rust candidate fixtures
+        run: cargo run -p maps-core --example aggregation_parity --locked -- fixtures/aggregation-parity.json > /tmp/rust-aggregation.json
+
+      - name: Compare control and candidate
+        run: bun scripts/verify-rust-aggregation-parity.mjs fixtures/aggregation-parity.json /tmp/rust-aggregation.json

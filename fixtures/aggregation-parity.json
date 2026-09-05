@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "name": "berlin-cluster",
+      "points": [
+        { "id": "berlin-0", "latitude": 52.5200, "longitude": 13.4050, "metrics": { "orders": 1, "revenue": 10 } },
+        { "id": "berlin-1", "latitude": 52.5202, "longitude": 13.4052, "metrics": { "orders": 2, "revenue": 20 } },
+        { "latitude": 52.5204, "longitude": 13.4054, "metrics": { "orders": 3, "revenue": 30 } },
+        { "id": "berlin-3", "latitude": 52.5206, "longitude": 13.4056, "metrics": { "orders": 4, "revenue": 40 } },
+        { "id": "berlin-4", "latitude": 52.5208, "longitude": 13.4058, "metrics": { "orders": 5, "revenue": 50 } },
+        { "id": "berlin-5", "latitude": 52.5210, "longitude": 13.4060, "metrics": { "orders": 6, "revenue": 60 } },
+        { "id": "paris", "latitude": 48.8566, "longitude": 2.3522, "metrics": { "orders": 7, "revenue": 70 } }
+      ],
+      "options": { "extent": 512, "maxZoom": 16, "minZoom": 0, "radius": 72 },
+      "query": { "bounds": [-180, -85, 180, 85], "zoom": 4 },
+      "leafLimit": 20
+    },
+    {
+      "name": "antimeridian",
+      "points": [
+        { "id": "east", "latitude": 0, "longitude": 179.8, "metrics": { "count": 1 } },
+        { "id": "west", "latitude": 0, "longitude": -179.8, "metrics": { "count": 1 } }
+      ],
+      "options": { "extent": 512, "maxZoom": 16, "minZoom": 0, "radius": 72 },
+      "query": { "bounds": [170, -10, -170, 10], "zoom": 12 },
+      "leafLimit": 20
+    }
+  ]
+}

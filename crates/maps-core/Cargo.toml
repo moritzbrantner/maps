@@ -10,3 +10,7 @@ publish = false
 
 [dependencies]
 geo-core.workspace = true
+geojson.workspace = true
+serde.workspace = true
+serde-json.workspace = true
+supercluster.workspace = true
