@@ -86,7 +86,7 @@ window.mapsWasmReady = init().then(() => {
 `,
   );
 
-  run("bun", ["install", "--frozen-lockfile=false"], tempRoot);
+  run("bun", ["install"], tempRoot);
   run("bun", ["run", "build"], tempRoot);
 
   preview = spawn("bun", ["run", "preview"], {
