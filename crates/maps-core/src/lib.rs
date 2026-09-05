@@ -1,8 +1,8 @@
 mod clustering;
 
 pub use clustering::{
-    aggregate_viewport, MapClusterPoint, MapClusteringOptions, MapMetricRecord,
-    MapViewportAggregation, MapViewportFeature, MapViewportQuery,
+    MapClusterPoint, MapClusteringOptions, MapMetricRecord, MapViewportAggregation,
+    MapViewportFeature, MapViewportQuery, aggregate_viewport,
 };
 
 use serde::{Deserialize, Serialize};
