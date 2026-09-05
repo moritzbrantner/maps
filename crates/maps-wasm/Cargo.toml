@@ -12,6 +12,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+getrandom.workspace = true
 maps-core.workspace = true
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
