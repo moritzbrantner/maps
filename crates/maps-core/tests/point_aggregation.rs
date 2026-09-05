@@ -125,7 +125,10 @@ fn preserves_metric_totals_for_large_inputs() {
         .expect("viewport should aggregate");
 
     assert_eq!(aggregation.summary.visible_point_count, 20_000);
-    assert_eq!(aggregation.summary.metrics.get("weight"), Some(&1_010_000.0));
+    assert_eq!(
+        aggregation.summary.metrics.get("weight"),
+        Some(&1_010_000.0)
+    );
 }
 
 #[test]
