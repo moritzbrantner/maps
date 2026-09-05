@@ -4,6 +4,9 @@
 
 - Bun `1.3.14`, matching `packageManager` in `package.json`.
 - Node/npm available for `npm pack`.
+- Rust `1.98.1` with `clippy`, `rustfmt`, and the `wasm32-unknown-unknown`
+  target when changing Maps-owned Rust computation. `rust-toolchain.toml` pins
+  this repository toolchain.
 - Playwright Chromium installed with
   `bunx playwright install --with-deps chromium` when running browser tests
   locally.
@@ -20,6 +23,22 @@ bun run dev
 ```sh
 bun run verify:fast
 ```
+
+## Rust Validation
+
+Changes under `crates/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, or
+the direct Maps WASM boundary must also run:
+
+```sh
+bun run verify:rust
+```
+
+The committed `Cargo.lock` is part of the deterministic repository contract.
+Rust validation uses `--locked` and must fail rather than silently changing the
+dependency graph. Maps may reuse lower-level geo/Moenarch crates when they
+remove duplicate primitive correctness logic, but map-domain behavior remains
+owned by this repository and must not be routed through `viz-engine` or a new
+generic visualization layer.
 
 ## Agent TDD Harness
 

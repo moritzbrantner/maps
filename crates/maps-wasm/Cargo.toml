@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 description = "WASM bindings for Maps-owned deterministic geographic computation."
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

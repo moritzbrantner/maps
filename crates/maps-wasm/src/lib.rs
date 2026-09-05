@@ -1,6 +1,6 @@
 use maps_core::{
-    aggregate_viewport as aggregate_viewport_core, normalize_points_with_bounds, MapBounds,
-    MapClusterPoint, MapClusteringOptions, MapPoint, MapPointInput, MapViewportQuery,
+    MapBounds, MapClusterPoint, MapClusteringOptions, MapPoint, MapPointInput, MapViewportQuery,
+    aggregate_viewport as aggregate_viewport_core, normalize_points_with_bounds,
 };
 use serde::Serialize;
 use wasm_bindgen::prelude::*;

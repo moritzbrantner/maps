@@ -332,10 +332,12 @@ mod tests {
             MapClusteringOptions::default(),
         );
 
-        assert!(result
-            .features
-            .iter()
-            .all(|feature| matches!(feature, MapViewportFeature::Point { .. })));
+        assert!(
+            result
+                .features
+                .iter()
+                .all(|feature| matches!(feature, MapViewportFeature::Point { .. }))
+        );
     }
 
     #[test]
