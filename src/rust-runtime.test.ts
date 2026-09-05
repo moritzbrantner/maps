@@ -36,7 +36,7 @@ class FakePointAggregationIndex {
       : null;
   }
 
-  getViewportAggregation() {
+  getViewportAggregation(): unknown {
     return {
       features: [
         {
