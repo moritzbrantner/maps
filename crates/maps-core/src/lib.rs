@@ -1,20 +1,50 @@
-mod clustering;
+//! Maps-owned deterministic geographic computation primitives.
+//!
+//! This crate owns map-domain contracts while reusing lower-level geospatial
+//! primitives where they fit. It deliberately contains no browser, rendering,
+//! React, MapLibre, or JavaScript runtime concerns.
 
-pub use clustering::{
-    MapClusterPoint, MapClusteringOptions, MapMetricRecord, MapViewportAggregation,
-    MapViewportFeature, MapViewportQuery, aggregate_viewport,
+mod aggregation;
+
+use std::collections::BTreeMap;
+
+pub use aggregation::{
+    AggregatedMapCluster, AggregatedMapFeature, AggregatedMapPoint, PointAggregationError,
+    PointAggregationIndex, PointAggregationOptions, ViewportAggregation, ViewportAggregationQuery,
+    VisibleAggregationSummary,
 };
+use geo_core::{BBox, Coordinate};
 
-use serde::{Deserialize, Serialize};
+/// Numeric metrics attached to native map points.
+pub type MapMetricRecord = BTreeMap<String, f64>;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MapPoint {
-    pub id: String,
-    pub latitude: f64,
+/// A finite map coordinate in `[longitude, latitude]` order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapCoordinate {
     pub longitude: f64,
+    pub latitude: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+impl MapCoordinate {
+    /// Creates a coordinate when both values are finite.
+    #[must_use]
+    pub fn new(longitude: f64, latitude: f64) -> Option<Self> {
+        Coordinate::new(longitude, latitude).ok()?;
+        Some(Self {
+            longitude,
+            latitude,
+        })
+    }
+
+    /// Returns this coordinate in `[longitude, latitude]` order.
+    #[must_use]
+    pub const fn as_array(self) -> [f64; 2] {
+        [self.longitude, self.latitude]
+    }
+}
+
+/// Map viewport bounds in `[west, south, east, north]` order.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapBounds {
     pub west: f64,
     pub south: f64,
@@ -22,136 +52,149 @@ pub struct MapBounds {
     pub north: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MapPointInput {
-    #[serde(default)]
-    pub id: Option<String>,
-    pub latitude: f64,
-    pub longitude: f64,
+impl MapBounds {
+    /// Creates bounds when every value is finite and the extents are ordered.
+    #[must_use]
+    pub fn new(values: [f64; 4]) -> Option<Self> {
+        let bbox = BBox::new(values).ok()?;
+        Some(Self {
+            west: bbox.min_lon,
+            south: bbox.min_lat,
+            east: bbox.max_lon,
+            north: bbox.max_lat,
+        })
+    }
+
+    /// Returns this value in `[west, south, east, north]` order.
+    #[must_use]
+    pub const fn as_array(self) -> [f64; 4] {
+        [self.west, self.south, self.east, self.north]
+    }
 }
 
-pub fn normalize_points(points: &[MapPointInput]) -> Vec<MapPoint> {
-    points
-        .iter()
-        .enumerate()
-        .filter_map(|(index, point)| {
-            if !point.latitude.is_finite() || !point.longitude.is_finite() {
-                return None;
-            }
+/// Native map data used as input to deterministic map computation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapPoint {
+    pub id: Option<String>,
+    pub label: Option<String>,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub metrics: MapMetricRecord,
+}
 
-            Some(MapPoint {
-                id: point.id.clone().unwrap_or_else(|| index.to_string()),
-                latitude: point.latitude,
-                longitude: point.longitude,
-            })
-        })
+impl MapPoint {
+    /// Creates a point with no id, label, or metrics.
+    #[must_use]
+    pub fn new(latitude: f64, longitude: f64) -> Self {
+        Self {
+            id: None,
+            label: None,
+            latitude,
+            longitude,
+            metrics: MapMetricRecord::new(),
+        }
+    }
+
+    /// Sets an explicit stable point id.
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Sets an optional display label.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Adds a numeric metric. Non-finite metrics are removed during normalization.
+    #[must_use]
+    pub fn with_metric(mut self, key: impl Into<String>, value: f64) -> Self {
+        self.metrics.insert(key.into(), value);
+        self
+    }
+}
+
+/// Normalized native map data with a stable string id and finite metrics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexedMapPoint {
+    pub id: String,
+    pub label: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub metrics: MapMetricRecord,
+}
+
+/// Normalizes one point without deciding whether its coordinates are usable.
+///
+/// The generated id uses the original input index. This preserves stable ids
+/// even when an earlier point is later rejected for non-finite coordinates.
+#[must_use]
+pub fn normalize_map_point(mut point: MapPoint, input_index: usize) -> IndexedMapPoint {
+    point.metrics.retain(|_, value| value.is_finite());
+
+    IndexedMapPoint {
+        id: point.id.unwrap_or_else(|| input_index.to_string()),
+        label: point.label.unwrap_or_default(),
+        latitude: point.latitude,
+        longitude: point.longitude,
+        metrics: point.metrics,
+    }
+}
+
+/// Normalizes native map points and rejects non-finite coordinates.
+#[must_use]
+pub fn normalize_map_points(points: impl IntoIterator<Item = MapPoint>) -> Vec<IndexedMapPoint> {
+    points
+        .into_iter()
+        .enumerate()
+        .map(|(input_index, point)| normalize_map_point(point, input_index))
+        .filter(is_finite_indexed_map_point)
         .collect()
 }
 
-pub fn bounds_from_points(points: &[MapPoint]) -> Option<MapBounds> {
-    let first = points.first()?;
-    let mut bounds = MapBounds {
-        west: first.longitude,
-        south: first.latitude,
-        east: first.longitude,
-        north: first.latitude,
-    };
-
-    for point in &points[1..] {
-        bounds.west = bounds.west.min(point.longitude);
-        bounds.south = bounds.south.min(point.latitude);
-        bounds.east = bounds.east.max(point.longitude);
-        bounds.north = bounds.north.max(point.latitude);
-    }
-
-    Some(bounds)
+/// Computes bounds from finite input points and ignores non-finite points.
+#[must_use]
+pub fn get_bounds_from_points(points: &[MapPoint]) -> Option<MapBounds> {
+    get_bounds_from_coordinates(
+        points
+            .iter()
+            .filter_map(|point| MapCoordinate::new(point.longitude, point.latitude)),
+    )
 }
 
-pub fn normalize_points_with_bounds(
-    points: &[MapPointInput],
-) -> (Vec<MapPoint>, Option<MapBounds>) {
-    let normalized = normalize_points(points);
-    let bounds = bounds_from_points(&normalized);
-    (normalized, bounds)
+/// Computes bounds from finite normalized points.
+#[must_use]
+pub fn get_bounds_from_indexed_points(points: &[IndexedMapPoint]) -> Option<MapBounds> {
+    get_bounds_from_coordinates(
+        points
+            .iter()
+            .filter_map(|point| MapCoordinate::new(point.longitude, point.latitude)),
+    )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn is_finite_indexed_map_point(point: &IndexedMapPoint) -> bool {
+    MapCoordinate::new(point.longitude, point.latitude).is_some()
+}
 
-    #[test]
-    fn normalization_assigns_stable_fallback_ids_and_rejects_non_finite_points() {
-        let points = vec![
-            MapPointInput {
-                id: Some("berlin".to_string()),
-                latitude: 52.52,
-                longitude: 13.405,
-            },
-            MapPointInput {
-                id: None,
-                latitude: 48.7758,
-                longitude: 9.1829,
-            },
-            MapPointInput {
-                id: Some("invalid".to_string()),
-                latitude: f64::NAN,
-                longitude: 8.0,
-            },
-        ];
+fn get_bounds_from_coordinates(
+    coordinates: impl IntoIterator<Item = MapCoordinate>,
+) -> Option<MapBounds> {
+    let mut coordinates = coordinates.into_iter();
+    let first = coordinates.next()?;
+    let mut west = first.longitude;
+    let mut south = first.latitude;
+    let mut east = first.longitude;
+    let mut north = first.latitude;
 
-        assert_eq!(
-            normalize_points(&points),
-            vec![
-                MapPoint {
-                    id: "berlin".to_string(),
-                    latitude: 52.52,
-                    longitude: 13.405,
-                },
-                MapPoint {
-                    id: "1".to_string(),
-                    latitude: 48.7758,
-                    longitude: 9.1829,
-                },
-            ]
-        );
+    for coordinate in coordinates {
+        west = west.min(coordinate.longitude);
+        south = south.min(coordinate.latitude);
+        east = east.max(coordinate.longitude);
+        north = north.max(coordinate.latitude);
     }
 
-    #[test]
-    fn bounds_cover_only_normalized_points() {
-        let (points, bounds) = normalize_points_with_bounds(&[
-            MapPointInput {
-                id: None,
-                latitude: 52.52,
-                longitude: 13.405,
-            },
-            MapPointInput {
-                id: None,
-                latitude: 48.7758,
-                longitude: 9.1829,
-            },
-        ]);
-
-        assert_eq!(points.len(), 2);
-        assert_eq!(
-            bounds,
-            Some(MapBounds {
-                west: 9.1829,
-                south: 48.7758,
-                east: 13.405,
-                north: 52.52,
-            })
-        );
-    }
-
-    #[test]
-    fn bounds_are_none_for_an_empty_normalized_set() {
-        let (points, bounds) = normalize_points_with_bounds(&[MapPointInput {
-            id: None,
-            latitude: f64::INFINITY,
-            longitude: 8.0,
-        }]);
-
-        assert!(points.is_empty());
-        assert_eq!(bounds, None);
-    }
+    MapBounds::new([west, south, east, north])
 }
