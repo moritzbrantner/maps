@@ -1,5 +1,7 @@
 import Supercluster from "supercluster";
 
+import { compareMapsAggregationCandidate } from "./aggregation-runtime";
+
 export type MapMetricRecord = Record<string, number>;
 
 export type MapPoint<TProperties = Record<string, unknown>> = {
@@ -158,11 +160,13 @@ export function createPointAggregationIndex<TProperties = Record<string, unknown
       const features = rawFeatures
         .map((feature) => toAggregatedMapFeature(feature, pointLookup, metricKeys, tree))
         .filter(isDefined);
-
-      return {
+      const aggregation = {
         features,
         summary: summarizeMapFeatures(query, features, metricKeys),
       };
+
+      compareMapsAggregationCandidate(normalizedPoints, options, query, aggregation);
+      return aggregation;
     },
   };
 }
