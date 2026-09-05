@@ -218,7 +218,7 @@ impl PointAggregationIndex {
             if !seen.insert(key) {
                 continue;
             }
-            if let Some(feature) = self.to_aggregated_feature(&feature)? {
+            if let Some(feature) = self.resolve_aggregated_feature(&feature)? {
                 features.push(feature);
             }
         }
@@ -228,7 +228,7 @@ impl PointAggregationIndex {
         Ok(ViewportAggregation { features, summary })
     }
 
-    fn to_aggregated_feature(
+    fn resolve_aggregated_feature(
         &mut self,
         feature: &Feature,
     ) -> Result<Option<AggregatedMapFeature>, PointAggregationError> {
