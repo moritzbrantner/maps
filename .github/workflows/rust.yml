@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   rust-validation:
@@ -23,16 +23,22 @@ jobs:
           rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt --target wasm32-unknown-unknown
           rustup default 1.98.1
 
-      # Temporary bootstrap for #38; remove once the expanded Cargo.lock is committed.
+      # One hosted bootstrap for #38; this step and write permission are removed after the lock commit.
       - name: Bootstrap Cargo.lock
         run: cargo generate-lockfile
 
-      - name: Upload Cargo.lock bootstrap
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-lock-bootstrap
-          path: Cargo.lock
-          retention-days: 1
+      - name: Commit Cargo.lock bootstrap
+        if: github.event_name == 'pull_request' && github.head_ref == 'feat/maps-rust-clustering-38'
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Commit clustering Cargo.lock bootstrap"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
 
       - name: Check formatting
         run: cargo fmt --all -- --check
