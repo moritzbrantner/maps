@@ -1,6 +1,9 @@
 import Supercluster from "supercluster";
 
-import { compareMapsAggregationCandidate } from "./aggregation-runtime";
+import {
+  compareMapsAggregationCandidate,
+  createMapsAggregationCandidateIndex,
+} from "./aggregation-runtime";
 
 export type MapMetricRecord = Record<string, number>;
 
@@ -82,8 +85,13 @@ export type PointAggregationIndexOptions<TProperties = Record<string, unknown>> 
 };
 
 export type PointAggregationIndex<TProperties = Record<string, unknown>> = {
+  dispose(): void;
   getClusterExpansionZoom(clusterId: number): number;
-  getClusterLeaves(clusterId: number, limit?: number, offset?: number): Array<IndexedMapPoint<TProperties>>;
+  getClusterLeaves(
+    clusterId: number,
+    limit?: number,
+    offset?: number,
+  ): Array<IndexedMapPoint<TProperties>>;
   getPointById(pointId: string): IndexedMapPoint<TProperties> | null;
   getViewportAggregation(query: ViewportAggregationQuery): ViewportAggregation<TProperties>;
 };
@@ -142,7 +150,12 @@ export function createPointAggregationIndex<TProperties = Record<string, unknown
     })),
   );
 
+  const candidateIndex = createMapsAggregationCandidateIndex(normalizedPoints, options);
+
   return {
+    dispose() {
+      candidateIndex?.dispose();
+    },
     getClusterExpansionZoom(clusterId) {
       return tree.getClusterExpansionZoom(clusterId);
     },
@@ -165,7 +178,7 @@ export function createPointAggregationIndex<TProperties = Record<string, unknown
         summary: summarizeMapFeatures(query, features, metricKeys),
       };
 
-      compareMapsAggregationCandidate(normalizedPoints, options, query, aggregation);
+      compareMapsAggregationCandidate(candidateIndex, query, aggregation);
       return aggregation;
     },
   };
