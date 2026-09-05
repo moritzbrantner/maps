@@ -4,8 +4,15 @@
 //! primitives where they fit. It deliberately contains no browser, rendering,
 //! React, MapLibre, or JavaScript runtime concerns.
 
+mod aggregation;
+
 use std::collections::BTreeMap;
 
+pub use aggregation::{
+    AggregatedMapCluster, AggregatedMapFeature, AggregatedMapPoint, PointAggregationError,
+    PointAggregationIndex, PointAggregationOptions, ViewportAggregation, ViewportAggregationQuery,
+    VisibleAggregationSummary,
+};
 use geo_core::{BBox, Coordinate};
 
 /// Numeric metrics attached to native map points.
