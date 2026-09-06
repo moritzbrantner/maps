@@ -1,0 +1,152 @@
+name: Add Canvas2D renderer showcase
+
+on:
+  push:
+    branches:
+      - feat/maps-canvas-point-cluster-renderer
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: feat/maps-canvas-point-cluster-renderer
+      - name: Add renderer switch to showcase
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('demo/App.tsx')
+          text = p.read_text()
+          import_anchor = 'import { HistoryDemoView } from "./components/HistoryDemoView";\n'
+          if import_anchor not in text:
+              raise SystemExit('demo import anchor missing')
+          text = text.replace(
+              import_anchor,
+              'import { CanvasClusteredMap } from "../src/canvas-clustered-map";\n' + import_anchor,
+              1,
+          )
+          state_anchor = '  const [view, setView] = useState<DemoView>("clusters");\n'
+          if state_anchor not in text:
+              raise SystemExit('view state anchor missing')
+          text = text.replace(
+              state_anchor,
+              state_anchor + '  const [pointClusterRenderer, setPointClusterRenderer] = useState<"maplibre" | "canvas2d">("maplibre");\n',
+              1,
+          )
+          control_anchor = '''          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+            <span>Region</span>
+            <NativeSelect
+              value={selectedRegion}
+              onChange={(event) => setSelectedRegion(event.target.value)}
+            >
+              <option value="all">All regions</option>
+              {dataset.regions.map((region) => (
+                <option key={region} value={region}>
+                  {region}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
+'''
+          renderer_control = control_anchor + '''          {view === "clusters" ? (
+            <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+              <span>Data renderer</span>
+              <NativeSelect
+                aria-label="Point cluster renderer"
+                value={pointClusterRenderer}
+                onChange={(event) =>
+                  setPointClusterRenderer(event.target.value as "maplibre" | "canvas2d")
+                }
+              >
+                <option value="maplibre">MapLibre</option>
+                <option value="canvas2d">Canvas2D</option>
+              </NativeSelect>
+            </label>
+          ) : null}
+'''
+          if text.count(control_anchor) != 1:
+              raise SystemExit(f'expected one region control, found {text.count(control_anchor)}')
+          text = text.replace(control_anchor, renderer_control, 1)
+          call_anchor = '''            temporalTime,
+            setTemporalTime,
+            e2eRegistration,
+'''
+          if call_anchor not in text:
+              raise SystemExit('renderMap call anchor missing')
+          text = text.replace(
+              call_anchor,
+              '''            temporalTime,
+            setTemporalTime,
+            pointClusterRenderer,
+            e2eRegistration,
+''',
+              1,
+          )
+          signature_anchor = '''  temporalTime: number,
+  setTemporalTime: Dispatch<SetStateAction<number>>,
+  e2eRegistration: DemoE2ERegistration,
+'''
+          if signature_anchor not in text:
+              raise SystemExit('renderMap signature anchor missing')
+          text = text.replace(
+              signature_anchor,
+              '''  temporalTime: number,
+  setTemporalTime: Dispatch<SetStateAction<number>>,
+  pointClusterRenderer: "maplibre" | "canvas2d",
+  e2eRegistration: DemoE2ERegistration,
+''',
+              1,
+          )
+          cluster_anchor = '''    case "clusters":
+    default:
+      return (
+        <ClusteredMap
+'''
+          if cluster_anchor not in text:
+              raise SystemExit('clusters render anchor missing')
+          text = text.replace(
+              cluster_anchor,
+              '''    case "clusters":
+    default: {
+      const ClusterMap = pointClusterRenderer === "canvas2d" ? CanvasClusteredMap : ClusteredMap;
+      return (
+        <ClusterMap
+''',
+              1,
+          )
+          end_anchor = '''          style={{ minHeight: 620 }}
+        />
+      );
+  }
+}
+'''
+          if end_anchor not in text:
+              raise SystemExit('clusters case end anchor missing')
+          text = text.replace(
+              end_anchor,
+              '''          style={{ minHeight: 620 }}
+        />
+      );
+    }
+  }
+}
+''',
+              1,
+          )
+          p.write_text(text)
+          Path('.github/workflows/add-canvas-showcase-once.yml').unlink()
+          PY
+      - name: Commit showcase integration
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add demo/App.tsx .github/workflows/add-canvas-showcase-once.yml
+          git commit -m "feat: expose Canvas2D renderer in maps showcase"
+          git push origin HEAD:feat/maps-canvas-point-cluster-renderer
