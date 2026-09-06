@@ -53,5 +53,7 @@ async function initializeHostedRustRuntime() {
     return;
   }
 
-  markRustRuntimeUnavailable("Rust/WASM could not initialize; the deterministic control path remains active.");
+  markRustRuntimeUnavailable(
+    "Rust/WASM could not initialize; the deterministic control path remains active.",
+  );
 }
