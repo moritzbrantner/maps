@@ -2,8 +2,8 @@
 
 /**
  * Compatibility entrypoint retained for consumers importing map-engine directly.
- * The implementation now lives in the Maps-owned runtime and no longer depends
- * on a generic visualization engine.
+ * The implementation now lives in the Maps-owned runtime; this module preserves
+ * import stability without retaining a second visualization authority.
  */
 export {
   EngineGeoJsonLayer,
