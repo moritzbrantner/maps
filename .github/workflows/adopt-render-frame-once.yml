@@ -1,0 +1,125 @@
+name: Adopt point cluster render frame
+
+on:
+  push:
+    branches:
+      - feat/maps-point-cluster-render-frame
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: feat/maps-point-cluster-render-frame
+      - name: Route MapLibre adapter through Maps frame
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('src/cluster-layer.tsx')
+          text = p.read_text()
+          text = text.replace(
+            'import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";\n',
+            'import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";\nimport {\n  createPointClusterRenderFrame,\n  type MapPointClusterRenderFeature,\n} from "./point-cluster-render-frame";\n',
+            1,
+          )
+          text = text.replace(
+            '''      emitViewportSummary(aggregation.summary, lastViewportSummaryKeyRef, onViewportAggregationChange);
+
+      reconcileFlatLayerEntries<FlatClusterCacheEntry>({
+        cache: flatFeatureCacheRef.current,
+        layer,
+        plans: aggregation.features.map((feature) => {
+          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);''',
+            '''      const renderFrame = createPointClusterRenderFrame(aggregation, getFeatureId);
+      emitViewportSummary(renderFrame.summary, lastViewportSummaryKeyRef, onViewportAggregationChange);
+
+      reconcileFlatLayerEntries<FlatClusterCacheEntry>({
+        cache: flatFeatureCacheRef.current,
+        layer,
+        plans: renderFrame.features.map((renderFeature) => {
+          const feature = renderFeature.feature;
+          const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);''',
+            1,
+          )
+          text = text.replace('          const featureKey = getFlatClusterFeatureKey(feature, getFeatureId);', '          const featureKey = renderFeature.id;', 1)
+          text = text.replace('          const coordinatesKey = createFlatClusterCoordinatesKey(feature.coordinates);', '          const coordinatesKey = createFlatClusterCoordinatesKey(renderFeature.coordinates);', 1)
+          text = text.replace('            feature,\n            hovered,', '            renderFeature,\n            hovered,', 1)
+          text = text.replace('                  fillColor: getClusterColor(feature.pointCount),', '                  fillColor: renderFeature.fillColor,', 1)
+          text = text.replace('                  radius: getClusterRadius(feature.pointCount),', '                  radius: renderFeature.radius,', 1)
+          text = text.replace('                    map.setView(toLatLng(feature.coordinates), feature.expansionZoom);', '                    map.setView(toLatLng(renderFeature.coordinates), renderFeature.expansionZoom);', 1)
+          text = text.replace('                        center: feature.coordinates,\n                        zoom: feature.expansionZoom,', '                        center: renderFeature.coordinates,\n                        zoom: renderFeature.expansionZoom,', 1)
+          text = text.replace('                      html: escapeHtml(feature.pointCountAbbreviated),', '                      html: escapeHtml(renderFeature.label),', 1)
+          text = text.replace('                fillColor: "#0f172a",', '                fillColor: renderFeature.fillColor,', 1)
+          text = text.replace('                radius: 6,', '                radius: renderFeature.radius,', 1)
+          start = text.find('\nfunction getClusterColor(pointCount: number) {')
+          end = text.find('\nfunction serializeVisibleAggregationSummary', start)
+          if start < 0 or end < 0:
+              raise SystemExit('cluster style helper block not found')
+          text = text[:start] + '\n' + text[end:]
+          start = text.find('\nfunction getFlatClusterFeatureKey<TProperties>(')
+          end = text.find('\nfunction createFlatClusterCoordinatesKey', start)
+          if start < 0 or end < 0:
+              raise SystemExit('feature key helper block not found')
+          text = text[:start] + '\n' + text[end:]
+          old_sig = '''function createFlatClusterSignature<TProperties>({
+  feature,
+  hovered,
+  isMeasuring,
+  selected,
+}: {
+  feature: AggregatedMapFeature<TProperties>;
+  hovered: boolean;
+  isMeasuring: boolean;
+  selected: boolean;
+}) {
+  return JSON.stringify({
+    fillColor: feature.kind === "cluster" ? getClusterColor(feature.pointCount) : "#0f172a",
+    hovered,
+    interactive: !isMeasuring,
+    kind: feature.kind,
+    label: feature.kind === "cluster" ? feature.pointCountAbbreviated : feature.point.id,
+    radius: feature.kind === "cluster" ? getClusterRadius(feature.pointCount) : 6,
+    selected,
+  });
+}'''
+          new_sig = '''function createFlatClusterSignature<TProperties>({
+  renderFeature,
+  hovered,
+  isMeasuring,
+  selected,
+}: {
+  renderFeature: MapPointClusterRenderFeature<TProperties>;
+  hovered: boolean;
+  isMeasuring: boolean;
+  selected: boolean;
+}) {
+  return JSON.stringify({
+    fillColor: renderFeature.fillColor,
+    hovered,
+    interactive: !isMeasuring,
+    kind: renderFeature.kind,
+    label: renderFeature.label ?? renderFeature.id,
+    radius: renderFeature.radius,
+    selected,
+  });
+}'''
+          if old_sig not in text:
+              raise SystemExit('cluster signature helper did not match')
+          text = text.replace(old_sig, new_sig, 1)
+          p.write_text(text)
+          Path('.github/workflows/adopt-render-frame-once.yml').unlink()
+          PY
+      - name: Commit migration
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/cluster-layer.tsx .github/workflows/adopt-render-frame-once.yml
+          git commit -m "refactor: drive MapLibre clusters from Maps render frame"
+          git push origin HEAD:feat/maps-point-cluster-render-frame
