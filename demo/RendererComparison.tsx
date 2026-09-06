@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 
+import { NativeSelect } from "@moritzbrantner/ui";
 import {
   ClusteredMap,
-  NativeSelect,
   type AggregatedMapFeature,
   type MapPoint,
   type MapViewState,
@@ -24,7 +24,19 @@ export function RendererComparison() {
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(initialViewState);
   const points = useMemo(() => createComparisonPoints(), []);
-  const MapComponent = backend === "canvas2d" ? CanvasClusteredMap : ClusteredMap;
+  const mapProps = {
+    fitToData: false,
+    getFeatureId: getComparisonFeatureId,
+    mapLabel: "Renderer parity map",
+    mapStyle: demoMapStyle,
+    onFeatureSelect: (feature: AggregatedMapFeature<ComparisonPointProperties> | null) =>
+      setSelectedFeatureId(feature ? getComparisonFeatureId(feature) : null),
+    onViewStateChange: setViewState,
+    points,
+    selectedFeatureId,
+    style: { minHeight: 430 },
+    viewState,
+  };
 
   return (
     <section
@@ -60,23 +72,19 @@ export function RendererComparison() {
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-border bg-muted">
-        <MapComponent
-          fitToData={false}
-          getFeatureId={getComparisonFeatureId}
-          mapLabel="Renderer parity map"
-          mapStyle={demoMapStyle}
-          onFeatureSelect={(feature) => setSelectedFeatureId(feature ? getComparisonFeatureId(feature) : null)}
-          onViewStateChange={setViewState}
-          points={points}
-          selectedFeatureId={selectedFeatureId}
-          style={{ minHeight: 430 }}
-          viewState={viewState}
-        />
+        {backend === "canvas2d" ? (
+          <CanvasClusteredMap {...mapProps} />
+        ) : (
+          <ClusteredMap {...mapProps} />
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
         <span>
-          Backend: <strong className="text-foreground">{backend === "canvas2d" ? "Canvas2D" : "MapLibre"}</strong>
+          Backend:{" "}
+          <strong className="text-foreground">
+            {backend === "canvas2d" ? "Canvas2D" : "MapLibre"}
+          </strong>
         </span>
         <span>
           Visible source points: <strong className="text-foreground">{points.length}</strong>
@@ -110,16 +118,14 @@ function createComparisonPoints(): Array<MapPoint<ComparisonPointProperties>> {
     for (let index = 0; index < 44; index += 1) {
       const angle = index * 2.399963229728653;
       const distance = 0.05 + (index % 11) * 0.035;
+      const demand = 20 + ((index * 17 + hubIndex * 13) % 180);
       points.push({
         id: `${label.toLowerCase()}-${index}`,
         label: `${label} ${index + 1}`,
         latitude: latitude + Math.sin(angle) * distance,
         longitude: longitude + Math.cos(angle) * distance * 1.35,
-        metrics: { demand: 20 + ((index * 17 + hubIndex * 13) % 180) },
-        properties: {
-          demand: 20 + ((index * 17 + hubIndex * 13) % 180),
-          region,
-        },
+        metrics: { demand },
+        properties: { demand, region },
       });
     }
   }
