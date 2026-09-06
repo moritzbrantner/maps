@@ -380,7 +380,9 @@ fn to_geojson_feature(point: &IndexedMapPoint) -> Feature {
 
     Feature {
         bbox: None,
-        geometry: Some(Geometry::new(GeoJsonValue::Point(vec![longitude, latitude]))),
+        geometry: Some(Geometry::new(GeoJsonValue::Point(vec![
+            longitude, latitude,
+        ]))),
         id: Some(Id::String(point.id.clone())),
         properties: Some(properties),
         foreign_members: None,
