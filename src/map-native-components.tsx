@@ -426,7 +426,7 @@ function useCompatibilityLayer(
     const compatibilityLayerId = compatibilityLayerIdRef.current;
     if (!compatibilityEngine || !compatibilityLayerId || !surface) return;
 
-    compatibilityEngine.computeFrame({
+    callCompatibilityEngine(compatibilityEngine, "computeFrame", {
       layerIds: [compatibilityLayerId],
       viewport: {
         bounds: [-180, -90, 180, 90],
