@@ -268,7 +268,7 @@ impl PointAggregationIndex {
         };
 
         Ok(Some(AggregatedMapFeature::Point(AggregatedMapPoint {
-            coordinates,
+            coordinates: [point.longitude, point.latitude],
             metrics: point.metrics.clone(),
             point,
         })))
@@ -376,17 +376,39 @@ fn collect_metric_keys(points: &[IndexedMapPoint]) -> Vec<String> {
 fn to_geojson_feature(point: &IndexedMapPoint) -> Feature {
     let mut properties = JsonObject::new();
     properties.insert("pointId".to_owned(), json!(point.id));
+    let [longitude, latitude] = javascript_supercluster_coordinate(point.longitude, point.latitude);
 
     Feature {
         bbox: None,
         geometry: Some(Geometry::new(GeoJsonValue::Point(vec![
-            point.longitude,
-            point.latitude,
+            longitude,
+            latitude,
         ]))),
         id: Some(Id::String(point.id.clone())),
         properties: Some(properties),
         foreign_members: None,
     }
+}
+
+/// Reproduces Supercluster v8's Float32 storage precision for projected input points.
+///
+/// The JavaScript implementation rounds initial Web Mercator x/y values through
+/// `Math.fround` before clustering. The Rust dependency stores f64 values, so we
+/// inverse-project the rounded values before loading them. This keeps the internal
+/// hierarchy numerically compatible while source point coordinates remain exact in
+/// `point_lookup` and in public unclustered-point results.
+fn javascript_supercluster_coordinate(longitude: f64, latitude: f64) -> [f64; 2] {
+    let projected_x = f64::from((longitude.mul_add(1.0 / 360.0, 0.5)) as f32);
+    let sin = latitude.to_radians().sin();
+    let projected_y =
+        (0.5 - (0.25 * ((1.0 + sin) / (1.0 - sin)).ln()) / std::f64::consts::PI)
+            .clamp(0.0, 1.0);
+    let projected_y = f64::from(projected_y as f32);
+    let longitude = (projected_x - 0.5) * 360.0;
+    let mercator_y = ((180.0 - projected_y * 360.0) * std::f64::consts::PI) / 180.0;
+    let latitude = (360.0 * mercator_y.exp().atan()) / std::f64::consts::PI - 90.0;
+
+    [longitude, latitude]
 }
 
 fn is_cluster_feature(feature: &Feature) -> bool {
