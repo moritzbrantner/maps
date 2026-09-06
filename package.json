@@ -61,6 +61,10 @@
       "types": "./dist/temporal.d.ts",
       "import": "./dist/temporal.js"
     },
+    "./wasm": {
+      "types": "./dist/wasm/maps_wasm.d.ts",
+      "import": "./dist/wasm/maps_wasm.js"
+    },
     "./package.json": "./package.json",
     "./styles.css": "./styles.css",
     "./styles.full.css": "./styles.full.css"
@@ -72,6 +76,8 @@
     "build": "tsup --config tsup.config.ts && bun run build:styles",
     "build:js": "tsup --config tsup.config.ts",
     "build:styles": "node ./scripts/build-styles.mjs",
+    "build:wasm": "node ./scripts/build-maps-wasm.mjs",
+    "build:package": "bun run build && bun run build:wasm",
     "analyze:bundles": "node ./scripts/analyze-bundles.mjs",
     "bench:heat-map": "bun run ./scripts/benchmark-heat-map.mjs",
     "bench:heat-layer": "bun run ./scripts/benchmark-heat-layer.mjs",
@@ -84,7 +90,7 @@
     "format:check": "oxfmt --check demo package.json .oxfmtrc.json",
     "lint": "bun run lint:static && node ./scripts/verify-package-imports.mjs ./src @/ next/ && node ./scripts/verify-package-styles.mjs . && bun run verify:security-sensitive",
     "lint:static": "oxlint src demo e2e",
-    "prepack": "bun run build",
+    "prepack": "bun run build:package",
     "check-types": "tsc --noEmit",
     "test": "vitest run",
     "test:tdd": "vitest watch --reporter=verbose",
@@ -98,6 +104,7 @@
     "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
     "verify:audit": "bun audit --audit-level high",
     "verify:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --lib --tests --locked && cargo check -p maps-wasm --target wasm32-unknown-unknown --locked",
+    "verify:wasm-package": "bun run build:package && node ./scripts/verify-wasm-package.mjs",
     "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
@@ -105,7 +112,7 @@
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
     "verify:agent": "bun run check-types && bun run lint && bun run test:tdd:run",
     "verify:fast": "bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
-    "verify:release": "bun run verify:rust && bun run verify:fast && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
+    "verify:release": "bun run verify:rust && bun run verify:fast && bun run verify:wasm-package && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
   },
   "dependencies": {
     "@moritzbrantner/viz-engine": "^0.3.0",

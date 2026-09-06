@@ -7,9 +7,12 @@
 - Rust `1.98.1` with `clippy`, `rustfmt`, and the `wasm32-unknown-unknown`
   target when changing Maps-owned Rust computation. `rust-toolchain.toml` pins
   this repository toolchain.
+- `wasm-bindgen-cli` `0.2.128` when building or verifying the distributable
+  Maps WASM artifact:
+  `cargo install wasm-bindgen-cli --version 0.2.128 --locked`.
 - Playwright Chromium installed with
-  `bunx playwright install --with-deps chromium` when running browser tests
-  locally.
+  `bunx playwright install --with-deps chromium` when running browser or packed
+  WASM package tests locally.
 
 ## Local Setup
 
@@ -23,6 +26,9 @@ bun run dev
 ```sh
 bun run verify:fast
 ```
+
+`verify:fast` deliberately remains TypeScript/package focused and does not
+silently install Rust tooling.
 
 ## Rust Validation
 
@@ -39,6 +45,22 @@ dependency graph. Maps may reuse lower-level geo/Moenarch crates when they
 remove duplicate primitive correctness logic, but map-domain behavior remains
 owned by this repository and must not be routed through `viz-engine` or a new
 generic visualization layer.
+
+## Distributable WASM Validation
+
+The installed npm package owns its browser WASM artifact. Build and test the
+actual packed artifact with:
+
+```sh
+bun run verify:wasm-package
+```
+
+This runs the normal package build, compiles `maps-wasm` from the locked Rust
+graph, generates version-matched browser glue with the pinned wasm-bindgen CLI,
+then installs the tarball into a temporary Vite consumer and initializes the
+persistent Rust point index in Chromium. Normal `bun run build` stays JS-only;
+`bun run build:package` is the package/release build that also emits
+`dist/wasm/`.
 
 ## Agent TDD Harness
 
