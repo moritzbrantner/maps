@@ -9,10 +9,9 @@ type RuntimeStatus = {
 
 type HostedWasmIndex = {
   free(): void;
-  getViewportAggregation(query: {
-    bounds: [number, number, number, number];
-    zoom: number;
-  }): { features: unknown[] };
+  getViewportAggregation(query: { bounds: [number, number, number, number]; zoom: number }): {
+    features: unknown[];
+  };
 };
 
 type HostedWasmModule = {
