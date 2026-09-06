@@ -1,8 +1,9 @@
 import Supercluster from "supercluster";
 
 import {
-  compareMapsAggregationCandidate,
-  createMapsAggregationCandidateIndex,
+  createMapsAggregationRuntimeIndex,
+  type MapsAggregationRuntimeFeature,
+  type MapsAggregationRuntimeIndex,
 } from "./aggregation-runtime";
 
 export type MapMetricRecord = Record<string, number>;
@@ -121,67 +122,13 @@ export function createPointAggregationIndex<TProperties = Record<string, unknown
     .filter(isFiniteMapPoint)
     .filter((point) => options.filterPoint?.(point) ?? true);
   const pointLookup = new Map(normalizedPoints.map((point) => [point.id, point]));
-  const metricKeys = collectMapMetricKeys(normalizedPoints.map((point) => point.metrics));
-  const tree = new Supercluster<SuperclusterPointProperties, SuperclusterClusterProperties>({
-    extent: options.extent ?? 512,
-    map: (properties) => mapSuperclusterProperties(properties, metricKeys),
-    maxZoom: options.maxZoom ?? 16,
-    minZoom: options.minZoom ?? 0,
-    radius: options.radius ?? 72,
-    reduce: (accumulated, properties) => {
-      for (const metricKey of metricKeys) {
-        accumulated[metricKey] =
-          readNumericMetric(accumulated, metricKey) + readNumericMetric(properties, metricKey);
-      }
-    },
-  });
+  const runtimeIndex = createMapsAggregationRuntimeIndex(normalizedPoints, options);
 
-  tree.load(
-    normalizedPoints.map((point) => ({
-      geometry: {
-        coordinates: [point.longitude, point.latitude],
-        type: "Point" as const,
-      },
-      properties: {
-        pointId: point.id,
-        ...point.metrics,
-      },
-      type: "Feature" as const,
-    })),
-  );
+  if (runtimeIndex) {
+    return createRustPointAggregationIndex(runtimeIndex, pointLookup);
+  }
 
-  const candidateIndex = createMapsAggregationCandidateIndex(normalizedPoints, options);
-
-  return {
-    dispose() {
-      candidateIndex?.dispose();
-    },
-    getClusterExpansionZoom(clusterId) {
-      return tree.getClusterExpansionZoom(clusterId);
-    },
-    getClusterLeaves(clusterId, limit = 10, offset = 0) {
-      return tree
-        .getLeaves(clusterId, limit, offset)
-        .map((feature) => pointLookup.get(feature.properties.pointId))
-        .filter(isDefined);
-    },
-    getPointById(pointId) {
-      return pointLookup.get(pointId) ?? null;
-    },
-    getViewportAggregation(query) {
-      const rawFeatures = getFeaturesForBounds(tree, query.bounds, query.zoom);
-      const features = rawFeatures
-        .map((feature) => toAggregatedMapFeature(feature, pointLookup, metricKeys, tree))
-        .filter(isDefined);
-      const aggregation = {
-        features,
-        summary: summarizeMapFeatures(query, features, metricKeys),
-      };
-
-      compareMapsAggregationCandidate(candidateIndex, query, aggregation);
-      return aggregation;
-    },
-  };
+  return createSuperclusterPointAggregationIndex(normalizedPoints, pointLookup, options);
 }
 
 export function createMapDensityViewportSummary<TProperties = Record<string, unknown>>(
@@ -225,6 +172,140 @@ export function getBoundsFromPoints<TProperties = Record<string, unknown>>(
   }
 
   return hasPoint ? [west, south, east, north] : null;
+}
+
+function createRustPointAggregationIndex<TProperties>(
+  runtimeIndex: MapsAggregationRuntimeIndex,
+  pointLookup: Map<string, IndexedMapPoint<TProperties>>,
+): PointAggregationIndex<TProperties> {
+  return {
+    dispose() {
+      runtimeIndex.dispose();
+    },
+    getClusterExpansionZoom(clusterId) {
+      return runtimeIndex.getClusterExpansionZoom(clusterId);
+    },
+    getClusterLeaves(clusterId, limit = 10, offset = 0) {
+      return runtimeIndex
+        .getClusterLeaves(clusterId, limit, offset)
+        .map((point) => requireIndexedPoint(pointLookup, point.id));
+    },
+    getPointById(pointId) {
+      const point = runtimeIndex.getPointById(pointId);
+      return point ? requireIndexedPoint(pointLookup, point.id) : null;
+    },
+    getViewportAggregation(query) {
+      const aggregation = runtimeIndex.getViewportAggregation(query);
+
+      return {
+        features: aggregation.features.map((feature) =>
+          toRustAggregatedMapFeature(feature, pointLookup),
+        ),
+        summary: aggregation.summary,
+      };
+    },
+  };
+}
+
+function toRustAggregatedMapFeature<TProperties>(
+  feature: MapsAggregationRuntimeFeature,
+  pointLookup: Map<string, IndexedMapPoint<TProperties>>,
+): AggregatedMapFeature<TProperties> {
+  if (feature.kind === "cluster") {
+    return {
+      clusterId: feature.clusterId,
+      coordinates: feature.coordinates,
+      expansionZoom: feature.expansionZoom,
+      kind: "cluster",
+      metrics: feature.metrics,
+      pointCount: feature.pointCount,
+      pointCountAbbreviated: feature.pointCountAbbreviated,
+    };
+  }
+
+  const point = requireIndexedPoint(pointLookup, feature.pointId);
+
+  return {
+    coordinates: [point.longitude, point.latitude],
+    kind: "point",
+    metrics: point.metrics,
+    point,
+  };
+}
+
+function requireIndexedPoint<TProperties>(
+  pointLookup: Map<string, IndexedMapPoint<TProperties>>,
+  pointId: string,
+): IndexedMapPoint<TProperties> {
+  const point = pointLookup.get(pointId);
+
+  if (!point) {
+    throw new Error(`Rust aggregation returned unknown point id ${JSON.stringify(pointId)}.`);
+  }
+
+  return point;
+}
+
+function createSuperclusterPointAggregationIndex<TProperties>(
+  normalizedPoints: readonly IndexedMapPoint<TProperties>[],
+  pointLookup: Map<string, IndexedMapPoint<TProperties>>,
+  options: PointAggregationIndexOptions<TProperties>,
+): PointAggregationIndex<TProperties> {
+  const metricKeys = collectMapMetricKeys(normalizedPoints.map((point) => point.metrics));
+  const tree = new Supercluster<SuperclusterPointProperties, SuperclusterClusterProperties>({
+    extent: options.extent ?? 512,
+    map: (properties) => mapSuperclusterProperties(properties, metricKeys),
+    maxZoom: options.maxZoom ?? 16,
+    minZoom: options.minZoom ?? 0,
+    radius: options.radius ?? 72,
+    reduce: (accumulated, properties) => {
+      for (const metricKey of metricKeys) {
+        accumulated[metricKey] =
+          readNumericMetric(accumulated, metricKey) + readNumericMetric(properties, metricKey);
+      }
+    },
+  });
+
+  tree.load(
+    normalizedPoints.map((point) => ({
+      geometry: {
+        coordinates: [point.longitude, point.latitude],
+        type: "Point" as const,
+      },
+      properties: {
+        pointId: point.id,
+        ...point.metrics,
+      },
+      type: "Feature" as const,
+    })),
+  );
+
+  return {
+    dispose() {},
+    getClusterExpansionZoom(clusterId) {
+      return tree.getClusterExpansionZoom(clusterId);
+    },
+    getClusterLeaves(clusterId, limit = 10, offset = 0) {
+      return tree
+        .getLeaves(clusterId, limit, offset)
+        .map((feature) => pointLookup.get(feature.properties.pointId))
+        .filter(isDefined);
+    },
+    getPointById(pointId) {
+      return pointLookup.get(pointId) ?? null;
+    },
+    getViewportAggregation(query) {
+      const rawFeatures = getFeaturesForBounds(tree, query.bounds, query.zoom);
+      const features = rawFeatures
+        .map((feature) => toAggregatedMapFeature(feature, pointLookup, metricKeys, tree))
+        .filter(isDefined);
+
+      return {
+        features,
+        summary: summarizeMapFeatures(query, features, metricKeys),
+      };
+    },
+  };
 }
 
 function normalizeMapMetrics(metrics: MapMetricRecord | undefined): MapMetricRecord {

@@ -21,8 +21,8 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
           <h1>Map building blocks, end to end.</h1>
           <p>
             Clustering, scalar fields, flows, timelines, globe display, GeoJSON operations, and
-            editing in one live workbench. Maps owns the domain logic; Rust/WASM is taking over the
-            heavy geographic computation while browser renderers remain replaceable pixel backends.
+            editing in one live workbench. Maps owns the domain logic; Rust/WASM now owns supported
+            point aggregation while browser renderers remain replaceable pixel backends.
           </p>
         </div>
 
