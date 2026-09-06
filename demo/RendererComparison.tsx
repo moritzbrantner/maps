@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 
 import { NativeSelect } from "@moritzbrantner/ui";
 import {
-  ClusteredMap,
+  ClusterLayer,
+  MapView,
   type AggregatedMapFeature,
   type MapPoint,
   type MapViewState,
 } from "@moritzbrantner/maps";
-import { CanvasClusteredMap } from "../src/canvas-clustered-map";
+import { CanvasPointClusterLayer } from "../src/canvas-point-cluster-layer";
 import { demoMapStyle } from "./data/map-style";
 
 type RendererBackend = "maplibre" | "canvas2d";
@@ -24,18 +25,12 @@ export function RendererComparison() {
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(initialViewState);
   const points = useMemo(() => createComparisonPoints(), []);
-  const mapProps = {
-    fitToData: false,
+  const layerProps = {
     getFeatureId: getComparisonFeatureId,
-    mapLabel: "Renderer parity map",
-    mapStyle: demoMapStyle,
     onFeatureSelect: (feature: AggregatedMapFeature<ComparisonPointProperties> | null) =>
       setSelectedFeatureId(feature ? getComparisonFeatureId(feature) : null),
-    onViewStateChange: setViewState,
     points,
     selectedFeatureId,
-    style: { minHeight: 430 },
-    viewState,
   };
 
   return (
@@ -72,11 +67,20 @@ export function RendererComparison() {
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-border bg-muted">
-        {backend === "canvas2d" ? (
-          <CanvasClusteredMap {...mapProps} />
-        ) : (
-          <ClusteredMap {...mapProps} />
-        )}
+        <MapView
+          fitToData={false}
+          mapLabel="Renderer parity map"
+          mapStyle={demoMapStyle}
+          onViewStateChange={setViewState}
+          style={{ minHeight: 430 }}
+          viewState={viewState}
+        >
+          {backend === "canvas2d" ? (
+            <CanvasPointClusterLayer {...layerProps} />
+          ) : (
+            <ClusterLayer {...layerProps} />
+          )}
+        </MapView>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">

@@ -22,16 +22,21 @@ test("renderer comparison switches pixels without replacing the map camera @smok
   const comparison = page.getByTestId("renderer-comparison");
   await comparison.scrollIntoViewIfNeeded();
   await expect(comparison.getByText("Same Maps frame, different pixels")).toBeVisible();
-  await expect(comparison.getByText("Backend:").locator(".." )).toContainText("MapLibre");
+  await expect(comparison.getByText("Backend:").locator("..")).toContainText("MapLibre");
+
+  const cameraCanvas = comparison.locator(".maplibregl-canvas");
+  await expect(cameraCanvas).toBeVisible();
+  await cameraCanvas.evaluate((element) => element.setAttribute("data-camera-sentinel", "stable"));
 
   const renderer = comparison.getByLabel("Point cluster renderer");
   await renderer.selectOption("canvas2d");
 
   await expect(comparison.locator('canvas[data-map-renderer="canvas2d"]')).toBeVisible();
-  await expect(comparison.getByText("Backend:").locator(".." )).toContainText("Canvas2D");
-  await expect(comparison.locator(".maplibregl-canvas")).toBeVisible();
+  await expect(comparison.getByText("Backend:").locator("..")).toContainText("Canvas2D");
+  await expect(comparison.locator('.maplibregl-canvas[data-camera-sentinel="stable"]')).toBeVisible();
 
   await renderer.selectOption("maplibre");
   await expect(comparison.locator('canvas[data-map-renderer="canvas2d"]')).toHaveCount(0);
-  await expect(comparison.getByText("Backend:").locator(".." )).toContainText("MapLibre");
+  await expect(comparison.getByText("Backend:").locator("..")).toContainText("MapLibre");
+  await expect(comparison.locator('.maplibregl-canvas[data-camera-sentinel="stable"]')).toBeVisible();
 });
