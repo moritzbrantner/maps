@@ -1,6 +1,12 @@
 import type { MapsAggregationDiagnostic } from "../src/aggregation-runtime";
 
-export type RustRuntimeState = "loading" | "loaded" | "authoritative" | "fallback" | "error" | "unavailable";
+export type RustRuntimeState =
+  | "loading"
+  | "loaded"
+  | "authoritative"
+  | "fallback"
+  | "error"
+  | "unavailable";
 
 export type RustRuntimeStatus = {
   detail: string;
@@ -39,7 +45,8 @@ export function markRustRuntimeLoaded() {
   }
 
   updateStatus({
-    detail: "The packaged Maps Rust/WASM point index is loaded; new point aggregation indexes use Rust as authority.",
+    detail:
+      "The packaged Maps Rust/WASM point index is loaded; new point aggregation indexes use Rust as authority.",
     label: "Rust loaded",
     state: "loaded",
   });
