@@ -36,6 +36,64 @@ fn clusters_points_and_sums_maps_owned_metrics() {
 }
 
 #[test]
+fn matches_javascript_supercluster_float32_cluster_centroid() {
+    let points = normalize_map_points(vec![
+        MapPoint::new(52.5200, 13.4050).with_id("berlin-a"),
+        MapPoint::new(52.5204, 13.4054).with_id("berlin-b"),
+        MapPoint::new(52.5210, 13.4060).with_id("berlin-c"),
+        MapPoint::new(48.8566, 2.3522).with_id("paris"),
+    ]);
+    let mut index = PointAggregationIndex::new(points, PointAggregationOptions::default())
+        .expect("aggregation index should build");
+    let aggregation = index
+        .get_viewport_aggregation(ViewportAggregationQuery {
+            bounds: [-180.0, -85.0, 180.0, 85.0],
+            zoom: 2.0,
+        })
+        .expect("viewport should aggregate");
+    let cluster = aggregation
+        .features
+        .iter()
+        .find_map(|feature| match feature {
+            AggregatedMapFeature::Cluster(cluster) => Some(cluster),
+            AggregatedMapFeature::Point(_) => None,
+        })
+        .expect("fixture should produce one cluster");
+
+    assert!((cluster.coordinates[0] - 10.642147064208984).abs() <= 1e-9);
+    assert!((cluster.coordinates[1] - 51.6312860782416).abs() <= 1e-9);
+}
+
+#[test]
+fn preserves_exact_source_coordinates_for_unclustered_points() {
+    let longitude = 13.405_123_456_789;
+    let latitude = 52.520_987_654_321;
+    let points = normalize_map_points(vec![
+        MapPoint::new(latitude, longitude).with_id("precise-point")
+    ]);
+    let mut index = PointAggregationIndex::new(points, PointAggregationOptions::default())
+        .expect("aggregation index should build");
+    let aggregation = index
+        .get_viewport_aggregation(ViewportAggregationQuery {
+            bounds: [13.0, 52.0, 14.0, 53.0],
+            zoom: 17.0,
+        })
+        .expect("viewport should aggregate");
+    let point = aggregation
+        .features
+        .iter()
+        .find_map(|feature| match feature {
+            AggregatedMapFeature::Point(point) => Some(point),
+            AggregatedMapFeature::Cluster(_) => None,
+        })
+        .expect("fixture should return the source point");
+
+    assert_eq!(point.coordinates, [longitude, latitude]);
+    assert_eq!(point.point.longitude, longitude);
+    assert_eq!(point.point.latitude, latitude);
+}
+
+#[test]
 fn returns_cluster_leaves_by_original_stable_ids() {
     let points = normalize_map_points(
         (0..20)
