@@ -69,7 +69,7 @@ fn preserves_exact_source_coordinates_for_unclustered_points() {
     let longitude = 13.405_123_456_789;
     let latitude = 52.520_987_654_321;
     let points = normalize_map_points(vec![
-        MapPoint::new(latitude, longitude).with_id("precise-point")
+        MapPoint::new(latitude, longitude).with_id("precise-point"),
     ]);
     let mut index = PointAggregationIndex::new(points, PointAggregationOptions::default())
         .expect("aggregation index should build");
