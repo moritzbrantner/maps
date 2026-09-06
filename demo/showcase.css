@@ -4,9 +4,7 @@
 }
 
 body {
-  background:
-    radial-gradient(circle at 12% 0%, rgb(15 118 110 / 0.08), transparent 30rem),
-    #f3f6f6;
+  background: radial-gradient(circle at 12% 0%, rgb(15 118 110 / 0.08), transparent 30rem), #f3f6f6;
 }
 
 .maps-showcase {
