@@ -1,8 +1,12 @@
 import type {
   AggregatedMapFeature,
+  MapMetricRecord,
+  MapPoint,
   VisibleAggregationSummary,
   ViewportAggregation,
+  ViewportAggregationQuery,
 } from "./aggregation";
+import { createPointMapFeatures } from "./point-core";
 
 type MapPointClusterRenderFeatureBase<TProperties> = {
   coordinates: [longitude: number, latitude: number];
@@ -73,6 +77,41 @@ export function createPointClusterRenderFrame<TProperties = Record<string, unkno
   };
 }
 
+export function createPointOnlyRenderFrame<TProperties extends Record<string, unknown>>(
+  points: readonly MapPoint<TProperties>[],
+  query: ViewportAggregationQuery,
+  getFeatureId?: (feature: AggregatedMapFeature<TProperties>) => string,
+): MapPointClusterRenderFrame<TProperties> {
+  const [west, south, east, north] = query.bounds;
+  const features = createPointMapFeatures(points)
+    .filter(
+      ({ coordinates: [longitude, latitude] }) =>
+        longitude >= west && longitude <= east && latitude >= south && latitude <= north,
+    )
+    .map(({ coordinates, point }) => ({
+      coordinates,
+      kind: "point" as const,
+      metrics: point.metrics,
+      point,
+    }));
+  const metrics = sumMetrics(features.map((feature) => feature.metrics));
+
+  return createPointClusterRenderFrame(
+    {
+      features,
+      summary: {
+        bounds: query.bounds,
+        metrics,
+        visibleClusterCount: 0,
+        visiblePointCount: features.length,
+        visibleUnclusteredCount: features.length,
+        zoom: query.zoom,
+      },
+    },
+    getFeatureId,
+  );
+}
+
 function resolvePointClusterFeatureId<TProperties>(
   feature: AggregatedMapFeature<TProperties>,
   getFeatureId?: (feature: AggregatedMapFeature<TProperties>) => string,
@@ -81,6 +120,20 @@ function resolvePointClusterFeatureId<TProperties>(
     getFeatureId?.(feature) ||
     (feature.kind === "cluster" ? `cluster:${feature.clusterId}` : `point:${feature.point.id}`)
   );
+}
+
+function sumMetrics(records: readonly MapMetricRecord[]) {
+  const totals: MapMetricRecord = {};
+
+  for (const record of records) {
+    for (const [key, value] of Object.entries(record)) {
+      if (Number.isFinite(value)) {
+        totals[key] = (totals[key] ?? 0) + value;
+      }
+    }
+  }
+
+  return totals;
 }
 
 function getClusterColor(pointCount: number) {
