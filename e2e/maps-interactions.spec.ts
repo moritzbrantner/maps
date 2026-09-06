@@ -259,7 +259,12 @@ test("editor interaction selects, multi-selects, moves, reshapes, deletes, and d
     .poll(async () => coordinateMoved(beforeMoveCenter, await getGeoJsonCenter(page, "geojson-point")))
     .toBe(true);
 
+  await editorToolbarButton(page, "Select").click();
+  await expect.poll(() => getEditMode(page)).toBe("select");
   await clickFeatureCoordinate(page, "geojson", "geojson-polygon");
+  await expect(
+    page.getByLabel("Selected GeoJSON element").getByText("Polygon", { exact: true }),
+  ).toBeVisible();
   await editorToolbarButton(page, "Reshape").click();
   await expect.poll(() => getEditMode(page)).toBe("reshape");
   await waitForEditorHandleAtCoordinate(page, [6.4, 48.6]);
