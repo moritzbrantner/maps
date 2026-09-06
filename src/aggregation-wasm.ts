@@ -1,8 +1,8 @@
 import type {
-  MapsAggregationCandidateIndex,
-  MapsAggregationCandidateOptions,
-  MapsAggregationCandidatePoint,
-  MapsAggregationCandidateResult,
+  MapsAggregationRuntimeIndex,
+  MapsAggregationRuntimeOptions,
+  MapsAggregationRuntimePoint,
+  MapsAggregationRuntimeResult,
   MapsAggregationWasmRuntime,
 } from "./aggregation-runtime";
 import type { ViewportAggregationQuery } from "./aggregation";
@@ -12,14 +12,14 @@ const DEFAULT_MAPS_WASM_PACKAGE = "@moritzbrantner/maps/wasm";
 type MapsAggregationWasmIndex = {
   free?: () => void;
   getClusterExpansionZoom(clusterId: number): number;
-  getClusterLeaves(clusterId: number, limit: number, offset: number): MapsAggregationCandidatePoint[];
-  getPointById(pointId: string): MapsAggregationCandidatePoint | null;
-  getViewportAggregation(query: ViewportAggregationQuery): MapsAggregationCandidateResult;
+  getClusterLeaves(clusterId: number, limit: number, offset: number): MapsAggregationRuntimePoint[];
+  getPointById(pointId: string): MapsAggregationRuntimePoint | null;
+  getViewportAggregation(query: ViewportAggregationQuery): MapsAggregationRuntimeResult;
 };
 
 type MapsAggregationWasmIndexConstructor = new (
-  points: readonly MapsAggregationCandidatePoint[],
-  options: MapsAggregationCandidateOptions,
+  points: readonly MapsAggregationRuntimePoint[],
+  options: MapsAggregationRuntimeOptions,
 ) => MapsAggregationWasmIndex;
 
 type MapsAggregationWasmModule = {
@@ -39,7 +39,7 @@ export async function loadMapsAggregationWasmRuntime(
   }
 
   return {
-    createIndex(points, options): MapsAggregationCandidateIndex {
+    createIndex(points, options): MapsAggregationRuntimeIndex {
       const index = new Constructor(points, options);
       let disposed = false;
 
