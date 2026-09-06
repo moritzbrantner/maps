@@ -1,18 +1,20 @@
 "use client";
 
 export {
-  EngineGeoJsonLayer,
   GeoClusterLayer,
   GeoFlowLayer,
   GeoHeatLayer,
-  GeoPointLayer,
-  type EngineGeoJsonLayerProps,
-  type EngineGeoJsonLayerFeature,
   type GeoClusterLayerProps,
   type GeoFlowLayerProps,
   type GeoHeatLayerProps,
-  type GeoPointLayerProps,
 } from "../map-engine";
+export {
+  EngineGeoJsonLayer,
+  GeoPointLayer,
+  type EngineGeoJsonLayerProps,
+  type EngineGeoJsonLayerFeature,
+  type GeoPointLayerProps,
+} from "../map-native-components";
 export { MapView, type MapLibreLayerRender, type FlatMapRuntime, type MapViewProps } from "../map-view";
 export {
   MapControls,
