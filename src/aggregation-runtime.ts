@@ -1,12 +1,11 @@
 import type {
   MapMetricRecord,
   PointAggregationIndexOptions,
-  ViewportAggregation,
   ViewportAggregationQuery,
 } from "./aggregation";
 import { loadMapsAggregationWasmRuntime } from "./aggregation-wasm";
 
-export type MapsAggregationCandidatePoint = {
+export type MapsAggregationRuntimePoint = {
   id: string;
   label: string;
   latitude: number;
@@ -14,19 +13,19 @@ export type MapsAggregationCandidatePoint = {
   metrics: MapMetricRecord;
 };
 
-export type MapsAggregationCandidateOptions = {
+export type MapsAggregationRuntimeOptions = {
   extent: number;
   maxZoom: number;
   minZoom: number;
   radius: number;
 };
 
-type MapsAggregationCandidateBuildOptions = Pick<
+type MapsAggregationRuntimeBuildOptions = Pick<
   PointAggregationIndexOptions,
   "extent" | "maxZoom" | "minZoom" | "radius"
 >;
 
-export type MapsAggregationCandidateFeature =
+export type MapsAggregationRuntimeFeature =
   | {
       coordinates: [number, number];
       kind: "point";
@@ -43,8 +42,8 @@ export type MapsAggregationCandidateFeature =
       pointCountAbbreviated: string;
     };
 
-export type MapsAggregationCandidateResult = {
-  features: MapsAggregationCandidateFeature[];
+export type MapsAggregationRuntimeResult = {
+  features: MapsAggregationRuntimeFeature[];
   summary: {
     bounds: ViewportAggregationQuery["bounds"];
     metrics: MapMetricRecord;
@@ -55,54 +54,50 @@ export type MapsAggregationCandidateResult = {
   };
 };
 
-export type MapsAggregationCandidateIndex = {
+export type MapsAggregationRuntimeIndex = {
   dispose(): void;
   getClusterExpansionZoom(clusterId: number): number;
-  getClusterLeaves(clusterId: number, limit?: number, offset?: number): MapsAggregationCandidatePoint[];
-  getPointById(pointId: string): MapsAggregationCandidatePoint | null;
-  getViewportAggregation(query: ViewportAggregationQuery): MapsAggregationCandidateResult;
+  getClusterLeaves(clusterId: number, limit?: number, offset?: number): MapsAggregationRuntimePoint[];
+  getPointById(pointId: string): MapsAggregationRuntimePoint | null;
+  getViewportAggregation(query: ViewportAggregationQuery): MapsAggregationRuntimeResult;
 };
 
 export type MapsAggregationWasmRuntime = {
   createIndex(
-    points: readonly MapsAggregationCandidatePoint[],
-    options: MapsAggregationCandidateOptions,
-  ): MapsAggregationCandidateIndex;
+    points: readonly MapsAggregationRuntimePoint[],
+    options: MapsAggregationRuntimeOptions,
+  ): MapsAggregationRuntimeIndex;
 };
 
 export type MapsAggregationDiagnostic = {
   backend: "wasm";
-  candidateFeatureCount?: number;
-  controlFeatureCount?: number;
   fallbackReason?: string;
-  matched?: boolean;
-  mode: "candidate" | "fallback";
+  featureCount?: number;
+  mode: "authoritative" | "error" | "fallback";
 };
 
-export type MapsAggregationRuntimeOptions = {
+export type MapsAggregationLoaderOptions = {
   onDiagnostic?: (event: MapsAggregationDiagnostic) => void;
   wasmPackage?: string;
 };
 
-let configuredOptions: MapsAggregationRuntimeOptions = {};
+let configuredOptions: MapsAggregationLoaderOptions = {};
 let wasmRuntime: MapsAggregationWasmRuntime | null = null;
 let wasmLoadError: unknown = null;
-let wasmDisabledForSession = false;
 
-export function configureMapsAggregationRuntime(options: MapsAggregationRuntimeOptions = {}) {
+export function configureMapsAggregationRuntime(options: MapsAggregationLoaderOptions = {}) {
   configuredOptions = {
     ...configuredOptions,
     ...options,
   };
 }
 
-export async function initializeMapsAggregationWasm(options: MapsAggregationRuntimeOptions = {}) {
+export async function initializeMapsAggregationWasm(options: MapsAggregationLoaderOptions = {}) {
   configureMapsAggregationRuntime(options);
 
   try {
     wasmRuntime = await loadMapsAggregationWasmRuntime(configuredOptions.wasmPackage);
     wasmLoadError = null;
-    wasmDisabledForSession = false;
     return true;
   } catch (error) {
     wasmRuntime = null;
@@ -120,29 +115,32 @@ export function resetMapsAggregationRuntimeForTests() {
   configuredOptions = {};
   wasmRuntime = null;
   wasmLoadError = null;
-  wasmDisabledForSession = false;
 }
 
 export function setMapsAggregationWasmRuntimeForTests(runtime: MapsAggregationWasmRuntime | null) {
   wasmRuntime = runtime;
   wasmLoadError = null;
-  wasmDisabledForSession = false;
 }
 
 export function getMapsAggregationWasmLoadError() {
   return wasmLoadError;
 }
 
-export function createMapsAggregationCandidateIndex(
-  points: readonly MapsAggregationCandidatePoint[],
-  options: MapsAggregationCandidateBuildOptions,
-): MapsAggregationCandidateIndex | null {
-  if (!wasmRuntime || wasmDisabledForSession) {
+/**
+ * Returns the Maps-owned Rust/WASM aggregation index when that runtime has been
+ * initialized. A missing runtime is the explicit no-WASM/SSR fallback boundary.
+ * Once the Rust runtime is selected, construction and query errors fail closed.
+ */
+export function createMapsAggregationRuntimeIndex(
+  points: readonly MapsAggregationRuntimePoint[],
+  options: MapsAggregationRuntimeBuildOptions,
+): MapsAggregationRuntimeIndex | null {
+  if (!wasmRuntime) {
     return null;
   }
 
-  try {
-    return wasmRuntime.createIndex(
+  const index = runAuthoritative(() =>
+    wasmRuntime!.createIndex(
       points.map((point) => ({
         id: point.id,
         label: point.label,
@@ -156,137 +154,51 @@ export function createMapsAggregationCandidateIndex(
         minZoom: options.minZoom ?? 0,
         radius: options.radius ?? 72,
       },
-    );
-  } catch (error) {
-    disableCandidate(error);
-    return null;
-  }
-}
+    ),
+  );
 
-export function compareMapsAggregationCandidate<TProperties>(
-  candidate: MapsAggregationCandidateIndex | null,
-  query: ViewportAggregationQuery,
-  control: ViewportAggregation<TProperties>,
-) {
-  if (!candidate || wasmDisabledForSession) {
-    return;
-  }
-
-  try {
-    const candidateResult = candidate.getViewportAggregation(query);
-    const matched = aggregationSemanticsMatch(control, candidateResult);
-
-    configuredOptions.onDiagnostic?.({
-      backend: "wasm",
-      candidateFeatureCount: candidateResult.features.length,
-      controlFeatureCount: control.features.length,
-      matched,
-      mode: "candidate",
-    });
-
-    if (!matched) {
-      candidate.dispose();
-      disableCandidate("WASM aggregation candidate did not match the Supercluster control");
-    }
-  } catch (error) {
-    candidate.dispose();
-    disableCandidate(error);
-  }
-}
-
-function disableCandidate(error: unknown) {
-  wasmDisabledForSession = true;
   configuredOptions.onDiagnostic?.({
     backend: "wasm",
-    fallbackReason: getErrorMessage(error),
-    mode: "fallback",
+    mode: "authoritative",
   });
-}
-
-function aggregationSemanticsMatch<TProperties>(
-  control: ViewportAggregation<TProperties>,
-  candidate: MapsAggregationCandidateResult,
-) {
-  const controlFeatures = control.features.map(toComparableControlFeature).sort(compareComparable);
-  const candidateFeatures = candidate.features.map(toComparableCandidateFeature).sort(compareComparable);
-
-  if (controlFeatures.length !== candidateFeatures.length) {
-    return false;
-  }
-
-  return controlFeatures.every((feature, index) => {
-    const candidateFeature = candidateFeatures[index];
-
-    return (
-      feature.key === candidateFeature.key &&
-      nearlyEqual(feature.longitude, candidateFeature.longitude) &&
-      nearlyEqual(feature.latitude, candidateFeature.latitude) &&
-      metricsMatch(feature.metrics, candidateFeature.metrics)
-    );
-  });
-}
-
-type ComparableFeature = {
-  key: string;
-  latitude: number;
-  longitude: number;
-  metrics: MapMetricRecord;
-};
-
-function toComparableControlFeature<TProperties>(
-  feature: ViewportAggregation<TProperties>["features"][number],
-): ComparableFeature {
-  if (feature.kind === "point") {
-    return {
-      key: `point:${feature.point.id}`,
-      latitude: feature.coordinates[1],
-      longitude: feature.coordinates[0],
-      metrics: feature.metrics,
-    };
-  }
 
   return {
-    key: `cluster:${feature.pointCount}`,
-    latitude: feature.coordinates[1],
-    longitude: feature.coordinates[0],
-    metrics: feature.metrics,
+    dispose() {
+      runAuthoritative(() => index.dispose());
+    },
+    getClusterExpansionZoom(clusterId) {
+      return runAuthoritative(() => index.getClusterExpansionZoom(clusterId));
+    },
+    getClusterLeaves(clusterId, limit = 10, offset = 0) {
+      return runAuthoritative(() => index.getClusterLeaves(clusterId, limit, offset));
+    },
+    getPointById(pointId) {
+      return runAuthoritative(() => index.getPointById(pointId));
+    },
+    getViewportAggregation(query) {
+      const result = runAuthoritative(() => index.getViewportAggregation(query));
+
+      configuredOptions.onDiagnostic?.({
+        backend: "wasm",
+        featureCount: result.features.length,
+        mode: "authoritative",
+      });
+      return result;
+    },
   };
 }
 
-function toComparableCandidateFeature(feature: MapsAggregationCandidateFeature): ComparableFeature {
-  if (feature.kind === "point") {
-    return {
-      key: `point:${feature.pointId}`,
-      latitude: feature.coordinates[1],
-      longitude: feature.coordinates[0],
-      metrics: feature.metrics,
-    };
+function runAuthoritative<TResult>(operation: () => TResult): TResult {
+  try {
+    return operation();
+  } catch (error) {
+    configuredOptions.onDiagnostic?.({
+      backend: "wasm",
+      fallbackReason: getErrorMessage(error),
+      mode: "error",
+    });
+    throw error;
   }
-
-  return {
-    key: `cluster:${feature.pointCount}`,
-    latitude: feature.coordinates[1],
-    longitude: feature.coordinates[0],
-    metrics: feature.metrics,
-  };
-}
-
-function compareComparable(left: ComparableFeature, right: ComparableFeature) {
-  return (
-    left.key.localeCompare(right.key) ||
-    left.longitude - right.longitude ||
-    left.latitude - right.latitude
-  );
-}
-
-function metricsMatch(left: MapMetricRecord, right: MapMetricRecord) {
-  const keys = Array.from(new Set([...Object.keys(left), ...Object.keys(right)])).sort();
-
-  return keys.every((key) => nearlyEqual(left[key] ?? 0, right[key] ?? 0));
-}
-
-function nearlyEqual(left: number, right: number) {
-  return Math.abs(left - right) <= 1e-6;
 }
 
 function getErrorMessage(error: unknown) {
