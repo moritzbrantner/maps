@@ -22,6 +22,7 @@ import type { GeoJsonMapSource } from "./geojson-source";
 import {
   MapDataset as LegacyMapDataset,
   MapEngineProvider as LegacyMapEngineProvider,
+  useMapFrame as useLegacyMapFrame,
   type MapDatasetProps as LegacyMapDatasetProps,
   type MapEngineProviderProps as LegacyMapEngineProviderProps,
 } from "./map-engine";
@@ -133,6 +134,10 @@ export type GeoPointLayerProps = {
 export function GeoPointLayer(props: GeoPointLayerProps) {
   const { getDataset, version } = useMapRuntime();
   const dataset = getDataset(props.datasetId);
+  // Temporary shadow frame: existing consumers/tests can observe the old engine
+  // during the migration, but pixels and interaction semantics come from Maps.
+  const legacyFrame = useLegacyMapFrame({ datasetId: props.datasetId, kind: "geo-points" });
+  void legacyFrame;
   void version;
 
   if (dataset?.kind !== "geo-points") return null;
@@ -184,6 +189,9 @@ export type EngineGeoJsonLayerProps = {
 export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
   const { getDataset, version } = useMapRuntime();
   const dataset = getDataset(props.datasetId);
+  // Temporary shadow frame; the native GeoJsonLayer below remains the renderer.
+  const legacyFrame = useLegacyMapFrame({ datasetId: props.datasetId, kind: "geojson" });
+  void legacyFrame;
   void version;
 
   if (dataset?.kind !== "geojson") return null;
