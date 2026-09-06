@@ -1,12 +1,6 @@
 import type { MapsAggregationDiagnostic } from "../src/aggregation-runtime";
 
-export type RustRuntimeState =
-  | "loading"
-  | "loaded"
-  | "authoritative"
-  | "fallback"
-  | "error"
-  | "unavailable";
+export type RustRuntimeState = "loading" | "loaded" | "authoritative" | "fallback" | "error" | "unavailable";
 
 export type RustRuntimeStatus = {
   detail: string;
@@ -40,11 +34,7 @@ export function markRustRuntimeLoading() {
 }
 
 export function markRustRuntimeLoaded() {
-  if (
-    status.state === "authoritative" ||
-    status.state === "fallback" ||
-    status.state === "error"
-  ) {
+  if (status.state === "authoritative" || status.state === "fallback" || status.state === "error") {
     return;
   }
 
