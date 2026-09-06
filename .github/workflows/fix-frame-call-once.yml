@@ -23,32 +23,10 @@ jobs:
           from pathlib import Path
           p = Path('src/map-native-components.tsx')
           text = p.read_text()
-          old = '''    compatibilityEngine.computeFrame({
-              layerIds: [compatibilityLayerId],
-              viewport: {
-                bounds: [-180, -90, 180, 90],
-                center: surface.viewState.center,
-                display: surface.display,
-                height: 1,
-                kind: "geo",
-                width: 1,
-                zoom: surface.viewState.zoom,
-              },
-            });'''
-          new = '''    callCompatibilityEngine(compatibilityEngine, "computeFrame", {
-              layerIds: [compatibilityLayerId],
-              viewport: {
-                bounds: [-180, -90, 180, 90],
-                center: surface.viewState.center,
-                display: surface.display,
-                height: 1,
-                kind: "geo",
-                width: 1,
-                zoom: surface.viewState.zoom,
-              },
-            });'''
-          if old not in text:
-              raise SystemExit('computeFrame compatibility call did not match')
+          old = '    compatibilityEngine.computeFrame({'
+          new = '    callCompatibilityEngine(compatibilityEngine, "computeFrame", {'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one direct computeFrame call, found {text.count(old)}')
           p.write_text(text.replace(old, new, 1))
           Path('.github/workflows/fix-frame-call-once.yml').unlink()
           PY
