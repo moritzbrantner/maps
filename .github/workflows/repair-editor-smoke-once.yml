@@ -24,17 +24,19 @@ jobs:
 
           path = Path("e2e/maps-interactions.spec.ts")
           text = path.read_text()
-          old = '''  await clickFeatureCoordinate(page, "geojson", "geojson-polygon");
-          await editorToolbarButton(page, "Reshape").click();
-          '''
-          new = '''  await editorToolbarButton(page, "Select").click();
-          await expect.poll(() => getEditMode(page)).toBe("select");
-          await clickFeatureCoordinate(page, "geojson", "geojson-polygon");
-          await expect(
-            page.getByLabel("Selected GeoJSON element").getByText("Polygon", { exact: true }),
-          ).toBeVisible();
-          await editorToolbarButton(page, "Reshape").click();
-          '''
+          old = (
+              '  await clickFeatureCoordinate(page, "geojson", "geojson-polygon");\n'
+              '  await editorToolbarButton(page, "Reshape").click();\n'
+          )
+          new = (
+              '  await editorToolbarButton(page, "Select").click();\n'
+              '  await expect.poll(() => getEditMode(page)).toBe("select");\n'
+              '  await clickFeatureCoordinate(page, "geojson", "geojson-polygon");\n'
+              '  await expect(\n'
+              '    page.getByLabel("Selected GeoJSON element").getByText("Polygon", { exact: true }),\n'
+              '  ).toBeVisible();\n'
+              '  await editorToolbarButton(page, "Reshape").click();\n'
+          )
           if text.count(old) != 1:
               raise SystemExit("expected exactly one editor smoke transition to repair")
           path.write_text(text.replace(old, new, 1))
