@@ -40,7 +40,9 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
           <article className="maps-showcase__runtime-card">
             <span>Renderers</span>
             <strong>MapLibre + Canvas2D</strong>
-            <small>Shared Maps semantics; camera/basemap stay MapLibre-owned in this horizon.</small>
+            <small>
+              Shared Maps semantics; camera/basemap stay MapLibre-owned in this horizon.
+            </small>
           </article>
           <article className="maps-showcase__runtime-card">
             <span>Capabilities</span>

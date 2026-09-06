@@ -53,9 +53,9 @@ export function RendererComparison() {
             Same Maps frame, different pixels
           </h2>
           <p className="mb-0 mt-2 text-sm leading-6 text-muted-foreground">
-            Switch the point/cluster data layer without changing the viewport, selection, clustering,
-            or expansion semantics. MapLibre still supplies the camera and basemap; Canvas2D is a
-            deliberately small reference renderer over the Maps-owned frame.
+            Switch the point/cluster data layer without changing the viewport, selection,
+            clustering, or expansion semantics. MapLibre still supplies the camera and basemap;
+            Canvas2D is a deliberately small reference renderer over the Maps-owned frame.
           </p>
         </div>
         <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
