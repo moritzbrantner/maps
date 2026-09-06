@@ -128,11 +128,8 @@ function formatRuntimeState(state: RuntimeState) {
 }
 
 async function verifyHostedRustRuntime() {
-  const dynamicImport = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<HostedWasmModule>;
   const moduleUrl = new URL("wasm/maps_wasm.js", document.baseURI).href;
-  const wasmModule = await dynamicImport(moduleUrl);
+  const wasmModule = (await import(/* @vite-ignore */ moduleUrl)) as HostedWasmModule;
 
   await wasmModule.default?.();
 
