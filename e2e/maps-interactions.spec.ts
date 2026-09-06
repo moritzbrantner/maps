@@ -261,7 +261,8 @@ test("editor interaction selects, multi-selects, moves, reshapes, deletes, and d
 
   await editorToolbarButton(page, "Select").click();
   await expect.poll(() => getEditMode(page)).toBe("select");
-  await clickFeatureCoordinate(page, "geojson", "geojson-polygon");
+  const visiblePolygonPoint = await projectFeature(page, [10.8, 48.2]);
+  await page.mouse.click(visiblePolygonPoint.x, visiblePolygonPoint.y);
   await expect(
     page.getByLabel("Selected GeoJSON element").getByText("Polygon", { exact: true }),
   ).toBeVisible();
