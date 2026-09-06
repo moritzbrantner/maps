@@ -37,11 +37,11 @@ import { MapSurfaceContext } from "./map-view";
 import type { TemporalGeoJsonSupportedGeometry } from "./temporal-geojson-types";
 
 type CompatibilityEngine = {
-  addDataset?: (dataset: unknown) => unknown;
-  addLayer?: (layer: unknown) => unknown;
-  computeFrame?: (options: unknown) => unknown;
-  removeDataset?: (datasetId: string) => void;
-  removeLayer?: (layerId: string) => void;
+  addDataset?: unknown;
+  addLayer?: unknown;
+  computeFrame?: unknown;
+  removeDataset?: unknown;
+  removeLayer?: unknown;
 };
 
 /**
@@ -75,7 +75,7 @@ type MapRuntimeContextValue = {
 
 const MapRuntimeContext = createContext<MapRuntimeContextValue | null>(null);
 
-export function MapEngineProvider({ children, engine = null }: MapEngineProviderProps) {
+export function MapEngineProvider({ children, engine }: MapEngineProviderProps) {
   const datasetsRef = useRef(new Map<string, MapRuntimeDataset>());
   const compatibilityDatasetIdsRef = useRef(new Map<string, string>());
   const [version, setVersion] = useState(0);
@@ -90,7 +90,7 @@ export function MapEngineProvider({ children, engine = null }: MapEngineProvider
   const registerDataset = useCallback(
     (publicId: string, dataset: MapRuntimeDataset) => {
       datasetsRef.current.set(publicId, dataset);
-      const compatibilityDatasetId = engine?.addDataset?.(dataset);
+      const compatibilityDatasetId = callCompatibilityEngine(engine, "addDataset", dataset);
 
       if (typeof compatibilityDatasetId === "string") {
         compatibilityDatasetIdsRef.current.set(publicId, compatibilityDatasetId);
@@ -104,7 +104,7 @@ export function MapEngineProvider({ children, engine = null }: MapEngineProvider
         const currentCompatibilityId = compatibilityDatasetIdsRef.current.get(publicId);
         if (currentCompatibilityId && currentCompatibilityId === compatibilityDatasetId) {
           compatibilityDatasetIdsRef.current.delete(publicId);
-          engine?.removeDataset?.(currentCompatibilityId);
+          callCompatibilityEngine(engine, "removeDataset", currentCompatibilityId);
         }
         setVersion((current) => current + 1);
       };
@@ -113,7 +113,7 @@ export function MapEngineProvider({ children, engine = null }: MapEngineProvider
   );
   const value = useMemo<MapRuntimeContextValue>(
     () => ({
-      compatibilityEngine: engine,
+      compatibilityEngine: engine ?? null,
       getCompatibilityDatasetId,
       getDataset,
       registerDataset,
@@ -380,6 +380,17 @@ function useMapRuntime() {
   return context;
 }
 
+function callCompatibilityEngine(
+  engine: CompatibilityEngine | null | undefined,
+  method: keyof CompatibilityEngine,
+  ...args: unknown[]
+) {
+  const candidate = engine?.[method];
+  return typeof candidate === "function"
+    ? (candidate as (...values: unknown[]) => unknown)(...args)
+    : undefined;
+}
+
 function useCompatibilityLayer(
   kind: "geo-clusters" | "geo-flows" | "geo-heat" | "geo-points" | "geojson",
   publicDatasetId: string,
@@ -392,9 +403,9 @@ function useCompatibilityLayer(
   const optionsKey = JSON.stringify(options);
 
   useEffect(() => {
-    if (!compatibilityEngine?.addLayer || !compatibilityDatasetId) return;
+    if (!compatibilityEngine || !compatibilityDatasetId) return;
 
-    const compatibilityLayerId = compatibilityEngine.addLayer({
+    const compatibilityLayerId = callCompatibilityEngine(compatibilityEngine, "addLayer", {
       ...JSON.parse(optionsKey),
       datasetId: compatibilityDatasetId,
       kind,
@@ -407,13 +418,13 @@ function useCompatibilityLayer(
       if (compatibilityLayerIdRef.current === compatibilityLayerId) {
         compatibilityLayerIdRef.current = null;
       }
-      compatibilityEngine.removeLayer?.(compatibilityLayerId);
+      callCompatibilityEngine(compatibilityEngine, "removeLayer", compatibilityLayerId);
     };
   }, [compatibilityDatasetId, compatibilityEngine, kind, optionsKey]);
 
   useEffect(() => {
     const compatibilityLayerId = compatibilityLayerIdRef.current;
-    if (!compatibilityEngine?.computeFrame || !compatibilityLayerId || !surface) return;
+    if (!compatibilityEngine || !compatibilityLayerId || !surface) return;
 
     compatibilityEngine.computeFrame({
       layerIds: [compatibilityLayerId],
