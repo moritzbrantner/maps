@@ -13,5 +13,9 @@
       "package:check": ["bash", "-lc", "bun run verify:api-surface && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry"],
       "benchmark:smoke": ["bun", "run", "verify:benchmarks"]
     }
+  },
+  "merge": {
+    "authority": "hosted",
+    "requiredChecks": ["Fast Validation / Fast Validation"]
   }
 }
