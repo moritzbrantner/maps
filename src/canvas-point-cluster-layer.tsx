@@ -33,17 +33,18 @@ import {
   createPointOnlyRenderFrame,
 } from "./point-cluster-render-frame";
 
-export type CanvasPointClusterLayerProps<TProperties = Record<string, unknown>> =
-  MapFeatureInteractionProps<AggregatedMapFeature<TProperties>> & {
-    clusterRadius?: PointAggregationIndexOptions<TProperties>["radius"];
-    filterPoint?: MapPointFilter<TProperties>;
-    maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
-    minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
-    mode?: "clusters" | "points";
-    onFeatureSelect?: (feature: AggregatedMapFeature<TProperties> | null) => void;
-    onViewportAggregationChange?: (summary: VisibleAggregationSummary) => void;
-    points: readonly MapPoint<TProperties>[];
-  };
+export type CanvasPointClusterLayerProps<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+> = MapFeatureInteractionProps<AggregatedMapFeature<TProperties>> & {
+  clusterRadius?: PointAggregationIndexOptions<TProperties>["radius"];
+  filterPoint?: MapPointFilter<TProperties>;
+  maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
+  minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
+  mode?: "clusters" | "points";
+  onFeatureSelect?: (feature: AggregatedMapFeature<TProperties> | null) => void;
+  onViewportAggregationChange?: (summary: VisibleAggregationSummary) => void;
+  points: readonly MapPoint<TProperties>[];
+};
 
 type CanvasMapEvent = {
   originalEvent?: {
@@ -63,7 +64,9 @@ type CanvasEventMap = {
  * It is intentionally not exported from package entrypoints. MapLibre remains
  * the camera/basemap owner; Canvas2D only paints and hit-tests frame features.
  */
-export function CanvasPointClusterLayer<TProperties = Record<string, unknown>>({
+export function CanvasPointClusterLayer<
+  TProperties extends Record<string, unknown> = Record<string, unknown>,
+>({
   clusterRadius,
   filterPoint,
   getFeatureId,
@@ -180,9 +183,7 @@ export function CanvasPointClusterLayer<TProperties = Record<string, unknown>>({
 
     const eventMap = map as unknown as CanvasEventMap;
     const findHit = (event: CanvasMapEvent) =>
-      sceneRef.current
-        ? hitTestCanvasPointClusterScene(sceneRef.current, event.point)
-        : null;
+      sceneRef.current ? hitTestCanvasPointClusterScene(sceneRef.current, event.point) : null;
     const preventMapBackgroundAction = (event: CanvasMapEvent) => {
       event.originalEvent?.preventDefault?.();
       event.originalEvent?.stopPropagation?.();
