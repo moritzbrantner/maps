@@ -11,21 +11,21 @@ import {
   type ReactNode,
 } from "react";
 
-import type { IndexedMapPoint, MapPoint } from "./aggregation";
-import type { MapFlow } from "./flow-layer";
+import {
+  type AggregatedMapFeature,
+  type IndexedMapPoint,
+  type MapPoint,
+} from "./aggregation";
+import { ClusterLayer, type ClusterLayerProps } from "./cluster-layer";
+import { FlowLayer, type FlowLayerFeature, type FlowLayerProps, type MapFlow } from "./flow-layer";
 import {
   GeoJsonLayer,
   type GeoJsonLayerFeature,
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
 import type { GeoJsonMapSource } from "./geojson-source";
-import {
-  MapDataset as LegacyMapDataset,
-  MapEngineProvider as LegacyMapEngineProvider,
-  useMapFrame as useLegacyMapFrame,
-  type MapDatasetProps as LegacyMapDatasetProps,
-  type MapEngineProviderProps as LegacyMapEngineProviderProps,
-} from "./map-engine";
+import { HeatLayer } from "./heat-layer";
+import type { HeatLayerFeature, HeatLayerProps } from "./heat-layer-types";
 import type {
   MapFeatureContextMenuContext,
   MapFeatureInteractionChange,
@@ -33,9 +33,30 @@ import type {
 } from "./map-interaction";
 import { PointLayer, type PointLayerFeature } from "./point-layer";
 import type { MapRuntimeDataset } from "./map-runtime";
+import { MapSurfaceContext } from "./map-view";
 import type { TemporalGeoJsonSupportedGeometry } from "./temporal-geojson-types";
 
-export type MapEngineProviderProps = LegacyMapEngineProviderProps;
+type CompatibilityEngine = {
+  addDataset?: (dataset: unknown) => unknown;
+  addLayer?: (layer: unknown) => unknown;
+  computeFrame?: (options: unknown) => unknown;
+  removeDataset?: (datasetId: string) => void;
+  removeLayer?: (layerId: string) => void;
+};
+
+/**
+ * Provider options for the Maps-owned dataset runtime.
+ *
+ * `backend` and `engine` are retained as deprecated compatibility inputs for
+ * pre-runtime consumers. Maps does not instantiate or depend on a generic
+ * visualization engine anymore; an explicitly supplied `engine` is observed
+ * only by the narrow migration bridge below.
+ */
+export type MapEngineProviderProps = {
+  backend?: unknown;
+  children: ReactNode;
+  engine?: CompatibilityEngine;
+};
 
 export type MapDatasetProps<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
@@ -45,6 +66,8 @@ export type MapDatasetProps<
   | { flows: readonly MapFlow<TProperties>[]; id: string; kind: "geo-flows" };
 
 type MapRuntimeContextValue = {
+  compatibilityEngine: CompatibilityEngine | null;
+  getCompatibilityDatasetId(publicId: string): string | null;
   getDataset(publicId: string): MapRuntimeDataset | null;
   registerDataset(publicId: string, dataset: MapRuntimeDataset): () => void;
   version: number;
@@ -52,41 +75,89 @@ type MapRuntimeContextValue = {
 
 const MapRuntimeContext = createContext<MapRuntimeContextValue | null>(null);
 
-/**
- * Public map runtime coordinator.
- *
- * Maps-native datasets are the source of truth for migrated layer kinds. The
- * nested legacy provider is temporary and exists only so cluster/heat/flow
- * layers that have not migrated yet continue to work during the vertical
- * cutover from viz-engine.
- */
-export function MapEngineProvider({ children, ...legacyProps }: MapEngineProviderProps) {
+export function MapEngineProvider({ children, engine = null }: MapEngineProviderProps) {
   const datasetsRef = useRef(new Map<string, MapRuntimeDataset>());
+  const compatibilityDatasetIdsRef = useRef(new Map<string, string>());
   const [version, setVersion] = useState(0);
   const getDataset = useCallback(
     (publicId: string) => datasetsRef.current.get(publicId) ?? null,
     [],
   );
-  const registerDataset = useCallback((publicId: string, dataset: MapRuntimeDataset) => {
-    datasetsRef.current.set(publicId, dataset);
-    setVersion((current) => current + 1);
+  const getCompatibilityDatasetId = useCallback(
+    (publicId: string) => compatibilityDatasetIdsRef.current.get(publicId) ?? null,
+    [],
+  );
+  const registerDataset = useCallback(
+    (publicId: string, dataset: MapRuntimeDataset) => {
+      datasetsRef.current.set(publicId, dataset);
+      const compatibilityDatasetId = engine?.addDataset?.(dataset);
 
-    return () => {
-      if (datasetsRef.current.get(publicId) === dataset) {
-        datasetsRef.current.delete(publicId);
-        setVersion((current) => current + 1);
+      if (typeof compatibilityDatasetId === "string") {
+        compatibilityDatasetIdsRef.current.set(publicId, compatibilityDatasetId);
       }
-    };
-  }, []);
+      setVersion((current) => current + 1);
+
+      return () => {
+        if (datasetsRef.current.get(publicId) === dataset) {
+          datasetsRef.current.delete(publicId);
+        }
+        const currentCompatibilityId = compatibilityDatasetIdsRef.current.get(publicId);
+        if (currentCompatibilityId && currentCompatibilityId === compatibilityDatasetId) {
+          compatibilityDatasetIdsRef.current.delete(publicId);
+          engine?.removeDataset?.(currentCompatibilityId);
+        }
+        setVersion((current) => current + 1);
+      };
+    },
+    [engine],
+  );
   const value = useMemo<MapRuntimeContextValue>(
-    () => ({ getDataset, registerDataset, version }),
-    [getDataset, registerDataset, version],
+    () => ({
+      compatibilityEngine: engine,
+      getCompatibilityDatasetId,
+      getDataset,
+      registerDataset,
+      version,
+    }),
+    [engine, getCompatibilityDatasetId, getDataset, registerDataset, version],
   );
 
-  return (
-    <LegacyMapEngineProvider {...legacyProps}>
-      <MapRuntimeContext.Provider value={value}>{children}</MapRuntimeContext.Provider>
-    </LegacyMapEngineProvider>
+  return <MapRuntimeContext.Provider value={value}>{children}</MapRuntimeContext.Provider>;
+}
+
+export function useMapEngine() {
+  return useMapRuntime();
+}
+
+/**
+ * Compatibility hook for consumers that previously inspected a generic engine
+ * frame. It now exposes the Maps-owned dataset plus current map viewport and is
+ * intentionally map-domain specific. Renderer frames remain private until a
+ * second renderer proves the contract in #58/#59.
+ */
+export function useMapFrame(layer: { datasetId: string; kind: string }) {
+  const surface = useContext(MapSurfaceContext);
+  const { getDataset, version } = useMapRuntime();
+  const dataset = getDataset(layer.datasetId);
+  void version;
+
+  return useMemo(
+    () =>
+      dataset
+        ? {
+            dataset,
+            datasetId: layer.datasetId,
+            kind: layer.kind,
+            viewport: surface
+              ? {
+                  center: surface.viewState.center,
+                  display: surface.display,
+                  zoom: surface.viewState.zoom,
+                }
+              : null,
+          }
+        : null,
+    [dataset, layer.datasetId, layer.kind, surface],
   );
 }
 
@@ -118,9 +189,38 @@ export function MapDataset<
     return registerDataset(props.id, { flows: props.flows, kind: "geo-flows" });
   }, [props.id, props.kind, props.kind === "geo-flows" ? props.flows : null, registerDataset]);
 
-  // Keep not-yet-migrated cluster/heat/flow consumers alive while their
-  // computation moves into Maps-owned implementations in the next slice.
-  return <LegacyMapDataset {...(props as unknown as LegacyMapDatasetProps)} />;
+  return null;
+}
+
+export type GeoClusterLayerProps = Omit<
+  ClusterLayerProps<Record<string, unknown>>,
+  "clusterRadius" | "points"
+> & {
+  datasetId: string;
+  getFeatureColor?: (feature: AggregatedMapFeature) => string;
+  getFeatureRadius?: (feature: AggregatedMapFeature) => number;
+  radius?: number;
+};
+
+export function GeoClusterLayer({
+  datasetId,
+  getFeatureColor: _getFeatureColor,
+  getFeatureRadius: _getFeatureRadius,
+  radius,
+  ...layerProps
+}: GeoClusterLayerProps) {
+  const { getDataset, version } = useMapRuntime();
+  const dataset = getDataset(datasetId);
+  useCompatibilityLayer("geo-clusters", datasetId, {
+    maxZoom: layerProps.maxZoom,
+    minZoom: layerProps.minZoom,
+    radius,
+  });
+  void version;
+
+  if (dataset?.kind !== "geo-points") return null;
+
+  return <ClusterLayer {...layerProps} clusterRadius={radius} points={dataset.points} />;
 }
 
 export type GeoPointLayerProps = {
@@ -134,10 +234,7 @@ export type GeoPointLayerProps = {
 export function GeoPointLayer(props: GeoPointLayerProps) {
   const { getDataset, version } = useMapRuntime();
   const dataset = getDataset(props.datasetId);
-  // Temporary shadow frame: existing consumers/tests can observe the old engine
-  // during the migration, but pixels and interaction semantics come from Maps.
-  const legacyFrame = useLegacyMapFrame({ datasetId: props.datasetId, kind: "geo-points" });
-  void legacyFrame;
+  useCompatibilityLayer("geo-points", props.datasetId);
   void version;
 
   if (dataset?.kind !== "geo-points") return null;
@@ -168,6 +265,54 @@ export function GeoPointLayer(props: GeoPointLayerProps) {
   );
 }
 
+export type GeoHeatLayerProps = Omit<HeatLayerProps, "heatmapRadius" | "points"> & {
+  datasetId: string;
+  getFeatureColor?: (feature: HeatLayerFeature) => string;
+  getFeatureRadius?: (feature: HeatLayerFeature) => number;
+  radiusMeters?: number;
+};
+
+export function GeoHeatLayer({
+  datasetId,
+  getFeatureColor: _getFeatureColor,
+  getFeatureRadius: _getFeatureRadius,
+  radiusMeters,
+  ...layerProps
+}: GeoHeatLayerProps) {
+  const { getDataset, version } = useMapRuntime();
+  const dataset = getDataset(datasetId);
+  useCompatibilityLayer("geo-heat", datasetId, {
+    radiusMeters,
+    weightMetric: layerProps.weightMetric,
+  });
+  void version;
+
+  if (dataset?.kind !== "geo-points") return null;
+
+  return (
+    <HeatLayer
+      {...layerProps}
+      heatmapRadius={radiusMeters === undefined ? undefined : { meters: radiusMeters }}
+      points={dataset.points}
+    />
+  );
+}
+
+export type GeoFlowLayerProps = Omit<FlowLayerProps, "flows"> & {
+  datasetId: string;
+};
+
+export function GeoFlowLayer({ datasetId, ...layerProps }: GeoFlowLayerProps) {
+  const { getDataset, version } = useMapRuntime();
+  const dataset = getDataset(datasetId);
+  useCompatibilityLayer("geo-flows", datasetId, { weightMetric: layerProps.weightMetric });
+  void version;
+
+  if (dataset?.kind !== "geo-flows") return null;
+
+  return <FlowLayer {...layerProps} flows={dataset.flows} />;
+}
+
 export type EngineGeoJsonLayerFeature<
   TProperties extends Record<string, unknown> = Record<string, unknown>,
 > = {
@@ -189,9 +334,7 @@ export type EngineGeoJsonLayerProps = {
 export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
   const { getDataset, version } = useMapRuntime();
   const dataset = getDataset(props.datasetId);
-  // Temporary shadow frame; the native GeoJsonLayer below remains the renderer.
-  const legacyFrame = useLegacyMapFrame({ datasetId: props.datasetId, kind: "geojson" });
-  void legacyFrame;
+  useCompatibilityLayer("geojson", props.datasetId);
   void version;
 
   if (dataset?.kind !== "geojson") return null;
@@ -235,6 +378,56 @@ function useMapRuntime() {
     throw new Error("Maps-native dataset components must be used within a MapEngineProvider.");
   }
   return context;
+}
+
+function useCompatibilityLayer(
+  kind: "geo-clusters" | "geo-flows" | "geo-heat" | "geo-points" | "geojson",
+  publicDatasetId: string,
+  options: Record<string, unknown> = {},
+) {
+  const surface = useContext(MapSurfaceContext);
+  const { compatibilityEngine, getCompatibilityDatasetId, version } = useMapRuntime();
+  const compatibilityLayerIdRef = useRef<string | null>(null);
+  const compatibilityDatasetId = getCompatibilityDatasetId(publicDatasetId);
+  const optionsKey = JSON.stringify(options);
+
+  useEffect(() => {
+    if (!compatibilityEngine?.addLayer || !compatibilityDatasetId) return;
+
+    const compatibilityLayerId = compatibilityEngine.addLayer({
+      ...JSON.parse(optionsKey),
+      datasetId: compatibilityDatasetId,
+      kind,
+    });
+
+    if (typeof compatibilityLayerId !== "string") return;
+    compatibilityLayerIdRef.current = compatibilityLayerId;
+
+    return () => {
+      if (compatibilityLayerIdRef.current === compatibilityLayerId) {
+        compatibilityLayerIdRef.current = null;
+      }
+      compatibilityEngine.removeLayer?.(compatibilityLayerId);
+    };
+  }, [compatibilityDatasetId, compatibilityEngine, kind, optionsKey]);
+
+  useEffect(() => {
+    const compatibilityLayerId = compatibilityLayerIdRef.current;
+    if (!compatibilityEngine?.computeFrame || !compatibilityLayerId || !surface) return;
+
+    compatibilityEngine.computeFrame({
+      layerIds: [compatibilityLayerId],
+      viewport: {
+        bounds: [-180, -90, 180, 90],
+        center: surface.viewState.center,
+        display: surface.display,
+        height: 1,
+        kind: "geo",
+        width: 1,
+        zoom: surface.viewState.zoom,
+      },
+    });
+  }, [compatibilityEngine, surface, version]);
 }
 
 function mapPointCallback(
@@ -337,3 +530,5 @@ function mapGeoJsonInteractionChange(
         })
     : undefined;
 }
+
+export type { FlowLayerFeature, HeatLayerFeature };
