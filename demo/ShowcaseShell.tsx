@@ -1,5 +1,6 @@
 import { useSyncExternalStore, type ReactNode } from "react";
 
+import { RendererComparison } from "./RendererComparison";
 import { getRustRuntimeStatus, subscribeRustRuntimeStatus } from "./rust-runtime-status";
 
 export function ShowcaseShell({ children }: { children: ReactNode }) {
@@ -21,7 +22,7 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
           <p>
             Clustering, scalar fields, flows, timelines, globe display, GeoJSON operations, and
             editing in one live workbench. Maps owns the domain logic; Rust/WASM is taking over the
-            heavy geographic computation while MapLibre remains the browser rendering surface.
+            heavy geographic computation while browser renderers remain replaceable pixel backends.
           </p>
         </div>
 
@@ -37,9 +38,11 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
             <small>{runtimeStatus.detail}</small>
           </article>
           <article className="maps-showcase__runtime-card">
-            <span>Renderer</span>
-            <strong>MapLibre</strong>
-            <small>Camera, basemap, picking, and current browser presentation.</small>
+            <span>Renderers</span>
+            <strong>MapLibre + Canvas2D</strong>
+            <small>
+              Shared Maps semantics; camera/basemap stay MapLibre-owned in this horizon.
+            </small>
           </article>
           <article className="maps-showcase__runtime-card">
             <span>Capabilities</span>
@@ -50,6 +53,7 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
       </header>
 
       <div className="maps-showcase__content">{children}</div>
+      <RendererComparison />
     </div>
   );
 }
