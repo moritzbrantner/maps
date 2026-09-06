@@ -56,13 +56,6 @@ import {
 } from "./webgl-flat-runtime";
 import { createFlowPathCoordinates } from "./flow-layer";
 import type { FlowLayerFeature } from "./flow-layer";
-import type {
-  VizDataset,
-  VizEngine,
-  VizGeoJsonFeatureCollection,
-  VizLayer,
-  VizRenderLayer,
-} from "@moritzbrantner/viz-engine/core";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -269,7 +262,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-type MockVizEngine = VizEngine & {
+type MockDataset =
+  | { kind: "geo-points"; points: readonly MapPoint[] }
+  | { flows: readonly MapFlow[]; kind: "geo-flows" }
+  | { featureCollection: GeoJsonMapSource; kind: "geojson" };
+
+type MockLayer = {
+  datasetId: string;
+  kind: "geo-clusters" | "geo-flows" | "geo-heat" | "geo-points" | "geojson";
+  [key: string]: unknown;
+};
+
+type MockRenderLayer = {
+  kind: string;
+  layerId: string;
+  [key: string]: unknown;
+};
+
+type MockCompatibilityEngine = {
   addDataset: ReturnType<typeof vi.fn>;
   addLayer: ReturnType<typeof vi.fn>;
   computeFrame: ReturnType<typeof vi.fn>;
@@ -278,21 +288,21 @@ type MockVizEngine = VizEngine & {
   updateLayer: ReturnType<typeof vi.fn>;
 };
 
-function createMockVizEngine(): MockVizEngine {
-  const datasets = new Map<string, VizDataset>();
-  const layers = new Map<string, VizLayer>();
+function createMockCompatibilityEngine(): MockCompatibilityEngine {
+  const datasets = new Map<string, MockDataset>();
+  const layers = new Map<string, MockLayer>();
   let nextDatasetId = 0;
   let nextLayerId = 0;
 
   const engine = {
-    addDataset: vi.fn((dataset: VizDataset) => {
+    addDataset: vi.fn((dataset: MockDataset) => {
       const datasetId = `dataset-${++nextDatasetId}`;
 
       datasets.set(datasetId, dataset);
 
       return datasetId;
     }),
-    addLayer: vi.fn((layer: VizLayer) => {
+    addLayer: vi.fn((layer: MockLayer) => {
       const layerId = `layer-${++nextLayerId}`;
 
       layers.set(layerId, layer);
@@ -309,7 +319,7 @@ function createMockVizEngine(): MockVizEngine {
         const layer = layers.get(layerId);
         const dataset = layer ? datasets.get(layer.datasetId) : null;
         const renderedLayer =
-          layer && dataset ? createMockVizRenderLayer(layerId, layer, dataset) : null;
+          layer && dataset ? createMockMockRenderLayer(layerId, layer, dataset) : null;
 
         return renderedLayer ? [renderedLayer] : [];
       });
@@ -338,7 +348,7 @@ function createMockVizEngine(): MockVizEngine {
     removeLayer: vi.fn((layerId: string) => {
       layers.delete(layerId);
     }),
-    updateDataset: vi.fn((datasetId: string, dataset: VizDataset) => {
+    updateDataset: vi.fn((datasetId: string, dataset: MockDataset) => {
       if (!datasets.has(datasetId)) {
         return false;
       }
@@ -347,7 +357,7 @@ function createMockVizEngine(): MockVizEngine {
 
       return true;
     }),
-    updateLayer: vi.fn((layerId: string, layer: VizLayer) => {
+    updateLayer: vi.fn((layerId: string, layer: MockLayer) => {
       if (!layers.has(layerId)) {
         return false;
       }
@@ -358,14 +368,14 @@ function createMockVizEngine(): MockVizEngine {
     }),
   };
 
-  return engine as unknown as MockVizEngine;
+  return engine as unknown as MockCompatibilityEngine;
 }
 
-function createMockVizRenderLayer(
+function createMockMockRenderLayer(
   layerId: string,
-  layer: VizLayer,
-  dataset: VizDataset,
-): VizRenderLayer | null {
+  layer: MockLayer,
+  dataset: MockDataset,
+): MockRenderLayer | null {
   if (layer.kind === "geo-points" && dataset.kind === "geo-points") {
     return {
       bounds: null,
@@ -493,7 +503,7 @@ function createMockVizRenderLayer(
   }
 
   if (layer.kind === "geojson" && dataset.kind === "geojson") {
-    const featureCollection = dataset.featureCollection as VizGeoJsonFeatureCollection;
+    const featureCollection = dataset.featureCollection as GeoJsonMapSource;
 
     return {
       bounds: null,
@@ -1767,7 +1777,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
   });
 
   test("keeps engine datasets registered when parents re-render with the same data reference", async () => {
-    const engine = createMockVizEngine();
+    const engine = createMockCompatibilityEngine();
     const points = [{ id: "store-1", latitude: 40, longitude: -74 }];
     const { rerender } = render(
       <MapEngineProvider backend={{ finance: "js", geo: "js", xy: "js" }} engine={engine}>
@@ -1792,7 +1802,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
   });
 
   test("keeps engine layers registered across flat viewport renders", async () => {
-    const engine = createMockVizEngine();
+    const engine = createMockCompatibilityEngine();
     const points = [{ id: "store-1", latitude: 40, longitude: -74 }];
     let controller: import("./map-display").MapSurfaceController | null = null;
 
@@ -1906,7 +1916,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
   ])(
     "re-renders engine-backed flat $label layers on pan and zoom",
     async ({ dataset, layer, label }) => {
-      const engine = createMockVizEngine();
+      const engine = createMockCompatibilityEngine();
       let controller: import("./map-display").MapSurfaceController | null = null;
 
       render(
@@ -1945,7 +1955,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
   );
 
   test("routes flat engine point interactions through the map surface", async () => {
-    const engine = createMockVizEngine();
+    const engine = createMockCompatibilityEngine();
     const onFeatureContextMenu = vi.fn();
     const onFeatureHover = vi.fn();
     const onFeatureSelect = vi.fn();
@@ -1999,7 +2009,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
   });
 
   test("uses current globe view state when computing engine globe layers", async () => {
-    const engine = createMockVizEngine();
+    const engine = createMockCompatibilityEngine();
 
     render(
       <MapEngineProvider engine={engine}>

@@ -5,7 +5,7 @@ export type MapRuntimePoint<TProperties = Record<string, unknown>> = IndexedMapP
 
 export type MapRuntimeFlow<TProperties = Record<string, unknown>> = {
   from: [longitude: number, latitude: number];
-  id?: string;
+  id: string;
   label?: string;
   metrics?: MapMetricRecord;
   properties?: TProperties;

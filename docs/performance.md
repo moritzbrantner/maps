@@ -47,15 +47,14 @@ increase quality and CPU/memory cost.
 />
 ```
 
-`initializeMapsScalarFieldWasm(...)` can opt into the engine-backed scalar-field
-path provided by the required `@moritzbrantner/viz-engine/core` entrypoint. If
-initialization fails, scalar field creation falls back to TypeScript and
-`getMapsScalarFieldWasmLoadError()` exposes the last load error.
-
-`@moritzbrantner/viz-engine@0.3.0` also exposes a lazy WASM entrypoint, but maps
-keeps the scalar-field initialization path synchronous for now. Lazy loading
-requires a separate maps-level API design because the current helper returns a
-ready-to-use runtime state.
+`initializeMapsScalarFieldWasm(...)` now targets the first-party
+`@moritzbrantner/maps/wasm` boundary. A Maps WASM build that exposes scalar-field
+computation can become the fast path without introducing a second visualization
+authority. Until that export is available, initialization fails closed and scalar
+field creation continues through the deterministic TypeScript implementation;
+`getMapsScalarFieldWasmLoadError()` exposes the load/capability error. This
+boundary is computation-only: browser renderers consume Maps-owned map-domain
+outputs rather than becoming a second source of geographic truth.
 
 ## Temporal GeoJSON
 
