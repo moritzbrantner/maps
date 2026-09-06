@@ -52,7 +52,9 @@ increase quality and CPU/memory cost.
 computation can become the fast path without introducing a second visualization
 authority. Until that export is available, initialization fails closed and scalar
 field creation continues through the deterministic TypeScript implementation;
-`getMapsScalarFieldWasmLoadError()` exposes the load/capability error.
+`getMapsScalarFieldWasmLoadError()` exposes the load/capability error. This
+boundary is computation-only: browser renderers consume Maps-owned map-domain
+outputs rather than becoming a second source of geographic truth.
 
 ## Temporal GeoJSON
 
