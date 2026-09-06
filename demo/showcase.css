@@ -145,13 +145,22 @@ body {
   margin-top: 2px;
 }
 
-/* Keep the working map stage unchanged so the showcase shell does not become a
-   second source of map styling or invalidate the interaction baselines. */
+/* Keep the working map stage visually stable while removing the old full-screen
+   grid stretch that pushed it far below the controls. The explicit stage height
+   gives the map room to dominate without reintroducing empty layout rows. */
 .maps-showcase__content > main {
   align-content: start !important;
   min-height: 0 !important;
   gap: 12px !important;
   padding: 24px !important;
+}
+
+.maps-showcase__content .demo-stage {
+  min-height: 682px;
+}
+
+.maps-showcase__content .demo-stage:has(.demo-editor-facts) {
+  min-height: 715px;
 }
 
 .maps-showcase__content > main > header {
@@ -313,6 +322,11 @@ body {
   .maps-showcase__content > main {
     gap: 10px !important;
     padding: 12px !important;
+  }
+
+  .maps-showcase__content .demo-stage,
+  .maps-showcase__content .demo-stage:has(.demo-editor-facts) {
+    min-height: 0;
   }
 
   .maps-showcase__content > main > header {
