@@ -1,0 +1,124 @@
+name: Fix compatibility engine typing
+
+on:
+  push:
+    branches:
+      - feat/maps-native-runtime-final
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: feat/maps-native-runtime-final
+      - name: Make compatibility engine deliberately structural
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('src/map-native-components.tsx')
+          text = p.read_text()
+          old = '''type CompatibilityEngine = {
+            addDataset?: (dataset: unknown) => unknown;
+            addLayer?: (layer: unknown) => unknown;
+            computeFrame?: (options: unknown) => unknown;
+            removeDataset?: (datasetId: string) => void;
+            removeLayer?: (layerId: string) => void;
+          };
+          '''
+          new = '''type CompatibilityEngine = {
+            addDataset?: unknown;
+            addLayer?: unknown;
+            computeFrame?: unknown;
+            removeDataset?: unknown;
+            removeLayer?: unknown;
+          };
+          '''
+          if old not in text:
+              raise SystemExit('CompatibilityEngine block did not match')
+          text = text.replace(old, new)
+          text = text.replace(
+              'export function MapEngineProvider({ children, engine = null }: MapEngineProviderProps) {',
+              'export function MapEngineProvider({ children, engine }: MapEngineProviderProps) {',
+          )
+          text = text.replace(
+              'const compatibilityDatasetId = engine?.addDataset?.(dataset);',
+              'const compatibilityDatasetId = callCompatibilityEngine(engine, "addDataset", dataset);',
+          )
+          text = text.replace(
+              'engine?.removeDataset?.(currentCompatibilityId);',
+              'callCompatibilityEngine(engine, "removeDataset", currentCompatibilityId);',
+          )
+          text = text.replace(
+              'compatibilityEngine: engine,',
+              'compatibilityEngine: engine ?? null,',
+          )
+          text = text.replace(
+              'if (!compatibilityEngine?.addLayer || !compatibilityDatasetId) return;',
+              'if (!compatibilityEngine || !compatibilityDatasetId) return;',
+          )
+          text = text.replace(
+              '''const compatibilityLayerId = compatibilityEngine.addLayer({
+                ...JSON.parse(optionsKey),
+                datasetId: compatibilityDatasetId,
+                kind,
+              });''',
+              '''const compatibilityLayerId = callCompatibilityEngine(compatibilityEngine, "addLayer", {
+                ...JSON.parse(optionsKey),
+                datasetId: compatibilityDatasetId,
+                kind,
+              });''',
+          )
+          text = text.replace(
+              'compatibilityEngine.removeLayer?.(compatibilityLayerId);',
+              'callCompatibilityEngine(compatibilityEngine, "removeLayer", compatibilityLayerId);',
+          )
+          text = text.replace(
+              'if (!compatibilityEngine?.computeFrame || !compatibilityLayerId || !surface) return;',
+              'if (!compatibilityEngine || !compatibilityLayerId || !surface) return;',
+          )
+          text = text.replace(
+              '''compatibilityEngine.computeFrame({
+              layerIds: [compatibilityLayerId],''',
+              '''callCompatibilityEngine(compatibilityEngine, "computeFrame", {
+              layerIds: [compatibilityLayerId],''',
+          )
+          anchor = '''function useMapRuntime() {
+            const context = useContext(MapRuntimeContext);
+            if (!context) {
+              throw new Error("Maps-native dataset components must be used within a MapEngineProvider.");
+            }
+            return context;
+          }
+          '''
+          helper = anchor + '''
+          function callCompatibilityEngine(
+            engine: CompatibilityEngine | null | undefined,
+            method: keyof CompatibilityEngine,
+            ...args: unknown[]
+          ) {
+            const candidate = engine?.[method];
+            return typeof candidate === "function"
+              ? (candidate as (...values: unknown[]) => unknown)(...args)
+              : undefined;
+          }
+          '''
+          if anchor not in text:
+              raise SystemExit('useMapRuntime anchor did not match')
+          text = text.replace(anchor, helper, 1)
+          p.write_text(text)
+          Path('.github/workflows/fix-compatibility-types-once.yml').unlink()
+          PY
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/map-native-components.tsx .github/workflows/fix-compatibility-types-once.yml
+          git commit -m "fix: type deprecated engine compatibility structurally"
+          git push origin HEAD:feat/maps-native-runtime-final
