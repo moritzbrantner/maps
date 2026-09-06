@@ -1,0 +1,16 @@
+/* Keep the existing map-stage geometry stable while the outer Pages shell changes.
+   This preserves interaction and visual baselines without restoring the old stretched page grid. */
+.maps-showcase__content .demo-stage {
+  min-height: 681px;
+}
+
+.maps-showcase__content .demo-stage:has(.demo-editor-facts) {
+  min-height: 714px;
+}
+
+@media (max-width: 900px) {
+  .maps-showcase__content .demo-stage,
+  .maps-showcase__content .demo-stage:has(.demo-editor-facts) {
+    min-height: 0;
+  }
+}
