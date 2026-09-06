@@ -1,0 +1,51 @@
+name: Repair editor smoke once
+
+on:
+  push:
+    branches:
+      - feat/maps-canvas-renderer-showcase
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/maps-canvas-renderer-showcase
+      - name: Repair editor mode transition
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("e2e/maps-interactions.spec.ts")
+          text = path.read_text()
+          old = '''  await clickFeatureCoordinate(page, "geojson", "geojson-polygon");
+          await editorToolbarButton(page, "Reshape").click();
+          '''
+          new = '''  await editorToolbarButton(page, "Select").click();
+          await expect.poll(() => getEditMode(page)).toBe("select");
+          await clickFeatureCoordinate(page, "geojson", "geojson-polygon");
+          await expect(
+            page.getByLabel("Selected GeoJSON element").getByText("Polygon", { exact: true }),
+          ).toBeVisible();
+          await editorToolbarButton(page, "Reshape").click();
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one editor smoke transition to repair")
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Remove one-shot workflow
+        run: git rm .github/workflows/repair-editor-smoke-once.yml
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add e2e/maps-interactions.spec.ts
+          git diff --cached --check
+          git commit -m "test: select polygon before reshape smoke"
+          git push
