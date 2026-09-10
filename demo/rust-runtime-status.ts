@@ -54,11 +54,12 @@ export function markRustRuntimeLoaded() {
 
 export function recordRustAggregationDiagnostic(event: MapsAggregationDiagnostic) {
   if (event.mode === "authoritative") {
+    if (status.state === "authoritative") {
+      return;
+    }
+
     updateStatus({
-      detail:
-        event.featureCount === undefined
-          ? "Rust/WASM is authoritative for point aggregation in this session."
-          : `Rust/WASM is authoritative for the live ${event.featureCount}-feature viewport.`,
+      detail: "Rust/WASM is authoritative for point aggregation in this session.",
       label: "Rust authoritative",
       state: "authoritative",
     });
@@ -94,6 +95,14 @@ export function markRustRuntimeUnavailable(detail: string) {
 }
 
 function updateStatus(nextStatus: RustRuntimeStatus) {
+  if (
+    status.detail === nextStatus.detail &&
+    status.label === nextStatus.label &&
+    status.state === nextStatus.state
+  ) {
+    return;
+  }
+
   status = nextStatus;
   for (const listener of listeners) {
     listener();
