@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import "@moritzbrantner/ui/atlas/styles.css";
+import "@moritzbrantner/ui/component-sources.css";
 import "../styles.css";
 import "./styles.css";
 import "./showcase.css";
