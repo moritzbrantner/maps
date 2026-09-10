@@ -35,7 +35,7 @@ jobs:
       actions: read
       contents: read
       packages: read
-    uses: moritzbrantner/reusable-workflows/.github/workflows/build-artifact.yml@3f5a0b2505eb97fb46116e00e7651443c58e5d6c
+    uses: moritzbrantner/reusable-workflows/.github/workflows/build-artifact.yml@680d4f7bda61361b10865d8835bc7ef69a24061b
     with:
       source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       artifact_key: maps-example-pages-v1
@@ -71,7 +71,7 @@ jobs:
       pages: write
       id-token: write
       packages: read
-    uses: moritzbrantner/reusable-workflows/.github/workflows/deploy-pages.yml@2ec97db0aa1a3bcd2f664af0b0d69bef8bab578f
+    uses: moritzbrantner/reusable-workflows/.github/workflows/deploy-pages.yml@680d4f7bda61361b10865d8835bc7ef69a24061b
     with:
       node_version: ""
       bun_version: ""
