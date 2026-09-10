@@ -23,6 +23,8 @@ on:
 permissions:
   contents: read
   packages: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages' }}
