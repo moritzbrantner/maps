@@ -75,8 +75,8 @@ export async function loadMapsAggregationWasmRuntime(
 
 /**
  * Single reviewed dynamic-import boundary for the version-matched Maps WASM
- * package. Runtime-specific loaders should reuse this function rather than
- * adding new Function-constructor sites or independent package resolution.
+ * package. Runtime-specific loaders reuse this function instead of creating
+ * additional constructor-based import sites or independent package resolution.
  */
 export async function importMapsWasmModule<TModule extends MapsWasmModuleBase>(
   packageName = DEFAULT_MAPS_WASM_PACKAGE,
