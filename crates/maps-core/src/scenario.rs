@@ -112,7 +112,9 @@ impl fmt::Display for EngineScenarioError {
             Self::Decode(error) => write!(formatter, "invalid engine scenario JSON: {error}"),
             Self::Encode(error) => write!(formatter, "failed to encode engine observation: {error}"),
             Self::Invalid(message) => write!(formatter, "invalid engine scenario: {message}"),
-            Self::Unsupported(message) => write!(formatter, "unsupported engine scenario: {message}"),
+            Self::Unsupported(message) => {
+                write!(formatter, "unsupported engine scenario: {message}")
+            }
         }
     }
 }
@@ -253,18 +255,17 @@ fn apply_operation(
     camera: MapCamera,
     operation: CameraOperation,
 ) -> Result<MapCamera, EngineScenarioError> {
-    match operation {
+    let next = match operation {
         CameraOperation::SetCenter {
             longitude,
             latitude,
         } => camera.with_center(longitude, latitude),
         CameraOperation::SetZoom { zoom } => camera.with_zoom(zoom),
-        CameraOperation::Resize { width, height } => {
-            let viewport = ViewportSize::new(width, height)?;
-            camera.with_viewport(viewport)
-        }
-    }
-    .ok_or_else(|| {
+        CameraOperation::Resize { width, height } => ViewportSize::new(width, height)
+            .and_then(|viewport| camera.with_viewport(viewport)),
+    };
+
+    next.ok_or_else(|| {
         EngineScenarioError::Invalid(format!(
             "operation {} produced an invalid camera",
             operation.name()
@@ -361,12 +362,16 @@ fn canonical_zero(value: f64) -> f64 {
 mod tests {
     use super::*;
 
-    const CAMERA_SCENARIO: &str = include_str!("../../../engine-scenarios/camera-world-pan-v1.json");
+    const CAMERA_SCENARIO: &str =
+        include_str!("../../../engine-scenarios/camera-world-pan-v1.json");
 
     #[test]
     fn canonical_camera_scenario_executes_all_declared_operations() {
-        let result = execute_engine_scenario(CAMERA_SCENARIO, EngineImplementationIdentity::maps_rust())
-            .expect("canonical camera scenario");
+        let result = execute_engine_scenario(
+            CAMERA_SCENARIO,
+            EngineImplementationIdentity::maps_rust(),
+        )
+        .expect("canonical camera scenario");
 
         assert_eq!(result.schema_version, OBSERVATION_SCHEMA_VERSION);
         assert_eq!(result.scenario_id, CAMERA_WORLD_PAN_V1);
@@ -380,8 +385,11 @@ mod tests {
 
     #[test]
     fn camera_scenario_observes_antimeridian_wrapping() {
-        let result = execute_engine_scenario(CAMERA_SCENARIO, EngineImplementationIdentity::maps_rust())
-            .expect("canonical camera scenario");
+        let result = execute_engine_scenario(
+            CAMERA_SCENARIO,
+            EngineImplementationIdentity::maps_rust(),
+        )
+        .expect("canonical camera scenario");
         let east_state = &result.states[1];
 
         assert!(east_state.visible_bounds.crosses_antimeridian);
