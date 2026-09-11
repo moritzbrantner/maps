@@ -166,13 +166,15 @@ function visibleBounds(map, viewport) {
 }
 
 function captureProjection(map, input) {
-  const world = MercatorCoordinate.fromLngLat({ lng: input[0], lat: input[1] });
-  const screen = map.project(input);
+  const wrappedLongitude = wrapLongitude(input[0]);
+  const world = MercatorCoordinate.fromLngLat({ lng: wrappedLongitude, lat: input[1] });
+  const projectedLongitude = nearestWorldLongitude(wrappedLongitude, map.getCenter().lng);
+  const screen = map.project([projectedLongitude, input[1]]);
   const unprojected = map.unproject(screen);
 
   return {
     input: input.map(canonicalZero),
-    wrappedLongitude: canonicalZero(wrapLongitude(input[0])),
+    wrappedLongitude: canonicalZero(wrappedLongitude),
     world: [canonicalZero(world.x), canonicalZero(world.y)],
     screen: [canonicalZero(screen.x), canonicalZero(screen.y)],
     unprojected: [
@@ -180,6 +182,16 @@ function captureProjection(map, input) {
       canonicalZero(unprojected.lat),
     ],
   };
+}
+
+function nearestWorldLongitude(longitude, centerLongitude) {
+  let candidate = wrapLongitude(longitude);
+  const center = wrapLongitude(centerLongitude);
+  const delta = candidate - center;
+
+  if (delta > 180) candidate -= 360;
+  if (delta < -180) candidate += 360;
+  return candidate;
 }
 
 function wrapLongitude(longitude) {
