@@ -272,10 +272,15 @@ pub fn world_size(zoom: f64, tile_size: f64) -> Option<f64> {
     Some(size)
 }
 
-/// Wraps longitude into `[-180, 180)` without adding an offset first, avoiding
-/// loss of the representable distinction immediately adjacent to ±180°.
+/// Wraps longitude into `[-180, 180)` while preserving already-canonical
+/// finite values exactly. The fast path avoids modulo rounding at tiny negative
+/// values and at representable values immediately adjacent to ±180°.
 #[must_use]
 pub fn wrap_longitude(longitude: f64) -> f64 {
+    if (-180.0..180.0).contains(&longitude) {
+        return longitude;
+    }
+
     let wrapped = longitude.rem_euclid(360.0);
     if wrapped >= 180.0 {
         wrapped - 360.0
@@ -304,7 +309,13 @@ fn wrap_world_x(x: f64) -> f64 {
 }
 
 fn shortest_wrapped_delta(delta: f64) -> f64 {
-    (delta + 0.5).rem_euclid(1.0) - 0.5
+    if delta >= 0.5 {
+        delta - 1.0
+    } else if delta < -0.5 {
+        delta + 1.0
+    } else {
+        delta
+    }
 }
 
 fn tile_dimension(z: u8) -> Option<u64> {
