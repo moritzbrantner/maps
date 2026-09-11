@@ -1,6 +1,6 @@
 use maps_core::{
     MapCamera, ScreenCoordinate, TileId, ViewportSize, project_web_mercator,
-    unproject_web_mercator, wrap_longitude,
+    unproject_web_mercator, world_size, wrap_longitude,
 };
 
 const EPSILON: f64 = 1e-9;
@@ -31,12 +31,12 @@ fn web_mercator_round_trips_representative_coordinates() {
 }
 
 #[test]
-fn projection_clamps_the_finite_mercator_latitude_domain() {
+fn projection_clamps_the_finite_mercator_latitude_domain_exactly() {
     let north = project_web_mercator(0.0, 90.0).expect("finite coordinate");
     let south = project_web_mercator(0.0, -90.0).expect("finite coordinate");
 
-    assert_near(north.y, 0.0);
-    assert_near(south.y, 1.0);
+    assert_eq!(north.y, 0.0);
+    assert_eq!(south.y, 1.0);
 }
 
 #[test]
@@ -45,6 +45,23 @@ fn longitude_wrap_is_canonical_across_world_copies() {
     assert_near(wrap_longitude(540.0), -180.0);
     assert_near(wrap_longitude(-540.0), -180.0);
     assert_near(wrap_longitude(181.0), -179.0);
+}
+
+#[test]
+fn world_size_rejects_overflow_underflow_and_invalid_tile_sizes() {
+    assert_eq!(world_size(1023.0, 512.0), None);
+    assert_eq!(world_size(-1075.0, 512.0), None);
+    assert_eq!(world_size(2.0, 0.0), None);
+    assert_eq!(world_size(2.0, f64::NAN), None);
+    assert_eq!(world_size(2.0, 512.0), Some(2048.0));
+}
+
+#[test]
+fn camera_rejects_zoom_with_non_finite_derived_world_scale() {
+    let viewport = ViewportSize::new(1280.0, 720.0).expect("valid viewport");
+
+    assert_eq!(MapCamera::new(0.0, 0.0, 1023.0, 0.0, 0.0, viewport), None);
+    assert_eq!(MapCamera::new(0.0, 0.0, -1075.0, 0.0, 0.0, viewport), None);
 }
 
 #[test]
@@ -87,6 +104,20 @@ fn camera_fails_closed_for_unimplemented_bearing_or_pitch_projection() {
     assert_eq!(pitch.project_screen(0.0, 0.0), None);
     assert_eq!(
         pitch.unproject_screen(ScreenCoordinate { x: 400.0, y: 300.0 }),
+        None
+    );
+}
+
+#[test]
+fn camera_fails_closed_for_non_finite_screen_input() {
+    let viewport = ViewportSize::new(800.0, 600.0).expect("valid viewport");
+    let camera = MapCamera::new(0.0, 0.0, 2.0, 0.0, 0.0, viewport).expect("valid camera");
+
+    assert_eq!(
+        camera.unproject_screen(ScreenCoordinate {
+            x: f64::NAN,
+            y: 300.0,
+        }),
         None
     );
 }
