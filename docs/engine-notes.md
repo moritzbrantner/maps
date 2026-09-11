@@ -1,0 +1,1 @@
+The authoritative roadmap is `docs/engine-roadmap.md`; supporting documents must not become competing roadmaps. If guidance duplicates the authoritative roadmap without adding a stable contract, consolidate it during milestone convergence.
