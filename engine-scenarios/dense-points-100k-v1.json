@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "dense-points-100k-v1",
+  "fixture": {
+    "generator": "seeded-uniform-world-points",
+    "seed": 20260911,
+    "count": 100000,
+    "metrics": ["weight", "demand"]
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "journey": [
+    { "longitude": 0, "latitude": 0, "zoom": 2 },
+    { "longitude": 13.405, "latitude": 52.52, "zoom": 5 },
+    { "longitude": -73.9857, "latitude": 40.7484, "zoom": 8 },
+    { "longitude": 179.8, "latitude": 10, "zoom": 4 },
+    { "longitude": -179.8, "latitude": 10, "zoom": 4 }
+  ],
+  "observations": [
+    "visible-feature-identities",
+    "cluster-metrics",
+    "cluster-expansion-zoom",
+    "bounded-cluster-leaves",
+    "pick-result"
+  ],
+  "runtimePhases": [
+    "index-build",
+    "aggregation",
+    "render-frame",
+    "renderer-upload-paint",
+    "picking"
+  ]
+}
