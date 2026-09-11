@@ -22,8 +22,12 @@ const DEFAULT_TILE_SIZE = 256;
 const DEFAULT_SOURCE_MAX_ZOOM = 19;
 const MAX_MAP_ZOOM = 22;
 
+type MapsCanvasFitBoundsOptions = MapFitBoundsOptions & {
+  reason?: MapViewStateChangeReason;
+};
+
 export type MapsCanvasFlatRuntimeController = {
-  fitBounds(bounds: MapBounds, options?: MapFitBoundsOptions): void;
+  fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
 };
@@ -147,7 +151,7 @@ export function MapsCanvasFlatRuntime({
           const effectiveMaxZoom =
             options.maxZoom ?? normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
           runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
-          emitViewState(syncFrame(), "fit-bounds");
+          emitViewState(syncFrame(), options.reason ?? "fit-bounds");
         },
         setViewState(next, reason = "programmatic") {
           runtime.setViewState(next);
