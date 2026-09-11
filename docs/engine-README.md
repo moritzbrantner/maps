@@ -1,0 +1,1 @@
+Start with `engine-roadmap.md`, then `engine-scenarios.md` and `engine-evidence.md`. ADR 0006 records the architecture decision. The remaining `engine-*` files refine stable boundary/policy details and must be consolidated if they drift or duplicate the authoritative roadmap.
