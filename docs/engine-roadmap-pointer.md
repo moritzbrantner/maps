@@ -1,0 +1,1 @@
+The authoritative roadmap is `docs/engine-roadmap.md`. This pointer exists only for tooling/docs navigation; do not treat supporting files as independent roadmaps.
