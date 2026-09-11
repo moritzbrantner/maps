@@ -28,6 +28,7 @@ type MapsCanvasFitBoundsOptions = MapFitBoundsOptions & {
 
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
+  project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
 };
@@ -152,6 +153,10 @@ export function MapsCanvasFlatRuntime({
             options.maxZoom ?? normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
           runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
           emitViewState(syncFrame(), options.reason ?? "fit-bounds");
+        },
+        project(coordinates) {
+          const [x, y] = runtime.project(coordinates[0], coordinates[1]);
+          return { x, y };
         },
         setViewState(next, reason = "programmatic") {
           runtime.setViewState(next);
