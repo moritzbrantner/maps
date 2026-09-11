@@ -20,8 +20,9 @@ export function MapsRuntimeAcceptance() {
     <main style={{ margin: "0 auto", maxWidth: 1120, padding: 24 }}>
       <h1>Maps-owned flat runtime acceptance</h1>
       <p>
-        This path constructs the Rust/WASM camera and tile runtime directly. It intentionally uses no
-        MapLibre instance and no raster network source so interaction evidence stays deterministic.
+        This path constructs the Rust/WASM camera and tile runtime directly. It intentionally uses
+        no MapLibre instance and no raster network source so interaction evidence stays
+        deterministic.
       </p>
       <MapView
         flatRuntime="maps"
