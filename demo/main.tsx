@@ -10,7 +10,9 @@ import "./showcase.css";
 import "./showcase-stage.css";
 
 import { initializeMapsAggregationWasm } from "../src/aggregation-runtime";
+import { configureMapsWasmPackage } from "../src/aggregation-wasm";
 import { App } from "./App";
+import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
 import {
   markRustRuntimeLoaded,
   markRustRuntimeLoading,
@@ -26,12 +28,13 @@ void bootstrap();
 async function bootstrap() {
   await initializeHostedRustRuntime();
 
+  const acceptanceMode = new URLSearchParams(window.location.search).get("acceptance");
+  const content = acceptanceMode === "maps-runtime" ? <MapsRuntimeAcceptance /> : <App />;
+
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <ShowcaseShell>
-          <App />
-        </ShowcaseShell>
+        <ShowcaseShell>{content}</ShowcaseShell>
       </QueryClientProvider>
     </StrictMode>,
   );
@@ -45,6 +48,8 @@ async function initializeHostedRustRuntime() {
   markRustRuntimeLoading();
 
   const moduleUrl = new URL("wasm/maps_wasm.js", document.baseURI).href;
+  configureMapsWasmPackage(moduleUrl);
+
   const initialized = await initializeMapsAggregationWasm({
     onDiagnostic: recordRustAggregationDiagnostic,
     wasmPackage: moduleUrl,
