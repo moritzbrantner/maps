@@ -220,9 +220,15 @@ pub fn project_web_mercator(longitude: f64, latitude: f64) -> Option<WorldCoordi
     let longitude = wrap_longitude(longitude);
     let latitude = clamp_mercator_latitude(latitude);
     let x = (longitude + 180.0) / 360.0;
-    let latitude_radians = latitude.to_radians();
-    let y = ((1.0 - (latitude_radians.tan() + 1.0 / latitude_radians.cos()).ln() / PI) / 2.0)
-        .clamp(0.0, 1.0);
+    let y = if latitude == MAX_MERCATOR_LATITUDE {
+        0.0
+    } else if latitude == -MAX_MERCATOR_LATITUDE {
+        1.0
+    } else {
+        let latitude_radians = latitude.to_radians();
+        ((1.0 - (latitude_radians.tan() + 1.0 / latitude_radians.cos()).ln() / PI) / 2.0)
+            .clamp(0.0, 1.0)
+    };
 
     Some(WorldCoordinate { x, y })
 }
