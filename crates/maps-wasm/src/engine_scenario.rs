@@ -1,7 +1,8 @@
 use maps_core::{
-    EngineImplementationIdentity, FlatRasterRuntime as CoreFlatRasterRuntime,
-    FlatRasterRuntimeLimits, MapCamera, RasterFramePlan, RasterSourceSpec, RasterTilePlacement,
-    ScreenCoordinate, TileId, ViewportSize, execute_engine_scenario,
+    BoundedFlatRasterRuntime as CoreBoundedFlatRasterRuntime, EngineImplementationIdentity,
+    FlatRasterRuntime as CoreFlatRasterRuntime, FlatRasterRuntimeLimits, MapBounds as CoreMapBounds,
+    MapCamera, RasterFramePlan, RasterSourceSpec, RasterTilePlacement, ScreenCoordinate, TileId,
+    ViewportSize, execute_engine_scenario,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -29,6 +30,8 @@ struct WasmFlatRasterRuntimeConfig {
     source: WasmRasterSourceSpec,
     #[serde(default)]
     limits: Option<WasmFlatRasterRuntimeLimits>,
+    #[serde(default)]
+    max_bounds: Option<[f64; 4]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,11 +126,12 @@ struct WasmRasterFramePlan {
 
 /// Stateful WASM transport over the Maps-owned flat raster runtime.
 ///
-/// The browser host supplies input/network/pixel services. Camera, tile cover,
-/// request scheduling, cancellation and cache policy remain Rust-owned.
+/// The browser host supplies input/network/pixel services. Camera, geographic
+/// constraints, tile cover, request scheduling, cancellation and cache policy
+/// remain Rust-owned.
 #[wasm_bindgen]
 pub struct MapsFlatRasterRuntime {
-    inner: CoreFlatRasterRuntime,
+    inner: CoreBoundedFlatRasterRuntime,
 }
 
 #[wasm_bindgen]
@@ -162,7 +166,9 @@ impl MapsFlatRasterRuntime {
             .ok_or_else(|| JsValue::from_str("invalid flat raster runtime limits"))?,
             None => FlatRasterRuntimeLimits::default(),
         };
-        let inner = CoreFlatRasterRuntime::new(camera, source, limits).map_err(to_js_error)?;
+        let runtime = CoreFlatRasterRuntime::new(camera, source, limits).map_err(to_js_error)?;
+        let max_bounds = config.max_bounds.map(normalize_max_bounds).transpose()?;
+        let inner = CoreBoundedFlatRasterRuntime::new(runtime, max_bounds).map_err(to_js_error)?;
 
         Ok(Self { inner })
     }
@@ -268,6 +274,20 @@ impl MapsFlatRasterRuntime {
         let camera = self.inner.camera();
         encode_json_compatible(&wasm_frame_plan(camera, plan))
     }
+}
+
+fn normalize_max_bounds(values: [f64; 4]) -> Result<CoreMapBounds, JsValue> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(JsValue::from_str("invalid flat raster max bounds"));
+    }
+
+    let west = values[0].min(values[2]);
+    let east = values[0].max(values[2]);
+    let south = values[1].min(values[3]).clamp(-90.0, 90.0);
+    let north = values[1].max(values[3]).clamp(-90.0, 90.0);
+
+    CoreMapBounds::new([west, south, east, north])
+        .ok_or_else(|| JsValue::from_str("invalid flat raster max bounds"))
 }
 
 fn wasm_frame_plan(camera: MapCamera, plan: RasterFramePlan) -> WasmRasterFramePlan {
