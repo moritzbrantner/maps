@@ -103,8 +103,20 @@ export function CanvasPointClusterLayer<
         : null,
     [clusterRadius, filterPoint, maxZoom, minZoom, mode, points],
   );
+  const activeIndexRef = useRef(index);
 
-  useEffect(() => () => index?.dispose(), [index]);
+  useEffect(() => {
+    activeIndexRef.current = index;
+
+    return () => {
+      activeIndexRef.current = null;
+      queueMicrotask(() => {
+        if (activeIndexRef.current !== index) {
+          index?.dispose();
+        }
+      });
+    };
+  }, [index]);
 
   useEffect(() => {
     const container = surface?.maplibreMap?.getContainer();
