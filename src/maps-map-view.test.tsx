@@ -25,6 +25,7 @@ vi.mock("./canvas-flat-runtime", async () => {
     unproject: (x: number, y: number) => [number, number];
   };
   type Props = {
+    maxBounds?: [number, number, number, number];
     onContextMenu?: (context: {
       coordinates: [number, number];
       position: { x: number; y: number };
@@ -71,6 +72,7 @@ vi.mock("./canvas-flat-runtime", async () => {
     return (
       <canvas
         data-flat-runtime="maps"
+        data-max-bounds={props.maxBounds?.join(",")}
         onContextMenu={(event) => {
           event.preventDefault();
           props.onContextMenu?.({
@@ -144,6 +146,27 @@ describe("Maps-owned MapView runtime", () => {
         { display: "flat", reason: "fit-bounds" },
       );
     });
+  });
+
+  test("routes maxBounds to the Rust runtime host without React clamping", async () => {
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="Bounded Maps runtime"
+        mapStyle={{ tiles: false }}
+        maxBounds={[-25, 34, 35, 66]}
+      />,
+    );
+
+    const map = screen.getByLabelText("Bounded Maps runtime");
+
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+    });
+    expect(map.querySelector('[data-flat-runtime="maps"]')?.getAttribute("data-max-bounds")).toBe(
+      "-25,34,35,66",
+    );
   });
 
   test("fits data through the Rust-runtime controller after readiness", async () => {
@@ -346,19 +369,7 @@ describe("Maps-owned MapView runtime", () => {
     ).toThrow(/requires an explicit raster tile style/);
   });
 
-  test("fails closed for MapLibre-specific readiness and maxBounds contracts", () => {
-    expect(() =>
-      render(
-        <MapView
-          flatRuntime="maps"
-          fitToData={false}
-          mapLabel="Unsupported max bounds"
-          mapStyle={{ tiles: false }}
-          maxBounds={[-25, 34, 35, 66]}
-        />,
-      ),
-    ).toThrow(/does not support maxBounds yet/);
-
+  test("fails closed for the MapLibre-specific onMapReady contract", () => {
     expect(() =>
       render(
         <MapView
