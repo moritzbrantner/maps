@@ -6,6 +6,7 @@
 
 mod aggregation;
 mod engine;
+mod scenario;
 
 use std::collections::BTreeMap;
 
@@ -15,9 +16,14 @@ pub use aggregation::{
     VisibleAggregationSummary,
 };
 pub use engine::{
-    GeographicCoordinate, MapCamera, ScreenCoordinate, TileId, ViewportSize, WorldCoordinate,
-    clamp_mercator_latitude, project_web_mercator, unproject_web_mercator, world_size,
-    wrap_longitude,
+    GeographicCoordinate, MapCamera, MapViewportBounds, ScreenCoordinate, TileId, ViewportSize,
+    WorldCoordinate, clamp_mercator_latitude, project_web_mercator, unproject_web_mercator,
+    world_size, wrap_longitude,
+};
+pub use scenario::{
+    CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
+    EngineScenarioObservation, ProjectionObservation, ViewportObservation, VisibleBoundsObservation,
+    execute_engine_scenario, execute_engine_scenario_json,
 };
 use geo_core::{BBox, Coordinate};
 
