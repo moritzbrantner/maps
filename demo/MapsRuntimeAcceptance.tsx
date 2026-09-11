@@ -1,6 +1,13 @@
 import { useState } from "react";
 
-import { MapControls, MapView, type MapSurfaceController, type MapViewState } from "../src";
+import {
+  GeoJsonLayer,
+  MapControls,
+  MapView,
+  PointLayer,
+  type MapSurfaceController,
+  type MapViewState,
+} from "../src";
 
 const INITIAL_VIEW_STATE: MapViewState = {
   center: [13.405, 52.52],
@@ -30,6 +37,47 @@ export function MapsRuntimeAcceptance() {
         }}
         viewState={viewState}
       >
+        <GeoJsonLayer
+          featureCollection={{
+            features: [
+              {
+                geometry: {
+                  coordinates: [
+                    [
+                      [13.1, 52.35],
+                      [13.72, 52.35],
+                      [13.72, 52.7],
+                      [13.1, 52.7],
+                      [13.1, 52.35],
+                    ],
+                  ],
+                  type: "Polygon",
+                },
+                id: "acceptance-zone",
+                properties: {},
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          }}
+          polygonFillColor="#2563eb"
+          polygonFillOpacity={0.12}
+          polygonStrokeColor="#2563eb"
+          selectedFeatureId="acceptance-zone"
+        />
+        <PointLayer
+          hoveredFeatureId="acceptance-berlin"
+          pointColor="#dc2626"
+          pointRadius={8}
+          points={[
+            {
+              id: "acceptance-berlin",
+              label: "Berlin",
+              latitude: 52.52,
+              longitude: 13.405,
+            },
+          ]}
+        />
         <MapControls aria-label="Maps runtime acceptance controls">
           <button
             type="button"
