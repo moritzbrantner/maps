@@ -48,12 +48,10 @@ struct WasmFlatRasterRuntimeLimits {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct WasmTileId {
     z: u8,
     x: u32,
     y: u32,
-    key: String,
 }
 
 impl From<TileId> for WasmTileId {
@@ -62,7 +60,6 @@ impl From<TileId> for WasmTileId {
             z: tile.z,
             x: tile.x,
             y: tile.y,
-            key: format!("{}/{}/{}", tile.z, tile.x, tile.y),
         }
     }
 }
