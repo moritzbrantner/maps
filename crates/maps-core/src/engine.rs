@@ -7,6 +7,7 @@ use std::f64::consts::PI;
 
 const MAX_MERCATOR_LATITUDE: f64 = 85.051_128_779_806_6;
 const DEFAULT_TILE_SIZE: f64 = 512.0;
+const MAX_WORLD_X_EXCLUSIVE: f64 = f64::from_bits(1.0_f64.to_bits() - 1);
 
 /// CSS-pixel viewport dimensions used by camera/projection calculations.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -330,7 +331,12 @@ pub fn project_web_mercator(longitude: f64, latitude: f64) -> Option<WorldCoordi
 
     let longitude = wrap_longitude(longitude);
     let latitude = clamp_mercator_latitude(latitude);
-    let x = (longitude + 180.0) / 360.0;
+    let raw_x = (longitude + 180.0) / 360.0;
+    let x = if raw_x >= 1.0 {
+        MAX_WORLD_X_EXCLUSIVE
+    } else {
+        raw_x.max(0.0)
+    };
     let y = if latitude == MAX_MERCATOR_LATITUDE {
         0.0
     } else if latitude == -MAX_MERCATOR_LATITUDE {
