@@ -45,7 +45,8 @@ export function MapsRuntimeAcceptance() {
             Fit acceptance bounds
           </button>
           <output data-testid="maps-runtime-view-state">
-            {viewState.center[0].toFixed(4)},{viewState.center[1].toFixed(4)} | zoom {viewState.zoom.toFixed(4)}
+            {viewState.center[0].toFixed(4)},{viewState.center[1].toFixed(4)} | zoom{" "}
+            {viewState.zoom.toFixed(4)}
           </output>
         </MapControls>
       </MapView>
