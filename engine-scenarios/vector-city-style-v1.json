@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "vector-city-style-v1",
+  "fixture": {
+    "source": "committed-vector-tile-fixtures",
+    "style": "committed-maplibre-compatible-style",
+    "network": "disabled"
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "journey": [
+    { "longitude": 13.405, "latitude": 52.52, "zoom": 10 },
+    { "longitude": 13.405, "latitude": 52.52, "zoom": 12 },
+    { "longitude": 13.405, "latitude": 52.52, "zoom": 14 }
+  ],
+  "observations": [
+    "decoded-feature-identities",
+    "evaluated-layer-values",
+    "render-bucket-identities",
+    "normalized-pick-result"
+  ],
+  "runtimePhases": [
+    "tile-decode",
+    "style-evaluate",
+    "bucket-build",
+    "upload",
+    "render",
+    "picking"
+  ]
+}
