@@ -27,6 +27,21 @@ impl ViewportSize {
     }
 }
 
+/// Canonical visible geographic bounds for a flat viewport.
+///
+/// Wrapped bounds may have `west > east`; `crosses_antimeridian` makes that
+/// explicit. `spans_full_world` distinguishes a viewport that covers all
+/// longitudes from a zero-width wrapped interval.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapViewportBounds {
+    pub west: f64,
+    pub south: f64,
+    pub east: f64,
+    pub north: f64,
+    pub crosses_antimeridian: bool,
+    pub spans_full_world: bool,
+}
+
 /// Canonical flat-map camera state.
 ///
 /// Bearing and pitch are part of the long-term engine contract even though the
@@ -73,6 +88,45 @@ impl MapCamera {
             pitch: pitch.clamp(0.0, 85.0),
             viewport,
         })
+    }
+
+    /// Returns the same camera with a new normalized center.
+    #[must_use]
+    pub fn with_center(self, longitude: f64, latitude: f64) -> Option<Self> {
+        Self::new(
+            longitude,
+            latitude,
+            self.zoom,
+            self.bearing,
+            self.pitch,
+            self.viewport,
+        )
+    }
+
+    /// Returns the same camera with a new validated zoom.
+    #[must_use]
+    pub fn with_zoom(self, zoom: f64) -> Option<Self> {
+        Self::new(
+            self.longitude,
+            self.latitude,
+            zoom,
+            self.bearing,
+            self.pitch,
+            self.viewport,
+        )
+    }
+
+    /// Returns the same camera with a new viewport.
+    #[must_use]
+    pub fn with_viewport(self, viewport: ViewportSize) -> Option<Self> {
+        Self::new(
+            self.longitude,
+            self.latitude,
+            self.zoom,
+            self.bearing,
+            self.pitch,
+            viewport,
+        )
     }
 
     /// World size in CSS pixels for the current zoom.
@@ -131,6 +185,63 @@ impl MapCamera {
         };
 
         unproject_web_mercator(world)
+    }
+
+    /// Computes canonical visible bounds for a north-up, zero-pitch camera.
+    #[must_use]
+    pub fn visible_bounds(self) -> Option<MapViewportBounds> {
+        if self.bearing != 0.0 || self.pitch != 0.0 {
+            return None;
+        }
+
+        let size = self.world_size()?;
+        let middle_y = self.viewport.height / 2.0;
+        let middle_x = self.viewport.width / 2.0;
+        let north = self
+            .unproject_screen(ScreenCoordinate {
+                x: middle_x,
+                y: 0.0,
+            })?
+            .latitude;
+        let south = self
+            .unproject_screen(ScreenCoordinate {
+                x: middle_x,
+                y: self.viewport.height,
+            })?
+            .latitude;
+
+        if self.viewport.width >= size {
+            return Some(MapViewportBounds {
+                west: -180.0,
+                south: south.min(north),
+                east: 180.0,
+                north: south.max(north),
+                crosses_antimeridian: false,
+                spans_full_world: true,
+            });
+        }
+
+        let west = self
+            .unproject_screen(ScreenCoordinate {
+                x: 0.0,
+                y: middle_y,
+            })?
+            .longitude;
+        let east = self
+            .unproject_screen(ScreenCoordinate {
+                x: self.viewport.width,
+                y: middle_y,
+            })?
+            .longitude;
+
+        Some(MapViewportBounds {
+            west,
+            south: south.min(north),
+            east,
+            north: south.max(north),
+            crosses_antimeridian: west > east,
+            spans_full_world: false,
+        })
     }
 }
 
