@@ -35,6 +35,7 @@ export type MapsCanvasFlatRuntimeController = {
 
 type MapsCanvasFlatRuntimeProps = {
   mapStyle: RasterMapStyle;
+  maxBounds?: MapBounds;
   maxZoom?: number;
   onContextMenu?: (context: {
     coordinates: [longitude: number, latitude: number];
@@ -55,6 +56,7 @@ type ActiveTileLoad = {
 
 export function MapsCanvasFlatRuntime({
   mapStyle,
+  maxBounds,
   maxZoom,
   onContextMenu,
   onControllerReady,
@@ -76,8 +78,10 @@ export function MapsCanvasFlatRuntime({
   const sourceKey = source
     ? [source.url, source.options.minZoom, source.options.maxZoom, source.options.tileSize].join(":")
     : "no-raster-source";
+  const boundsKey = maxBounds?.join(":") ?? "unbounded";
   const sourceRef = useRef(source);
   const maxZoomRef = useRef(maxZoom);
+  const viewStateRef = useRef(viewState);
   const onViewStateChangeRef = useRef(onViewStateChange);
   const onContextMenuRef = useRef(onContextMenu);
   const onControllerReadyRef = useRef(onControllerReady);
@@ -87,6 +91,7 @@ export function MapsCanvasFlatRuntime({
 
   sourceRef.current = source;
   maxZoomRef.current = maxZoom;
+  viewStateRef.current = viewState;
   onViewStateChangeRef.current = onViewStateChange;
   onContextMenuRef.current = onContextMenu;
   onControllerReadyRef.current = onControllerReady;
@@ -105,15 +110,16 @@ export function MapsCanvasFlatRuntime({
       const currentSource = sourceRef.current;
       const runtime = await loadMapsFlatRasterRuntime(
         {
-          center: viewState.center,
+          center: viewStateRef.current.center,
           height: size.height,
+          maxBounds,
           source: {
             maxZoom: Math.round(currentSource?.options.maxZoom ?? DEFAULT_SOURCE_MAX_ZOOM),
             minZoom: Math.round(currentSource?.options.minZoom ?? 0),
             tileSize: Math.round(currentSource?.options.tileSize ?? DEFAULT_TILE_SIZE),
           },
           width: size.width,
-          zoom: viewState.zoom,
+          zoom: viewStateRef.current.zoom,
         },
         wasmPackage,
       );
@@ -135,13 +141,15 @@ export function MapsCanvasFlatRuntime({
         onError: (error) => onErrorRef.current?.(error),
       });
       const emitViewState = (frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => {
-        onViewStateChangeRef.current(
-          {
-            center: frame.camera.center,
-            zoom: frame.camera.zoom,
-          },
-          reason,
-        );
+        onViewStateChangeRef.current(frameViewState(frame), reason);
+      };
+      const emitConstraintCorrection = (
+        frame: MapsFlatRasterFrame,
+        reason: MapViewStateChangeReason,
+      ) => {
+        if (!areViewStatesEqual(frameViewState(frame), viewStateRef.current)) {
+          emitViewState(frame, reason);
+        }
       };
 
       syncFrameRef.current = syncFrame;
@@ -171,11 +179,11 @@ export function MapsCanvasFlatRuntime({
         const nextSize = getCanvasCssSize(canvas);
         resizeCanvasBackingStore(canvas);
         runtime.resize(nextSize.width, nextSize.height);
-        syncFrame();
+        emitConstraintCorrection(syncFrame(), "prop-change");
       });
       resizeObserver.observe(canvas);
 
-      syncFrame();
+      emitConstraintCorrection(syncFrame(), "initial");
       onControllerReadyRef.current?.(controller);
       onReadyRef.current?.();
     }
@@ -197,7 +205,7 @@ export function MapsCanvasFlatRuntime({
       runtimeRef.current?.dispose();
       runtimeRef.current = null;
     };
-  }, [sourceKey, wasmPackage]);
+  }, [boundsKey, sourceKey, wasmPackage]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -205,7 +213,10 @@ export function MapsCanvasFlatRuntime({
     if (!runtime || !syncFrame) return;
 
     runtime.setViewState(viewState);
-    syncFrame();
+    const frame = syncFrame();
+    if (!areViewStatesEqual(frameViewState(frame), viewState)) {
+      emitViewStateRef.current?.(frame, "prop-change");
+    }
   }, [viewState.center[0], viewState.center[1], viewState.zoom]);
 
   return (
@@ -344,6 +355,21 @@ function createFrameSynchronizer({
   }
 
   return syncFrame;
+}
+
+function frameViewState(frame: MapsFlatRasterFrame): MapViewState {
+  return {
+    center: frame.camera.center,
+    zoom: frame.camera.zoom,
+  };
+}
+
+function areViewStatesEqual(left: MapViewState, right: MapViewState) {
+  return (
+    Math.abs(left.center[0] - right.center[0]) < 1e-10 &&
+    Math.abs(left.center[1] - right.center[1]) < 1e-10 &&
+    Math.abs(left.zoom - right.zoom) < 1e-10
+  );
 }
 
 async function loadRasterTile(url: string, signal: AbortSignal) {
