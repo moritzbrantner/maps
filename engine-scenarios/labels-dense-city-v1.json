@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "labels-dense-city-v1",
+  "fixture": {
+    "source": "committed-label-vector-fixtures",
+    "glyphs": "committed-test-glyphs",
+    "sprites": "committed-test-sprites",
+    "network": "disabled"
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "journey": [
+    { "longitude": 13.405, "latitude": 52.52, "zoom": 12 },
+    { "longitude": 13.41, "latitude": 52.52, "zoom": 12.5 },
+    { "longitude": 13.405, "latitude": 52.52, "zoom": 13 }
+  ],
+  "observations": [
+    "shaped-runs",
+    "placement-decisions",
+    "collision-decisions",
+    "cross-tile-symbol-identity",
+    "visible-symbol-set"
+  ],
+  "runtimePhases": [
+    "shape",
+    "candidate-generation",
+    "placement",
+    "glyph-upload",
+    "render"
+  ]
+}
