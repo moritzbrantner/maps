@@ -56,8 +56,24 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     .not.toEqual(zoomedPointPosition);
 
   await page.getByRole("button", { name: "Fit acceptance bounds" }).click();
-
   await expect(viewState).toHaveText(/^0\.0000,45\.\d{4} \| zoom \d+\.\d{4}$/);
+
+  await page.getByRole("button", { name: "Request outside bounds" }).click();
+  await expect
+    .poll(async () => isInsideAcceptanceBounds(parseViewState(await viewState.textContent())))
+    .toBe(true);
+  const constrained = parseViewState(await viewState.textContent());
+  expect(constrained.zoom).toBeGreaterThan(1);
+
+  await page.mouse.move(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
+  await page.mouse.wheel(0, 10_000);
+  await expect
+    .poll(async () => isInsideAcceptanceBounds(parseViewState(await viewState.textContent())))
+    .toBe(true);
+  expect(parseViewState(await viewState.textContent()).zoom).toBeGreaterThanOrEqual(
+    constrained.zoom - 0.0001,
+  );
+
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
 });
 
@@ -66,4 +82,27 @@ async function projectedPointPosition(point: import("@playwright/test").Locator)
     cx: await point.getAttribute("cx"),
     cy: await point.getAttribute("cy"),
   };
+}
+
+function parseViewState(text: string | null) {
+  const [coordinates = "", zoomText = ""] = (text ?? "").split(" | zoom ");
+  const [longitude = Number.NaN, latitude = Number.NaN] = coordinates
+    .split(",")
+    .map(Number);
+
+  return {
+    center: [longitude, latitude] as [number, number],
+    zoom: Number(zoomText),
+  };
+}
+
+function isInsideAcceptanceBounds(viewState: ReturnType<typeof parseViewState>) {
+  return (
+    Number.isFinite(viewState.center[0]) &&
+    Number.isFinite(viewState.center[1]) &&
+    viewState.center[0] >= -25 &&
+    viewState.center[0] <= 35 &&
+    viewState.center[1] >= 34 &&
+    viewState.center[1] <= 66
+  );
 }
