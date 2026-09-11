@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "camera-world-pan-v1",
+  "viewport": { "width": 1280, "height": 720 },
+  "initialCamera": {
+    "longitude": 0,
+    "latitude": 0,
+    "zoom": 2,
+    "bearing": 0,
+    "pitch": 0
+  },
+  "operations": [
+    { "type": "set-center", "longitude": 179.75, "latitude": 0 },
+    { "type": "set-center", "longitude": -179.75, "latitude": 0 },
+    { "type": "set-zoom", "zoom": 3 },
+    { "type": "set-zoom", "zoom": 3.5 },
+    { "type": "resize", "width": 800, "height": 600 }
+  ],
+  "coordinates": [
+    [0, 0],
+    [13.405, 52.52],
+    [-122.4194, 37.7749],
+    [179.9, 10],
+    [-179.9, -10]
+  ],
+  "observations": [
+    "camera-state",
+    "projected-screen-coordinate",
+    "unprojected-geographic-coordinate",
+    "world-wrap-identity",
+    "visible-bounds"
+  ],
+  "runtimePhases": [
+    "camera-update",
+    "projection-batch",
+    "visible-world"
+  ]
+}
