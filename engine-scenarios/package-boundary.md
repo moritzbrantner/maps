@@ -1,0 +1,1 @@
+The engine scenario registry is repository tooling, not a public npm entrypoint. Scenario schemas/fixtures may become published analyzer artifacts later, but adding them here does not expand the JavaScript package surface.
