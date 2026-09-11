@@ -1,0 +1,1 @@
+Implemented scenario identities in the initial foundation: camera-world-pan-v1, raster-tile-churn-v1, dense-points-100k-v1, geometry-edit-dense-v1, vector-city-style-v1, labels-dense-city-v1. Only scenarios with executable implementations and required capabilities may be used as acceptance evidence; registry presence alone is not proof of capability.
