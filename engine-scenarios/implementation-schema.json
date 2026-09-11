@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Maps engine scenario implementation state v1",
+  "type": "object",
+  "required": ["schemaVersion", "implemented"],
+  "properties": {
+    "schemaVersion": { "const": "maps.engine-scenario-implementation/v1" },
+    "implemented": { "type": "array" }
+  }
+}
