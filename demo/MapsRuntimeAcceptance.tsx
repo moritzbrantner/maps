@@ -1,11 +1,6 @@
 import { useState } from "react";
 
-import {
-  MapControls,
-  MapView,
-  type MapSurfaceController,
-  type MapViewState,
-} from "../src";
+import { MapControls, MapView, type MapSurfaceController, type MapViewState } from "../src";
 
 const INITIAL_VIEW_STATE: MapViewState = {
   center: [13.405, 52.52],
