@@ -89,13 +89,13 @@ export function MapsCanvasFlatRuntime({
   onReadyRef.current = onReady;
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
     let cancelled = false;
     let resizeObserver: ResizeObserver | null = null;
 
     async function initialize() {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
       const size = getCanvasCssSize(canvas);
       const currentSource = sourceRef.current;
       const runtime = await loadMapsFlatRasterRuntime(
