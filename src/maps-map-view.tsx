@@ -283,11 +283,6 @@ export function MapsMapView({
   if (mapDisplay !== "flat" || flatRuntime !== "maps") {
     throw new Error("The Maps runtime only supports flat MapView execution.");
   }
-  if (maxBounds !== undefined) {
-    throw new Error(
-      'flatRuntime="maps" does not support maxBounds yet; use MapLibre until the Rust runtime owns bounded-camera semantics.',
-    );
-  }
   if (onMapReady) {
     throw new Error(
       'onMapReady is MapLibre-specific and is unavailable with flatRuntime="maps"; use onMapControllerReady instead.',
@@ -314,6 +309,7 @@ export function MapsMapView({
       >
         <MapsCanvasFlatRuntime
           mapStyle={resolvedMapStyle}
+          maxBounds={maxBounds}
           maxZoom={resolvedMaxZoom}
           onContextMenu={handleMapContextMenu}
           onControllerReady={(controller) => {
