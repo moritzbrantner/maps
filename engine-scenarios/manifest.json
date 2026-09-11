@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "maps.engine-scenarios/v1",
+  "scenarios": [
+    {
+      "id": "camera-world-pan-v1",
+      "family": "camera-world",
+      "reference": "maplibre",
+      "capabilities": ["rust-core"],
+      "runtimePhases": ["camera-update", "projection-batch", "visible-world"]
+    },
+    {
+      "id": "raster-tile-churn-v1",
+      "family": "raster-tiles",
+      "reference": "leaflet",
+      "capabilities": ["rust-core", "browser"],
+      "runtimePhases": ["visible-tile", "schedule", "decode-upload", "warm-cache"]
+    },
+    {
+      "id": "dense-points-100k-v1",
+      "family": "point-density",
+      "reference": "maplibre",
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": ["index-build", "aggregation", "render-frame", "paint", "picking"]
+    }
+  ]
+}

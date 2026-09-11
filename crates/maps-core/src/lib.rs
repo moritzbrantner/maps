@@ -5,6 +5,7 @@
 //! React, MapLibre, or JavaScript runtime concerns.
 
 mod aggregation;
+mod engine;
 
 use std::collections::BTreeMap;
 
@@ -12,6 +13,11 @@ pub use aggregation::{
     AggregatedMapCluster, AggregatedMapFeature, AggregatedMapPoint, PointAggregationError,
     PointAggregationIndex, PointAggregationOptions, ViewportAggregation, ViewportAggregationQuery,
     VisibleAggregationSummary,
+};
+pub use engine::{
+    GeographicCoordinate, MapCamera, ScreenCoordinate, TileId, ViewportSize, WorldCoordinate,
+    clamp_mercator_latitude, project_web_mercator, unproject_web_mercator, world_size,
+    wrap_longitude,
 };
 use geo_core::{BBox, Coordinate};
 

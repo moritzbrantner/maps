@@ -10,7 +10,16 @@
   },
   "files": [
     "dist",
-    "docs",
+    "docs/api-stability.md",
+    "docs/editor.md",
+    "docs/entrypoints.md",
+    "docs/geojson-transition-future-goals.md",
+    "docs/geojson.md",
+    "docs/getting-started.md",
+    "docs/performance.md",
+    "docs/recipes.md",
+    "docs/ssr-next.md",
+    "docs/timeline.md",
     "styles.css",
     "styles.full.css"
   ],
@@ -101,6 +110,7 @@
     "test:browser:smoke": "playwright test --grep @smoke --project=chromium",
     "test:browser:update": "playwright test --update-snapshots",
     "verify:api-surface": "node ./scripts/verify-api-surface.mjs",
+    "verify:engine-scenarios": "node ./scripts/verify-engine-scenarios.mjs",
     "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
     "verify:audit": "bun audit --audit-level high",
     "verify:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --lib --tests --locked && cargo check -p maps-wasm --target wasm32-unknown-unknown --locked",
@@ -110,8 +120,8 @@
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
     "verify:package-size": "node ./scripts/verify-package-size.mjs",
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
-    "verify:agent": "bun run check-types && bun run lint && bun run test:tdd:run",
-    "verify:fast": "bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
+    "verify:agent": "bun run verify:engine-scenarios && bun run check-types && bun run lint && bun run test:tdd:run",
+    "verify:fast": "bun run verify:engine-scenarios && bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
     "verify:release": "bun run verify:rust && bun run verify:fast && bun run verify:wasm-package && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
   },
   "dependencies": {
