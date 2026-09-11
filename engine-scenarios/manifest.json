@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "maps.engine-scenarios/v1",
+  "scenarios": [
+    {
+      "id": "camera-world-pan-v1",
+      "family": "camera-world",
+      "document": "docs/engine-scenarios.md",
+      "reference": "maplibre",
+      "capabilities": ["rust-core"],
+      "runtimePhases": ["camera-update", "projection-batch", "visible-world"]
+    },
+    {
+      "id": "raster-tile-churn-v1",
+      "family": "raster-tiles",
+      "document": "docs/engine-scenarios.md",
+      "reference": "leaflet",
+      "capabilities": ["rust-core", "browser"],
+      "runtimePhases": ["visible-tile", "schedule", "decode-upload", "warm-cache"]
+    },
+    {
+      "id": "dense-points-100k-v1",
+      "family": "point-density",
+      "document": "docs/engine-scenarios.md",
+      "reference": "maplibre",
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": ["index-build", "aggregation", "render-frame", "paint", "picking"]
+    },
+    {
+      "id": "geometry-edit-dense-v1",
+      "family": "geometry-editing",
+      "document": "docs/engine-scenarios.md",
+      "reference": "maplibre",
+      "capabilities": ["browser"],
+      "runtimePhases": ["geometry-prepare", "render-frame", "paint", "picking", "edit"]
+    },
+    {
+      "id": "vector-city-style-v1",
+      "family": "vector-cartography",
+      "document": "docs/engine-scenarios.md",
+      "reference": "maplibre",
+      "capabilities": ["rust-wasm", "browser", "vector-tiles"],
+      "runtimePhases": ["tile-decode", "style-evaluate", "bucket-build", "upload", "render", "picking"]
+    },
+    {
+      "id": "labels-dense-city-v1",
+      "family": "labels",
+      "document": "docs/engine-scenarios.md",
+      "reference": "maplibre",
+      "capabilities": ["rust-wasm", "browser", "symbols"],
+      "runtimePhases": ["shape", "candidate-generation", "placement", "glyph-upload", "render"]
+    }
+  ]
+}
