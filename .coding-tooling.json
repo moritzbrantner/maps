@@ -6,12 +6,13 @@
     "full": ["format:check", "lint", "typecheck", "build", "test:unit", "test:e2e", "package:check", "benchmark:smoke"]
   },
   "requiredCapabilities": ["format:check", "lint", "typecheck", "build", "test:unit"],
-  "optionalCapabilities": ["test:e2e", "package:check", "benchmark:smoke"],
+  "optionalCapabilities": ["test:e2e", "package:check", "benchmark:smoke", "engine:camera-evidence"],
   "capabilityCommands": {
     "@moritzbrantner/maps": {
       "test:e2e": ["bun", "run", "test:browser:smoke"],
       "package:check": ["bash", "-lc", "bun run verify:api-surface && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry"],
-      "benchmark:smoke": ["bun", "run", "verify:benchmarks"]
+      "benchmark:smoke": ["bun", "run", "verify:benchmarks"],
+      "engine:camera-evidence": ["bun", "run", "verify:engine-camera"]
     }
   },
   "merge": {
