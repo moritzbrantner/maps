@@ -64,6 +64,7 @@ export type MapsFlatRasterRuntimeConfig = {
     loadConcurrency: number;
     maxVisibleTiles: number;
   };
+  maxBounds?: MapBounds;
   source: {
     maxZoom: number;
     minZoom: number;
