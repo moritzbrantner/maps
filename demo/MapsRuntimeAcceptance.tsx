@@ -31,6 +31,7 @@ export function MapsRuntimeAcceptance() {
         fitToData={false}
         mapLabel="Maps Rust runtime acceptance"
         mapStyle={{ tiles: false }}
+        maxBounds={[-25, 34, 35, 66]}
         onMapControllerReady={setController}
         onViewStateChange={(next) => {
           setViewState(next);
@@ -87,6 +88,15 @@ export function MapsRuntimeAcceptance() {
             }}
           >
             Fit acceptance bounds
+          </button>
+          <button
+            type="button"
+            disabled={!controller}
+            onClick={() => {
+              controller?.setViewState({ center: [120, 80], zoom: 1 });
+            }}
+          >
+            Request outside bounds
           </button>
           <output data-testid="maps-runtime-view-state">
             {viewState.center[0].toFixed(4)},{viewState.center[1].toFixed(4)} | zoom{" "}
