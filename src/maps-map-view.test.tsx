@@ -195,8 +195,8 @@ describe("Maps-owned MapView runtime", () => {
     });
 
     const point = map.querySelector('[data-map-feature-id="berlin"]');
-    expect(point?.getAttribute("cx")).toBe("534.05");
-    expect(point?.getAttribute("cy")).toBe("37.400000000000006");
+    expect(Number(point?.getAttribute("cx"))).toBeCloseTo(534.05, 10);
+    expect(Number(point?.getAttribute("cy"))).toBeCloseTo(37.4, 10);
     expect(point?.getAttribute("fill")).toBe("#dc2626");
     expect(point?.getAttribute("r")).toBe("8");
     expect(point?.getAttribute("class")).toContain("mb-maps__feature--hovered");
