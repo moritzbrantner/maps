@@ -1,6 +1,9 @@
+import {
+  DEFAULT_MAPS_WASM_PACKAGE,
+  importMapsWasmModule,
+  type MapsWasmModuleBase,
+} from "./aggregation-wasm";
 import type { MapBounds, MapViewState } from "./map-display";
-
-const DEFAULT_MAPS_WASM_PACKAGE = "@moritzbrantner/maps/wasm";
 
 export type MapsRasterTileId = {
   key: string;
@@ -107,8 +110,7 @@ type MapsFlatRasterWasmRuntimeConstructor = new (
   config: MapsFlatRasterRuntimeConfig,
 ) => MapsFlatRasterWasmRuntime;
 
-type MapsFlatRasterWasmModule = {
-  default?: (moduleOrPath?: unknown) => Promise<unknown>;
+type MapsFlatRasterWasmModule = MapsWasmModuleBase & {
   MapsFlatRasterRuntime?: MapsFlatRasterWasmRuntimeConstructor;
 };
 
@@ -116,7 +118,7 @@ export async function loadMapsFlatRasterRuntime(
   config: MapsFlatRasterRuntimeConfig,
   packageName = DEFAULT_MAPS_WASM_PACKAGE,
 ): Promise<MapsFlatRasterRuntime> {
-  const wasmModule = await importOptionalWasmModule(packageName);
+  const wasmModule = await importMapsWasmModule<MapsFlatRasterWasmModule>(packageName);
   await wasmModule.default?.();
   const Constructor = wasmModule.MapsFlatRasterRuntime;
 
@@ -176,12 +178,4 @@ function assertLive(disposed: boolean) {
   if (disposed) {
     throw new Error("Maps WASM flat raster runtime has been disposed.");
   }
-}
-
-async function importOptionalWasmModule(packageName: string): Promise<MapsFlatRasterWasmModule> {
-  const dynamicImport = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<MapsFlatRasterWasmModule>;
-
-  return dynamicImport(packageName);
 }
