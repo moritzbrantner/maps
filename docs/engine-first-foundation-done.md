@@ -1,0 +1,1 @@
+The initial foundation is not complete until crate exports + normal verification are wired. Do not merge based solely on the presence of new source/test files.
