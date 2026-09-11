@@ -20,12 +20,12 @@ pub use engine::{
     WorldCoordinate, clamp_mercator_latitude, project_web_mercator, unproject_web_mercator,
     world_size, wrap_longitude,
 };
+use geo_core::{BBox, Coordinate};
 pub use scenario::{
     CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
-    EngineScenarioObservation, ProjectionObservation, ViewportObservation, VisibleBoundsObservation,
-    execute_engine_scenario, execute_engine_scenario_json,
+    EngineScenarioObservation, ProjectionObservation, ViewportObservation,
+    VisibleBoundsObservation, execute_engine_scenario, execute_engine_scenario_json,
 };
-use geo_core::{BBox, Coordinate};
 
 /// Numeric metrics attached to native map points.
 pub type MapMetricRecord = BTreeMap<String, f64>;
