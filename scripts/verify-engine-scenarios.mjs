@@ -30,6 +30,19 @@ function fail(path, message) {
   throw new Error(`${path}: ${message}`);
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function assertString(value, path) {
   if (typeof value !== "string") {
     fail(path, "must be a string");
@@ -159,9 +172,9 @@ function validateAgainstSchema(value, rule, path) {
       fail(path, `must contain at least ${rule.minItems} item(s)`);
     }
     if (rule.uniqueItems) {
-      const serialized = value.map((item) => JSON.stringify(item));
+      const serialized = value.map(canonicalJson);
       if (new Set(serialized).size !== serialized.length) {
-        fail(path, "must contain unique items");
+        fail(path, "must contain structurally unique items");
       }
     }
     if (rule.items !== undefined) {
