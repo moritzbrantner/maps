@@ -20,6 +20,7 @@ const supportedSchemaKeywords = new Set([
   "minLength",
   "additionalProperties",
 ]);
+const supportedSchemaTypes = new Set(["object", "array", "string"]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -27,6 +28,30 @@ function isPlainObject(value) {
 
 function fail(path, message) {
   throw new Error(`${path}: ${message}`);
+}
+
+function assertString(value, path) {
+  if (typeof value !== "string") {
+    fail(path, "must be a string");
+  }
+}
+
+function assertNonNegativeInteger(value, path) {
+  if (!Number.isInteger(value) || value < 0) {
+    fail(path, "must be a non-negative integer");
+  }
+}
+
+function assertUniqueStringArray(value, path) {
+  if (!Array.isArray(value)) {
+    fail(path, "must be an array");
+  }
+  if (value.some((item) => typeof item !== "string" || item.length === 0)) {
+    fail(path, "must contain non-empty strings");
+  }
+  if (new Set(value).size !== value.length) {
+    fail(path, "must contain unique strings");
+  }
 }
 
 function assertSupportedSchema(node, path = "schema") {
@@ -38,6 +63,48 @@ function assertSupportedSchema(node, path = "schema") {
     if (!supportedSchemaKeywords.has(key)) {
       fail(path, `unsupported schema keyword ${key}`);
     }
+  }
+
+  for (const key of ["$schema", "$id", "title", "description"]) {
+    if (node[key] !== undefined) {
+      assertString(node[key], `${path}.${key}`);
+    }
+  }
+
+  if (node.type !== undefined) {
+    assertString(node.type, `${path}.type`);
+    if (!supportedSchemaTypes.has(node.type)) {
+      fail(`${path}.type`, `unsupported schema type ${node.type}`);
+    }
+  }
+
+  if (node.required !== undefined) {
+    assertUniqueStringArray(node.required, `${path}.required`);
+  }
+
+  if (node.pattern !== undefined) {
+    assertString(node.pattern, `${path}.pattern`);
+    try {
+      new RegExp(node.pattern);
+    } catch (error) {
+      fail(`${path}.pattern`, `must be a valid regular expression: ${error.message}`);
+    }
+  }
+
+  if (node.minItems !== undefined) {
+    assertNonNegativeInteger(node.minItems, `${path}.minItems`);
+  }
+  if (node.minLength !== undefined) {
+    assertNonNegativeInteger(node.minLength, `${path}.minLength`);
+  }
+  if (node.uniqueItems !== undefined && typeof node.uniqueItems !== "boolean") {
+    fail(`${path}.uniqueItems`, "must be a boolean");
+  }
+  if (
+    node.additionalProperties !== undefined &&
+    typeof node.additionalProperties !== "boolean"
+  ) {
+    fail(`${path}.additionalProperties`, "must be a boolean in the supported schema subset");
   }
 
   if (node.properties !== undefined) {
