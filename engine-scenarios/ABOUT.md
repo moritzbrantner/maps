@@ -1,0 +1,1 @@
+Canonical scenario files are contracts for future and implemented workloads. `implemented.json` separately records the strongest actually proven implementation state so roadmap visibility never becomes a capability claim.
