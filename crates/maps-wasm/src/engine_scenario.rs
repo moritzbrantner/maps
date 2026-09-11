@@ -243,6 +243,15 @@ impl MapsFlatRasterRuntime {
         Ok(())
     }
 
+    pub fn project(&self, longitude: f64, latitude: f64) -> Result<JsValue, JsValue> {
+        let screen = self
+            .inner
+            .camera()
+            .project_screen(longitude, latitude)
+            .ok_or_else(|| JsValue::from_str("screen projection is unavailable"))?;
+        encode_json_compatible(&[screen.x, screen.y])
+    }
+
     pub fn unproject(&self, screen_x: f64, screen_y: f64) -> Result<JsValue, JsValue> {
         let coordinate = self
             .inner
