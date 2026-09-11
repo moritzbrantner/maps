@@ -67,7 +67,7 @@ const EPSILON = 1e-6;
 window.mapsEngineCameraEvidence = (async () => {
   await init();
 
-  const candidate = executeEngineScenario(scenario);
+  const candidate = executeEngineScenario(JSON.stringify(scenario));
   const reference = await executeMapLibreCameraScenario(scenario, referenceVersion);
   const comparison = compareSemanticObservations(reference, candidate);
 
