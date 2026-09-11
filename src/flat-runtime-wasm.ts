@@ -1,5 +1,4 @@
 import {
-  DEFAULT_MAPS_WASM_PACKAGE,
   importMapsWasmModule,
   type MapsWasmModuleBase,
 } from "./aggregation-wasm";
@@ -129,7 +128,7 @@ type MapsFlatRasterWasmModule = MapsWasmModuleBase & {
 
 export async function loadMapsFlatRasterRuntime(
   config: MapsFlatRasterRuntimeConfig,
-  packageName = DEFAULT_MAPS_WASM_PACKAGE,
+  packageName?: string,
 ): Promise<MapsFlatRasterRuntime> {
   const wasmModule = await importMapsWasmModule<MapsFlatRasterWasmModule>(packageName);
   await wasmModule.default?.();
