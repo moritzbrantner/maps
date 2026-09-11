@@ -9,6 +9,8 @@ import type { ViewportAggregationQuery } from "./aggregation";
 
 export const DEFAULT_MAPS_WASM_PACKAGE = "@moritzbrantner/maps/wasm";
 
+let configuredMapsWasmPackage: string | undefined;
+
 export type MapsWasmModuleBase = {
   default?: (moduleOrPath?: unknown) => Promise<unknown>;
 };
@@ -30,8 +32,12 @@ type MapsAggregationWasmModule = MapsWasmModuleBase & {
   MapsPointAggregationIndex?: MapsAggregationWasmIndexConstructor;
 };
 
+export function configureMapsWasmPackage(packageName?: string) {
+  configuredMapsWasmPackage = packageName;
+}
+
 export async function loadMapsAggregationWasmRuntime(
-  packageName = DEFAULT_MAPS_WASM_PACKAGE,
+  packageName?: string,
 ): Promise<MapsAggregationWasmRuntime> {
   const wasmModule = await importMapsWasmModule<MapsAggregationWasmModule>(packageName);
   await wasmModule.default?.();
@@ -77,15 +83,18 @@ export async function loadMapsAggregationWasmRuntime(
  * Single reviewed dynamic-import boundary for the version-matched Maps WASM
  * package. Runtime-specific loaders reuse this function instead of creating
  * additional constructor-based import sites or independent package resolution.
+ * Hosted applications can configure one exact module URL for all Maps runtime
+ * loaders while published consumers keep the package self-reference default.
  */
 export async function importMapsWasmModule<TModule extends MapsWasmModuleBase>(
-  packageName = DEFAULT_MAPS_WASM_PACKAGE,
+  packageName?: string,
 ): Promise<TModule> {
   const dynamicImport = new Function("specifier", "return import(specifier)") as (
     specifier: string,
   ) => Promise<TModule>;
+  const resolvedPackage = packageName ?? configuredMapsWasmPackage ?? DEFAULT_MAPS_WASM_PACKAGE;
 
-  return dynamicImport(packageName);
+  return dynamicImport(resolvedPackage);
 }
 
 function assertLive(disposed: boolean) {
