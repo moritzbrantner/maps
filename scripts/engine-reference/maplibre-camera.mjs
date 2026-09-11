@@ -10,8 +10,11 @@ const TILE_SIZE = 512;
  * the Maps-owned normalized observation contract. MapLibre internals never
  * cross this adapter boundary.
  */
-export async function executeMapLibreCameraScenario(scenario) {
+export async function executeMapLibreCameraScenario(scenario, referenceVersion) {
   validateScenario(scenario);
+  if (typeof referenceVersion !== "string" || referenceVersion.length === 0) {
+    throw new Error("MapLibre reference version must be provided by the pinned root install");
+  }
 
   const container = document.createElement("div");
   container.style.position = "fixed";
@@ -46,7 +49,7 @@ export async function executeMapLibreCameraScenario(scenario) {
       schemaVersion: OBSERVATION_SCHEMA_VERSION,
       scenarioId: scenario.id,
       implementation: {
-        name: "maplibre-gl",
+        name: `maplibre-gl@${referenceVersion}`,
         protocol: "maps-reference/camera-v1",
       },
       declaredObservations: [...scenario.observations],
