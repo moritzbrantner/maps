@@ -44,7 +44,7 @@ pub struct MapCamera {
 }
 
 impl MapCamera {
-    /// Creates a normalized camera.
+    /// Creates a normalized camera whose derived world scale is finite.
     #[must_use]
     pub fn new(
         longitude: f64,
@@ -63,6 +63,8 @@ impl MapCamera {
             return None;
         }
 
+        world_size(zoom, DEFAULT_TILE_SIZE)?;
+
         Some(Self {
             longitude: wrap_longitude(longitude),
             latitude: clamp_mercator_latitude(latitude),
@@ -75,7 +77,7 @@ impl MapCamera {
 
     /// World size in CSS pixels for the current zoom.
     #[must_use]
-    pub fn world_size(self) -> f64 {
+    pub fn world_size(self) -> Option<f64> {
         world_size(self.zoom, DEFAULT_TILE_SIZE)
     }
 
@@ -97,25 +99,32 @@ impl MapCamera {
 
         let target = project_web_mercator(longitude, latitude)?;
         let center = project_web_mercator(self.longitude, self.latitude)?;
-        let size = self.world_size();
+        let size = self.world_size()?;
         let dx = shortest_wrapped_delta(target.x - center.x) * size;
         let dy = (target.y - center.y) * size;
+        let x = self.viewport.width / 2.0 + dx;
+        let y = self.viewport.height / 2.0 + dy;
 
-        Some(ScreenCoordinate {
-            x: self.viewport.width / 2.0 + dx,
-            y: self.viewport.height / 2.0 + dy,
-        })
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+
+        Some(ScreenCoordinate { x, y })
     }
 
     /// Unprojects screen pixels for a north-up, zero-pitch camera.
     #[must_use]
     pub fn unproject_screen(self, screen: ScreenCoordinate) -> Option<GeographicCoordinate> {
-        if self.bearing != 0.0 || self.pitch != 0.0 {
+        if self.bearing != 0.0
+            || self.pitch != 0.0
+            || !screen.x.is_finite()
+            || !screen.y.is_finite()
+        {
             return None;
         }
 
         let center = project_web_mercator(self.longitude, self.latitude)?;
-        let size = self.world_size();
+        let size = self.world_size()?;
         let world = WorldCoordinate {
             x: wrap_world_x(center.x + (screen.x - self.viewport.width / 2.0) / size),
             y: center.y + (screen.y - self.viewport.height / 2.0) / size,
@@ -212,7 +221,10 @@ pub fn project_web_mercator(longitude: f64, latitude: f64) -> Option<WorldCoordi
     let latitude = clamp_mercator_latitude(latitude);
     let x = (longitude + 180.0) / 360.0;
     let latitude_radians = latitude.to_radians();
-    let y = (1.0 - (latitude_radians.tan() + 1.0 / latitude_radians.cos()).ln() / PI) / 2.0;
+    let y = ((1.0
+        - (latitude_radians.tan() + 1.0 / latitude_radians.cos()).ln() / PI)
+        / 2.0)
+        .clamp(0.0, 1.0);
 
     Some(WorldCoordinate { x, y })
 }
@@ -235,10 +247,19 @@ pub fn unproject_web_mercator(world: WorldCoordinate) -> Option<GeographicCoordi
     })
 }
 
-/// Returns the CSS-pixel world size for a zoom and tile size.
+/// Returns a finite, strictly-positive CSS-pixel world size for a zoom and tile size.
 #[must_use]
-pub fn world_size(zoom: f64, tile_size: f64) -> f64 {
-    tile_size * 2.0_f64.powf(zoom)
+pub fn world_size(zoom: f64, tile_size: f64) -> Option<f64> {
+    if !zoom.is_finite() || !tile_size.is_finite() || tile_size <= 0.0 {
+        return None;
+    }
+
+    let size = tile_size * 2.0_f64.powf(zoom);
+    if !size.is_finite() || size <= 0.0 {
+        return None;
+    }
+
+    Some(size)
 }
 
 /// Wraps longitude into `[-180, 180)`.
