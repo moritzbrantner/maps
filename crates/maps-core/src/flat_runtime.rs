@@ -329,7 +329,6 @@ impl FlatRasterRuntime {
         self.set_view_state(center.longitude, center.latitude, zoom)
     }
 
-    #[must_use]
     pub fn unproject_screen(
         &self,
         screen: ScreenCoordinate,
