@@ -279,20 +279,34 @@ mod tests {
 
         assert!(!visible.crosses_antimeridian);
         assert!(!visible.spans_full_world);
-        assert!(visible.west >= bounds.west - epsilon, "west={}", visible.west);
-        assert!(visible.east <= bounds.east + epsilon, "east={}", visible.east);
-        assert!(visible.south >= bounds.south - epsilon, "south={}", visible.south);
-        assert!(visible.north <= bounds.north + epsilon, "north={}", visible.north);
+        assert!(
+            visible.west >= bounds.west - epsilon,
+            "west={}",
+            visible.west
+        );
+        assert!(
+            visible.east <= bounds.east + epsilon,
+            "east={}",
+            visible.east
+        );
+        assert!(
+            visible.south >= bounds.south - epsilon,
+            "south={}",
+            visible.south
+        );
+        assert!(
+            visible.north <= bounds.north + epsilon,
+            "north={}",
+            visible.north
+        );
     }
 
     #[test]
     fn initialization_constrains_center_and_minimum_zoom() {
         let bounds = europe_bounds();
-        let runtime = BoundedFlatRasterRuntime::new(
-            runtime([120.0, 80.0], 1.0, 960.0, 620.0),
-            Some(bounds),
-        )
-        .unwrap();
+        let runtime =
+            BoundedFlatRasterRuntime::new(runtime([120.0, 80.0], 1.0, 960.0, 620.0), Some(bounds))
+                .unwrap();
 
         assert!(runtime.camera().zoom > 1.0);
         assert_camera_inside_bounds(&runtime, bounds);
@@ -324,12 +338,7 @@ mod tests {
         .unwrap();
 
         runtime
-            .zoom_about(
-                -20.0,
-                ScreenCoordinate { x: 480.0, y: 310.0 },
-                0.0,
-                22.0,
-            )
+            .zoom_about(-20.0, ScreenCoordinate { x: 480.0, y: 310.0 }, 0.0, 22.0)
             .unwrap();
 
         assert!(runtime.camera().zoom > 1.0);
@@ -355,11 +364,9 @@ mod tests {
     #[test]
     fn antimeridian_adjacent_bounds_choose_the_nearest_world_copy() {
         let bounds = MapBounds::new([170.0, -10.0, 190.0, 10.0]).unwrap();
-        let runtime = BoundedFlatRasterRuntime::new(
-            runtime([-179.0, 0.0], 5.0, 640.0, 480.0),
-            Some(bounds),
-        )
-        .unwrap();
+        let runtime =
+            BoundedFlatRasterRuntime::new(runtime([-179.0, 0.0], 5.0, 640.0, 480.0), Some(bounds))
+                .unwrap();
 
         assert!(runtime.camera().longitude.abs() > 170.0);
     }
