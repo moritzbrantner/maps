@@ -7,7 +7,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MapCamera, MapViewportBounds, ViewportSize, WorldCoordinate, wrap_longitude};
+use crate::{
+    MapCamera, MapViewportBounds, ViewportSize, WorldCoordinate, wrap_longitude,
+};
 
 const SCENARIO_SCHEMA_VERSION: &str = "maps.engine-scenario/v1";
 const OBSERVATION_SCHEMA_VERSION: &str = "maps.engine-observation/v1";
