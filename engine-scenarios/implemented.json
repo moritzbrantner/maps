@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "maps.engine-scenario-implementation/v1",
+  "implemented": [
+    {
+      "id": "camera-world-pan-v1",
+      "level": "core-contract",
+      "evidence": ["crates/maps-core/tests/engine_contract.rs"],
+      "missingForAcceptance": ["scenario-executor", "maplibre-reference", "browser-journey", "runtime-profiler", "moonlight"]
+    },
+    {
+      "id": "dense-points-100k-v1",
+      "level": "existing-runtime-partial",
+      "evidence": ["authoritative-rust-point-index", "point-cluster-render-frame", "canvas-reference-renderer"],
+      "missingForAcceptance": ["canonical-scenario-executor", "runtime-profiler", "moonlight"]
+    }
+  ]
+}
