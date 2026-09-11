@@ -95,6 +95,48 @@ fn north_up_camera_screen_projection_round_trips_across_antimeridian() {
 }
 
 #[test]
+fn visible_bounds_make_antimeridian_crossing_explicit() {
+    let viewport = ViewportSize::new(1280.0, 720.0).expect("valid viewport");
+    let camera = MapCamera::new(179.75, 0.0, 3.0, 0.0, 0.0, viewport).expect("valid camera");
+    let bounds = camera.visible_bounds().expect("supported bounds");
+
+    assert!(bounds.crosses_antimeridian);
+    assert!(!bounds.spans_full_world);
+    assert!(bounds.west > bounds.east);
+    assert!(bounds.south < 0.0);
+    assert!(bounds.north > 0.0);
+}
+
+#[test]
+fn visible_bounds_distinguish_full_world_from_wrapped_interval() {
+    let viewport = ViewportSize::new(1280.0, 720.0).expect("valid viewport");
+    let camera = MapCamera::new(30.0, 0.0, 0.0, 0.0, 0.0, viewport).expect("valid camera");
+    let bounds = camera.visible_bounds().expect("supported bounds");
+
+    assert!(bounds.spans_full_world);
+    assert!(!bounds.crosses_antimeridian);
+    assert_eq!(bounds.west, -180.0);
+    assert_eq!(bounds.east, 180.0);
+}
+
+#[test]
+fn camera_state_mutations_preserve_other_canonical_state() {
+    let viewport = ViewportSize::new(1280.0, 720.0).expect("valid viewport");
+    let camera = MapCamera::new(0.0, 10.0, 2.0, 0.0, 0.0, viewport).expect("valid camera");
+    let resized = ViewportSize::new(800.0, 600.0).expect("valid viewport");
+    let camera = camera
+        .with_center(181.0, 20.0)
+        .and_then(|camera| camera.with_zoom(3.5))
+        .and_then(|camera| camera.with_viewport(resized))
+        .expect("valid camera mutation");
+
+    assert_eq!(camera.longitude, -179.0);
+    assert_eq!(camera.latitude, 20.0);
+    assert_eq!(camera.zoom, 3.5);
+    assert_eq!(camera.viewport, resized);
+}
+
+#[test]
 fn camera_fails_closed_for_unimplemented_bearing_or_pitch_projection() {
     let viewport = ViewportSize::new(800.0, 600.0).expect("valid viewport");
     let bearing = MapCamera::new(0.0, 0.0, 2.0, 10.0, 0.0, viewport).expect("valid camera");
@@ -102,6 +144,8 @@ fn camera_fails_closed_for_unimplemented_bearing_or_pitch_projection() {
 
     assert_eq!(bearing.project_screen(0.0, 0.0), None);
     assert_eq!(pitch.project_screen(0.0, 0.0), None);
+    assert_eq!(bearing.visible_bounds(), None);
+    assert_eq!(pitch.visible_bounds(), None);
     assert_eq!(
         pitch.unproject_screen(ScreenCoordinate { x: 400.0, y: 300.0 }),
         None
