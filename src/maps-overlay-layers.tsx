@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  Children,
-  Fragment,
-  isValidElement,
-  type ReactElement,
-  type ReactNode,
-  type SVGProps,
-} from "react";
+import { Children, Fragment, isValidElement, type ReactNode } from "react";
 
 import {
   GeoJsonLayer,
@@ -17,12 +10,7 @@ import {
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
 import { resolveFeatureStyle } from "./geojson-rendering";
-import {
-  PointLayer,
-  createPointLayerFeatures,
-  type PointLayerFeature,
-  type PointLayerProps,
-} from "./point-layer";
+import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
 import type { TemporalGeoJsonSupportedGeometry } from "./temporal-geojson-types";
 
 export type MapsProjectCoordinate = (
@@ -30,6 +18,11 @@ export type MapsProjectCoordinate = (
 ) => { x: number; y: number } | null;
 
 type AnyRecord = Record<string, unknown>;
+
+type MapsFeatureSvgCommon = {
+  className: string;
+  featureId: string;
+};
 
 type MapsOverlayLayersProps = {
   children: ReactNode;
@@ -65,9 +58,6 @@ export function MapsOverlayLayers({ children, project }: MapsOverlayLayersProps)
 function renderChildren(children: ReactNode, project: MapsProjectCoordinate): ReactNode[] {
   return Children.toArray(children).flatMap((child) => {
     if (!isValidElement(child)) {
-      if (child === null || child === undefined || child === false) {
-        return [];
-      }
       throwUnsupportedMapsLayer();
     }
 
@@ -229,10 +219,10 @@ function renderGeometry(
   selected: boolean,
   project: MapsProjectCoordinate,
 ): ReactNode[] {
-  const common = {
+  const common: MapsFeatureSvgCommon = {
     className: mapsFeatureClassName("mb-maps__geojson-feature", hovered, selected),
-    "data-map-feature-id": featureId,
-  } satisfies SVGProps<SVGElement>;
+    featureId,
+  };
   const geometry = feature.geometry;
 
   switch (geometry.type) {
@@ -277,17 +267,18 @@ function renderGeoJsonPoint(
   style: Required<GeoJsonLayerStyle>,
   selected: boolean,
   project: MapsProjectCoordinate,
-  common: SVGProps<SVGElement>,
+  common: MapsFeatureSvgCommon,
 ): ReactNode[] {
   const position = project(coordinates);
   if (!position) return [];
 
   return [
     <circle
-      {...common}
       key={key}
+      className={common.className}
       cx={position.x}
       cy={position.y}
+      data-map-feature-id={common.featureId}
       fill={style.pointColor}
       fillOpacity={0.94}
       r={style.pointRadius}
@@ -303,16 +294,17 @@ function renderLine(
   style: Required<GeoJsonLayerStyle>,
   selected: boolean,
   project: MapsProjectCoordinate,
-  common: SVGProps<SVGElement>,
+  common: MapsFeatureSvgCommon,
 ): ReactNode[] {
   const path = projectPath(geometry.coordinates, project, false);
   if (!path) return [];
 
   return [
     <path
-      {...common}
       key={key}
+      className={common.className}
       d={path}
+      data-map-feature-id={common.featureId}
       fill="none"
       stroke={style.lineColor}
       strokeLinecap="round"
@@ -329,16 +321,17 @@ function renderPolygon(
   style: Required<GeoJsonLayerStyle>,
   selected: boolean,
   project: MapsProjectCoordinate,
-  common: SVGProps<SVGElement>,
+  common: MapsFeatureSvgCommon,
 ): ReactNode[] {
   const paths = geometry.coordinates.map((ring) => projectPath(ring, project, true));
   if (paths.some((path) => !path)) return [];
 
   return [
     <path
-      {...common}
       key={key}
+      className={common.className}
       d={paths.join(" ")}
+      data-map-feature-id={common.featureId}
       fill={style.polygonFillColor}
       fillOpacity={style.polygonFillOpacity}
       fillRule="evenodd"
