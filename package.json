@@ -10,7 +10,16 @@
   },
   "files": [
     "dist",
-    "docs",
+    "docs/api-stability.md",
+    "docs/editor.md",
+    "docs/entrypoints.md",
+    "docs/geojson-transition-future-goals.md",
+    "docs/geojson.md",
+    "docs/getting-started.md",
+    "docs/performance.md",
+    "docs/recipes.md",
+    "docs/ssr-next.md",
+    "docs/timeline.md",
     "styles.css",
     "styles.full.css"
   ],
