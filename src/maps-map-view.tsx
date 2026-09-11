@@ -32,6 +32,7 @@ import {
   type RasterMapStyle,
 } from "./map-display";
 import type { MapContextMenuContext } from "./map-interaction";
+import { MapsOverlayLayers } from "./maps-overlay-layers";
 import {
   MapSurfaceContext,
   type MapSurfaceContextValue,
@@ -145,6 +146,13 @@ export function MapsMapView({
     [setViewState],
   );
 
+  const projectCoordinate = useCallback(
+    (coordinates: [longitude: number, latitude: number]) => {
+      return runtimeControllerRef.current?.project(coordinates) ?? null;
+    },
+    [currentViewState.center[0], currentViewState.center[1], currentViewState.zoom, isReady],
+  );
+
   const handleMapContextMenu = useCallback(
     (input: {
       coordinates: [longitude: number, latitude: number];
@@ -236,13 +244,13 @@ export function MapsMapView({
       display: "flat",
       handleBackgroundClick: closeContextMenu,
       handleFeatureClick() {
-        throwUnsupportedMapsLayer();
+        throwUnsupportedMapsInteraction();
       },
       handleFeatureContextMenu() {
-        throwUnsupportedMapsLayer();
+        throwUnsupportedMapsInteraction();
       },
       handleFeatureHover() {
-        throwUnsupportedMapsLayer();
+        throwUnsupportedMapsInteraction();
       },
       isFeatureHovered: () => false,
       isFeatureSelected: () => false,
@@ -252,15 +260,15 @@ export function MapsMapView({
       maplibre: null,
       maplibreMap: null,
       registerMapLibreLayer() {
-        throwUnsupportedMapsLayer();
+        throwUnsupportedMapsInteraction();
       },
       registerInteractionMode() {
-        throwUnsupportedMapsLayer();
+        throwUnsupportedMapsInteraction();
       },
       requestRender: () => undefined,
       setMeasurementActive(active) {
         if (active) {
-          throwUnsupportedMapsLayer();
+          throwUnsupportedMapsInteraction();
         }
       },
       setViewState,
@@ -284,9 +292,6 @@ export function MapsMapView({
     throw new Error(
       'onMapReady is MapLibre-specific and is unavailable with flatRuntime="maps"; use onMapControllerReady instead.',
     );
-  }
-  if (mapChildren.layers.some(isRenderableLayerChild)) {
-    throwUnsupportedMapsLayer();
   }
 
   const rootClassName = joinClassNames("mb-maps", className);
@@ -328,6 +333,7 @@ export function MapsMapView({
           onViewStateChange={setViewState}
           viewState={currentViewState}
         />
+        <MapsOverlayLayers project={projectCoordinate}>{mapChildren.layers}</MapsOverlayLayers>
         {showAttributionControl && attribution ? (
           <div
             className="mb-maps__attribution"
@@ -403,13 +409,9 @@ function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapSt
   return mapStyle;
 }
 
-function isRenderableLayerChild(child: ReactNode) {
-  return child !== null && child !== undefined && child !== false;
-}
-
-function throwUnsupportedMapsLayer(): never {
+function throwUnsupportedMapsInteraction(): never {
   throw new Error(
-    'flatRuntime="maps" does not support MapLibre-backed map layers yet; use overlay controls only until the Maps-owned point/GeoJSON overlay slice lands.',
+    'flatRuntime="maps" does not support MapLibre-backed interaction/editing layers yet; use display-only PointLayer/GeoJsonLayer overlays until the Maps interaction overlay slice lands.',
   );
 }
 
