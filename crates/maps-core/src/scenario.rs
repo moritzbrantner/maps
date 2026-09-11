@@ -367,9 +367,11 @@ mod tests {
 
     #[test]
     fn canonical_camera_scenario_executes_all_declared_operations() {
-        let result =
-            execute_engine_scenario(CAMERA_SCENARIO, EngineImplementationIdentity::maps_rust())
-                .expect("canonical camera scenario");
+        let result = execute_engine_scenario(
+            CAMERA_SCENARIO,
+            EngineImplementationIdentity::maps_rust(),
+        )
+        .expect("canonical camera scenario");
 
         assert_eq!(result.schema_version, OBSERVATION_SCHEMA_VERSION);
         assert_eq!(result.scenario_id, CAMERA_WORLD_PAN_V1);
@@ -383,9 +385,11 @@ mod tests {
 
     #[test]
     fn camera_scenario_observes_antimeridian_wrapping() {
-        let result =
-            execute_engine_scenario(CAMERA_SCENARIO, EngineImplementationIdentity::maps_rust())
-                .expect("canonical camera scenario");
+        let result = execute_engine_scenario(
+            CAMERA_SCENARIO,
+            EngineImplementationIdentity::maps_rust(),
+        )
+        .expect("canonical camera scenario");
         let east_state = &result.states[1];
 
         assert!(east_state.visible_bounds.crosses_antimeridian);
