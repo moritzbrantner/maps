@@ -42,7 +42,13 @@ const files = Array.isArray(packageInfo?.files) ? packageInfo.files : [];
 const stylesheet = files.find((file) => file.path === "styles.css");
 const fullStylesheet = files.find((file) => file.path === "styles.full.css");
 const wasmRuntime = files.find((file) => file.path === "dist/wasm/maps_wasm_bg.wasm");
-const requiredFiles = ["styles.css", "styles.full.css", "README.md", "package.json"];
+const requiredFiles = [
+  "styles.css",
+  "styles.full.css",
+  "dist/wasm/maps_wasm_bg.wasm",
+  "README.md",
+  "package.json",
+];
 const errors = [];
 
 for (const filePath of requiredFiles) {
