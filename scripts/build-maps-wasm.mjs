@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const BINARYEN_VERSION = "132.0.0";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wasmInput = path.join(
   rootDir,
@@ -15,7 +14,6 @@ const wasmInput = path.join(
   "maps_wasm.wasm",
 );
 const outDir = path.join(rootDir, "dist", "wasm");
-const wasmOutput = path.join(outDir, "maps_wasm_bg.wasm");
 
 run("cargo", [
   "build",
@@ -41,20 +39,7 @@ run("wasm-bindgen", [
   "--typescript",
 ]);
 
-// Keep the runtime-size gate meaningful as Maps adds real engine capability.
-// Binaryen is exact-version pinned here so release packaging does not depend on
-// whichever wasm-opt happens to be installed on a developer or runner image.
-run("npx", [
-  "--yes",
-  `--package=binaryen@${BINARYEN_VERSION}`,
-  "wasm-opt",
-  wasmOutput,
-  "-Oz",
-  "-o",
-  wasmOutput,
-]);
-
-console.log(`Built and optimized Maps WASM package artifact in ${path.relative(rootDir, outDir)}.`);
+console.log(`Built Maps WASM package artifact in ${path.relative(rootDir, outDir)}.`);
 
 function run(command, args) {
   const result = spawnSync(command, args, {
