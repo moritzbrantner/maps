@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "geometry-edit-dense-v1",
+  "fixture": {
+    "source": "committed-dense-geojson",
+    "includes": ["long-lines", "polygons", "holes", "overlaps"]
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "journey": [
+    { "type": "select-feature", "feature": "polygon-a" },
+    { "type": "move-vertex", "feature": "polygon-a", "vertex": 2 },
+    { "type": "insert-vertex", "feature": "line-a", "segment": 4 },
+    { "type": "delete-vertex", "feature": "line-a", "vertex": 3 },
+    { "type": "reshape", "feature": "polygon-b" }
+  ],
+  "observations": [
+    "normalized-geojson",
+    "topology-validation",
+    "feature-identity",
+    "pick-result"
+  ],
+  "runtimePhases": [
+    "geometry-prepare",
+    "render-frame",
+    "paint",
+    "picking",
+    "edit"
+  ]
+}
