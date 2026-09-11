@@ -3,6 +3,8 @@
 //! Map semantics belong in `maps-core`. This crate only translates JavaScript
 //! values to and from that domain contract.
 
+mod engine_scenario;
+
 use std::collections::BTreeMap;
 
 use maps_core::{

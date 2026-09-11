@@ -28,11 +28,36 @@ immutable reference identity + immutable candidate identity
 
 A Maps PR may still use focused unit/browser checks, but architectural performance claims must be backed by named canonical scenarios when the required profiler capability exists.
 
+## Semantic observation contract
+
+`docs/contracts/maps-engine-observation-v1.schema.json` defines the versioned Maps-owned semantic envelope. The implementation identity is evidence provenance; the remaining normalized fields are the semantic comparison surface.
+
+The first executable path is `camera-world-pan-v1`:
+
+```text
+engine-scenarios/camera-world-pan-v1.json
+              |
+              +--> maps-core executor --> native CLI
+              |                     |
+              |                     +--> maps-wasm --> browser candidate
+              |
+              +--> MapLibre public-API reference adapter
+                                     |
+                                     v
+                     maps.engine-observation/v1 parity
+```
+
+`maps-core` is the only candidate semantic implementation. The CLI and WASM functions are transports over the same executor. The MapLibre adapter stays under `scripts/engine-reference/` so reference-specific normalization cannot become Maps engine truth.
+
+The repository capability `engine:camera-evidence` builds the Maps WASM transport, executes the canonical browser scenario against the MapLibre reference, and fails on a normalized semantic mismatch. It is deterministic semantic evidence, not a replacement for runtime-profiler performance capture or Moonlight policy.
+
 ## Comparability
 
 Runtime evidence may only be compared when runtime-profiler considers it strictly comparable. Missing or incomparable evidence is not reinterpreted as success by Maps.
 
 Reference semantic evidence must identify the reference implementation/version and normalized observation contract. Incidental implementation details (for example MapLibre-internal cluster ids) are excluded unless Maps intentionally adopts them as public semantics.
+
+For numeric camera observations, the browser parity adapter uses a bounded floating-point tolerance while structure, operation order, boolean world-wrap state, scenario identity and declared observation/runtime-phase identity remain exact. A tolerance is not widened to hide a discovered semantic difference; the implementation or normalization contract is corrected instead.
 
 ## Promotion/removal rule
 

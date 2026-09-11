@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://moritzbrantner.github.io/maps/contracts/maps-engine-observation-v1.schema.json",
+  "title": "Maps engine observation v1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "scenarioId",
+    "implementation",
+    "declaredObservations",
+    "runtimePhases",
+    "states"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "maps.engine-observation/v1" },
+    "scenarioId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$"
+    },
+    "implementation": {
+      "type": "object",
+      "required": ["name", "protocol"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "protocol": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "declaredObservations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "runtimePhases": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/cameraState" }
+    }
+  },
+  "$defs": {
+    "finiteNumber": { "type": "number" },
+    "coordinate": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/finiteNumber" }
+    },
+    "viewport": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "$ref": "#/$defs/finiteNumber" },
+        "height": { "$ref": "#/$defs/finiteNumber" }
+      },
+      "additionalProperties": false
+    },
+    "camera": {
+      "type": "object",
+      "required": ["longitude", "latitude", "zoom", "bearing", "pitch", "viewport"],
+      "properties": {
+        "longitude": { "$ref": "#/$defs/finiteNumber" },
+        "latitude": { "$ref": "#/$defs/finiteNumber" },
+        "zoom": { "$ref": "#/$defs/finiteNumber" },
+        "bearing": { "$ref": "#/$defs/finiteNumber" },
+        "pitch": { "$ref": "#/$defs/finiteNumber" },
+        "viewport": { "$ref": "#/$defs/viewport" }
+      },
+      "additionalProperties": false
+    },
+    "visibleBounds": {
+      "type": "object",
+      "required": [
+        "west",
+        "south",
+        "east",
+        "north",
+        "crossesAntimeridian",
+        "spansFullWorld"
+      ],
+      "properties": {
+        "west": { "$ref": "#/$defs/finiteNumber" },
+        "south": { "$ref": "#/$defs/finiteNumber" },
+        "east": { "$ref": "#/$defs/finiteNumber" },
+        "north": { "$ref": "#/$defs/finiteNumber" },
+        "crossesAntimeridian": { "type": "boolean" },
+        "spansFullWorld": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "projection": {
+      "type": "object",
+      "required": ["input", "wrappedLongitude", "world", "screen", "unprojected"],
+      "properties": {
+        "input": { "$ref": "#/$defs/coordinate" },
+        "wrappedLongitude": { "$ref": "#/$defs/finiteNumber" },
+        "world": { "$ref": "#/$defs/coordinate" },
+        "screen": { "$ref": "#/$defs/coordinate" },
+        "unprojected": { "$ref": "#/$defs/coordinate" }
+      },
+      "additionalProperties": false
+    },
+    "cameraState": {
+      "type": "object",
+      "required": ["sequence", "operation", "camera", "visibleBounds", "projections"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "operation": { "type": "string", "minLength": 1 },
+        "camera": { "$ref": "#/$defs/camera" },
+        "visibleBounds": { "$ref": "#/$defs/visibleBounds" },
+        "projections": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/projection" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
