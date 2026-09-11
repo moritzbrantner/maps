@@ -90,7 +90,6 @@ impl MapCamera {
         })
     }
 
-    /// Returns the same camera with a new normalized center.
     #[must_use]
     pub fn with_center(self, longitude: f64, latitude: f64) -> Option<Self> {
         Self::new(
@@ -103,7 +102,6 @@ impl MapCamera {
         )
     }
 
-    /// Returns the same camera with a new validated zoom.
     #[must_use]
     pub fn with_zoom(self, zoom: f64) -> Option<Self> {
         Self::new(
@@ -116,7 +114,6 @@ impl MapCamera {
         )
     }
 
-    /// Returns the same camera with a new viewport.
     #[must_use]
     pub fn with_viewport(self, viewport: ViewportSize) -> Option<Self> {
         Self::new(
@@ -129,22 +126,16 @@ impl MapCamera {
         )
     }
 
-    /// World size in CSS pixels for the current zoom.
     #[must_use]
     pub fn world_size(self) -> Option<f64> {
         world_size(self.zoom, DEFAULT_TILE_SIZE)
     }
 
-    /// Projects a geographic coordinate into the normalized Mercator world.
     #[must_use]
     pub fn project_world(self, longitude: f64, latitude: f64) -> Option<WorldCoordinate> {
         project_web_mercator(longitude, latitude)
     }
 
-    /// Projects a coordinate into screen pixels for a north-up, zero-pitch camera.
-    ///
-    /// Returns `None` until bearing/pitch-aware projection is requested through a
-    /// future matrix-backed camera path rather than silently applying incorrect math.
     #[must_use]
     pub fn project_screen(self, longitude: f64, latitude: f64) -> Option<ScreenCoordinate> {
         if self.bearing != 0.0 || self.pitch != 0.0 {
@@ -166,7 +157,6 @@ impl MapCamera {
         Some(ScreenCoordinate { x, y })
     }
 
-    /// Unprojects screen pixels for a north-up, zero-pitch camera.
     #[must_use]
     pub fn unproject_screen(self, screen: ScreenCoordinate) -> Option<GeographicCoordinate> {
         if self.bearing != 0.0
@@ -187,7 +177,6 @@ impl MapCamera {
         unproject_web_mercator(world)
     }
 
-    /// Computes canonical visible bounds for a north-up, zero-pitch camera.
     #[must_use]
     pub fn visible_bounds(self) -> Option<MapViewportBounds> {
         if self.bearing != 0.0 || self.pitch != 0.0 {
@@ -245,31 +234,24 @@ impl MapCamera {
     }
 }
 
-/// A geographic coordinate in degrees.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeographicCoordinate {
     pub longitude: f64,
     pub latitude: f64,
 }
 
-/// A normalized Web Mercator world coordinate.
-///
-/// `x` wraps horizontally with one world per unit. `y=0` is the northern
-/// Mercator limit and `y=1` is the southern limit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldCoordinate {
     pub x: f64,
     pub y: f64,
 }
 
-/// A coordinate in viewport CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenCoordinate {
     pub x: f64,
     pub y: f64,
 }
 
-/// Canonical XYZ tile coordinate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TileId {
     pub z: u8,
@@ -278,18 +260,15 @@ pub struct TileId {
 }
 
 impl TileId {
-    /// Creates a canonical tile identity when x/y fit the zoom pyramid.
     #[must_use]
     pub fn new(z: u8, x: u32, y: u32) -> Option<Self> {
         let dimension = tile_dimension(z)?;
         if u64::from(x) >= dimension || u64::from(y) >= dimension {
             return None;
         }
-
         Some(Self { z, x, y })
     }
 
-    /// Returns the parent tile, or `None` for the root tile.
     #[must_use]
     pub fn parent(self) -> Option<Self> {
         let z = self.z.checked_sub(1)?;
@@ -300,14 +279,12 @@ impl TileId {
         })
     }
 
-    /// Returns the four child tiles when the zoom can be represented.
     #[must_use]
     pub fn children(self) -> Option<[Self; 4]> {
         let z = self.z.checked_add(1)?;
         tile_dimension(z)?;
         let x = self.x.checked_mul(2)?;
         let y = self.y.checked_mul(2)?;
-
         Some([
             Self { z, x, y },
             Self { z, x: x + 1, y },
@@ -321,7 +298,6 @@ impl TileId {
     }
 }
 
-/// Projects degrees into normalized spherical Web Mercator coordinates.
 #[must_use]
 pub fn project_web_mercator(longitude: f64, latitude: f64) -> Option<WorldCoordinate> {
     if !longitude.is_finite() || !latitude.is_finite() {
@@ -344,7 +320,6 @@ pub fn project_web_mercator(longitude: f64, latitude: f64) -> Option<WorldCoordi
     Some(WorldCoordinate { x, y })
 }
 
-/// Unprojects normalized spherical Web Mercator coordinates into degrees.
 #[must_use]
 pub fn unproject_web_mercator(world: WorldCoordinate) -> Option<GeographicCoordinate> {
     if !world.x.is_finite() || !world.y.is_finite() {
@@ -362,28 +337,28 @@ pub fn unproject_web_mercator(world: WorldCoordinate) -> Option<GeographicCoordi
     })
 }
 
-/// Returns a finite, strictly-positive CSS-pixel world size for a zoom and tile size.
 #[must_use]
 pub fn world_size(zoom: f64, tile_size: f64) -> Option<f64> {
     if !zoom.is_finite() || !tile_size.is_finite() || tile_size <= 0.0 {
         return None;
     }
-
     let size = tile_size * 2.0_f64.powf(zoom);
     if !size.is_finite() || size <= 0.0 {
         return None;
     }
-
     Some(size)
 }
 
-/// Wraps longitude into `[-180, 180)`.
 #[must_use]
 pub fn wrap_longitude(longitude: f64) -> f64 {
-    (longitude + 180.0).rem_euclid(360.0) - 180.0
+    let wrapped = longitude.rem_euclid(360.0);
+    if wrapped >= 180.0 {
+        wrapped - 360.0
+    } else {
+        wrapped
+    }
 }
 
-/// Clamps latitude to the finite Web Mercator domain.
 #[must_use]
 pub fn clamp_mercator_latitude(latitude: f64) -> f64 {
     latitude.clamp(-MAX_MERCATOR_LATITUDE, MAX_MERCATOR_LATITUDE)
