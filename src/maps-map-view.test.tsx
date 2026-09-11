@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { GeoJsonLayer } from "./geojson-layer";
 import { MapControls } from "./map-components";
 import type { MapSurfaceController } from "./map-display";
 import { MapView } from "./map-view";
+import { PointLayer } from "./point-layer";
 
 vi.mock("./canvas-flat-runtime", async () => {
   const React = await import("react");
@@ -18,6 +20,7 @@ vi.mock("./canvas-flat-runtime", async () => {
       bounds: [number, number, number, number],
       options?: { maxZoom?: number; reason?: Reason },
     ) => void;
+    project: (coordinates: [number, number]) => { x: number; y: number };
     setViewState: (viewState: ViewState, reason?: Reason) => void;
     unproject: (x: number, y: number) => [number, number];
   };
@@ -42,6 +45,12 @@ vi.mock("./canvas-flat-runtime", async () => {
             },
             options.reason ?? "fit-bounds",
           );
+        },
+        project(coordinates) {
+          return {
+            x: 400 + coordinates[0] * 10,
+            y: 300 - coordinates[1] * 5,
+          };
         },
         setViewState(next, reason = "programmatic") {
           props.onViewStateChange(next, reason);
@@ -161,6 +170,106 @@ describe("Maps-owned MapView runtime", () => {
     });
   });
 
+  test("renders PointLayer through Rust-owned screen projection", async () => {
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="Point overlay Maps runtime"
+        mapStyle={{ tiles: false }}
+      >
+        <PointLayer
+          hoveredFeatureId="berlin"
+          points={[{ id: "berlin", latitude: 52.52, longitude: 13.405 }]}
+          pointColor="#dc2626"
+          pointRadius={8}
+        />
+      </MapView>,
+    );
+
+    const map = screen.getByLabelText("Point overlay Maps runtime");
+
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(map.querySelector('[data-map-overlay-runtime="maps"]')).toBeTruthy();
+    });
+
+    const point = map.querySelector('[data-map-feature-id="berlin"]');
+    expect(point?.getAttribute("cx")).toBe("534.05");
+    expect(point?.getAttribute("cy")).toBe("37.400000000000006");
+    expect(point?.getAttribute("fill")).toBe("#dc2626");
+    expect(point?.getAttribute("r")).toBe("8");
+    expect(point?.getAttribute("class")).toContain("mb-maps__feature--hovered");
+  });
+
+  test("renders GeoJsonLayer points, lines, and polygons through Rust projection", async () => {
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="GeoJSON overlay Maps runtime"
+        mapStyle={{ tiles: false }}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            features: [
+              {
+                geometry: { coordinates: [1, 2], type: "Point" },
+                id: "point-a",
+                properties: {},
+                type: "Feature",
+              },
+              {
+                geometry: {
+                  coordinates: [
+                    [1, 2],
+                    [3, 4],
+                  ],
+                  type: "LineString",
+                },
+                id: "line-a",
+                properties: {},
+                type: "Feature",
+              },
+              {
+                geometry: {
+                  coordinates: [
+                    [
+                      [0, 0],
+                      [2, 0],
+                      [2, 2],
+                      [0, 0],
+                    ],
+                  ],
+                  type: "Polygon",
+                },
+                id: "polygon-a",
+                properties: {},
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          }}
+          selectedFeatureId="polygon-a"
+        />
+      </MapView>,
+    );
+
+    const map = screen.getByLabelText("GeoJSON overlay Maps runtime");
+
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(map.querySelector('[data-map-feature-id="point-a"]')).toBeTruthy();
+    });
+
+    expect(map.querySelector('[data-map-feature-id="line-a"]')?.getAttribute("d")).toBe(
+      "M 410 290 L 430 280",
+    );
+    const polygon = map.querySelector('[data-map-feature-id="polygon-a"]');
+    expect(polygon?.getAttribute("d")).toBe("M 400 300 L 420 300 L 420 290 L 400 300 Z");
+    expect(polygon?.getAttribute("class")).toContain("mb-maps__feature--selected");
+  });
+
   test("routes map context menus through the shared MapView contract", async () => {
     const onMapContextMenu = vi.fn();
 
@@ -195,7 +304,7 @@ describe("Maps-owned MapView runtime", () => {
     expect(screen.getByText("Create 8, 50")).toBeTruthy();
   });
 
-  test("fails closed for MapLibre-only layers and style URLs", () => {
+  test("fails closed for unsupported layer types, interactions, and style URLs", () => {
     expect(() =>
       render(
         <MapView
@@ -207,7 +316,23 @@ describe("Maps-owned MapView runtime", () => {
           <div>Map layer</div>
         </MapView>,
       ),
-    ).toThrow(/does not support MapLibre-backed map layers/);
+    ).toThrow(/supports PointLayer and GeoJsonLayer only/);
+
+    expect(() =>
+      render(
+        <MapView
+          flatRuntime="maps"
+          fitToData={false}
+          mapLabel="Unsupported interactive point"
+          mapStyle={{ tiles: false }}
+        >
+          <PointLayer
+            onFeatureSelect={() => undefined}
+            points={[{ id: "berlin", latitude: 52.52, longitude: 13.405 }]}
+          />
+        </MapView>,
+      ),
+    ).toThrow(/point overlays are display-only/);
 
     expect(() =>
       render(
