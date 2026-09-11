@@ -12,6 +12,8 @@ export type MapsRasterTileId = {
   z: number;
 };
 
+type MapsRasterTileCoordinates = Omit<MapsRasterTileId, "key">;
+
 export type MapsRasterTilePlacement = {
   tile: MapsRasterTileId;
   worldCopy: number;
@@ -42,6 +44,17 @@ export type MapsFlatRasterFrame = {
     spansFullWorld: boolean;
     west: number;
   };
+};
+
+type MapsFlatRasterWasmFrame = {
+  camera: MapsFlatRasterFrame["camera"];
+  cancellations: MapsRasterTileCoordinates[];
+  evictions: MapsRasterTileCoordinates[];
+  placements: Array<
+    Omit<MapsRasterTilePlacement, "tile"> & { tile: MapsRasterTileCoordinates }
+  >;
+  requests: MapsRasterTileCoordinates[];
+  visibleBounds: MapsFlatRasterFrame["visibleBounds"];
 };
 
 export type MapsFlatRasterRuntimeConfig = {
@@ -89,7 +102,7 @@ type MapsFlatRasterWasmRuntime = {
     padding: number,
     maxZoom: number,
   ): void;
-  frame(): MapsFlatRasterFrame;
+  frame(): MapsFlatRasterWasmFrame;
   free?: () => void;
   markFailed(z: number, x: number, y: number): void;
   markLoaded(z: number, x: number, y: number): void;
@@ -141,7 +154,7 @@ export async function loadMapsFlatRasterRuntime(
     },
     frame() {
       assertLive(disposed);
-      return runtime.frame();
+      return addRasterTileKeys(runtime.frame());
     },
     markFailed(tile) {
       assertLive(disposed);
@@ -171,6 +184,26 @@ export async function loadMapsFlatRasterRuntime(
       assertLive(disposed);
       runtime.zoomAbout(deltaZoom, x, y, minZoom, maxZoom);
     },
+  };
+}
+
+function addRasterTileKeys(frame: MapsFlatRasterWasmFrame): MapsFlatRasterFrame {
+  return {
+    ...frame,
+    cancellations: frame.cancellations.map(addRasterTileKey),
+    evictions: frame.evictions.map(addRasterTileKey),
+    placements: frame.placements.map((placement) => ({
+      ...placement,
+      tile: addRasterTileKey(placement.tile),
+    })),
+    requests: frame.requests.map(addRasterTileKey),
+  };
+}
+
+function addRasterTileKey(tile: MapsRasterTileCoordinates): MapsRasterTileId {
+  return {
+    ...tile,
+    key: `${tile.z}/${tile.x}/${tile.y}`,
   };
 }
 
