@@ -63,6 +63,10 @@ export function MapsCanvasFlatRuntime({
   const runtimeRef = useRef<MapsFlatRasterRuntime | null>(null);
   const imagesRef = useRef<Map<string, ImageBitmap>>(new Map());
   const loadsRef = useRef<Map<string, ActiveTileLoad>>(new Map());
+  const syncFrameRef = useRef<(() => MapsFlatRasterFrame) | null>(null);
+  const emitViewStateRef = useRef<
+    ((frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => void) | null
+  >(null);
   const source = resolveTileLayerOptions(mapStyle);
   const sourceKey = source
     ? [source.url, source.options.minZoom, source.options.maxZoom, source.options.tileSize].join(":")
@@ -71,14 +75,18 @@ export function MapsCanvasFlatRuntime({
   const maxZoomRef = useRef(maxZoom);
   const onViewStateChangeRef = useRef(onViewStateChange);
   const onContextMenuRef = useRef(onContextMenu);
+  const onControllerReadyRef = useRef(onControllerReady);
   const onErrorRef = useRef(onError);
+  const onReadyRef = useRef(onReady);
   const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
 
   sourceRef.current = source;
   maxZoomRef.current = maxZoom;
   onViewStateChangeRef.current = onViewStateChange;
   onContextMenuRef.current = onContextMenu;
+  onControllerReadyRef.current = onControllerReady;
   onErrorRef.current = onError;
+  onReadyRef.current = onReady;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -121,26 +129,7 @@ export function MapsCanvasFlatRuntime({
         source: () => sourceRef.current,
         onError: (error) => onErrorRef.current?.(error),
       });
-
-      const controller: MapsCanvasFlatRuntimeController = {
-        fitBounds(bounds, options = {}) {
-          const effectiveMaxZoom =
-            options.maxZoom ?? normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
-          runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
-          const frame = syncFrame();
-          emitViewState(frame, options.reason ?? "fit-bounds");
-        },
-        setViewState(next, reason = "programmatic") {
-          runtime.setViewState(next);
-          const frame = syncFrame();
-          emitViewState(frame, reason);
-        },
-        unproject(x, y) {
-          return runtime.unproject(x, y);
-        },
-      };
-
-      function emitViewState(frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) {
+      const emitViewState = (frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => {
         onViewStateChangeRef.current(
           {
             center: frame.camera.center,
@@ -148,13 +137,26 @@ export function MapsCanvasFlatRuntime({
           },
           reason,
         );
-      }
+      };
 
-      (canvas as HTMLCanvasElement & { __mapsSyncFrame?: () => MapsFlatRasterFrame }).__mapsSyncFrame =
-        syncFrame;
-      (canvas as HTMLCanvasElement & {
-        __mapsEmitViewState?: (frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => void;
-      }).__mapsEmitViewState = emitViewState;
+      syncFrameRef.current = syncFrame;
+      emitViewStateRef.current = emitViewState;
+
+      const controller: MapsCanvasFlatRuntimeController = {
+        fitBounds(bounds, options = {}) {
+          const effectiveMaxZoom =
+            options.maxZoom ?? normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+          runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
+          emitViewState(syncFrame(), "fit-bounds");
+        },
+        setViewState(next, reason = "programmatic") {
+          runtime.setViewState(next);
+          emitViewState(syncFrame(), reason);
+        },
+        unproject(x, y) {
+          return runtime.unproject(x, y);
+        },
+      };
 
       resizeObserver = new ResizeObserver(() => {
         const nextSize = getCanvasCssSize(canvas);
@@ -165,8 +167,8 @@ export function MapsCanvasFlatRuntime({
       resizeObserver.observe(canvas);
 
       syncFrame();
-      onControllerReady?.(controller);
-      onReady?.();
+      onControllerReadyRef.current?.(controller);
+      onReadyRef.current?.();
     }
 
     initialize().catch((error) => {
@@ -176,27 +178,25 @@ export function MapsCanvasFlatRuntime({
     return () => {
       cancelled = true;
       resizeObserver?.disconnect();
-      onControllerReady?.(null);
+      onControllerReadyRef.current?.(null);
+      syncFrameRef.current = null;
+      emitViewStateRef.current = null;
       for (const load of loadsRef.current.values()) load.abort.abort();
       loadsRef.current.clear();
       for (const image of imagesRef.current.values()) image.close();
       imagesRef.current.clear();
       runtimeRef.current?.dispose();
       runtimeRef.current = null;
-      delete (canvas as HTMLCanvasElement & { __mapsSyncFrame?: unknown }).__mapsSyncFrame;
-      delete (canvas as HTMLCanvasElement & { __mapsEmitViewState?: unknown }).__mapsEmitViewState;
     };
   }, [sourceKey, wasmPackage]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
-    const canvas = canvasRef.current as
-      | (HTMLCanvasElement & { __mapsSyncFrame?: () => MapsFlatRasterFrame })
-      | null;
-    if (!runtime || !canvas?.__mapsSyncFrame) return;
+    const syncFrame = syncFrameRef.current;
+    if (!runtime || !syncFrame) return;
 
     runtime.setViewState(viewState);
-    canvas.__mapsSyncFrame();
+    syncFrame();
   }, [viewState.center[0], viewState.center[1], viewState.zoom]);
 
   return (
@@ -231,24 +231,15 @@ export function MapsCanvasFlatRuntime({
       onPointerMove={(event) => {
         const drag = dragRef.current;
         const runtime = runtimeRef.current;
-        const canvas = event.currentTarget as HTMLCanvasElement & {
-          __mapsEmitViewState?: (
-            frame: MapsFlatRasterFrame,
-            reason: MapViewStateChangeReason,
-          ) => void;
-          __mapsSyncFrame?: () => MapsFlatRasterFrame;
-        };
-        if (!runtime || !drag || drag.pointerId !== event.pointerId || !canvas.__mapsSyncFrame) {
-          return;
-        }
+        const syncFrame = syncFrameRef.current;
+        if (!runtime || !drag || drag.pointerId !== event.pointerId || !syncFrame) return;
 
         const deltaX = event.clientX - drag.x;
         const deltaY = event.clientY - drag.y;
         drag.x = event.clientX;
         drag.y = event.clientY;
         runtime.panBy(deltaX, deltaY);
-        const frame = canvas.__mapsSyncFrame();
-        canvas.__mapsEmitViewState?.(frame, "pan");
+        emitViewStateRef.current?.(syncFrame(), "pan");
       }}
       onPointerUp={(event) => {
         if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
@@ -259,14 +250,8 @@ export function MapsCanvasFlatRuntime({
       onWheel={(event) => {
         event.preventDefault();
         const runtime = runtimeRef.current;
-        const canvas = event.currentTarget as HTMLCanvasElement & {
-          __mapsEmitViewState?: (
-            frame: MapsFlatRasterFrame,
-            reason: MapViewStateChangeReason,
-          ) => void;
-          __mapsSyncFrame?: () => MapsFlatRasterFrame;
-        };
-        if (!runtime || !canvas.__mapsSyncFrame) return;
+        const syncFrame = syncFrameRef.current;
+        if (!runtime || !syncFrame) return;
         const rect = event.currentTarget.getBoundingClientRect();
         const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
 
@@ -277,8 +262,7 @@ export function MapsCanvasFlatRuntime({
           0,
           effectiveMaxZoom,
         );
-        const frame = canvas.__mapsSyncFrame();
-        canvas.__mapsEmitViewState?.(frame, "zoom");
+        emitViewStateRef.current?.(syncFrame(), "zoom");
       }}
     />
   );
@@ -299,8 +283,8 @@ function createFrameSynchronizer({
   source: () => ReturnType<typeof resolveTileLayerOptions>;
   onError: (error: unknown) => void;
 }) {
-  return () => {
-    const frame = runtime.frame();
+  function syncFrame(): MapsFlatRasterFrame {
+    let frame = runtime.frame();
 
     for (const tile of frame.cancellations) {
       loads.get(tile.key)?.abort.abort();
@@ -311,13 +295,17 @@ function createFrameSynchronizer({
       images.delete(tile.key);
     }
 
-    drawFrame(canvas, images, frame);
-
     const currentSource = source();
     if (!currentSource) {
-      for (const tile of frame.requests) runtime.markLoaded(tile);
+      while (frame.requests.length > 0) {
+        for (const tile of frame.requests) runtime.markLoaded(tile);
+        frame = runtime.frame();
+      }
+      drawFrame(canvas, images, frame);
       return frame;
     }
+
+    drawFrame(canvas, images, frame);
 
     for (const tile of frame.requests) {
       if (loads.has(tile.key) || images.has(tile.key)) continue;
@@ -327,9 +315,13 @@ function createFrameSynchronizer({
       loadRasterTile(buildRasterTileUrl(currentSource.url, tile), abort.signal)
         .then((image) => {
           loads.delete(tile.key);
+          if (abort.signal.aborted) {
+            image.close();
+            return;
+          }
           images.set(tile.key, image);
           runtime.markLoaded(tile);
-          drawFrame(canvas, images, runtime.frame());
+          syncFrame();
         })
         .catch((error) => {
           loads.delete(tile.key);
@@ -340,7 +332,9 @@ function createFrameSynchronizer({
     }
 
     return frame;
-  };
+  }
+
+  return syncFrame;
 }
 
 async function loadRasterTile(url: string, signal: AbortSignal) {
