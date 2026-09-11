@@ -221,9 +221,7 @@ pub fn project_web_mercator(longitude: f64, latitude: f64) -> Option<WorldCoordi
     let latitude = clamp_mercator_latitude(latitude);
     let x = (longitude + 180.0) / 360.0;
     let latitude_radians = latitude.to_radians();
-    let y = ((1.0
-        - (latitude_radians.tan() + 1.0 / latitude_radians.cos()).ln() / PI)
-        / 2.0)
+    let y = ((1.0 - (latitude_radians.tan() + 1.0 / latitude_radians.cos()).ln() / PI) / 2.0)
         .clamp(0.0, 1.0);
 
     Some(WorldCoordinate { x, y })
