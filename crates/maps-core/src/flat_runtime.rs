@@ -61,7 +61,11 @@ impl Default for FlatRasterRuntimeLimits {
 
 impl FlatRasterRuntimeLimits {
     #[must_use]
-    pub fn new(max_visible_tiles: usize, cache_capacity: usize, load_concurrency: usize) -> Option<Self> {
+    pub fn new(
+        max_visible_tiles: usize,
+        cache_capacity: usize,
+        load_concurrency: usize,
+    ) -> Option<Self> {
         if max_visible_tiles == 0
             || cache_capacity == 0
             || load_concurrency == 0
@@ -198,7 +202,8 @@ impl FlatRasterRuntime {
     }
 
     pub fn resize(&mut self, width: f64, height: f64) -> Result<(), FlatRasterRuntimeError> {
-        let viewport = ViewportSize::new(width, height).ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let viewport =
+            ViewportSize::new(width, height).ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         self.camera = self
             .camera
             .with_viewport(viewport)
@@ -260,14 +265,14 @@ impl FlatRasterRuntime {
         let anchor_world = project_web_mercator(anchor.longitude, anchor.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         let zoom = (self.camera.zoom + delta_zoom).clamp(min_zoom, max_zoom);
-        let next_size = world_size(zoom, CAMERA_TILE_SIZE)
-            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let next_size =
+            world_size(zoom, CAMERA_TILE_SIZE).ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         let center_world = WorldCoordinate {
             x: anchor_world.x - (screen.x - self.camera.viewport.width / 2.0) / next_size,
             y: anchor_world.y - (screen.y - self.camera.viewport.height / 2.0) / next_size,
         };
-        let center = unproject_web_mercator(center_world)
-            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let center =
+            unproject_web_mercator(center_world).ok_or(FlatRasterRuntimeError::InvalidCamera)?;
 
         self.set_view_state(center.longitude, center.latitude, zoom)
     }
@@ -294,10 +299,10 @@ impl FlatRasterRuntime {
         }
 
         validate_camera(self.camera)?;
-        let north_west = project_web_mercator(west, north)
-            .ok_or(FlatRasterRuntimeError::InvalidBounds)?;
-        let south_east = project_web_mercator(east, south)
-            .ok_or(FlatRasterRuntimeError::InvalidBounds)?;
+        let north_west =
+            project_web_mercator(west, north).ok_or(FlatRasterRuntimeError::InvalidBounds)?;
+        let south_east =
+            project_web_mercator(east, south).ok_or(FlatRasterRuntimeError::InvalidBounds)?;
         let mut east_x = south_east.x;
         if west > east || east_x < north_west.x {
             east_x += 1.0;
@@ -318,8 +323,8 @@ impl FlatRasterRuntime {
             x: north_west.x + span_x / 2.0,
             y: (north_west.y + south_east.y) / 2.0,
         };
-        let center = unproject_web_mercator(center_world)
-            .ok_or(FlatRasterRuntimeError::InvalidBounds)?;
+        let center =
+            unproject_web_mercator(center_world).ok_or(FlatRasterRuntimeError::InvalidBounds)?;
 
         self.set_view_state(center.longitude, center.latitude, zoom)
     }
@@ -349,7 +354,8 @@ impl FlatRasterRuntime {
 
     pub fn frame_plan(&mut self) -> Result<RasterFramePlan, FlatRasterRuntimeError> {
         validate_camera(self.camera)?;
-        let placements = visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;
+        let placements =
+            visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;
         let visible_bounds = self
             .camera
             .visible_bounds()
@@ -466,12 +472,11 @@ fn visible_tile_placements(
     let min_x = (west * dimension as f64).floor() as i64;
     let max_x = ((east * dimension as f64).ceil() as i64 - 1).max(min_x);
     let min_y = ((north * dimension as f64).floor() as i64).clamp(0, dimension - 1);
-    let max_y = ((south * dimension as f64).ceil() as i64 - 1)
-        .clamp(min_y, dimension - 1);
-    let columns = usize::try_from(max_x - min_x + 1)
-        .map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
-    let rows = usize::try_from(max_y - min_y + 1)
-        .map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
+    let max_y = ((south * dimension as f64).ceil() as i64 - 1).clamp(min_y, dimension - 1);
+    let columns =
+        usize::try_from(max_x - min_x + 1).map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
+    let rows =
+        usize::try_from(max_y - min_y + 1).map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
     let required = columns
         .checked_mul(rows)
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
@@ -572,10 +577,12 @@ mod tests {
         let second = runtime.frame_plan().unwrap();
 
         assert!(!second.cancellations.is_empty());
-        assert!(second
-            .cancellations
-            .iter()
-            .all(|tile| first.requests.contains(tile)));
+        assert!(
+            second
+                .cancellations
+                .iter()
+                .all(|tile| first.requests.contains(tile))
+        );
     }
 
     #[test]
@@ -602,12 +609,9 @@ mod tests {
         )
         .unwrap();
         let limits = FlatRasterRuntimeLimits::new(1, 1, 1).unwrap();
-        let mut runtime = FlatRasterRuntime::new(
-            camera,
-            RasterSourceSpec::new(0, 19, 256).unwrap(),
-            limits,
-        )
-        .unwrap();
+        let mut runtime =
+            FlatRasterRuntime::new(camera, RasterSourceSpec::new(0, 19, 256).unwrap(), limits)
+                .unwrap();
 
         assert!(matches!(
             runtime.frame_plan(),
