@@ -48,6 +48,19 @@ fn longitude_wrap_is_canonical_across_world_copies() {
 }
 
 #[test]
+fn longitude_wrap_preserves_representable_values_adjacent_to_antimeridian() {
+    let west_adjacent = -180.000_000_000_000_03;
+    let east_adjacent = 179.999_999_999_999_97;
+
+    assert_eq!(wrap_longitude(west_adjacent), east_adjacent);
+    assert_eq!(wrap_longitude(east_adjacent), east_adjacent);
+
+    let projected = project_web_mercator(west_adjacent, 0.0).expect("finite coordinate");
+    assert!(projected.x >= 0.0);
+    assert!(projected.x < 1.0);
+}
+
+#[test]
 fn world_size_rejects_overflow_underflow_and_invalid_tile_sizes() {
     assert_eq!(world_size(1023.0, 512.0), None);
     assert_eq!(world_size(-1075.0, 512.0), None);
