@@ -80,6 +80,7 @@ export type MapsFlatRasterRuntime = {
   markFailed(tile: MapsRasterTileId): void;
   markLoaded(tile: MapsRasterTileId): void;
   panBy(deltaX: number, deltaY: number): void;
+  project(longitude: number, latitude: number): [x: number, y: number];
   resize(width: number, height: number): void;
   setViewState(viewState: MapViewState): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
@@ -106,6 +107,7 @@ type MapsFlatRasterWasmRuntime = {
   markFailed(z: number, x: number, y: number): void;
   markLoaded(z: number, x: number, y: number): void;
   panBy(deltaX: number, deltaY: number): void;
+  project(longitude: number, latitude: number): [x: number, y: number];
   resize(width: number, height: number): void;
   setViewState(longitude: number, latitude: number, zoom: number): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
@@ -166,6 +168,10 @@ export async function loadMapsFlatRasterRuntime(
     panBy(deltaX, deltaY) {
       assertLive(disposed);
       runtime.panBy(deltaX, deltaY);
+    },
+    project(longitude, latitude) {
+      assertLive(disposed);
+      return runtime.project(longitude, latitude);
     },
     resize(width, height) {
       assertLive(disposed);
