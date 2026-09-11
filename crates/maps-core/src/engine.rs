@@ -266,10 +266,16 @@ pub fn world_size(zoom: f64, tile_size: f64) -> Option<f64> {
     Some(size)
 }
 
-/// Wraps longitude into `[-180, 180)`.
+/// Wraps longitude into `[-180, 180)` without adding an offset first, avoiding
+/// loss of the representable distinction immediately adjacent to ±180°.
 #[must_use]
 pub fn wrap_longitude(longitude: f64) -> f64 {
-    (longitude + 180.0).rem_euclid(360.0) - 180.0
+    let wrapped = longitude.rem_euclid(360.0);
+    if wrapped >= 180.0 {
+        wrapped - 360.0
+    } else {
+        wrapped
+    }
 }
 
 /// Clamps latitude to the finite Web Mercator domain.
