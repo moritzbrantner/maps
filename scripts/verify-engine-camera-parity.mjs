@@ -1,14 +1,25 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const rootPackage = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
+const mapLibrePackage = JSON.parse(
+  readFileSync(path.join(rootDir, "node_modules", "maplibre-gl", "package.json"), "utf8"),
+);
+const referenceVersion = mapLibrePackage.version;
+const viteEntry = path.join(rootDir, "node_modules", "vite", "bin", "vite.js");
 const scenario = JSON.parse(
   readFileSync(path.join(rootDir, "engine-scenarios", "camera-world-pan-v1.json"), "utf8"),
 );
@@ -22,27 +33,22 @@ let preview;
 
 try {
   readFileSync(wasmEntry);
+  readFileSync(viteEntry);
+  if (typeof referenceVersion !== "string" || referenceVersion.length === 0) {
+    throw new Error("root MapLibre install does not expose a resolved version");
+  }
 
   mkdirSync(path.join(tempRoot, "src"), { recursive: true });
+  mkdirSync(path.join(tempRoot, "node_modules", "@moritzbrantner"), { recursive: true });
+  linkDirectory(rootDir, path.join(tempRoot, "node_modules", "@moritzbrantner", "maps"));
+  linkDirectory(
+    path.join(rootDir, "node_modules", "maplibre-gl"),
+    path.join(tempRoot, "node_modules", "maplibre-gl"),
+  );
+
   writeFileSync(
     path.join(tempRoot, "package.json"),
-    JSON.stringify(
-      {
-        private: true,
-        type: "module",
-        dependencies: {
-          "@moritzbrantner/maps": `file:${rootDir}`,
-          "maplibre-gl": rootPackage.dependencies["maplibre-gl"],
-          vite: rootPackage.devDependencies.vite,
-        },
-        scripts: {
-          build: "vite build",
-          preview: "vite preview --host 127.0.0.1 --port 4188 --strictPort",
-        },
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({ private: true, type: "module" }, null, 2),
   );
   writeFileSync(
     path.join(tempRoot, "index.html"),
@@ -55,13 +61,14 @@ try {
 import { executeMapLibreCameraScenario } from "./maplibre-camera-reference.js";
 
 const scenario = ${JSON.stringify(scenario)};
+const referenceVersion = ${JSON.stringify(referenceVersion)};
 const EPSILON = 1e-6;
 
 window.mapsEngineCameraEvidence = (async () => {
   await init();
 
   const candidate = executeEngineScenario(scenario);
-  const reference = await executeMapLibreCameraScenario(scenario);
+  const reference = await executeMapLibreCameraScenario(scenario, referenceVersion);
   const comparison = compareSemanticObservations(reference, candidate);
 
   return {
@@ -131,10 +138,9 @@ function compareValue(reference, candidate, path, stats) {
 `,
   );
 
-  run("bun", ["install"], tempRoot);
-  run("bun", ["run", "build"], tempRoot);
+  run("bun", [viteEntry, "build"], tempRoot);
 
-  preview = spawn("bun", ["run", "preview"], {
+  preview = spawn("bun", [viteEntry, "preview", "--host", "127.0.0.1", "--port", "4188", "--strictPort"], {
     cwd: tempRoot,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -157,6 +163,11 @@ function compareValue(reference, candidate, path, stats) {
     if (result.comparison.numericComparisons === 0) {
       throw new Error("camera parity did not compare numeric observations");
     }
+    if (result.referenceImplementation.name !== `maplibre-gl@${referenceVersion}`) {
+      throw new Error(
+        `camera evidence used unexpected MapLibre reference ${result.referenceImplementation.name}`,
+      );
+    }
 
     console.log("Maps Rust/WASM camera reference parity passed.");
     console.log(JSON.stringify(result, null, 2));
@@ -166,6 +177,10 @@ function compareValue(reference, candidate, path, stats) {
 } finally {
   preview?.kill("SIGTERM");
   rmSync(tempRoot, { force: true, recursive: true });
+}
+
+function linkDirectory(target, linkPath) {
+  symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
 }
 
 function run(command, args, cwd) {
