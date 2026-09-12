@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { getBoundsFromPoints } from "./aggregation";
+import { getBoundsFromPoints, type ViewportAggregationQuery } from "./aggregation";
 import {
   MapsCanvasFlatRuntime,
   type MapsCanvasFlatRuntimeController,
@@ -194,6 +194,21 @@ export function MapsMapView({
   const projectCoordinate = useCallback(
     (coordinates: [longitude: number, latitude: number]) => {
       return runtimeControllerRef.current?.project(coordinates) ?? null;
+    },
+    [currentViewState.center[0], currentViewState.center[1], currentViewState.zoom, isReady],
+  );
+
+  const getViewportAggregationQuery = useCallback(
+    (width: number, height: number): ViewportAggregationQuery | null => {
+      const runtime = runtimeControllerRef.current;
+      if (!runtime) return null;
+
+      const bottomLeft = runtime.unproject(0, height);
+      const topRight = runtime.unproject(width, 0);
+      return {
+        bounds: [bottomLeft[0], bottomLeft[1], topRight[0], topRight[1]],
+        zoom: currentViewState.zoom,
+      };
     },
     [currentViewState.center[0], currentViewState.center[1], currentViewState.zoom, isReady],
   );
@@ -582,7 +597,12 @@ export function MapsMapView({
           onViewStateChange={setViewState}
           viewState={currentViewState}
         />
-        <MapsOverlayLayers ref={overlayControllerRef} project={projectCoordinate} surface={context}>
+        <MapsOverlayLayers
+          ref={overlayControllerRef}
+          getViewport={getViewportAggregationQuery}
+          project={projectCoordinate}
+          surface={context}
+        >
           {mapChildren.layers}
         </MapsOverlayLayers>
         {showAttributionControl && attribution ? (
