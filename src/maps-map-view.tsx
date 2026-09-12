@@ -15,7 +15,11 @@ import {
   MapsCanvasFlatRuntime,
   type MapsCanvasFlatRuntimeController,
 } from "./canvas-flat-runtime";
-import { FeatureOverlays, type ContextMenuOverlayState } from "./feature-overlays";
+import {
+  FeatureOverlays,
+  type ContextMenuOverlayState,
+  type FeatureOverlayState,
+} from "./feature-overlays";
 import { getBoundsFromGeoJson, type GeoJsonMapSource } from "./geojson-source";
 import { splitMapViewChildren } from "./map-components";
 import {
@@ -31,13 +35,17 @@ import {
   type MapViewStateChangeReason,
   type RasterMapStyle,
 } from "./map-display";
-import type { MapContextMenuContext } from "./map-interaction";
+import type {
+  MapContextMenuContext,
+  MapFeatureContextMenuContext,
+} from "./map-interaction";
 import { MapsOverlayLayers } from "./maps-overlay-layers";
 import {
   MapSurfaceContext,
   type MapSurfaceContextValue,
 } from "./map-surface-context";
 import { useControllableMapViewState } from "./map-view-state";
+import { getFeatureCoordinate, isBlockedHoverPosition } from "./map-view-utils";
 import type { MapViewProps as LegacyMapViewProps } from "./map-view-maplibre";
 
 export type MapsMapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
@@ -72,8 +80,12 @@ export function MapsMapView({
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
   const lastFitBoundsKeyRef = useRef<string | null>(null);
+  const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [runtimeError, setRuntimeError] = useState<unknown>(null);
+  const [hovered, setHovered] = useState<{ feature: unknown; id: string | null } | null>(null);
+  const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
+  const [popup, setPopup] = useState<FeatureOverlayState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuOverlayState | null>(null);
   const {
     controlled,
@@ -90,7 +102,35 @@ export function MapsMapView({
   });
   const resolvedMaxZoom = normalizeMapMaxZoom(maxZoom);
 
+  const getFeatureId = useCallback((feature: unknown, getId?: (feature: never) => string) => {
+    if (getId) {
+      return getId(feature as never);
+    }
+
+    if (feature && typeof feature === "object") {
+      const record = feature as Record<string, unknown>;
+      const point = record.point as Record<string, unknown> | undefined;
+      const flow = record.flow as Record<string, unknown> | undefined;
+
+      return String(point?.id ?? flow?.id ?? record.id ?? record.clusterId ?? "");
+    }
+
+    return "";
+  }, []);
+
   const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  const closeFeaturePopup = useCallback(() => {
+    setPopup(null);
+  }, []);
+
+  const handleBackgroundClick = useCallback(() => {
+    blockedHoverPositionRef.current = null;
+    setHovered(null);
+    setTooltip(null);
+    setPopup(null);
     setContextMenu(null);
   }, []);
 
@@ -164,11 +204,17 @@ export function MapsMapView({
         position: input.position,
       };
 
+      blockedHoverPositionRef.current = null;
+      setHovered(null);
+      setTooltip(null);
+      setPopup(null);
+
       startTransition(() => {
         onMapContextMenu?.(context);
       });
 
       if (!renderMapContextMenu) {
+        setContextMenu(null);
         return;
       }
 
@@ -240,20 +286,143 @@ export function MapsMapView({
 
   const context = useMemo<MapSurfaceContextValue>(
     () => ({
-      closeFeaturePopup: () => undefined,
+      closeFeaturePopup,
       display: "flat",
-      handleBackgroundClick: closeContextMenu,
-      handleFeatureClick() {
-        throwUnsupportedMapsInteraction();
+      handleBackgroundClick,
+      handleFeatureClick(feature, position, options) {
+        if (options?.suppress) {
+          return;
+        }
+
+        const featureId = getFeatureId(feature, options?.getFeatureId as never) || null;
+
+        setContextMenu(null);
+        setHovered(null);
+        setTooltip(null);
+        blockedHoverPositionRef.current = position;
+
+        startTransition(() => {
+          options?.onFeatureSelect?.(feature);
+          options?.onSelectedFeatureIdChange?.(featureId, {
+            feature,
+            featureId,
+            source: "click",
+          });
+        });
+
+        if (options?.renderFeaturePopup) {
+          setPopup({
+            feature,
+            position,
+            render: options.renderFeaturePopup as (feature: unknown) => ReactNode,
+          });
+        }
       },
-      handleFeatureContextMenu() {
-        throwUnsupportedMapsInteraction();
+      handleFeatureContextMenu(feature, position, options) {
+        if (options?.suppress) {
+          return;
+        }
+
+        const featureId = getFeatureId(feature, options?.getFeatureId as never) || null;
+        const coordinates = options?.coordinates ?? getFeatureCoordinate(feature);
+        const featureContext: MapFeatureContextMenuContext<typeof feature> = {
+          close: closeContextMenu,
+          coordinates,
+          feature,
+          position,
+        };
+
+        blockedHoverPositionRef.current = position;
+        setHovered(null);
+        setTooltip(null);
+
+        startTransition(() => {
+          options?.onFeatureContextMenu?.(feature);
+          options?.onFeatureSelect?.(feature);
+          options?.onSelectedFeatureIdChange?.(featureId, {
+            feature,
+            featureId,
+            source: "context-menu",
+          });
+        });
+
+        if (options?.renderFeatureContextMenu) {
+          setPopup(null);
+          setContextMenu({
+            context: featureContext,
+            position,
+            render: (value) =>
+              options.renderFeatureContextMenu!(
+                (value as MapFeatureContextMenuContext<typeof feature>).feature,
+                value as MapFeatureContextMenuContext<typeof feature>,
+              ),
+          });
+          return;
+        }
+
+        setContextMenu(null);
+
+        if (options?.renderFeaturePopup) {
+          setPopup({
+            feature,
+            position,
+            render: options.renderFeaturePopup as (feature: unknown) => ReactNode,
+          });
+        }
       },
-      handleFeatureHover() {
-        throwUnsupportedMapsInteraction();
+      handleFeatureHover(feature, position, options) {
+        const featureId = feature ? getFeatureId(feature, options?.getFeatureId as never) || null : null;
+
+        startTransition(() => {
+          options?.onFeatureHover?.(feature);
+          options?.onHoveredFeatureIdChange?.(featureId, {
+            feature,
+            featureId,
+            source: feature ? "hover" : "clear",
+          });
+        });
+
+        if (!feature || !position) {
+          blockedHoverPositionRef.current = null;
+          setHovered(null);
+          setTooltip(null);
+          return;
+        }
+
+        if (isBlockedHoverPosition(blockedHoverPositionRef.current, position)) {
+          return;
+        }
+
+        blockedHoverPositionRef.current = null;
+        setHovered({ feature, id: featureId });
+
+        if (options?.renderFeatureTooltip) {
+          setTooltip({
+            feature,
+            position,
+            render: options.renderFeatureTooltip as (feature: unknown) => ReactNode,
+          });
+        }
       },
-      isFeatureHovered: () => false,
-      isFeatureSelected: () => false,
+      isFeatureHovered(feature, hoveredFeatureId, getId) {
+        if (hoveredFeatureId) {
+          return getFeatureId(feature, getId as never) === hoveredFeatureId;
+        }
+
+        if (!hovered) {
+          return false;
+        }
+
+        const id = getFeatureId(feature, getId as never);
+        return id ? hovered.id === id : hovered.feature === feature;
+      },
+      isFeatureSelected(feature, selectedFeatureId, getId) {
+        if (!selectedFeatureId) {
+          return false;
+        }
+
+        return getFeatureId(feature, getId as never) === selectedFeatureId;
+      },
       isMeasuring: false,
       interactionMode: "none",
       flatMap: null,
@@ -274,7 +443,15 @@ export function MapsMapView({
       setViewState,
       viewState: currentViewState,
     }),
-    [closeContextMenu, currentViewState, setViewState],
+    [
+      closeContextMenu,
+      closeFeaturePopup,
+      currentViewState,
+      getFeatureId,
+      handleBackgroundClick,
+      hovered,
+      setViewState,
+    ],
   );
 
   if (runtimeError) {
@@ -299,7 +476,11 @@ export function MapsMapView({
         className={rootClassName}
         data-map-ready={isReady ? "true" : "false"}
         data-map-runtime="maps"
-        onClick={closeContextMenu}
+        onClick={(event) => {
+          if (event.target === event.currentTarget || event.target instanceof HTMLCanvasElement) {
+            handleBackgroundClick();
+          }
+        }}
         style={{
           minHeight: 480,
           position: "relative",
@@ -329,7 +510,9 @@ export function MapsMapView({
           onViewStateChange={setViewState}
           viewState={currentViewState}
         />
-        <MapsOverlayLayers project={projectCoordinate}>{mapChildren.layers}</MapsOverlayLayers>
+        <MapsOverlayLayers project={projectCoordinate} surface={context}>
+          {mapChildren.layers}
+        </MapsOverlayLayers>
         {showAttributionControl && attribution ? (
           <div
             className="mb-maps__attribution"
@@ -349,10 +532,10 @@ export function MapsMapView({
         ) : null}
         <FeatureOverlays
           contextMenu={contextMenu}
-          popup={null}
-          tooltip={null}
+          popup={popup}
+          tooltip={tooltip}
           onCloseContextMenu={closeContextMenu}
-          onClosePopup={() => undefined}
+          onClosePopup={closeFeaturePopup}
         />
       </div>
     </MapSurfaceContext.Provider>
@@ -407,7 +590,7 @@ function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapSt
 
 function throwUnsupportedMapsInteraction(): never {
   throw new Error(
-    'flatRuntime="maps" does not support MapLibre-backed interaction/editing layers yet; use display-only PointLayer/GeoJsonLayer overlays until the Maps interaction overlay slice lands.',
+    'flatRuntime="maps" does not support MapLibre-backed layer registration or editing/measurement interaction modes yet.',
   );
 }
 
