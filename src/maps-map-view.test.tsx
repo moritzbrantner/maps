@@ -321,8 +321,7 @@ describe("Maps-owned MapView runtime", () => {
         mapStyle={{ tiles: false }}
       >
         <PointLayer
-          getFeatureId={() => "stable-berlin"
-          }
+          getFeatureId={() => "stable-berlin"}
           onFeatureContextMenu={onFeatureContextMenu}
           onFeatureHover={onFeatureHover}
           onFeatureSelect={onFeatureSelect}
