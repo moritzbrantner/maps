@@ -1,5 +1,6 @@
 import type {
   MapRenderCircle,
+  MapRenderDirectionMarker,
   MapRenderLine,
   MapRenderPolygon,
   MapVectorRenderFrame,
@@ -21,6 +22,14 @@ export type CanvasCircleScenePrimitive<TFeature = unknown> = CanvasScenePrimitiv
   y: number;
 };
 
+export type CanvasDirectionMarkerScenePrimitive<TFeature = unknown> =
+  CanvasScenePrimitiveBase<TFeature> & {
+    angle: number;
+    kind: "direction-marker";
+    x: number;
+    y: number;
+  };
+
 export type CanvasLineScenePrimitive<TFeature = unknown> = CanvasScenePrimitiveBase<TFeature> & {
   kind: "line";
   points: MapScreenPoint[];
@@ -33,6 +42,7 @@ export type CanvasPolygonScenePrimitive<TFeature = unknown> = CanvasScenePrimiti
 
 export type CanvasMapScenePrimitive<TFeature = unknown> =
   | CanvasCircleScenePrimitive<TFeature>
+  | CanvasDirectionMarkerScenePrimitive<TFeature>
   | CanvasLineScenePrimitive<TFeature>
   | CanvasPolygonScenePrimitive<TFeature>;
 
@@ -99,6 +109,20 @@ function projectPrimitive<TFeature>(
       if (!isFinitePoint(center)) return [];
       return [{ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y }];
     }
+    case "direction-marker": {
+      const anchor = project(primitive.anchor);
+      const previous = project(primitive.previous);
+      if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return [];
+      return [
+        {
+          angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
+          kind: "direction-marker",
+          renderPrimitive: primitive,
+          x: anchor.x,
+          y: anchor.y,
+        },
+      ];
+    }
     case "line": {
       const points = projectCoordinates(primitive.coordinates, project);
       if (!points || points.length < 2) return [];
@@ -152,6 +176,13 @@ function drawPrimitive<TFeature>(
     case "circle":
       drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, selected, hovered);
       return;
+    case "direction-marker":
+      drawDirectionMarker(
+        context,
+        scenePrimitive,
+        primitive as MapRenderDirectionMarker<TFeature>,
+      );
+      return;
     case "line":
       drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, selected, hovered);
       return;
@@ -164,6 +195,26 @@ function drawPrimitive<TFeature>(
         hovered,
       );
   }
+}
+
+function drawDirectionMarker<TFeature>(
+  context: CanvasRenderingContext2D,
+  scene: CanvasDirectionMarkerScenePrimitive<TFeature>,
+  primitive: MapRenderDirectionMarker<TFeature>,
+) {
+  const size = Math.max(0, primitive.size);
+  context.save();
+  context.translate(scene.x, scene.y);
+  context.rotate(scene.angle);
+  context.beginPath();
+  context.moveTo(size * 0.38, 0);
+  context.lineTo(size * -0.62, size * -0.42);
+  context.lineTo(size * -0.62, size * 0.42);
+  context.closePath();
+  context.fillStyle = primitive.color;
+  context.globalAlpha = primitive.opacity;
+  context.fill();
+  context.restore();
 }
 
 function drawCircle<TFeature>(
@@ -262,6 +313,8 @@ function hitPrimitive<TFeature>(
       const radius = Math.max(8, (primitive.renderPrimitive as MapRenderCircle<TFeature>).radius);
       return squaredDistance(point, { x: primitive.x, y: primitive.y }) <= radius * radius;
     }
+    case "direction-marker":
+      return false;
     case "line": {
       const tolerance = Math.max(
         4,
