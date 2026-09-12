@@ -739,6 +739,6 @@ function assertNoUnsupportedPointDrag(
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
-    'flatRuntime="maps" currently supports PointLayer, GeoJsonLayer, and ClusterLayer only; other map layer types remain explicitly MapLibre-backed.',
+    'The direct-feature Maps runtime supports PointLayer and GeoJsonLayer only; ClusterLayer is also supported through the Maps-owned aggregation adapter. Other map layer types remain explicitly MapLibre-backed.',
   );
 }
