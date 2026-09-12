@@ -9,6 +9,7 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   const point = overlay.locator('[data-map-feature-id="acceptance-berlin"]');
   const polygon = overlay.locator('[data-map-feature-id="acceptance-zone"]');
   const viewState = page.getByTestId("maps-runtime-view-state");
+  const interaction = page.getByTestId("maps-runtime-interaction");
 
   await expect(map).toHaveAttribute("data-map-ready", "true");
   await expect(map).toHaveAttribute("data-map-runtime", "maps");
@@ -16,10 +17,34 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await expect(overlay).toHaveCount(1);
   await expect(point).toHaveCount(1);
   await expect(polygon).toHaveCount(1);
+  await expect(point).toHaveAttribute("data-map-feature-interactive", "true");
+  await expect(polygon).toHaveAttribute("data-map-feature-interactive", "true");
   await expect(point).toHaveClass(/mb-maps__feature--hovered/);
   await expect(polygon).toHaveClass(/mb-maps__feature--selected/);
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
   await expect(viewState).toContainText("13.4050,52.5200 | zoom 6.0000");
+
+  await point.hover();
+  await expect(interaction).toHaveText("point:hover:acceptance-berlin");
+  await expect(page.getByText("Hover Berlin")).toBeVisible();
+
+  await point.click();
+  await expect(interaction).toHaveText("point:click:acceptance-berlin");
+  await expect(point).toHaveClass(/mb-maps__feature--selected/);
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Selected Berlin");
+  await page.keyboard.press("Escape");
+
+  await point.click({ button: "right" });
+  await expect(interaction).toHaveText("point:context-menu:acceptance-berlin");
+  await expect(page.getByRole("button", { name: /Context Berlin at 13\.405,52\.520/ })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await polygon.click({ position: { x: 4, y: 4 } });
+  await expect(interaction).toHaveText("geojson:click:acceptance-zone");
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText(
+    "GeoJSON acceptance-zone",
+  );
+  await page.keyboard.press("Escape");
 
   const initialViewState = await viewState.textContent();
   const initialPointPosition = await projectedPointPosition(point);
