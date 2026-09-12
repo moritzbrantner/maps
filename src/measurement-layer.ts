@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useEffectEvent, useState, type MutableRefObject } from "react";
+import type { MapMouseEvent } from "maplibre-gl";
 import type { LayerGroup, Map as FlatMap } from "flat";
 
 import {
@@ -141,7 +142,7 @@ export function useFlatBeeLineMeasurementLayer(options: {
       emitDraftChange(null);
     }
 
-    function handleClick(event: { latlng?: { lat?: number; lng?: number } }) {
+    function handleClick(event: MapMouseEvent) {
       const nextCoordinate = getEventCoordinate(event);
 
       if (!nextCoordinate) {
@@ -175,7 +176,7 @@ export function useFlatBeeLineMeasurementLayer(options: {
       clearDraft();
     }
 
-    function handleMouseMove(event: { latlng?: { lat?: number; lng?: number } }) {
+    function handleMouseMove(event: MapMouseEvent) {
       if (!draftFrom) {
         return;
       }
@@ -330,11 +331,11 @@ function addEndpoint(
     .addTo(layer);
 }
 
-function getEventCoordinate(event: {
-  latlng?: { lat?: number; lng?: number };
-  lngLat?: { lat?: number; lng?: number };
-}) {
-  const latlng = event.latlng ?? event.lngLat;
+function getEventCoordinate(event: MapMouseEvent) {
+  const compatibleEvent = event as MapMouseEvent & {
+    latlng?: { lat?: number; lng?: number };
+  };
+  const latlng = compatibleEvent.lngLat ?? compatibleEvent.latlng;
 
   return normalizeMapCoordinate([latlng?.lng ?? Number.NaN, latlng?.lat ?? Number.NaN]);
 }
