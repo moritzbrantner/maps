@@ -293,6 +293,155 @@ describe("Maps-owned MapView runtime", () => {
     expect(polygon?.getAttribute("class")).toContain("mb-maps__feature--selected");
   });
 
+  test("routes point picks through the shared feature interaction contract", async () => {
+    const onFeatureContextMenu = vi.fn();
+    const onFeatureHover = vi.fn();
+    const onFeatureSelect = vi.fn();
+    const onHoveredFeatureIdChange = vi.fn();
+    const onSelectedFeatureIdChange = vi.fn();
+
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="Interactive point Maps runtime"
+        mapStyle={{ tiles: false }}
+      >
+        <PointLayer
+          getFeatureId={() => "stable-berlin"}
+          onFeatureContextMenu={onFeatureContextMenu}
+          onFeatureHover={onFeatureHover}
+          onFeatureSelect={onFeatureSelect}
+          onHoveredFeatureIdChange={onHoveredFeatureIdChange}
+          onSelectedFeatureIdChange={onSelectedFeatureIdChange}
+          points={[{ id: "berlin", label: "Berlin", latitude: 52.52, longitude: 13.405 }]}
+          renderFeatureContextMenu={(feature, context) => (
+            <span>
+              Context {feature.point.label} {context.coordinates.join(",")}
+            </span>
+          )}
+          renderFeaturePopup={(feature) => <span>Popup {feature.point.label}</span>}
+          renderFeatureTooltip={(feature) => <span>Tooltip {feature.point.label}</span>}
+        />
+      </MapView>,
+    );
+
+    const map = screen.getByLabelText("Interactive point Maps runtime");
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const point = map.querySelector('[data-map-feature-id="stable-berlin"]')!;
+    expect(point.getAttribute("data-map-feature-interactive")).toBe("true");
+
+    fireEvent.mouseEnter(point, { clientX: 54, clientY: 72 });
+    await waitFor(() => {
+      expect(onFeatureHover).toHaveBeenCalledWith(expect.objectContaining({ point: expect.anything() }));
+      expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
+        "stable-berlin",
+        expect.objectContaining({ featureId: "stable-berlin", source: "hover" }),
+      );
+      expect(point.getAttribute("class")).toContain("mb-maps__feature--hovered");
+      expect(screen.getByText("Tooltip Berlin")).toBeTruthy();
+    });
+
+    fireEvent.click(point, { clientX: 60, clientY: 80 });
+    await waitFor(() => {
+      expect(onFeatureSelect).toHaveBeenCalledWith(expect.objectContaining({ point: expect.anything() }));
+      expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
+        "stable-berlin",
+        expect.objectContaining({ featureId: "stable-berlin", source: "click" }),
+      );
+      expect(screen.getByText("Popup Berlin")).toBeTruthy();
+    });
+
+    fireEvent.contextMenu(point, { clientX: 70, clientY: 90 });
+    await waitFor(() => {
+      expect(onFeatureContextMenu).toHaveBeenCalledWith(
+        expect.objectContaining({ point: expect.anything() }),
+      );
+      expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
+        "stable-berlin",
+        expect.objectContaining({ featureId: "stable-berlin", source: "context-menu" }),
+      );
+      expect(screen.getByText("Context Berlin 13.405,52.52")).toBeTruthy();
+    });
+
+    fireEvent.mouseLeave(point);
+    await waitFor(() => {
+      expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({ featureId: null, source: "clear" }),
+      );
+    });
+  });
+
+  test("honors GeoJSON per-feature interactivity at the Maps picking boundary", async () => {
+    const onSelectedFeatureIdChange = vi.fn();
+
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="Interactive GeoJSON Maps runtime"
+        mapStyle={{ tiles: false }}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            features: [
+              {
+                geometry: { coordinates: [1, 2], type: "Point" },
+                id: "ignored-point",
+                properties: {},
+                type: "Feature",
+              },
+              {
+                geometry: {
+                  coordinates: [
+                    [
+                      [0, 0],
+                      [2, 0],
+                      [2, 2],
+                      [0, 0],
+                    ],
+                  ],
+                  type: "Polygon",
+                },
+                id: "picked-polygon",
+                properties: {},
+                type: "Feature",
+              },
+            ],
+            type: "FeatureCollection",
+          }}
+          isFeatureInteractive={(feature) => feature.id === "picked-polygon"}
+          onSelectedFeatureIdChange={onSelectedFeatureIdChange}
+        />
+      </MapView>,
+    );
+
+    const map = screen.getByLabelText("Interactive GeoJSON Maps runtime");
+    await waitFor(() => {
+      expect(map.getAttribute("data-map-ready")).toBe("true");
+    });
+
+    const ignored = map.querySelector('[data-map-feature-id="ignored-point"]')!;
+    const picked = map.querySelector('[data-map-feature-id="picked-polygon"]')!;
+    expect(ignored.getAttribute("data-map-feature-interactive")).toBe("false");
+    expect(picked.getAttribute("data-map-feature-interactive")).toBe("true");
+
+    fireEvent.click(ignored, { clientX: 10, clientY: 10 });
+    expect(onSelectedFeatureIdChange).not.toHaveBeenCalled();
+
+    fireEvent.click(picked, { clientX: 20, clientY: 20 });
+    await waitFor(() => {
+      expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
+        "picked-polygon",
+        expect.objectContaining({ featureId: "picked-polygon", source: "click" }),
+      );
+    });
+  });
+
   test("routes map context menus through the shared MapView contract", async () => {
     const onMapContextMenu = vi.fn();
 
@@ -327,7 +476,7 @@ describe("Maps-owned MapView runtime", () => {
     expect(screen.getByText("Create 8, 50")).toBeTruthy();
   });
 
-  test("fails closed for unsupported layer types, interactions, and style URLs", () => {
+  test("fails closed for unsupported layer types, point dragging, and style URLs", () => {
     expect(() =>
       render(
         <MapView
@@ -346,16 +495,16 @@ describe("Maps-owned MapView runtime", () => {
         <MapView
           flatRuntime="maps"
           fitToData={false}
-          mapLabel="Unsupported interactive point"
+          mapLabel="Unsupported draggable point"
           mapStyle={{ tiles: false }}
         >
           <PointLayer
-            onFeatureSelect={() => undefined}
+            draggable
             points={[{ id: "berlin", latitude: 52.52, longitude: 13.405 }]}
           />
         </MapView>,
       ),
-    ).toThrow(/point overlays are display-only/);
+    ).toThrow(/does not support draggable PointLayer features/);
 
     expect(() =>
       render(
