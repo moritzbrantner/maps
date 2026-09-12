@@ -18,6 +18,14 @@ const entries = [
   },
 ];
 const tempDir = path.join(rootDir, ".style-build");
+const mapLibreSourcePath = path.join(
+  rootDir,
+  "node_modules",
+  "maplibre-gl",
+  "dist",
+  "maplibre-gl.css",
+);
+const mapLibreOutputPath = path.join(rootDir, "maplibre.css");
 
 rmSync(tempDir, { force: true, recursive: true });
 mkdirSync(tempDir, { recursive: true });
@@ -54,9 +62,18 @@ for (const entry of entries) {
   const css = readFileSync(cssPath, "utf8");
   writeFileSync(
     outputPath,
-    `/* Generated from src/${entry.sourceFileName}. Run \`bun run build:styles\` after editing package styles. */\n${css}`,
+    `/* Generated from src/${entry.sourceFileName}. Run \`bun run build:styles\` after editing package styles. */\n@import "./maplibre.css";\n${css}`,
   );
 }
+
+if (!existsSync(mapLibreSourcePath)) {
+  throw new Error("MapLibre GL stylesheet is missing from the installed dependency.");
+}
+
+writeFileSync(
+  mapLibreOutputPath,
+  `/* Generated from the pinned maplibre-gl fallback dependency. */\n${readFileSync(mapLibreSourcePath, "utf8")}`,
+);
 rmSync(tempDir, { force: true, recursive: true });
 
 function findCssFile(directory) {
