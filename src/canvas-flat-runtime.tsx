@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
+import { createMapsPointerGesture } from "./canvas-flat-gesture";
 import {
   normalizeMapMaxZoom,
   resolveTileLayerOptions,
@@ -87,7 +88,7 @@ export function MapsCanvasFlatRuntime({
   const onControllerReadyRef = useRef(onControllerReady);
   const onErrorRef = useRef(onError);
   const onReadyRef = useRef(onReady);
-  const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const gestureRef = useRef(createMapsPointerGesture());
 
   sourceRef.current = source;
   maxZoomRef.current = maxZoom;
@@ -198,6 +199,7 @@ export function MapsCanvasFlatRuntime({
       onControllerReadyRef.current?.(null);
       syncFrameRef.current = null;
       emitViewStateRef.current = null;
+      gestureRef.current.clear();
       for (const load of loadsRef.current.values()) load.abort.abort();
       loadsRef.current.clear();
       for (const image of imagesRef.current.values()) image.close();
@@ -224,15 +226,12 @@ export function MapsCanvasFlatRuntime({
       className="mb-maps__canvas mb-maps__canvas-flat"
       data-flat-runtime="maps"
       ref={canvasRef}
+      style={{ touchAction: "none" }}
       onContextMenu={(event) => {
         event.preventDefault();
         const runtime = runtimeRef.current;
         if (!runtime) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        const position = {
-          x: event.clientX - rect.left,
-          y: event.clientY - rect.top,
-        };
+        const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
 
         onContextMenuRef.current?.({
           coordinates: runtime.unproject(position.x, position.y),
@@ -240,48 +239,54 @@ export function MapsCanvasFlatRuntime({
         });
       }}
       onPointerDown={(event) => {
-        if (event.button !== 0 || !runtimeRef.current) return;
-        dragRef.current = {
-          pointerId: event.pointerId,
-          x: event.clientX,
-          y: event.clientY,
-        };
+        if (!runtimeRef.current || (event.pointerType === "mouse" && event.button !== 0)) return;
+        gestureRef.current.pointerDown(
+          event.pointerId,
+          pointerPosition(event.currentTarget, event.clientX, event.clientY),
+        );
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event) => {
-        const drag = dragRef.current;
         const runtime = runtimeRef.current;
         const syncFrame = syncFrameRef.current;
-        if (!runtime || !drag || drag.pointerId !== event.pointerId || !syncFrame) return;
+        if (!runtime || !syncFrame) return;
 
-        const deltaX = event.clientX - drag.x;
-        const deltaY = event.clientY - drag.y;
-        drag.x = event.clientX;
-        drag.y = event.clientY;
-        runtime.panBy(deltaX, deltaY);
-        emitViewStateRef.current?.(syncFrame(), "pan");
+        const delta = gestureRef.current.pointerMove(
+          event.pointerId,
+          pointerPosition(event.currentTarget, event.clientX, event.clientY),
+        );
+        if (!delta) return;
+
+        if (delta.type === "pan") {
+          runtime.panBy(delta.deltaX, delta.deltaY);
+          emitViewStateRef.current?.(syncFrame(), "pan");
+          return;
+        }
+
+        if (delta.deltaX !== 0 || delta.deltaY !== 0) {
+          runtime.panBy(delta.deltaX, delta.deltaY);
+        }
+        if (delta.deltaZoom !== 0) {
+          const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+          runtime.zoomAbout(delta.deltaZoom, delta.x, delta.y, 0, effectiveMaxZoom);
+        }
+        emitViewStateRef.current?.(syncFrame(), delta.deltaZoom === 0 ? "pan" : "zoom");
       }}
       onPointerUp={(event) => {
-        if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+        gestureRef.current.pointerUp(event.pointerId);
       }}
       onPointerCancel={(event) => {
-        if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+        gestureRef.current.pointerUp(event.pointerId);
       }}
       onWheel={(event) => {
         event.preventDefault();
         const runtime = runtimeRef.current;
         const syncFrame = syncFrameRef.current;
         if (!runtime || !syncFrame) return;
-        const rect = event.currentTarget.getBoundingClientRect();
+        const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
         const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
 
-        runtime.zoomAbout(
-          -event.deltaY * 0.0025,
-          event.clientX - rect.left,
-          event.clientY - rect.top,
-          0,
-          effectiveMaxZoom,
-        );
+        runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
         emitViewStateRef.current?.(syncFrame(), "zoom");
       }}
     />
@@ -426,5 +431,13 @@ function getCanvasCssSize(canvas: HTMLCanvasElement) {
   return {
     height: Math.max(1, Math.round(rect.height || canvas.clientHeight || 1)),
     width: Math.max(1, Math.round(rect.width || canvas.clientWidth || 1)),
+  };
+}
+
+function pointerPosition(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: clientX - rect.left,
+    y: clientY - rect.top,
   };
 }
