@@ -4,6 +4,13 @@ import { useEffect, useRef } from "react";
 
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
 import {
+  advanceMapsKineticPan,
+  createMapsKineticPanState,
+  createMapsPanVelocityTracker,
+  type MapsKineticPanState,
+  type MapsPanVelocity,
+} from "./canvas-flat-inertia";
+import {
   normalizeMapMaxZoom,
   resolveTileLayerOptions,
   type MapBounds,
@@ -89,6 +96,12 @@ export function MapsCanvasFlatRuntime({
   const onErrorRef = useRef(onError);
   const onReadyRef = useRef(onReady);
   const gestureRef = useRef(createMapsPointerGesture());
+  const velocityTrackerRef = useRef(createMapsPanVelocityTracker());
+  const pointerTimesRef = useRef<Map<number, number>>(new Map());
+  const kineticStateRef = useRef<MapsKineticPanState | null>(null);
+  const kineticFrameRef = useRef<number | null>(null);
+  const kineticLastFrameTimeRef = useRef<number | null>(null);
+  const lastEmittedViewStateRef = useRef<MapViewState | null>(null);
 
   sourceRef.current = source;
   maxZoomRef.current = maxZoom;
@@ -98,6 +111,53 @@ export function MapsCanvasFlatRuntime({
   onControllerReadyRef.current = onControllerReady;
   onErrorRef.current = onError;
   onReadyRef.current = onReady;
+
+  function cancelKineticPan() {
+    if (kineticFrameRef.current !== null) {
+      cancelAnimationFrame(kineticFrameRef.current);
+    }
+    kineticFrameRef.current = null;
+    kineticStateRef.current = null;
+    kineticLastFrameTimeRef.current = null;
+  }
+
+  function startKineticPan(velocity: MapsPanVelocity) {
+    cancelKineticPan();
+    const initial = createMapsKineticPanState(velocity);
+    if (!initial) return;
+
+    kineticStateRef.current = initial;
+    kineticLastFrameTimeRef.current = performance.now();
+
+    const tick = (now: number) => {
+      kineticFrameRef.current = null;
+      const state = kineticStateRef.current;
+      const lastFrameTime = kineticLastFrameTimeRef.current;
+      const runtime = runtimeRef.current;
+      const syncFrame = syncFrameRef.current;
+      if (!state || lastFrameTime === null || !runtime || !syncFrame) {
+        cancelKineticPan();
+        return;
+      }
+
+      const step = advanceMapsKineticPan(state, now - lastFrameTime);
+      kineticStateRef.current = step.next;
+      kineticLastFrameTimeRef.current = now;
+
+      if (step.deltaX !== 0 || step.deltaY !== 0) {
+        runtime.panBy(step.deltaX, step.deltaY);
+        emitViewStateRef.current?.(syncFrame(), "pan");
+      }
+
+      if (step.next) {
+        kineticFrameRef.current = requestAnimationFrame(tick);
+      } else {
+        kineticLastFrameTimeRef.current = null;
+      }
+    };
+
+    kineticFrameRef.current = requestAnimationFrame(tick);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -142,7 +202,9 @@ export function MapsCanvasFlatRuntime({
         onError: (error) => onErrorRef.current?.(error),
       });
       const emitViewState = (frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => {
-        onViewStateChangeRef.current(frameViewState(frame), reason);
+        const nextViewState = frameViewState(frame);
+        lastEmittedViewStateRef.current = nextViewState;
+        onViewStateChangeRef.current(nextViewState, reason);
       };
       const emitConstraintCorrection = (
         frame: MapsFlatRasterFrame,
@@ -158,6 +220,7 @@ export function MapsCanvasFlatRuntime({
 
       const controller: MapsCanvasFlatRuntimeController = {
         fitBounds(bounds, options = {}) {
+          cancelKineticPan();
           const effectiveMaxZoom =
             options.maxZoom ?? normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
           runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
@@ -168,6 +231,7 @@ export function MapsCanvasFlatRuntime({
           return { x, y };
         },
         setViewState(next, reason = "programmatic") {
+          cancelKineticPan();
           runtime.setViewState(next);
           emitViewState(syncFrame(), reason);
         },
@@ -177,6 +241,7 @@ export function MapsCanvasFlatRuntime({
       };
 
       resizeObserver = new ResizeObserver(() => {
+        cancelKineticPan();
         const nextSize = getCanvasCssSize(canvas);
         resizeCanvasBackingStore(canvas);
         runtime.resize(nextSize.width, nextSize.height);
@@ -196,10 +261,14 @@ export function MapsCanvasFlatRuntime({
     return () => {
       cancelled = true;
       resizeObserver?.disconnect();
+      cancelKineticPan();
       onControllerReadyRef.current?.(null);
       syncFrameRef.current = null;
       emitViewStateRef.current = null;
       gestureRef.current.clear();
+      velocityTrackerRef.current.clear();
+      pointerTimesRef.current.clear();
+      lastEmittedViewStateRef.current = null;
       for (const load of loadsRef.current.values()) load.abort.abort();
       loadsRef.current.clear();
       for (const image of imagesRef.current.values()) image.close();
@@ -213,6 +282,13 @@ export function MapsCanvasFlatRuntime({
     const runtime = runtimeRef.current;
     const syncFrame = syncFrameRef.current;
     if (!runtime || !syncFrame) return;
+
+    const lastEmitted = lastEmittedViewStateRef.current;
+    if (lastEmitted && areViewStatesEqual(lastEmitted, viewState)) {
+      lastEmittedViewStateRef.current = null;
+    } else {
+      cancelKineticPan();
+    }
 
     runtime.setViewState(viewState);
     const frame = syncFrame();
@@ -229,6 +305,7 @@ export function MapsCanvasFlatRuntime({
       style={{ touchAction: "none" }}
       onContextMenu={(event) => {
         event.preventDefault();
+        cancelKineticPan();
         const runtime = runtimeRef.current;
         if (!runtime) return;
         const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
@@ -240,6 +317,9 @@ export function MapsCanvasFlatRuntime({
       }}
       onPointerDown={(event) => {
         if (!runtimeRef.current || (event.pointerType === "mouse" && event.button !== 0)) return;
+        cancelKineticPan();
+        velocityTrackerRef.current.clear();
+        pointerTimesRef.current.set(event.pointerId, event.timeStamp);
         gestureRef.current.pointerDown(
           event.pointerId,
           pointerPosition(event.currentTarget, event.clientX, event.clientY),
@@ -251,6 +331,8 @@ export function MapsCanvasFlatRuntime({
         const syncFrame = syncFrameRef.current;
         if (!runtime || !syncFrame) return;
 
+        const previousTime = pointerTimesRef.current.get(event.pointerId);
+        pointerTimesRef.current.set(event.pointerId, event.timeStamp);
         const delta = gestureRef.current.pointerMove(
           event.pointerId,
           pointerPosition(event.currentTarget, event.clientX, event.clientY),
@@ -258,11 +340,19 @@ export function MapsCanvasFlatRuntime({
         if (!delta) return;
 
         if (delta.type === "pan") {
+          if (previousTime !== undefined) {
+            velocityTrackerRef.current.record(
+              delta.deltaX,
+              delta.deltaY,
+              event.timeStamp - previousTime,
+            );
+          }
           runtime.panBy(delta.deltaX, delta.deltaY);
           emitViewStateRef.current?.(syncFrame(), "pan");
           return;
         }
 
+        velocityTrackerRef.current.clear();
         if (delta.deltaX !== 0 || delta.deltaY !== 0) {
           runtime.panBy(delta.deltaX, delta.deltaY);
         }
@@ -273,13 +363,29 @@ export function MapsCanvasFlatRuntime({
         emitViewStateRef.current?.(syncFrame(), delta.deltaZoom === 0 ? "pan" : "zoom");
       }}
       onPointerUp={(event) => {
+        const lastMoveTime = pointerTimesRef.current.get(event.pointerId);
+        pointerTimesRef.current.delete(event.pointerId);
         gestureRef.current.pointerUp(event.pointerId);
+
+        if (gestureRef.current.pointerCount() === 0) {
+          const velocity = velocityTrackerRef.current.release(
+            lastMoveTime === undefined ? Number.POSITIVE_INFINITY : event.timeStamp - lastMoveTime,
+          );
+          if (velocity) startKineticPan(velocity);
+        } else {
+          velocityTrackerRef.current.clear();
+        }
       }}
       onPointerCancel={(event) => {
+        pointerTimesRef.current.delete(event.pointerId);
         gestureRef.current.pointerUp(event.pointerId);
+        velocityTrackerRef.current.clear();
+        cancelKineticPan();
       }}
       onWheel={(event) => {
         event.preventDefault();
+        cancelKineticPan();
+        velocityTrackerRef.current.clear();
         const runtime = runtimeRef.current;
         const syncFrame = syncFrameRef.current;
         if (!runtime || !syncFrame) return;
