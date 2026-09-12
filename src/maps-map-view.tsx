@@ -198,6 +198,10 @@ export function MapsMapView({
     [currentViewState.center[0], currentViewState.center[1], currentViewState.zoom, isReady],
   );
 
+  const getViewportAggregationQuery = useCallback(() => {
+    return runtimeControllerRef.current?.getViewportAggregationQuery() ?? null;
+  }, []);
+
   const handleMapContextMenu = useCallback(
     (input: {
       coordinates: [longitude: number, latitude: number];
@@ -582,7 +586,12 @@ export function MapsMapView({
           onViewStateChange={setViewState}
           viewState={currentViewState}
         />
-        <MapsOverlayLayers ref={overlayControllerRef} project={projectCoordinate} surface={context}>
+        <MapsOverlayLayers
+          ref={overlayControllerRef}
+          getViewportAggregationQuery={getViewportAggregationQuery}
+          project={projectCoordinate}
+          surface={context}
+        >
           {mapChildren.layers}
         </MapsOverlayLayers>
         {showAttributionControl && attribution ? (
