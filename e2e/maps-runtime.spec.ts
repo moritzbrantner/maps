@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
+type OverlayArc = { radius: number; x: number; y: number };
 type OverlayTrace = {
-  arc: { radius: number; x: number; y: number } | null;
+  arcs: OverlayArc[];
   polygonBounds: { maxX: number; maxY: number; minX: number; minY: number } | null;
 };
 
@@ -13,6 +14,7 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
   const viewState = page.getByTestId("maps-runtime-view-state");
+  const clusterSummary = page.getByTestId("maps-runtime-cluster-summary");
   const interaction = page.getByTestId("maps-runtime-interaction");
 
   await expect(map).toHaveAttribute("data-map-ready", "true");
@@ -20,11 +22,13 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await expect(canvas).toBeVisible();
   await expect(overlay).toHaveCount(1);
   await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
-  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "2");
+  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "3");
   await expect(map.locator('svg[data-map-overlay-runtime="maps"]')).toHaveCount(0);
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
   await expect(viewState).toContainText("13.4050,52.5200 | zoom 6.0000");
-  await expect.poll(async () => (await readOverlayTrace(page)).arc).not.toBeNull();
+  await expect(clusterSummary).toHaveText("1/0/3");
+  await expect.poll(async () => overlayPointPosition(page)).not.toBeNull();
+  await expect.poll(async () => overlayClusterPosition(page)).not.toBeNull();
   await expect.poll(async () => (await readOverlayTrace(page)).polygonBounds).not.toBeNull();
 
   const overlayBox = await overlay.boundingBox();
@@ -142,6 +146,16 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     constrained.zoom - 0.0001,
   );
 
+  await expect(clusterSummary).toHaveText("1/0/3");
+  const beforeClusterExpand = parseViewState(await viewState.textContent());
+  const clusterPosition = await overlayClusterPosition(page);
+  await page.mouse.click(overlayBox!.x + clusterPosition.x, overlayBox!.y + clusterPosition.y);
+  await expect(interaction).toHaveText("cluster:click:acceptance-cluster");
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Cluster 3");
+  await expect
+    .poll(async () => parseViewState(await viewState.textContent()).zoom)
+    .toBeGreaterThan(beforeClusterExpand.zoom);
+
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
 });
 
@@ -157,7 +171,7 @@ async function installCanvasOverlayTrace(page: Page) {
     const originalMoveTo = CanvasRenderingContext2D.prototype.moveTo;
 
     function ensureTrace() {
-      traceWindow.__mapsOverlayTrace ??= { arc: null, polygonBounds: null };
+      traceWindow.__mapsOverlayTrace ??= { arcs: [], polygonBounds: null };
       return traceWindow.__mapsOverlayTrace;
     }
 
@@ -185,7 +199,7 @@ async function installCanvasOverlayTrace(page: Page) {
       height: number,
     ) {
       if (isOverlay(this)) {
-        traceWindow.__mapsOverlayTrace = { arc: null, polygonBounds: null };
+        traceWindow.__mapsOverlayTrace = { arcs: [], polygonBounds: null };
         paths.set(this, []);
       }
       return originalClearRect.call(this, x, y, width, height);
@@ -225,7 +239,7 @@ async function installCanvasOverlayTrace(page: Page) {
       counterclockwise?: boolean,
     ) {
       if (isOverlay(this)) {
-        ensureTrace().arc = { radius, x, y };
+        ensureTrace().arcs.push({ radius, x, y });
       }
       return originalArc.call(this, x, y, radius, startAngle, endAngle, counterclockwise);
     };
@@ -236,7 +250,7 @@ async function readOverlayTrace(page: Page): Promise<OverlayTrace> {
   return page.evaluate(() => {
     return (
       (window as Window & { __mapsOverlayTrace?: OverlayTrace }).__mapsOverlayTrace ?? {
-        arc: null,
+        arcs: [],
         polygonBounds: null,
       }
     );
@@ -244,8 +258,15 @@ async function readOverlayTrace(page: Page): Promise<OverlayTrace> {
 }
 
 async function overlayPointPosition(page: Page) {
-  const arc = (await readOverlayTrace(page)).arc;
+  const arc = (await readOverlayTrace(page)).arcs.find((candidate) => candidate.radius === 8);
   if (!arc) throw new Error("Canvas overlay point was not drawn.");
+  return { x: arc.x, y: arc.y };
+}
+
+async function overlayClusterPosition(page: Page) {
+  const arcs = (await readOverlayTrace(page)).arcs.filter((candidate) => candidate.radius > 8);
+  const arc = arcs.sort((left, right) => right.radius - left.radius)[0];
+  if (!arc) throw new Error("Canvas overlay cluster was not drawn.");
   return { x: arc.x, y: arc.y };
 }
 
