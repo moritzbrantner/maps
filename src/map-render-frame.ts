@@ -62,30 +62,62 @@ export type MapVectorRenderFrame<TFeature = unknown> = {
   primitives: Array<MapVectorRenderPrimitive<TFeature>>;
 };
 
+export type CreateCircleVectorRenderFrameOptions<TFeature> = {
+  fillOpacity?: number;
+  getCoordinates: (feature: TFeature) => readonly [longitude: number, latitude: number];
+  getFeatureId: (feature: TFeature) => string;
+  getFillColor: (feature: TFeature) => string;
+  getLabel?: (feature: TFeature) => string | null;
+  getRadius: (feature: TFeature) => number;
+  isFeatureInteractive?: (feature: TFeature) => boolean;
+  primitivePrefix?: string;
+  strokeColor?: string;
+  strokeOpacity?: number;
+  strokeWidth?: number;
+};
+
+export function createCircleVectorRenderFrame<TFeature>(
+  features: readonly TFeature[],
+  options: CreateCircleVectorRenderFrameOptions<TFeature>,
+): MapVectorRenderFrame<TFeature> {
+  const primitivePrefix = options.primitivePrefix ?? "circle";
+
+  return {
+    kind: "vector",
+    primitives: features.map((feature) => {
+      const featureId = options.getFeatureId(feature);
+
+      return {
+        center: copyCoordinate(options.getCoordinates(feature)),
+        feature,
+        featureId,
+        fillColor: options.getFillColor(feature),
+        fillOpacity: options.fillOpacity ?? 0.92,
+        interactive: options.isFeatureInteractive?.(feature) ?? true,
+        kind: "circle" as const,
+        label: options.getLabel?.(feature) ?? null,
+        primitiveId: `${primitivePrefix}:${featureId}`,
+        radius: Math.max(0, options.getRadius(feature)),
+        strokeColor: options.strokeColor ?? "#ffffff",
+        strokeOpacity: options.strokeOpacity ?? 1,
+        strokeWidth: Math.max(0, options.strokeWidth ?? 2),
+      };
+    }),
+  };
+}
+
 export function createPointClusterVectorRenderFrame<TProperties = Record<string, unknown>>(
   frame: MapPointClusterRenderFrame<TProperties>,
   options: { primitivePrefix?: string } = {},
 ): MapVectorRenderFrame<(typeof frame.features)[number]["feature"]> {
-  const primitivePrefix = options.primitivePrefix ?? "point-cluster";
-
-  return {
-    kind: "vector",
-    primitives: frame.features.map((renderFeature) => ({
-      center: copyCoordinate(renderFeature.coordinates),
-      feature: renderFeature.feature,
-      featureId: renderFeature.id,
-      fillColor: renderFeature.fillColor,
-      fillOpacity: 0.92,
-      interactive: true,
-      kind: "circle" as const,
-      label: renderFeature.label,
-      primitiveId: `${primitivePrefix}:${renderFeature.id}`,
-      radius: renderFeature.radius,
-      strokeColor: "#ffffff",
-      strokeOpacity: 1,
-      strokeWidth: 2,
-    })),
-  };
+  return createCircleVectorRenderFrame(frame.features, {
+    getCoordinates: (renderFeature) => renderFeature.coordinates,
+    getFeatureId: (renderFeature) => renderFeature.id,
+    getFillColor: (renderFeature) => renderFeature.fillColor,
+    getLabel: (renderFeature) => renderFeature.label,
+    getRadius: (renderFeature) => renderFeature.radius,
+    primitivePrefix: options.primitivePrefix ?? "point-cluster",
+  }) as MapVectorRenderFrame<(typeof frame.features)[number]["feature"]>;
 }
 
 export type CreateGeoJsonVectorRenderFrameOptions<
