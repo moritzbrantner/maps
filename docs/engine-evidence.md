@@ -6,7 +6,7 @@ Maps uses shared tooling instead of growing a private performance/evaluation pla
 
 - **Maps** owns canonical scenario identity, deterministic fixtures, map-domain observations and reference adapters.
 - **coding-tooling** discovers/invokes repository-declared deterministic scenario capabilities.
-- **runtime-profiler** captures, validates and summarizes immutable runtime evidence. It owns profiler-specific bundle formats.
+- **runtime-profiler** captures, validates and summarizes immutable runtime evidence. It owns profiler-specific bundle formats and strict comparability.
 - **Moonlight** owns baseline/candidate comparison policy and verdicts.
 - **reusable-workflows** may transport/reuse exact build and evidence artifacts; it does not reinterpret evidence.
 
@@ -51,9 +51,34 @@ engine-scenarios/camera-world-pan-v1.json
 
 The repository capability `engine:camera-evidence` builds the Maps WASM transport, executes the canonical browser scenario against the MapLibre reference, and fails on a normalized semantic mismatch. It is deterministic semantic evidence, not a replacement for runtime-profiler performance capture or Moonlight policy.
 
+## Milestone B runtime evidence
+
+`runtime-profiler-scenarios/camera-world-pan-v1.yaml` is the representative Milestone B runtime scenario. It wraps a real Chromium journey implemented by `scripts/profile-engine-camera-runtime.mjs` while retaining the same Maps canonical camera workload.
+
+Reference and candidate captures use one identical runtime-profiler scenario digest and one execution environment. The only selected implementation value is `MAPS_RUNTIME_PROFILE_IMPLEMENTATION`:
+
+- `reference` executes the pinned MapLibre public-API reference adapter;
+- `candidate` executes the generated first-party Rust/WASM scenario transport.
+
+The selector name is declared as inherited environment in the profiler scenario so target construction is explicit. Its value is not used as a Maps-side comparability override. Runtime-profiler remains responsible for deciding whether the resulting immutable bundles have compatible scenario and environment identities.
+
+`engine:runtime-evidence` performs the complete acceptance flow:
+
+1. re-run canonical browser semantic parity first;
+2. capture and validate an immutable reference runtime-profiler bundle;
+3. capture and validate an immutable candidate bundle using the same scenario;
+4. ask runtime-profiler for its descriptive reference-relative score;
+5. pass the validated bundles and neutral `agent.evidence/v1` references to Moonlight;
+6. require Moonlight's `agent.evaluation-result/v1` outcome to be `passed`;
+7. preserve the reference bundle, candidate bundle, descriptive score and Moonlight result as the hosted evidence artifact.
+
+For this foundation milestone, Moonlight requires at least five measured samples, complete candidate execution, and a runtime score of at least 75. That threshold is a broad viability guard, not a package-size or microbenchmark optimization target. A lower score fails acceptance; valid but non-comparable evidence is inconclusive and therefore does not pass.
+
+The current runtime-profiler command collector records process wall time, process success/timeout state and supported process memory evidence around the real browser journey. Rich Chromium trace ingestion, long-task attribution, React render summaries and source-level browser hotspots remain runtime-profiler platform work. Maps does not fabricate those metrics locally or claim they are already covered by this milestone.
+
 ## Comparability
 
-Runtime evidence may only be compared when runtime-profiler considers it strictly comparable. Missing or incomparable evidence is not reinterpreted as success by Maps.
+Runtime evidence may only be compared when runtime-profiler considers it strictly comparable. Missing or incomparable evidence is not reinterpreted as success by Maps or Moonlight.
 
 Reference semantic evidence must identify the reference implementation/version and normalized observation contract. Incidental implementation details (for example MapLibre-internal cluster ids) are excluded unless Maps intentionally adopts them as public semantics.
 
