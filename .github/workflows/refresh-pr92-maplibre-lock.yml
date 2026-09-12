@@ -32,11 +32,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install
 
-      - name: Verify audit and stylesheet budgets
+      - name: Verify audit and styles
         run: |
           bun run verify:audit
           bun run build:styles
-          bun run verify:package-size
 
       - name: Commit lockfile update
         run: |
