@@ -49,7 +49,7 @@ engine-scenarios/camera-world-pan-v1.json
 
 `maps-core` is the only candidate semantic implementation. The CLI and WASM functions are transports over the same executor. The MapLibre adapter stays under `scripts/engine-reference/` so reference-specific normalization cannot become Maps engine truth.
 
-The repository capability `engine:camera-evidence` builds the Maps WASM transport, executes the canonical browser scenario against the MapLibre reference, and fails on a normalized semantic mismatch. It is deterministic semantic evidence, not a replacement for runtime-profiler performance capture or Moonlight policy.
+The repository capability `test:integration` builds the Maps WASM transport, executes the canonical browser scenario against the MapLibre reference, and fails on a normalized semantic mismatch. It is deterministic semantic evidence, not a replacement for runtime-profiler performance capture or Moonlight policy.
 
 ## Milestone B runtime evidence
 
@@ -62,7 +62,7 @@ Reference and candidate captures use one identical runtime-profiler scenario dig
 
 The selector name is declared as inherited environment in the profiler scenario so target construction is explicit. Its value is not used as a Maps-side comparability override. Runtime-profiler remains responsible for deciding whether the resulting immutable bundles have compatible scenario and environment identities.
 
-`engine:runtime-evidence` performs the complete acceptance flow:
+`profile:runtime` performs the complete acceptance flow:
 
 1. re-run canonical browser semantic parity first;
 2. capture and validate an immutable reference runtime-profiler bundle;
