@@ -49,6 +49,11 @@ export type MapVectorRenderPrimitive<TFeature = unknown> =
   | MapRenderLine<TFeature>
   | MapRenderPolygon<TFeature>;
 
+export type MapCircleRenderFrame<TFeature = unknown> = {
+  kind: "vector";
+  primitives: Array<MapRenderCircle<TFeature>>;
+};
+
 /**
  * Maps-owned semantic vector render frame.
  *
@@ -79,7 +84,7 @@ export type CreateCircleVectorRenderFrameOptions<TFeature> = {
 export function createCircleVectorRenderFrame<TFeature>(
   features: readonly TFeature[],
   options: CreateCircleVectorRenderFrameOptions<TFeature>,
-): MapVectorRenderFrame<TFeature> {
+): MapCircleRenderFrame<TFeature> {
   const primitivePrefix = options.primitivePrefix ?? "circle";
 
   return {
@@ -109,7 +114,7 @@ export function createCircleVectorRenderFrame<TFeature>(
 export function createPointClusterVectorRenderFrame<TProperties = Record<string, unknown>>(
   frame: MapPointClusterRenderFrame<TProperties>,
   options: { primitivePrefix?: string } = {},
-): MapVectorRenderFrame<(typeof frame.features)[number]["feature"]> {
+): MapCircleRenderFrame<(typeof frame.features)[number]["feature"]> {
   const primitivePrefix = options.primitivePrefix ?? "point-cluster";
 
   return {
