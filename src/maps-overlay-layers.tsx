@@ -16,6 +16,10 @@ import {
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
 import { getGeometryCenter, resolveFeatureStyle } from "./geojson-rendering";
+import type {
+  MapFeatureContextMenuContext,
+  MapFeatureInteractionChange,
+} from "./map-interaction";
 import type { MapSurfaceContextValue } from "./map-surface-context";
 import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
 import type { TemporalGeoJsonSupportedGeometry } from "./temporal-geojson-types";
@@ -34,10 +38,18 @@ type MapsOverlayInteractionSurface = Pick<
   | "isFeatureSelected"
 >;
 
+type MapsFeaturePointerInteraction = Partial<{
+  onClick: (event: ReactMouseEvent<SVGElement>) => void;
+  onContextMenu: (event: ReactMouseEvent<SVGElement>) => void;
+  onMouseEnter: (event: ReactMouseEvent<SVGElement>) => void;
+  onMouseLeave: () => void;
+  onMouseMove: (event: ReactMouseEvent<SVGElement>) => void;
+}>;
+
 type MapsFeatureSvgCommon = {
   className: string;
   featureId: string;
-  interaction: ReturnType<typeof createFeaturePointerInteraction>;
+  interaction: MapsFeaturePointerInteraction;
 };
 
 type MapsOverlayLayersProps = {
@@ -256,11 +268,20 @@ function MapsGeoJsonLayer({
         })
       : {};
 
-    return renderGeometry(feature, featureId, style, hovered, selected, project, {
-      className: mapsFeatureClassName("mb-maps__geojson-feature", hovered, selected),
+    return renderGeometry(
+      feature,
       featureId,
-      interaction,
-    }, interactive);
+      style,
+      hovered,
+      selected,
+      project,
+      {
+        className: mapsFeatureClassName("mb-maps__geojson-feature", hovered, selected),
+        featureId,
+        interaction,
+      },
+      interactive,
+    );
   });
 }
 
@@ -445,26 +466,35 @@ function createFeaturePointerInteraction<TFeature>({
   onFeatureContextMenu?: (feature: TFeature) => void;
   onFeatureHover?: (feature: TFeature | null) => void;
   onFeatureSelect?: (feature: TFeature | null) => void;
-  onHoveredFeatureIdChange?: PointLayerProps<AnyRecord>["onHoveredFeatureIdChange"];
-  onSelectedFeatureIdChange?: PointLayerProps<AnyRecord>["onSelectedFeatureIdChange"];
-  renderFeatureContextMenu?: PointLayerProps<AnyRecord>["renderFeatureContextMenu"];
+  onHoveredFeatureIdChange?: (
+    featureId: string | null,
+    context: MapFeatureInteractionChange<TFeature>,
+  ) => void;
+  onSelectedFeatureIdChange?: (
+    featureId: string | null,
+    context: MapFeatureInteractionChange<TFeature>,
+  ) => void;
+  renderFeatureContextMenu?: (
+    feature: TFeature,
+    context: MapFeatureContextMenuContext<TFeature>,
+  ) => ReactNode;
   renderFeaturePopup?: (feature: TFeature) => ReactNode;
   renderFeatureTooltip?: (feature: TFeature) => ReactNode;
   surface: MapsOverlayInteractionSurface;
-}) {
+}): MapsFeaturePointerInteraction {
   const interactionId = () => featureId;
 
   return {
-    onClick(event: ReactMouseEvent<SVGElement>) {
+    onClick(event) {
       event.stopPropagation();
       surface.handleFeatureClick(feature, getPointerPosition(event), {
         getFeatureId: interactionId,
         onFeatureSelect,
-        onSelectedFeatureIdChange: onSelectedFeatureIdChange as never,
+        onSelectedFeatureIdChange,
         renderFeaturePopup,
       });
     },
-    onContextMenu(event: ReactMouseEvent<SVGElement>) {
+    onContextMenu(event) {
       event.preventDefault();
       event.stopPropagation();
       surface.handleFeatureContextMenu(feature, getPointerPosition(event), {
@@ -472,15 +502,15 @@ function createFeaturePointerInteraction<TFeature>({
         getFeatureId: interactionId,
         onFeatureContextMenu,
         onFeatureSelect,
-        onSelectedFeatureIdChange: onSelectedFeatureIdChange as never,
-        renderFeatureContextMenu: renderFeatureContextMenu as never,
+        onSelectedFeatureIdChange,
+        renderFeatureContextMenu,
         renderFeaturePopup,
       });
     },
-    onMouseEnter(event: ReactMouseEvent<SVGElement>) {
+    onMouseEnter(event) {
       surface.handleFeatureHover(feature, getPointerPosition(event), {
         getFeatureId,
-        onHoveredFeatureIdChange: onHoveredFeatureIdChange as never,
+        onHoveredFeatureIdChange,
         onFeatureHover,
         renderFeatureTooltip,
       });
@@ -488,15 +518,15 @@ function createFeaturePointerInteraction<TFeature>({
     onMouseLeave() {
       surface.handleFeatureHover(null, null, {
         getFeatureId,
-        onHoveredFeatureIdChange: onHoveredFeatureIdChange as never,
+        onHoveredFeatureIdChange,
         onFeatureHover,
         renderFeatureTooltip,
       });
     },
-    onMouseMove(event: ReactMouseEvent<SVGElement>) {
+    onMouseMove(event) {
       surface.handleFeatureHover(feature, getPointerPosition(event), {
         getFeatureId,
-        onHoveredFeatureIdChange: onHoveredFeatureIdChange as never,
+        onHoveredFeatureIdChange,
         onFeatureHover,
         renderFeatureTooltip,
       });
