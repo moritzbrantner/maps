@@ -20,6 +20,7 @@
     "docs/recipes.md",
     "docs/ssr-next.md",
     "docs/timeline.md",
+    "maplibre.css",
     "styles.css",
     "styles.full.css"
   ],
@@ -75,6 +76,7 @@
       "import": "./dist/wasm/maps_wasm.js"
     },
     "./package.json": "./package.json",
+    "./maplibre.css": "./maplibre.css",
     "./styles.css": "./styles.css",
     "./styles.full.css": "./styles.full.css"
   },
