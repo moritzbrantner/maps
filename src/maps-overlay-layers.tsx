@@ -1,6 +1,12 @@
 "use client";
 
-import { Children, Fragment, isValidElement, type ReactNode } from "react";
+import {
+  Children,
+  Fragment,
+  isValidElement,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 
 import {
   GeoJsonLayer,
@@ -9,7 +15,8 @@ import {
   type GeoJsonLayerProps,
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
-import { resolveFeatureStyle } from "./geojson-rendering";
+import { getGeometryCenter, resolveFeatureStyle } from "./geojson-rendering";
+import type { MapSurfaceContextValue } from "./map-surface-context";
 import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
 import type { TemporalGeoJsonSupportedGeometry } from "./temporal-geojson-types";
 
@@ -18,19 +25,29 @@ export type MapsProjectCoordinate = (
 ) => { x: number; y: number } | null;
 
 type AnyRecord = Record<string, unknown>;
+type MapsOverlayInteractionSurface = Pick<
+  MapSurfaceContextValue,
+  | "handleFeatureClick"
+  | "handleFeatureContextMenu"
+  | "handleFeatureHover"
+  | "isFeatureHovered"
+  | "isFeatureSelected"
+>;
 
 type MapsFeatureSvgCommon = {
   className: string;
   featureId: string;
+  interaction: ReturnType<typeof createFeaturePointerInteraction>;
 };
 
 type MapsOverlayLayersProps = {
   children: ReactNode;
   project: MapsProjectCoordinate;
+  surface: MapsOverlayInteractionSurface;
 };
 
-export function MapsOverlayLayers({ children, project }: MapsOverlayLayersProps) {
-  const layers = renderChildren(children, project);
+export function MapsOverlayLayers({ children, project, surface }: MapsOverlayLayersProps) {
+  const layers = renderChildren(children, project, surface);
 
   if (layers.length === 0) {
     return null;
@@ -55,14 +72,18 @@ export function MapsOverlayLayers({ children, project }: MapsOverlayLayersProps)
   );
 }
 
-function renderChildren(children: ReactNode, project: MapsProjectCoordinate): ReactNode[] {
+function renderChildren(
+  children: ReactNode,
+  project: MapsProjectCoordinate,
+  surface: MapsOverlayInteractionSurface,
+): ReactNode[] {
   return Children.toArray(children).flatMap((child) => {
     if (!isValidElement(child)) {
       throwUnsupportedMapsLayer();
     }
 
     if (child.type === Fragment) {
-      return renderChildren((child.props as { children?: ReactNode }).children, project);
+      return renderChildren((child.props as { children?: ReactNode }).children, project, surface);
     }
 
     if (child.type === PointLayer) {
@@ -71,6 +92,7 @@ function renderChildren(children: ReactNode, project: MapsProjectCoordinate): Re
           key={child.key ?? "maps-point-layer"}
           {...(child.props as PointLayerProps<AnyRecord>)}
           project={project}
+          surface={surface}
         />,
       ];
     }
@@ -81,6 +103,7 @@ function renderChildren(children: ReactNode, project: MapsProjectCoordinate): Re
           key={child.key ?? "maps-geojson-layer"}
           {...(child.props as GeoJsonLayerProps<AnyRecord>)}
           project={project}
+          surface={surface}
         />,
       ];
     }
@@ -111,28 +134,40 @@ function MapsPointLayer({
   renderFeatureTooltip,
   selectedFeatureId,
   getFeatureId,
-}: PointLayerProps<AnyRecord> & { project: MapsProjectCoordinate }) {
-  assertNoUnsupportedPointInteractions({
+  surface,
+}: PointLayerProps<AnyRecord> & {
+  project: MapsProjectCoordinate;
+  surface: MapsOverlayInteractionSurface;
+}) {
+  assertNoUnsupportedPointDrag({
     draggable,
-    onFeatureContextMenu,
     onFeatureDrag,
     onFeatureDragEnd,
-    onFeatureHover,
-    onFeatureSelect,
-    onHoveredFeatureIdChange,
-    onSelectedFeatureIdChange,
-    renderFeatureContextMenu,
-    renderFeaturePopup,
-    renderFeatureTooltip,
   });
 
   return createPointLayerFeatures(points, { filterPoint }).flatMap((feature) => {
     const position = project(feature.coordinates);
     if (!position) return [];
     const featureId = getFeatureId?.(feature) || feature.point.id;
-    const hovered = Boolean(hoveredFeatureId && hoveredFeatureId === featureId);
-    const selected = Boolean(selectedFeatureId && selectedFeatureId === featureId);
+    const resolveFeatureId = () => featureId;
+    const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, resolveFeatureId);
+    const selected = surface.isFeatureSelected(feature, selectedFeatureId, resolveFeatureId);
     const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius);
+    const interaction = createFeaturePointerInteraction({
+      coordinates: feature.coordinates,
+      feature,
+      featureId,
+      getFeatureId: resolveFeatureId,
+      onFeatureContextMenu,
+      onFeatureHover,
+      onFeatureSelect,
+      onHoveredFeatureIdChange,
+      onSelectedFeatureIdChange,
+      renderFeatureContextMenu,
+      renderFeaturePopup,
+      renderFeatureTooltip,
+      surface,
+    });
 
     return [
       <circle
@@ -141,11 +176,14 @@ function MapsPointLayer({
         cx={position.x}
         cy={position.y}
         data-map-feature-id={featureId}
+        data-map-feature-interactive="true"
         fill={getPointColor?.(feature) ?? pointColor}
         fillOpacity={0.92}
         r={radius}
         stroke="#ffffff"
         strokeWidth={selected ? 3 : 2}
+        style={interactiveFeatureStyle}
+        {...interaction}
       />,
     ];
   });
@@ -176,19 +214,11 @@ function MapsGeoJsonLayer({
   renderFeaturePopup,
   renderFeatureTooltip,
   selectedFeatureId,
-}: GeoJsonLayerProps<AnyRecord> & { project: MapsProjectCoordinate }) {
-  assertNoUnsupportedGeoJsonInteractions({
-    isFeatureInteractive,
-    onFeatureContextMenu,
-    onFeatureHover,
-    onFeatureSelect,
-    onHoveredFeatureIdChange,
-    onSelectedFeatureIdChange,
-    renderFeatureContextMenu,
-    renderFeaturePopup,
-    renderFeatureTooltip,
-  });
-
+  surface,
+}: GeoJsonLayerProps<AnyRecord> & {
+  project: MapsProjectCoordinate;
+  surface: MapsOverlayInteractionSurface;
+}) {
   const baseStyle: GeoJsonLayerStyle = compactStyle({
     lineColor,
     lineOpacity,
@@ -203,11 +233,34 @@ function MapsGeoJsonLayer({
 
   return createGeoJsonLayerFeatures(featureCollection).flatMap((feature) => {
     const featureId = getFeatureId?.(feature) || feature.id;
-    const hovered = Boolean(hoveredFeatureId && hoveredFeatureId === featureId);
-    const selected = Boolean(selectedFeatureId && selectedFeatureId === featureId);
+    const resolveFeatureId = () => featureId;
+    const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, resolveFeatureId);
+    const selected = surface.isFeatureSelected(feature, selectedFeatureId, resolveFeatureId);
     const style = resolveFeatureStyle(feature, baseStyle, getFeatureStyle);
+    const interactive = isFeatureInteractive?.(feature) ?? true;
+    const interaction = interactive
+      ? createFeaturePointerInteraction({
+          coordinates: getGeometryCenter(feature.geometry),
+          feature,
+          featureId,
+          getFeatureId: resolveFeatureId,
+          onFeatureContextMenu,
+          onFeatureHover,
+          onFeatureSelect,
+          onHoveredFeatureIdChange,
+          onSelectedFeatureIdChange,
+          renderFeatureContextMenu,
+          renderFeaturePopup,
+          renderFeatureTooltip,
+          surface,
+        })
+      : {};
 
-    return renderGeometry(feature, featureId, style, hovered, selected, project);
+    return renderGeometry(feature, featureId, style, hovered, selected, project, {
+      className: mapsFeatureClassName("mb-maps__geojson-feature", hovered, selected),
+      featureId,
+      interaction,
+    }, interactive);
   });
 }
 
@@ -218,22 +271,36 @@ function renderGeometry(
   hovered: boolean,
   selected: boolean,
   project: MapsProjectCoordinate,
+  common: MapsFeatureSvgCommon,
+  interactive: boolean,
 ): ReactNode[] {
-  const common: MapsFeatureSvgCommon = {
-    className: mapsFeatureClassName("mb-maps__geojson-feature", hovered, selected),
-    featureId,
-  };
   const geometry = feature.geometry;
 
   switch (geometry.type) {
     case "Point":
-      return renderGeoJsonPoint(geometry.coordinates, featureId, style, selected, project, common);
+      return renderGeoJsonPoint(
+        geometry.coordinates,
+        featureId,
+        style,
+        selected,
+        project,
+        common,
+        interactive,
+      );
     case "MultiPoint":
       return geometry.coordinates.flatMap((coordinates, index) =>
-        renderGeoJsonPoint(coordinates, `${featureId}:${index}`, style, selected, project, common),
+        renderGeoJsonPoint(
+          coordinates,
+          `${featureId}:${index}`,
+          style,
+          selected,
+          project,
+          common,
+          interactive,
+        ),
       );
     case "LineString":
-      return renderLine(geometry, featureId, style, selected, project, common);
+      return renderLine(geometry, featureId, style, selected, project, common, interactive);
     case "MultiLineString":
       return geometry.coordinates.flatMap((coordinates, index) =>
         renderLine(
@@ -243,10 +310,11 @@ function renderGeometry(
           selected,
           project,
           common,
+          interactive,
         ),
       );
     case "Polygon":
-      return renderPolygon(geometry, featureId, style, selected, project, common);
+      return renderPolygon(geometry, featureId, style, selected, project, common, interactive);
     case "MultiPolygon":
       return geometry.coordinates.flatMap((coordinates, index) =>
         renderPolygon(
@@ -256,6 +324,7 @@ function renderGeometry(
           selected,
           project,
           common,
+          interactive,
         ),
       );
   }
@@ -268,6 +337,7 @@ function renderGeoJsonPoint(
   selected: boolean,
   project: MapsProjectCoordinate,
   common: MapsFeatureSvgCommon,
+  interactive: boolean,
 ): ReactNode[] {
   const position = project(coordinates);
   if (!position) return [];
@@ -279,11 +349,14 @@ function renderGeoJsonPoint(
       cx={position.x}
       cy={position.y}
       data-map-feature-id={common.featureId}
+      data-map-feature-interactive={String(interactive)}
       fill={style.pointColor}
       fillOpacity={0.94}
       r={style.pointRadius}
       stroke="#ffffff"
       strokeWidth={selected ? 3 : 2}
+      style={interactive ? interactiveFeatureStyle : nonInteractiveFeatureStyle}
+      {...common.interaction}
     />,
   ];
 }
@@ -295,6 +368,7 @@ function renderLine(
   selected: boolean,
   project: MapsProjectCoordinate,
   common: MapsFeatureSvgCommon,
+  interactive: boolean,
 ): ReactNode[] {
   const path = projectPath(geometry.coordinates, project, false);
   if (!path) return [];
@@ -305,12 +379,15 @@ function renderLine(
       className={common.className}
       d={path}
       data-map-feature-id={common.featureId}
+      data-map-feature-interactive={String(interactive)}
       fill="none"
       stroke={style.lineColor}
       strokeLinecap="round"
       strokeLinejoin="round"
       strokeOpacity={style.lineOpacity}
       strokeWidth={selected ? style.lineWidth + 1.5 : style.lineWidth}
+      style={interactive ? interactiveFeatureStyle : nonInteractiveFeatureStyle}
+      {...common.interaction}
     />,
   ];
 }
@@ -322,6 +399,7 @@ function renderPolygon(
   selected: boolean,
   project: MapsProjectCoordinate,
   common: MapsFeatureSvgCommon,
+  interactive: boolean,
 ): ReactNode[] {
   const paths = geometry.coordinates.map((ring) => projectPath(ring, project, true));
   if (paths.some((path) => !path)) return [];
@@ -332,14 +410,108 @@ function renderPolygon(
       className={common.className}
       d={paths.join(" ")}
       data-map-feature-id={common.featureId}
+      data-map-feature-interactive={String(interactive)}
       fill={style.polygonFillColor}
       fillOpacity={style.polygonFillOpacity}
       fillRule="evenodd"
       stroke={style.polygonStrokeColor}
       strokeOpacity={0.9}
       strokeWidth={selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth}
+      style={interactive ? interactiveFeatureStyle : nonInteractiveFeatureStyle}
+      {...common.interaction}
     />,
   ];
+}
+
+function createFeaturePointerInteraction<TFeature>({
+  coordinates,
+  feature,
+  featureId,
+  getFeatureId,
+  onFeatureContextMenu,
+  onFeatureHover,
+  onFeatureSelect,
+  onHoveredFeatureIdChange,
+  onSelectedFeatureIdChange,
+  renderFeatureContextMenu,
+  renderFeaturePopup,
+  renderFeatureTooltip,
+  surface,
+}: {
+  coordinates: [longitude: number, latitude: number];
+  feature: TFeature;
+  featureId: string;
+  getFeatureId: (feature: TFeature) => string;
+  onFeatureContextMenu?: (feature: TFeature) => void;
+  onFeatureHover?: (feature: TFeature | null) => void;
+  onFeatureSelect?: (feature: TFeature | null) => void;
+  onHoveredFeatureIdChange?: PointLayerProps<AnyRecord>["onHoveredFeatureIdChange"];
+  onSelectedFeatureIdChange?: PointLayerProps<AnyRecord>["onSelectedFeatureIdChange"];
+  renderFeatureContextMenu?: PointLayerProps<AnyRecord>["renderFeatureContextMenu"];
+  renderFeaturePopup?: (feature: TFeature) => ReactNode;
+  renderFeatureTooltip?: (feature: TFeature) => ReactNode;
+  surface: MapsOverlayInteractionSurface;
+}) {
+  const interactionId = () => featureId;
+
+  return {
+    onClick(event: ReactMouseEvent<SVGElement>) {
+      event.stopPropagation();
+      surface.handleFeatureClick(feature, getPointerPosition(event), {
+        getFeatureId: interactionId,
+        onFeatureSelect,
+        onSelectedFeatureIdChange: onSelectedFeatureIdChange as never,
+        renderFeaturePopup,
+      });
+    },
+    onContextMenu(event: ReactMouseEvent<SVGElement>) {
+      event.preventDefault();
+      event.stopPropagation();
+      surface.handleFeatureContextMenu(feature, getPointerPosition(event), {
+        coordinates,
+        getFeatureId: interactionId,
+        onFeatureContextMenu,
+        onFeatureSelect,
+        onSelectedFeatureIdChange: onSelectedFeatureIdChange as never,
+        renderFeatureContextMenu: renderFeatureContextMenu as never,
+        renderFeaturePopup,
+      });
+    },
+    onMouseEnter(event: ReactMouseEvent<SVGElement>) {
+      surface.handleFeatureHover(feature, getPointerPosition(event), {
+        getFeatureId,
+        onHoveredFeatureIdChange: onHoveredFeatureIdChange as never,
+        onFeatureHover,
+        renderFeatureTooltip,
+      });
+    },
+    onMouseLeave() {
+      surface.handleFeatureHover(null, null, {
+        getFeatureId,
+        onHoveredFeatureIdChange: onHoveredFeatureIdChange as never,
+        onFeatureHover,
+        renderFeatureTooltip,
+      });
+    },
+    onMouseMove(event: ReactMouseEvent<SVGElement>) {
+      surface.handleFeatureHover(feature, getPointerPosition(event), {
+        getFeatureId,
+        onHoveredFeatureIdChange: onHoveredFeatureIdChange as never,
+        onFeatureHover,
+        renderFeatureTooltip,
+      });
+    },
+  };
+}
+
+function getPointerPosition(event: ReactMouseEvent<SVGElement>) {
+  const overlay = event.currentTarget.ownerSVGElement;
+  const bounds = overlay?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+
+  return {
+    x: event.clientX - bounds.left,
+    y: event.clientY - bounds.top,
+  };
 }
 
 function projectPath(
@@ -376,49 +548,24 @@ function compactStyle(style: GeoJsonLayerStyle): GeoJsonLayerStyle {
   ) as GeoJsonLayerStyle;
 }
 
-function assertNoUnsupportedPointInteractions(
-  props: Pick<
-    PointLayerProps<AnyRecord>,
-    | "draggable"
-    | "onFeatureContextMenu"
-    | "onFeatureDrag"
-    | "onFeatureDragEnd"
-    | "onFeatureHover"
-    | "onFeatureSelect"
-    | "onHoveredFeatureIdChange"
-    | "onSelectedFeatureIdChange"
-    | "renderFeatureContextMenu"
-    | "renderFeaturePopup"
-    | "renderFeatureTooltip"
-  >,
+function assertNoUnsupportedPointDrag(
+  props: Pick<PointLayerProps<AnyRecord>, "draggable" | "onFeatureDrag" | "onFeatureDragEnd">,
 ) {
   if (Object.values(props).some(Boolean)) {
     throw new Error(
-      'flatRuntime="maps" point overlays are display-only in this slice; interactive or draggable point contracts remain explicit until the Maps interaction overlay slice.',
+      'flatRuntime="maps" does not support draggable PointLayer features yet; drag/edit contracts remain explicit until a Maps-owned editing slice lands.',
     );
   }
 }
 
-function assertNoUnsupportedGeoJsonInteractions(
-  props: Pick<
-    GeoJsonLayerProps<AnyRecord>,
-    | "isFeatureInteractive"
-    | "onFeatureContextMenu"
-    | "onFeatureHover"
-    | "onFeatureSelect"
-    | "onHoveredFeatureIdChange"
-    | "onSelectedFeatureIdChange"
-    | "renderFeatureContextMenu"
-    | "renderFeaturePopup"
-    | "renderFeatureTooltip"
-  >,
-) {
-  if (Object.values(props).some(Boolean)) {
-    throw new Error(
-      'flatRuntime="maps" GeoJSON overlays are display-only in this slice; interactive GeoJSON contracts remain explicit until the Maps interaction overlay slice.',
-    );
-  }
-}
+const interactiveFeatureStyle = {
+  cursor: "pointer",
+  pointerEvents: "auto" as const,
+};
+
+const nonInteractiveFeatureStyle = {
+  pointerEvents: "none" as const,
+};
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
