@@ -321,7 +321,8 @@ describe("Maps-owned MapView runtime", () => {
         mapStyle={{ tiles: false }}
       >
         <PointLayer
-          getFeatureId={() => "stable-berlin"}
+          getFeatureId={() => "stable-berlin"
+          }
           onFeatureContextMenu={onFeatureContextMenu}
           onFeatureHover={onFeatureHover}
           onFeatureSelect={onFeatureSelect}
@@ -502,7 +503,7 @@ describe("Maps-owned MapView runtime", () => {
           <div>Map layer</div>
         </MapView>,
       ),
-    ).toThrow(/supports PointLayer and GeoJsonLayer only/);
+    ).toThrow(/supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer/);
 
     expect(() =>
       render(
