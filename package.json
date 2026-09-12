@@ -113,6 +113,7 @@
     "verify:engine-scenarios": "node ./scripts/verify-engine-scenarios.mjs",
     "verify:engine-camera:prepared": "node ./scripts/verify-engine-camera-parity.mjs",
     "verify:engine-camera": "bun run build:wasm && bun run verify:engine-camera:prepared",
+    "verify:engine-runtime-evidence": "node ./scripts/verify-engine-runtime-evidence.mjs",
     "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
     "verify:audit": "bun audit --audit-level high",
     "verify:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --lib --tests --locked && cargo check -p maps-wasm --target wasm32-unknown-unknown --locked",
