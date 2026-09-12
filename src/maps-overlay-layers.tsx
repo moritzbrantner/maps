@@ -29,6 +29,13 @@ import {
 } from "./canvas-map-renderer";
 import { ClusterLayer, type ClusterLayerProps } from "./cluster-layer";
 import {
+  FlowLayer,
+  createFlowLayerFeatures,
+  createFlowPathCoordinates,
+  type FlowLayerFeature,
+  type FlowLayerProps,
+} from "./flow-layer";
+import {
   GeoJsonLayer,
   createGeoJsonLayerFeatures,
   type GeoJsonLayerProps,
@@ -40,6 +47,9 @@ import {
   createCircleVectorRenderFrame,
   createGeoJsonVectorRenderFrame,
   createPointClusterVectorRenderFrame,
+  type MapRenderCircle,
+  type MapRenderDirectionMarker,
+  type MapRenderLine,
   type MapVectorRenderFrame,
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
@@ -112,6 +122,11 @@ type MapsOverlayEntry =
       prefix: string;
       props: ClusterLayerProps<AnyRecord>;
       runtimeKey: string;
+    }
+  | {
+      kind: "flow";
+      prefix: string;
+      props: FlowLayerProps<AnyRecord>;
     }
   | {
       kind: "geojson";
@@ -366,6 +381,16 @@ function collectOverlayEntries(children: ReactNode, path = "root", entries: Maps
       return;
     }
 
+    if (child.type === FlowLayer) {
+      const props = child.props as FlowLayerProps<AnyRecord>;
+      entries.push({
+        kind: "flow",
+        prefix: props.layerId ? `flow:${props.layerId}` : resolveLayerPrefix("flow", child.key, childPath),
+        props,
+      });
+      return;
+    }
+
     throwUnsupportedMapsLayer();
   });
 
@@ -401,6 +426,9 @@ function createOverlaySnapshot(
         }
         break;
       }
+      case "flow":
+        appendFlowLayer(entry.props, surface, mutable, entry.prefix);
+        break;
     }
   }
 
@@ -517,6 +545,113 @@ function appendClusterLayer(
     );
 
     appendPrimitive(snapshot, primitive, interaction, hovered, selected);
+  }
+}
+
+function appendFlowLayer(
+  props: FlowLayerProps<AnyRecord>,
+  surface: MapsOverlayInteractionSurface,
+  snapshot: MutableMapsOverlaySnapshot,
+  prefix: string,
+) {
+  const features = createFlowLayerFeatures(props.flows, {
+    getWeight: props.getWeight,
+    maxWeight: props.maxWeight,
+    maxWidth: props.maxWidth,
+    minWidth: props.minWidth,
+    weightMetric: props.weightMetric,
+  });
+  const hasHoveredFlow = features.some((feature) =>
+    surface.isFeatureHovered(feature, props.hoveredFeatureId, props.getFeatureId),
+  );
+
+  for (const feature of features) {
+    const featureId = props.getFeatureId?.(feature) || feature.flow.id;
+    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, props.getFeatureId);
+    const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, props.getFeatureId);
+    const hasActiveFlow = Boolean(props.selectedFeatureId) || hasHoveredFlow;
+    const active = selected || hovered;
+    const opacity = active
+      ? hovered
+        ? props.hoveredFlowOpacity ?? 0.95
+        : props.selectedFlowOpacity ?? 0.95
+      : hasActiveFlow
+        ? props.inactiveFlowOpacity ?? 0.22
+        : 0.72;
+    const color = props.getFlowColor?.(feature) ?? props.flowColor ?? "#0f766e";
+    const coordinates = createFlowPathCoordinates(feature, props.flowShape ?? "straight");
+    const interaction = createFeatureInteraction(
+      `${prefix}|${featureId}`,
+      feature,
+      featureId,
+      getFlowFeatureCenter(feature),
+      props,
+      surface,
+    );
+    const line: MapRenderLine<FlowLayerFeature<AnyRecord>> = {
+      coordinates,
+      feature,
+      featureId,
+      interactive: true,
+      kind: "line",
+      primitiveId: createOverlayPrimitiveId(prefix, featureId, "line"),
+      strokeColor: color,
+      strokeOpacity: opacity,
+      strokeWidth: selected ? feature.width + 1.5 : feature.width,
+    };
+
+    appendPrimitive(snapshot, line, interaction, false, false);
+
+    if (props.showDirection && (props.directionMarker ?? "arrow") !== "none" && coordinates.length >= 2) {
+      const marker: MapRenderDirectionMarker<FlowLayerFeature<AnyRecord>> = {
+        anchor: coordinates[coordinates.length - 1]!,
+        color,
+        feature,
+        featureId,
+        interactive: false,
+        kind: "direction-marker",
+        opacity,
+        previous: coordinates[coordinates.length - 2]!,
+        primitiveId: createOverlayPrimitiveId(prefix, featureId, "direction-marker"),
+        size: clampNumber(feature.width * 1.35, 9, 22),
+      };
+      appendPrimitive(snapshot, marker, null, false, false);
+    }
+
+    if (props.showEndpoints ?? true) {
+      const fromEndpoint: MapRenderCircle<FlowLayerFeature<AnyRecord>> = {
+        center: [feature.flow.from[0], feature.flow.from[1]],
+        feature,
+        featureId,
+        fillColor: color,
+        fillOpacity: 0.9,
+        interactive: false,
+        kind: "circle",
+        label: null,
+        primitiveId: createOverlayPrimitiveId(prefix, featureId, "endpoint", "from"),
+        radius: Math.max(3, feature.width * 0.55),
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWidth: 1.5,
+      };
+      const toEndpoint: MapRenderCircle<FlowLayerFeature<AnyRecord>> = {
+        center: [feature.flow.to[0], feature.flow.to[1]],
+        feature,
+        featureId,
+        fillColor: color,
+        fillOpacity: 0.95,
+        interactive: false,
+        kind: "circle",
+        label: null,
+        primitiveId: createOverlayPrimitiveId(prefix, featureId, "endpoint", "to"),
+        radius: Math.max(4, feature.width * 0.75),
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWidth: 1.5,
+      };
+      appendPrimitive(snapshot, fromEndpoint, null, false, false);
+      appendPrimitive(snapshot, toEndpoint, null, false, false);
+    }
   }
 }
 
@@ -687,6 +822,23 @@ function serializeVisibleAggregationSummary(summary: VisibleAggregationSummary) 
   });
 }
 
+function getFlowFeatureCenter(
+  feature: FlowLayerFeature<AnyRecord>,
+): [longitude: number, latitude: number] {
+  return [
+    (feature.flow.from[0] + feature.flow.to[0]) / 2,
+    (feature.flow.from[1] + feature.flow.to[1]) / 2,
+  ];
+}
+
+function createOverlayPrimitiveId(...parts: Array<string | number>) {
+  return JSON.stringify(parts);
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function resolveLayerPrefix(kind: string, key: string | null, path: string) {
   return `${kind}:${key ?? path}`;
 }
@@ -739,6 +891,6 @@ function assertNoUnsupportedPointDrag(
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
-    'The direct-feature Maps runtime supports PointLayer and GeoJsonLayer only; ClusterLayer is also supported through the Maps-owned aggregation adapter. Other map layer types remain explicitly MapLibre-backed.',
+    'The direct-feature Maps runtime supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer through Maps-owned semantic adapters. Other map layer types remain explicitly MapLibre-backed.',
   );
 }
