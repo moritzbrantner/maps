@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import {
+  ClusterLayer,
   GeoJsonLayer,
   MapControls,
   MapView,
@@ -20,15 +21,16 @@ export function MapsRuntimeAcceptance() {
   const [pointHoveredId, setPointHoveredId] = useState<string | null>("acceptance-berlin");
   const [pointSelectedId, setPointSelectedId] = useState<string | null>(null);
   const [zoneSelectedId, setZoneSelectedId] = useState<string | null>("acceptance-zone");
+  const [clusterSummary, setClusterSummary] = useState("pending");
   const [lastInteraction, setLastInteraction] = useState("none");
 
   return (
     <main style={{ margin: "0 auto", maxWidth: 1120, padding: 24 }}>
       <h1>Maps-owned flat runtime acceptance</h1>
       <p>
-        This path constructs the Rust/WASM camera and tile runtime directly. It intentionally uses
-        no MapLibre instance and no raster network source so interaction evidence stays
-        deterministic.
+        This path constructs the Rust/WASM camera, tile, and aggregation runtimes directly. It
+        intentionally uses no MapLibre instance and no raster network source so interaction evidence
+        stays deterministic.
       </p>
       <MapView
         flatRuntime="maps"
@@ -76,6 +78,31 @@ export function MapsRuntimeAcceptance() {
             <span data-testid="maps-runtime-feature-popup">GeoJSON {feature.id}</span>
           )}
           selectedFeatureId={zoneSelectedId}
+        />
+        <ClusterLayer
+          clusterRadius={96}
+          getFeatureId={(feature) =>
+            feature.kind === "cluster" ? "acceptance-cluster" : feature.point.id
+          }
+          layerId="acceptance-clusters"
+          onSelectedFeatureIdChange={(featureId, context) => {
+            setLastInteraction(`cluster:${context.source}:${featureId ?? "none"}`);
+          }}
+          onViewportAggregationChange={(summary) => {
+            setClusterSummary(
+              `${summary.visibleClusterCount}/${summary.visibleUnclusteredCount}/${summary.visiblePointCount}`,
+            );
+          }}
+          points={[
+            { id: "cluster-a", latitude: 51.0, longitude: 15.0 },
+            { id: "cluster-b", latitude: 51.004, longitude: 15.006 },
+            { id: "cluster-c", latitude: 50.996, longitude: 14.994 },
+          ]}
+          renderFeaturePopup={(feature) => (
+            <span data-testid="maps-runtime-feature-popup">
+              Cluster {feature.kind === "cluster" ? feature.pointCount : feature.point.id}
+            </span>
+          )}
         />
         <PointLayer
           hoveredFeatureId={pointHoveredId}
@@ -135,6 +162,7 @@ export function MapsRuntimeAcceptance() {
             {viewState.center[0].toFixed(4)},{viewState.center[1].toFixed(4)} | zoom{" "}
             {viewState.zoom.toFixed(4)}
           </output>
+          <output data-testid="maps-runtime-cluster-summary">{clusterSummary}</output>
           <output data-testid="maps-runtime-interaction">{lastInteraction}</output>
         </MapControls>
       </MapView>
