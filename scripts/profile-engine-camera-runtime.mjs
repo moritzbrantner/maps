@@ -16,6 +16,9 @@ import { chromium } from "@playwright/test";
 
 const IMPLEMENTATIONS = new Set(["candidate", "reference"]);
 const PROFILE_ITERATIONS = 12;
+const VITE_BUILD_TIMEOUT_MS = 15_000;
+const BROWSER_STAGE_TIMEOUT_MS = 10_000;
+const PREVIEW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const implementation = process.env.MAPS_RUNTIME_PROFILE_IMPLEMENTATION;
 
@@ -71,7 +74,7 @@ try {
     implementation === "candidate" ? candidateEntry() : referenceEntry(),
   );
 
-  run("bun", [viteEntry, "build"], tempRoot);
+  run("bun", [viteEntry, "build"], tempRoot, VITE_BUILD_TIMEOUT_MS);
 
   preview = spawn(
     "bun",
@@ -91,11 +94,18 @@ try {
   );
   await waitForHttp(`http://127.0.0.1:${previewPort}/`);
 
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ timeout: BROWSER_STAGE_TIMEOUT_MS });
   try {
     const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${previewPort}/`, { waitUntil: "load" });
-    const result = await page.evaluate(() => window.mapsRuntimeProfile);
+    await page.goto(`http://127.0.0.1:${previewPort}/`, {
+      timeout: BROWSER_STAGE_TIMEOUT_MS,
+      waitUntil: "load",
+    });
+    const result = await withTimeout(
+      page.evaluate(() => window.mapsRuntimeProfile),
+      BROWSER_STAGE_TIMEOUT_MS,
+      `${implementation} browser profile evaluation`,
+    );
 
     if (result.scenarioId !== scenario.id) {
       throw new Error(`unexpected scenario ${result.scenarioId}`);
@@ -122,10 +132,10 @@ try {
       })}\n`,
     );
   } finally {
-    await browser.close();
+    await withTimeout(browser.close(), BROWSER_STAGE_TIMEOUT_MS, "Chromium shutdown");
   }
 } finally {
-  preview?.kill("SIGTERM");
+  await stopPreview(preview);
   rmSync(tempRoot, { force: true, recursive: true });
 }
 
@@ -193,14 +203,20 @@ function linkDirectory(target, linkPath) {
   symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, timeout) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout,
   });
 
-  if (result.error) throw result.error;
+  if (result.error) {
+    throw new Error(
+      `${command} ${args.join(" ")} failed before completion: ${result.error.message}\n${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+      { cause: result.error },
+    );
+  }
   if (result.status !== 0) {
     throw new Error(
       `${command} ${args.join(" ")} failed\n${result.stdout ?? ""}\n${result.stderr ?? ""}`,
@@ -227,6 +243,44 @@ async function waitForHttp(url) {
   }
 
   throw new Error(`runtime profile preview did not become ready: ${String(lastError ?? "timeout")}`);
+}
+
+async function stopPreview(child) {
+  if (!child || child.exitCode !== null) return;
+
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  const stopped = await Promise.race([
+    exited.then(() => true),
+    delay(PREVIEW_SHUTDOWN_TIMEOUT_MS).then(() => false),
+  ]);
+  if (stopped || child.exitCode !== null) return;
+
+  child.kill("SIGKILL");
+  const killed = await Promise.race([
+    exited.then(() => true),
+    delay(PREVIEW_SHUTDOWN_TIMEOUT_MS).then(() => false),
+  ]);
+  if (!killed && child.exitCode === null) {
+    throw new Error("Vite preview did not terminate after SIGKILL");
+  }
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function reservePort() {
