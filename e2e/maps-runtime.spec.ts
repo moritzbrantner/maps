@@ -55,7 +55,17 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     .poll(async () => projectedPointPosition(point))
     .not.toEqual(zoomedPointPosition);
 
-  const draggedViewState = parseViewState(await viewState.textContent());
+  const releasedViewState = await viewState.textContent();
+  await expect
+    .poll(async () => viewState.textContent())
+    .not.toBe(releasedViewState);
+
+  await page.waitForTimeout(850);
+  const settledViewState = await viewState.textContent();
+  await page.waitForTimeout(120);
+  expect(await viewState.textContent()).toBe(settledViewState);
+
+  const draggedViewState = parseViewState(settledViewState);
   const draggedPointPosition = await projectedPointPosition(point);
   const cdp = await page.context().newCDPSession(page);
   const touchCenter = {
