@@ -55,6 +55,40 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     .poll(async () => projectedPointPosition(point))
     .not.toEqual(zoomedPointPosition);
 
+  const draggedViewState = parseViewState(await viewState.textContent());
+  const draggedPointPosition = await projectedPointPosition(point);
+  const cdp = await page.context().newCDPSession(page);
+  const touchCenter = {
+    x: box!.x + box!.width * 0.5,
+    y: box!.y + box!.height * 0.5,
+  };
+
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [
+      { x: touchCenter.x - 40, y: touchCenter.y },
+      { x: touchCenter.x + 40, y: touchCenter.y },
+    ],
+  });
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchMove",
+    touchPoints: [
+      { x: touchCenter.x - 80, y: touchCenter.y - 12 },
+      { x: touchCenter.x + 80, y: touchCenter.y + 12 },
+    ],
+  });
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+
+  await expect
+    .poll(async () => parseViewState(await viewState.textContent()).zoom)
+    .toBeGreaterThan(draggedViewState.zoom);
+  await expect
+    .poll(async () => projectedPointPosition(point))
+    .not.toEqual(draggedPointPosition);
+
   await page.getByRole("button", { name: "Fit acceptance bounds" }).click();
   await expect(viewState).toHaveText(/^0\.0000,45\.\d{4} \| zoom \d+\.\d{4}$/);
 
@@ -86,9 +120,7 @@ async function projectedPointPosition(point: import("@playwright/test").Locator)
 
 function parseViewState(text: string | null) {
   const [coordinates = "", zoomText = ""] = (text ?? "").split(" | zoom ");
-  const [longitude = Number.NaN, latitude = Number.NaN] = coordinates
-    .split(",")
-    .map(Number);
+  const [longitude = Number.NaN, latitude = Number.NaN] = coordinates.split(",").map(Number);
 
   return {
     center: [longitude, latitude] as [number, number],
