@@ -5,13 +5,22 @@ import {
   Fragment,
   forwardRef,
   isValidElement,
+  startTransition,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 
+import {
+  createPointAggregationIndex,
+  type AggregatedMapFeature,
+  type PointAggregationIndex,
+  type ViewportAggregationQuery,
+  type VisibleAggregationSummary,
+} from "./aggregation";
 import {
   createCanvasMapScene,
   drawCanvasMapScene,
@@ -19,6 +28,7 @@ import {
   type CanvasMapScene,
   type MapScreenPoint,
 } from "./canvas-map-renderer";
+import { ClusterLayer, type ClusterLayerProps } from "./cluster-layer";
 import {
   GeoJsonLayer,
   createGeoJsonLayerFeatures,
@@ -30,10 +40,15 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import {
   createCircleVectorRenderFrame,
   createGeoJsonVectorRenderFrame,
+  createPointClusterVectorRenderFrame,
   type MapVectorRenderFrame,
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
 import type { MapSurfaceContextValue } from "./map-surface-context";
+import {
+  createPointClusterRenderFrame,
+  type MapPointClusterRenderFrame,
+} from "./point-cluster-render-frame";
 import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
 
 export type MapsProjectCoordinate = (
@@ -61,10 +76,13 @@ type MapsOverlayInteractionSurface = Pick<
   | "handleFeatureHover"
   | "isFeatureHovered"
   | "isFeatureSelected"
+  | "setViewState"
+  | "viewState"
 >;
 
 type MapsOverlayLayersProps = {
   children: ReactNode;
+  getViewportAggregationQuery: () => ViewportAggregationQuery | null;
   project: MapsProjectCoordinate;
   surface: MapsOverlayInteractionSurface;
 };
@@ -93,6 +111,37 @@ type MutableMapsOverlaySnapshot = MapsOverlaySnapshot & {
   primitiveIds: Set<string>;
 };
 
+type PointLayerDescriptor = {
+  kind: "point";
+  prefix: string;
+  props: PointLayerProps<AnyRecord>;
+};
+
+type GeoJsonLayerDescriptor = {
+  kind: "geojson";
+  prefix: string;
+  props: GeoJsonLayerProps<AnyRecord>;
+};
+
+type ClusterLayerDescriptor = {
+  kind: "cluster";
+  prefix: string;
+  props: ClusterLayerProps<AnyRecord>;
+};
+
+type MapsLayerDescriptor = PointLayerDescriptor | GeoJsonLayerDescriptor | ClusterLayerDescriptor;
+
+type ClusterIndexEntry = {
+  clusterRadius: ClusterLayerProps<AnyRecord>["clusterRadius"];
+  filterPoint: ClusterLayerProps<AnyRecord>["filterPoint"];
+  index: PointAggregationIndex<AnyRecord>;
+  lastSummaryKey: string | null;
+  maxZoom: ClusterLayerProps<AnyRecord>["maxZoom"];
+  minZoom: ClusterLayerProps<AnyRecord>["minZoom"];
+  onViewportAggregationChange: ClusterLayerProps<AnyRecord>["onViewportAggregationChange"];
+  points: ClusterLayerProps<AnyRecord>["points"];
+};
+
 type InternalPick = {
   interaction: MapsOverlayInteraction;
   pick: MapsOverlayPick;
@@ -100,13 +149,31 @@ type InternalPick = {
 };
 
 export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
-  function MapsOverlayLayers({ children, project, surface }, ref) {
+  function MapsOverlayLayers(
+    { children, getViewportAggregationQuery, project, surface },
+    ref,
+  ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<CanvasMapScene<unknown> | null>(null);
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
-    const snapshot = useMemo(() => createOverlaySnapshot(children, surface), [children, surface]);
+    const [resizeVersion, setResizeVersion] = useState(0);
+    const descriptors = useMemo(() => describeChildren(children), [children]);
+    const clusterDescriptors = useMemo(
+      () => descriptors.filter(isClusterLayerDescriptor),
+      [descriptors],
+    );
+    const clusterFrames = useClusterRenderFrames(
+      clusterDescriptors,
+      getViewportAggregationQuery,
+      resizeVersion,
+      surface.viewState,
+    );
+    const snapshot = useMemo(
+      () => createOverlaySnapshot(descriptors, clusterFrames, surface),
+      [clusterFrames, descriptors, surface],
+    );
 
     const clearHover = () => {
       const interaction = lastHoveredInteractionRef.current;
@@ -188,35 +255,41 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         return;
       }
 
-      const draw = () => {
-        const size = resizeCanvasBackingStore(canvas);
-        const scene = createCanvasMapScene(snapshot.frame, project, size);
-        sceneRef.current = scene;
-        renderedSnapshotRef.current = snapshot;
+      const size = resizeCanvasBackingStore(canvas);
+      const scene = createCanvasMapScene(snapshot.frame, project, size);
+      sceneRef.current = scene;
+      renderedSnapshotRef.current = snapshot;
 
-        const context = getCanvasContext(canvas);
-        if (!context) return;
+      const context = getCanvasContext(canvas);
+      if (!context) return;
 
-        const ratio = Math.max(1, window.devicePixelRatio || 1);
-        context.setTransform(ratio, 0, 0, ratio, 0, 0);
-        drawCanvasMapScene(context, scene, {
-          hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
-          selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      drawCanvasMapScene(context, scene, {
+        hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
+        selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
+      });
+    }, [project, snapshot]);
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || typeof ResizeObserver === "undefined") return;
+
+      let animationFrame: number | null = null;
+      const observer = new ResizeObserver(() => {
+        if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+        animationFrame = requestAnimationFrame(() => {
+          animationFrame = null;
+          setResizeVersion((value) => value + 1);
         });
-      };
-
-      draw();
-
-      if (typeof ResizeObserver === "undefined") {
-        return;
-      }
-
-      const observer = new ResizeObserver(draw);
+      });
       observer.observe(canvas);
+
       return () => {
         observer.disconnect();
+        if (animationFrame !== null) cancelAnimationFrame(animationFrame);
       };
-    }, [project, snapshot]);
+    }, [descriptors.length > 0]);
 
     useEffect(() => {
       return () => {
@@ -227,7 +300,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       };
     }, []);
 
-    if (snapshot.frame.primitives.length === 0) {
+    if (descriptors.length === 0) {
       return null;
     }
 
@@ -251,8 +324,73 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
   },
 );
 
-function createOverlaySnapshot(
+function describeChildren(children: ReactNode): MapsLayerDescriptor[] {
+  const descriptors: MapsLayerDescriptor[] = [];
+  collectDescriptors(children, descriptors, "root");
+  return descriptors;
+}
+
+function collectDescriptors(
   children: ReactNode,
+  descriptors: MapsLayerDescriptor[],
+  path: string,
+) {
+  Children.toArray(children).forEach((child, index) => {
+    if (!isValidElement(child)) {
+      throwUnsupportedMapsLayer();
+    }
+
+    const childPath = `${path}.${index}`;
+    if (child.type === Fragment) {
+      collectDescriptors(
+        (child.props as { children?: ReactNode }).children,
+        descriptors,
+        childPath,
+      );
+      return;
+    }
+
+    if (child.type === PointLayer) {
+      const props = child.props as PointLayerProps<AnyRecord>;
+      descriptors.push({
+        kind: "point",
+        prefix: props.layerId ? `point:${props.layerId}` : resolveLayerPrefix("point", child.key, childPath),
+        props,
+      });
+      return;
+    }
+
+    if (child.type === GeoJsonLayer) {
+      const props = child.props as GeoJsonLayerProps<AnyRecord>;
+      descriptors.push({
+        kind: "geojson",
+        prefix: props.layerId
+          ? `geojson:${props.layerId}`
+          : resolveLayerPrefix("geojson", child.key, childPath),
+        props,
+      });
+      return;
+    }
+
+    if (child.type === ClusterLayer) {
+      const props = child.props as ClusterLayerProps<AnyRecord>;
+      descriptors.push({
+        kind: "cluster",
+        prefix: props.layerId
+          ? `cluster:${props.layerId}`
+          : resolveLayerPrefix("cluster", child.key, childPath),
+        props,
+      });
+      return;
+    }
+
+    throwUnsupportedMapsLayer();
+  });
+}
+
+function createOverlaySnapshot(
+  descriptors: readonly MapsLayerDescriptor[],
+  clusterFrames: ReadonlyMap<string, MapPointClusterRenderFrame<AnyRecord>>,
   surface: MapsOverlayInteractionSurface,
 ): MapsOverlaySnapshot {
   const mutable: MutableMapsOverlaySnapshot = {
@@ -263,7 +401,21 @@ function createOverlaySnapshot(
     selectedPrimitiveIds: new Set(),
   };
 
-  collectChildren(children, surface, mutable, "root");
+  for (const descriptor of descriptors) {
+    switch (descriptor.kind) {
+      case "point":
+        appendPointLayer(descriptor, surface, mutable);
+        break;
+      case "geojson":
+        appendGeoJsonLayer(descriptor, surface, mutable);
+        break;
+      case "cluster": {
+        const frame = clusterFrames.get(descriptor.prefix);
+        if (frame) appendClusterLayer(descriptor, frame, surface, mutable);
+        break;
+      }
+    }
+  }
 
   return {
     frame: mutable.frame,
@@ -273,61 +425,14 @@ function createOverlaySnapshot(
   };
 }
 
-function collectChildren(
-  children: ReactNode,
-  surface: MapsOverlayInteractionSurface,
-  snapshot: MutableMapsOverlaySnapshot,
-  path: string,
-) {
-  Children.toArray(children).forEach((child, index) => {
-    if (!isValidElement(child)) {
-      throwUnsupportedMapsLayer();
-    }
-
-    const childPath = `${path}.${index}`;
-    if (child.type === Fragment) {
-      collectChildren(
-        (child.props as { children?: ReactNode }).children,
-        surface,
-        snapshot,
-        childPath,
-      );
-      return;
-    }
-
-    if (child.type === PointLayer) {
-      appendPointLayer(
-        child.props as PointLayerProps<AnyRecord>,
-        surface,
-        snapshot,
-        resolveLayerPrefix("point", child.key, childPath),
-      );
-      return;
-    }
-
-    if (child.type === GeoJsonLayer) {
-      appendGeoJsonLayer(
-        child.props as GeoJsonLayerProps<AnyRecord>,
-        surface,
-        snapshot,
-        resolveLayerPrefix("geojson", child.key, childPath),
-      );
-      return;
-    }
-
-    throwUnsupportedMapsLayer();
-  });
-}
-
 function appendPointLayer(
-  props: PointLayerProps<AnyRecord>,
+  descriptor: PointLayerDescriptor,
   surface: MapsOverlayInteractionSurface,
   snapshot: MutableMapsOverlaySnapshot,
-  fallbackPrefix: string,
 ) {
+  const { prefix, props } = descriptor;
   assertNoUnsupportedPointDrag(props);
   const features = createPointLayerFeatures(props.points, { filterPoint: props.filterPoint });
-  const prefix = props.layerId ? `point:${props.layerId}` : fallbackPrefix;
   const frame = createCircleVectorRenderFrame(features, {
     getCoordinates: (feature) => feature.coordinates,
     getFeatureId: (feature) => props.getFeatureId?.(feature) || feature.point.id,
@@ -355,13 +460,12 @@ function appendPointLayer(
 }
 
 function appendGeoJsonLayer(
-  props: GeoJsonLayerProps<AnyRecord>,
+  descriptor: GeoJsonLayerDescriptor,
   surface: MapsOverlayInteractionSurface,
   snapshot: MutableMapsOverlaySnapshot,
-  fallbackPrefix: string,
 ) {
+  const { prefix, props } = descriptor;
   const features = createGeoJsonLayerFeatures(props.featureCollection);
-  const prefix = props.layerId ? `geojson:${props.layerId}` : fallbackPrefix;
   const frame = createGeoJsonVectorRenderFrame(features, {
     getFeatureId: props.getFeatureId,
     getFeatureStyle: props.getFeatureStyle,
@@ -400,6 +504,41 @@ function appendGeoJsonLayer(
   }
 }
 
+function appendClusterLayer(
+  descriptor: ClusterLayerDescriptor,
+  frame: MapPointClusterRenderFrame<AnyRecord>,
+  surface: MapsOverlayInteractionSurface,
+  snapshot: MutableMapsOverlaySnapshot,
+) {
+  const { prefix, props } = descriptor;
+  const vectorFrame = createPointClusterVectorRenderFrame(frame, { primitivePrefix: prefix });
+
+  for (const primitive of vectorFrame.primitives) {
+    const feature = primitive.feature;
+    const resolveFeatureId = () => primitive.featureId;
+    const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, resolveFeatureId);
+    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, resolveFeatureId);
+    const interaction = createFeatureInteraction(
+      `${prefix}|${primitive.featureId}`,
+      feature,
+      primitive.featureId,
+      primitive.center,
+      props,
+      surface,
+      feature.kind === "cluster"
+        ? () => {
+            surface.setViewState(
+              { center: primitive.center, zoom: feature.expansionZoom },
+              "cluster-expand",
+            );
+          }
+        : undefined,
+    );
+
+    appendPrimitive(snapshot, primitive, interaction, hovered, selected);
+  }
+}
+
 function appendPrimitive<TFeature>(
   snapshot: MutableMapsOverlaySnapshot,
   primitive: MapVectorRenderPrimitive<TFeature>,
@@ -425,6 +564,7 @@ function createFeatureInteraction<TFeature>(
   coordinates: [longitude: number, latitude: number],
   options: MapsFeatureInteractionOptions<TFeature>,
   surface: MapsOverlayInteractionSurface,
+  beforeClick?: () => void,
 ): MapsOverlayInteraction {
   const getFeatureId = () => featureId;
 
@@ -438,6 +578,7 @@ function createFeatureInteraction<TFeature>(
       });
     },
     click(position) {
+      beforeClick?.();
       surface.handleFeatureClick(feature, position, {
         getFeatureId,
         onFeatureSelect: options.onFeatureSelect,
@@ -467,6 +608,138 @@ function createFeatureInteraction<TFeature>(
     },
     key,
   };
+}
+
+function useClusterRenderFrames(
+  descriptors: readonly ClusterLayerDescriptor[],
+  getViewportAggregationQuery: () => ViewportAggregationQuery | null,
+  resizeVersion: number,
+  viewState: MapsOverlayInteractionSurface["viewState"],
+) {
+  const indexesRef = useRef<Map<string, ClusterIndexEntry>>(new Map());
+  const [frames, setFrames] = useState<Map<string, MapPointClusterRenderFrame<AnyRecord>>>(
+    () => new Map(),
+  );
+
+  useEffect(() => {
+    const activePrefixes = new Set(descriptors.map((descriptor) => descriptor.prefix));
+    for (const [prefix, entry] of indexesRef.current) {
+      if (!activePrefixes.has(prefix)) {
+        entry.index.dispose();
+        indexesRef.current.delete(prefix);
+      }
+    }
+
+    const query = getViewportAggregationQuery();
+    const nextFrames = new Map<string, MapPointClusterRenderFrame<AnyRecord>>();
+
+    for (const descriptor of descriptors) {
+      const entry = getOrCreateClusterIndex(indexesRef.current, descriptor);
+      if (!query) continue;
+
+      const aggregation = entry.index.getViewportAggregation(query);
+      const resolveFeatureId = (feature: AggregatedMapFeature<AnyRecord>) =>
+        descriptor.props.getFeatureId?.(feature) ?? defaultAggregatedFeatureId(feature);
+      const frame = createPointClusterRenderFrame(aggregation, resolveFeatureId);
+      nextFrames.set(descriptor.prefix, frame);
+      emitViewportSummary(entry, frame.summary, descriptor.props.onViewportAggregationChange);
+    }
+
+    setFrames(nextFrames);
+  }, [
+    descriptors,
+    getViewportAggregationQuery,
+    resizeVersion,
+    viewState.center[0],
+    viewState.center[1],
+    viewState.zoom,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      for (const entry of indexesRef.current.values()) entry.index.dispose();
+      indexesRef.current.clear();
+    };
+  }, []);
+
+  return frames;
+}
+
+function getOrCreateClusterIndex(
+  entries: Map<string, ClusterIndexEntry>,
+  descriptor: ClusterLayerDescriptor,
+) {
+  const current = entries.get(descriptor.prefix);
+  const { props } = descriptor;
+  const unchanged =
+    current &&
+    current.points === props.points &&
+    current.filterPoint === props.filterPoint &&
+    current.clusterRadius === props.clusterRadius &&
+    current.maxZoom === props.maxZoom &&
+    current.minZoom === props.minZoom;
+
+  if (unchanged) {
+    if (current.onViewportAggregationChange !== props.onViewportAggregationChange) {
+      current.onViewportAggregationChange = props.onViewportAggregationChange;
+      current.lastSummaryKey = null;
+    }
+    return current;
+  }
+
+  current?.index.dispose();
+  const entry: ClusterIndexEntry = {
+    clusterRadius: props.clusterRadius,
+    filterPoint: props.filterPoint,
+    index: createPointAggregationIndex(props.points, {
+      filterPoint: props.filterPoint,
+      maxZoom: props.maxZoom,
+      minZoom: props.minZoom,
+      radius: props.clusterRadius,
+    }),
+    lastSummaryKey: null,
+    maxZoom: props.maxZoom,
+    minZoom: props.minZoom,
+    onViewportAggregationChange: props.onViewportAggregationChange,
+    points: props.points,
+  };
+  entries.set(descriptor.prefix, entry);
+  return entry;
+}
+
+function emitViewportSummary(
+  entry: ClusterIndexEntry,
+  summary: VisibleAggregationSummary,
+  callback: ClusterLayerProps<AnyRecord>["onViewportAggregationChange"],
+) {
+  const key = serializeVisibleAggregationSummary(summary);
+  if (entry.lastSummaryKey === key) return;
+
+  entry.lastSummaryKey = key;
+  startTransition(() => callback?.(summary));
+}
+
+function serializeVisibleAggregationSummary(summary: VisibleAggregationSummary) {
+  return JSON.stringify({
+    bounds: summary.bounds.map((value) => Number(value.toFixed(6))),
+    metrics: Object.entries(summary.metrics)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([key, value]) => [key, Number(value.toFixed(6))]),
+    visibleClusterCount: summary.visibleClusterCount,
+    visiblePointCount: summary.visiblePointCount,
+    visibleUnclusteredCount: summary.visibleUnclusteredCount,
+    zoom: Number(summary.zoom.toFixed(6)),
+  });
+}
+
+function defaultAggregatedFeatureId(feature: AggregatedMapFeature<AnyRecord>) {
+  return feature.kind === "cluster" ? String(feature.clusterId) : feature.point.id;
+}
+
+function isClusterLayerDescriptor(
+  descriptor: MapsLayerDescriptor,
+): descriptor is ClusterLayerDescriptor {
+  return descriptor.kind === "cluster";
 }
 
 function resolveLayerPrefix(kind: string, key: string | null, path: string) {
@@ -521,6 +794,6 @@ function assertNoUnsupportedPointDrag(
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
-    'flatRuntime="maps" currently supports PointLayer and GeoJsonLayer only; other map layer types remain explicitly MapLibre-backed.',
+    'flatRuntime="maps" currently supports PointLayer, ClusterLayer and GeoJsonLayer; other map layer types remain explicitly MapLibre-backed.',
   );
 }
