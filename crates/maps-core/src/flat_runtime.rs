@@ -447,6 +447,23 @@ fn fit_zoom_for_span(available_pixels: f64, normalized_span: f64) -> f64 {
     (available_pixels / (CAMERA_TILE_SIZE * normalized_span)).log2()
 }
 
+fn source_covering_zoom(
+    camera_zoom: f64,
+    source: RasterSourceSpec,
+) -> Result<u8, FlatRasterRuntimeError> {
+    let source_zoom_offset = (CAMERA_TILE_SIZE / f64::from(source.tile_size)).log2();
+    if !source_zoom_offset.is_finite() {
+        return Err(FlatRasterRuntimeError::InvalidSource);
+    }
+
+    let covering_zoom = (camera_zoom + source_zoom_offset).floor();
+    if !covering_zoom.is_finite() {
+        return Err(FlatRasterRuntimeError::InvalidCamera);
+    }
+
+    Ok(covering_zoom.clamp(f64::from(source.min_zoom), f64::from(source.max_zoom)) as u8)
+}
+
 fn visible_tile_placements(
     camera: MapCamera,
     source: RasterSourceSpec,
@@ -457,8 +474,7 @@ fn visible_tile_placements(
     let size = camera
         .world_size()
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-    let tile_zoom = (camera.zoom.floor() as i32)
-        .clamp(i32::from(source.min_zoom), i32::from(source.max_zoom)) as u8;
+    let tile_zoom = source_covering_zoom(camera.zoom, source)?;
     let dimension = 1_i64
         .checked_shl(u32::from(tile_zoom))
         .ok_or(FlatRasterRuntimeError::InvalidSource)?;
@@ -549,10 +565,42 @@ mod tests {
         .unwrap();
         FlatRasterRuntime::new(
             camera,
-            RasterSourceSpec::new(0, 19, 256).unwrap(),
+            RasterSourceSpec::new(0, 19, 512).unwrap(),
             FlatRasterRuntimeLimits::default(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn source_tile_size_offsets_covering_zoom() {
+        let camera = MapCamera::new(
+            0.0,
+            0.0,
+            5.0,
+            0.0,
+            0.0,
+            ViewportSize::new(256.0, 256.0).unwrap(),
+        )
+        .unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(0, 19, 256).unwrap(),
+            FlatRasterRuntimeLimits::default(),
+        )
+        .unwrap();
+        let plan = runtime.frame_plan().unwrap();
+
+        assert!(plan.placements.iter().all(|placement| placement.tile.z == 6));
+        assert!(
+            plan.placements
+                .iter()
+                .all(|placement| (placement.screen_width - 256.0).abs() < 1e-9)
+        );
+        assert!(
+            plan.placements
+                .iter()
+                .all(|placement| (placement.screen_height - 256.0).abs() < 1e-9)
+        );
     }
 
     #[test]
