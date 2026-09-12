@@ -39,7 +39,7 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await expect(page.getByRole("button", { name: /Context Berlin at 13\.405,52\.520/ })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await polygon.click({ position: { x: 4, y: 4 } });
+  await polygon.click({ position: { x: 12, y: 12 } });
   await expect(interaction).toHaveText("geojson:click:acceptance-zone");
   await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText(
     "GeoJSON acceptance-zone",
