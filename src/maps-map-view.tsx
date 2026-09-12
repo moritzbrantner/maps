@@ -39,7 +39,10 @@ import type {
   MapContextMenuContext,
   MapFeatureContextMenuContext,
 } from "./map-interaction";
-import { MapsOverlayLayers } from "./maps-overlay-layers";
+import {
+  MapsOverlayLayers,
+  type MapsOverlayLayersController,
+} from "./maps-overlay-layers";
 import {
   MapSurfaceContext,
   type MapSurfaceContextValue,
@@ -79,6 +82,8 @@ export function MapsMapView({
   const tileSource = useMemo(() => resolveTileLayerOptions(resolvedMapStyle), [resolvedMapStyle]);
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
+  const overlayControllerRef = useRef<MapsOverlayLayersController | null>(null);
+  const featurePointerDownPrimitiveRef = useRef<string | null>(null);
   const lastFitBoundsKeyRef = useRef<string | null>(null);
   const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -468,6 +473,7 @@ export function MapsMapView({
 
   const rootClassName = joinClassNames("mb-maps", className);
   const attribution = tileSource?.options.attribution;
+  const fallbackCursor = typeof style?.cursor === "string" ? style.cursor : "";
 
   return (
     <MapSurfaceContext.Provider value={context}>
@@ -476,6 +482,72 @@ export function MapsMapView({
         className={rootClassName}
         data-map-ready={isReady ? "true" : "false"}
         data-map-runtime="maps"
+        onClickCapture={(event) => {
+          if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
+          const overlay = overlayControllerRef.current;
+          const hit = overlay?.pickAtClientPoint(event.clientX, event.clientY) ?? null;
+          const pointerDownPrimitive = featurePointerDownPrimitiveRef.current;
+          featurePointerDownPrimitiveRef.current = null;
+
+          if (!hit || !pointerDownPrimitive || hit.primitiveId !== pointerDownPrimitive) {
+            return;
+          }
+
+          if (overlay?.handleClickAtClientPoint(event.clientX, event.clientY)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+        onContextMenuCapture={(event) => {
+          if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
+          if (
+            overlayControllerRef.current?.handleContextMenuAtClientPoint(
+              event.clientX,
+              event.clientY,
+            )
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+        onPointerCancelCapture={() => {
+          featurePointerDownPrimitiveRef.current = null;
+        }}
+        onPointerDownCapture={(event) => {
+          if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
+          if (event.pointerType === "mouse" && event.button !== 0) {
+            featurePointerDownPrimitiveRef.current = null;
+            return;
+          }
+
+          const hit = overlayControllerRef.current?.pickAtClientPoint(event.clientX, event.clientY);
+          featurePointerDownPrimitiveRef.current = hit?.primitiveId ?? null;
+          if (hit) {
+            event.stopPropagation();
+          }
+        }}
+        onPointerLeave={(event) => {
+          overlayControllerRef.current?.clearHover();
+          event.currentTarget.style.cursor = fallbackCursor;
+        }}
+        onPointerMove={(event) => {
+          if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) {
+            overlayControllerRef.current?.clearHover();
+            event.currentTarget.style.cursor = fallbackCursor;
+            return;
+          }
+
+          const target = event.target;
+          const gestureOwnsPointer =
+            target instanceof HTMLCanvasElement &&
+            typeof target.hasPointerCapture === "function" &&
+            target.hasPointerCapture(event.pointerId);
+          const hit = gestureOwnsPointer
+            ? (overlayControllerRef.current?.clearHover(), null)
+            : overlayControllerRef.current?.handleHoverAtClientPoint(event.clientX, event.clientY) ??
+              null;
+          event.currentTarget.style.cursor = hit ? "pointer" : fallbackCursor;
+        }}
         onClick={(event) => {
           if (event.target === event.currentTarget || event.target instanceof HTMLCanvasElement) {
             handleBackgroundClick();
@@ -510,7 +582,7 @@ export function MapsMapView({
           onViewStateChange={setViewState}
           viewState={currentViewState}
         />
-        <MapsOverlayLayers project={projectCoordinate} surface={context}>
+        <MapsOverlayLayers ref={overlayControllerRef} project={projectCoordinate} surface={context}>
           {mapChildren.layers}
         </MapsOverlayLayers>
         {showAttributionControl && attribution ? (
@@ -540,6 +612,10 @@ export function MapsMapView({
       </div>
     </MapSurfaceContext.Provider>
   );
+}
+
+function isMapsSurfaceEventTarget(target: EventTarget | null, root: HTMLDivElement) {
+  return target === root || (target instanceof HTMLCanvasElement && target.dataset.flatRuntime === "maps");
 }
 
 function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapStyle {
