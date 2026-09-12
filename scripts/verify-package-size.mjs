@@ -9,6 +9,7 @@ const budgets = {
   compressedSize: 340_000,
   entryCount: 84,
   fullStylesheetSize: 125_000,
+  mapLibreStylesheetSize: 65_000,
   stylesheetSize: 116_000,
   unpackedSize: 1_500_000,
 };
@@ -41,8 +42,10 @@ try {
 const files = Array.isArray(packageInfo?.files) ? packageInfo.files : [];
 const stylesheet = files.find((file) => file.path === "styles.css");
 const fullStylesheet = files.find((file) => file.path === "styles.full.css");
+const mapLibreStylesheet = files.find((file) => file.path === "maplibre.css");
 const wasmRuntime = files.find((file) => file.path === "dist/wasm/maps_wasm_bg.wasm");
 const requiredFiles = [
+  "maplibre.css",
   "styles.css",
   "styles.full.css",
   "dist/wasm/maps_wasm_bg.wasm",
@@ -62,6 +65,12 @@ checkBudget("unpacked package size", packageInfo?.unpackedSize, budgets.unpacked
 checkBudget("package entry count", files.length, budgets.entryCount, "entries");
 checkBudget("styles.css size", stylesheet?.size, budgets.stylesheetSize, "bytes");
 checkBudget("styles.full.css size", fullStylesheet?.size, budgets.fullStylesheetSize, "bytes");
+checkBudget(
+  "maplibre.css size",
+  mapLibreStylesheet?.size,
+  budgets.mapLibreStylesheetSize,
+  "bytes",
+);
 
 console.log("Package size summary:");
 console.log(`- compressed size: ${formatBytes(packageInfo?.size)}`);
@@ -69,6 +78,7 @@ console.log(`- unpacked size: ${formatBytes(packageInfo?.unpackedSize)}`);
 console.log(`- entry count: ${files.length}`);
 console.log(`- stylesheet size: ${formatBytes(stylesheet?.size)}`);
 console.log(`- full stylesheet size: ${formatBytes(fullStylesheet?.size)}`);
+console.log(`- MapLibre fallback stylesheet size: ${formatBytes(mapLibreStylesheet?.size)}`);
 console.log(`- Maps WASM runtime size (reported only): ${formatBytes(wasmRuntime?.size)}`);
 
 if (errors.length > 0) {
