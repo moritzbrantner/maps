@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
+import type { ViewportAggregationQuery } from "./aggregation";
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
 import {
   advanceMapsKineticPan,
@@ -36,6 +37,7 @@ type MapsCanvasFitBoundsOptions = MapFitBoundsOptions & {
 
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
+  getViewportAggregationQuery(): ViewportAggregationQuery;
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
@@ -79,6 +81,7 @@ export function MapsCanvasFlatRuntime({
   const imagesRef = useRef<Map<string, ImageBitmap>>(new Map());
   const loadsRef = useRef<Map<string, ActiveTileLoad>>(new Map());
   const syncFrameRef = useRef<(() => MapsFlatRasterFrame) | null>(null);
+  const lastFrameRef = useRef<MapsFlatRasterFrame | null>(null);
   const emitViewStateRef = useRef<
     ((frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => void) | null
   >(null);
@@ -193,7 +196,7 @@ export function MapsCanvasFlatRuntime({
       runtimeRef.current = runtime;
       resizeCanvasBackingStore(canvas);
 
-      const syncFrame = createFrameSynchronizer({
+      const rawSyncFrame = createFrameSynchronizer({
         canvas,
         images: imagesRef.current,
         loads: loadsRef.current,
@@ -201,6 +204,11 @@ export function MapsCanvasFlatRuntime({
         source: () => sourceRef.current,
         onError: (error) => onErrorRef.current?.(error),
       });
+      const syncFrame = () => {
+        const frame = rawSyncFrame();
+        lastFrameRef.current = frame;
+        return frame;
+      };
       const emitViewState = (frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => {
         const nextViewState = frameViewState(frame);
         lastEmittedViewStateRef.current = nextViewState;
@@ -225,6 +233,14 @@ export function MapsCanvasFlatRuntime({
             options.maxZoom ?? normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
           runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
           emitViewState(syncFrame(), options.reason ?? "fit-bounds");
+        },
+        getViewportAggregationQuery() {
+          const frame = lastFrameRef.current ?? syncFrame();
+          const bounds = frame.visibleBounds;
+          return {
+            bounds: [bounds.west, bounds.south, bounds.east, bounds.north],
+            zoom: frame.camera.zoom,
+          };
         },
         project(coordinates) {
           const [x, y] = runtime.project(coordinates[0], coordinates[1]);
@@ -264,6 +280,7 @@ export function MapsCanvasFlatRuntime({
       cancelKineticPan();
       onControllerReadyRef.current?.(null);
       syncFrameRef.current = null;
+      lastFrameRef.current = null;
       emitViewStateRef.current = null;
       gestureRef.current.clear();
       velocityTrackerRef.current.clear();
