@@ -284,9 +284,11 @@ fn validate_raster_scenario(
     scenario: &RasterTileChurnScenario,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if scenario.schema_version != SCENARIO_SCHEMA_VERSION {
-        return Err(
-            format!("unsupported raster scenario schema {}", scenario.schema_version).into(),
-        );
+        return Err(format!(
+            "unsupported raster scenario schema {}",
+            scenario.schema_version
+        )
+        .into());
     }
     if scenario.id != RASTER_TILE_CHURN_V1 {
         return Err(format!("unsupported raster scenario {}", scenario.id).into());
@@ -303,7 +305,9 @@ fn validate_raster_scenario(
         || scenario.observations.is_empty()
         || scenario.runtime_phases.is_empty()
     {
-        return Err("raster scenario must declare journey, observations, and runtime phases".into());
+        return Err(
+            "raster scenario must declare journey, observations, and runtime phases".into(),
+        );
     }
 
     Ok(())
@@ -404,11 +408,7 @@ fn complete_pending(runtime: &mut FlatRasterRuntime, evidence: &mut EvidenceStat
     complete_tiles(runtime, evidence, &tiles);
 }
 
-fn complete_tiles(
-    runtime: &mut FlatRasterRuntime,
-    evidence: &mut EvidenceState,
-    tiles: &[TileId],
-) {
+fn complete_tiles(runtime: &mut FlatRasterRuntime, evidence: &mut EvidenceState, tiles: &[TileId]) {
     for tile in tiles {
         if evidence.pending.remove(tile) {
             runtime.mark_loaded(*tile);
@@ -442,14 +442,42 @@ mod tests {
 
         assert_eq!(observation.scenario_id, RASTER_TILE_CHURN_V1);
         assert!(!observation.final_visible_tile_set.is_empty());
-        assert!(observation.frames.iter().any(|frame| !frame.cancelled_requests.is_empty()));
-        assert!(observation.frames.iter().any(|frame| !frame.deduplicated_requests.is_empty()));
-        assert!(observation.frames.iter().any(|frame| !frame.cache_hits.is_empty()));
-        assert!(observation.frames.iter().any(|frame| !frame.cache_misses.is_empty()));
-        assert!(observation.frames.iter().any(|frame| !frame.evictions.is_empty()));
-        assert!(observation.frames.iter().all(|frame| {
-            frame.requested_tile_identities == frame.request_priority_order
-        }));
+        assert!(
+            observation
+                .frames
+                .iter()
+                .any(|frame| !frame.cancelled_requests.is_empty())
+        );
+        assert!(
+            observation
+                .frames
+                .iter()
+                .any(|frame| !frame.deduplicated_requests.is_empty())
+        );
+        assert!(
+            observation
+                .frames
+                .iter()
+                .any(|frame| !frame.cache_hits.is_empty())
+        );
+        assert!(
+            observation
+                .frames
+                .iter()
+                .any(|frame| !frame.cache_misses.is_empty())
+        );
+        assert!(
+            observation
+                .frames
+                .iter()
+                .any(|frame| !frame.evictions.is_empty())
+        );
+        assert!(
+            observation
+                .frames
+                .iter()
+                .all(|frame| { frame.requested_tile_identities == frame.request_priority_order })
+        );
     }
 
     #[test]
