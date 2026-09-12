@@ -144,6 +144,15 @@ export function MapsRuntimeAcceptance() {
             type="button"
             disabled={!controller}
             onClick={() => {
+              controller?.setViewState(INITIAL_VIEW_STATE);
+            }}
+          >
+            Reset acceptance view
+          </button>
+          <button
+            type="button"
+            disabled={!controller}
+            onClick={() => {
               controller?.fitBounds([-10, 40, 10, 50], { maxZoom: 7 });
             }}
           >
