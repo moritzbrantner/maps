@@ -14,6 +14,18 @@ describe("createMapsPointerGesture", () => {
     });
   });
 
+  test("reports the active pointer count for release handoff", () => {
+    const gesture = createMapsPointerGesture();
+    expect(gesture.pointerCount()).toBe(0);
+    gesture.pointerDown(1, { x: 10, y: 10 });
+    gesture.pointerDown(2, { x: 20, y: 20 });
+    expect(gesture.pointerCount()).toBe(2);
+    gesture.pointerUp(2);
+    expect(gesture.pointerCount()).toBe(1);
+    gesture.clear();
+    expect(gesture.pointerCount()).toBe(0);
+  });
+
   test("adding a second pointer does not create a jump", () => {
     const gesture = createMapsPointerGesture();
     gesture.pointerDown(1, { x: 40, y: 50 });
