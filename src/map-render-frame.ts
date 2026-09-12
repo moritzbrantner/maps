@@ -101,7 +101,7 @@ export function createCircleVectorRenderFrame<TFeature>(
         interactive: options.isFeatureInteractive?.(feature) ?? true,
         kind: "circle" as const,
         label: options.getLabel?.(feature) ?? null,
-        primitiveId: `${primitivePrefix}:${featureId}`,
+        primitiveId: createPrimitiveId(primitivePrefix, featureId),
         radius: Math.max(0, options.getRadius(feature)),
         strokeColor: options.strokeColor ?? "#ffffff",
         strokeOpacity: options.strokeOpacity ?? 1,
@@ -128,7 +128,7 @@ export function createPointClusterVectorRenderFrame<TProperties = Record<string,
       interactive: true,
       kind: "circle" as const,
       label: renderFeature.label,
-      primitiveId: `${primitivePrefix}:${renderFeature.id}`,
+      primitiveId: createPrimitiveId(primitivePrefix, renderFeature.id),
       radius: renderFeature.radius,
       strokeColor: "#ffffff",
       strokeOpacity: 1,
@@ -173,7 +173,7 @@ export function createGeoJsonVectorRenderFrame<
             return [
               createGeoJsonCircle(
                 base,
-                `${primitivePrefix}:${featureId}:point`,
+                createPrimitiveId(primitivePrefix, featureId, "point"),
                 feature.geometry.coordinates,
                 style,
               ),
@@ -182,7 +182,7 @@ export function createGeoJsonVectorRenderFrame<
             return feature.geometry.coordinates.map((coordinates, index) =>
               createGeoJsonCircle(
                 base,
-                `${primitivePrefix}:${featureId}:point:${index}`,
+                createPrimitiveId(primitivePrefix, featureId, "point", index),
                 coordinates,
                 style,
               ),
@@ -191,7 +191,7 @@ export function createGeoJsonVectorRenderFrame<
             return [
               createGeoJsonLine(
                 base,
-                `${primitivePrefix}:${featureId}:line`,
+                createPrimitiveId(primitivePrefix, featureId, "line"),
                 feature.geometry.coordinates,
                 style,
               ),
@@ -200,7 +200,7 @@ export function createGeoJsonVectorRenderFrame<
             return feature.geometry.coordinates.map((coordinates, index) =>
               createGeoJsonLine(
                 base,
-                `${primitivePrefix}:${featureId}:line:${index}`,
+                createPrimitiveId(primitivePrefix, featureId, "line", index),
                 coordinates,
                 style,
               ),
@@ -209,7 +209,7 @@ export function createGeoJsonVectorRenderFrame<
             return [
               createGeoJsonPolygon(
                 base,
-                `${primitivePrefix}:${featureId}:polygon`,
+                createPrimitiveId(primitivePrefix, featureId, "polygon"),
                 feature.geometry.coordinates,
                 style,
               ),
@@ -218,7 +218,7 @@ export function createGeoJsonVectorRenderFrame<
             return feature.geometry.coordinates.map((rings, index) =>
               createGeoJsonPolygon(
                 base,
-                `${primitivePrefix}:${featureId}:polygon:${index}`,
+                createPrimitiveId(primitivePrefix, featureId, "polygon", index),
                 rings,
                 style,
               ),
@@ -243,7 +243,7 @@ function createGeoJsonCircle<TFeature>(
     kind: "circle",
     label: null,
     primitiveId,
-    radius: style.pointRadius,
+    radius: Math.max(0, style.pointRadius),
     strokeColor: "#ffffff",
     strokeOpacity: 1,
     strokeWidth: 2,
@@ -284,6 +284,10 @@ function createGeoJsonPolygon<TFeature>(
     strokeOpacity: 0.9,
     strokeWidth: style.polygonStrokeWidth,
   };
+}
+
+function createPrimitiveId(...parts: Array<string | number>) {
+  return JSON.stringify(parts);
 }
 
 function copyCoordinate(coordinate: readonly [number, number]): MapRenderCoordinate {
