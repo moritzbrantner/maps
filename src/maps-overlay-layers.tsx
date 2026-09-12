@@ -590,7 +590,7 @@ function assertNoUnsupportedPointDrag(
 
 const interactiveFeatureStyle = {
   cursor: "pointer",
-  pointerEvents: "auto" as const,
+  pointerEvents: "all" as const,
 };
 
 const nonInteractiveFeatureStyle = {
