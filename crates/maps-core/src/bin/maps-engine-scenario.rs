@@ -383,13 +383,13 @@ fn capture_frame(
     frames.push(RasterFrameObservation {
         sequence: *sequence,
         operation: operation.to_owned(),
-        visible_tile_set: tile_observations(visible.into_iter()),
+        visible_tile_set: tile_observations(visible),
         requested_tile_identities: tile_observations(plan.requests.iter().copied()),
         request_priority_order: tile_observations(plan.requests.iter().copied()),
         cancelled_requests: tile_observations(plan.cancellations.iter().copied()),
-        deduplicated_requests: tile_observations(deduplicated.into_iter()),
-        cache_hits: tile_observations(cache_hits.into_iter()),
-        cache_misses: tile_observations(cache_misses.into_iter()),
+        deduplicated_requests: tile_observations(deduplicated),
+        cache_hits: tile_observations(cache_hits),
+        cache_misses: tile_observations(cache_misses),
         evictions: tile_observations(plan.evictions.iter().copied()),
     });
     *sequence += 1;
