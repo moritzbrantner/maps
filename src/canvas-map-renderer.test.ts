@@ -72,7 +72,7 @@ describe("Canvas map renderer", () => {
     expect(hitTestCanvasMapScene(scene, { x: 10, y: 9 })).toBeNull();
   });
 
-  it("uses even-odd polygon semantics so holes remain unpicked", () => {
+  it("uses even-odd polygon semantics while keeping visible hole strokes pickable", () => {
     const frame: MapVectorRenderFrame = {
       kind: "vector",
       primitives: [
@@ -85,19 +85,20 @@ describe("Canvas map renderer", () => {
             [0, 0],
           ],
           [
-            [6, 6],
-            [14, 6],
-            [14, 14],
-            [6, 14],
-            [6, 6],
+            [4, 4],
+            [16, 4],
+            [16, 16],
+            [4, 16],
+            [4, 4],
           ],
         ]),
       ],
     };
     const scene = identityScene(frame);
 
-    expect(hitTestCanvasMapScene(scene, { x: 3, y: 3 })?.renderPrimitive.featureId).toBe("area");
+    expect(hitTestCanvasMapScene(scene, { x: 2, y: 2 })?.renderPrimitive.featureId).toBe("area");
     expect(hitTestCanvasMapScene(scene, { x: 10, y: 10 })).toBeNull();
+    expect(hitTestCanvasMapScene(scene, { x: 5, y: 10 })?.renderPrimitive.featureId).toBe("area");
   });
 
   it("keeps projected scene identity tied to the semantic primitive", () => {
