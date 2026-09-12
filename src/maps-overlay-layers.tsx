@@ -630,6 +630,11 @@ function useClusterRenderFrames(
       }
     }
 
+    if (descriptors.length === 0) {
+      setFrames((current) => (current.size === 0 ? current : new Map()));
+      return;
+    }
+
     const query = getViewportAggregationQuery();
     const nextFrames = new Map<string, MapPointClusterRenderFrame<AnyRecord>>();
 
@@ -794,6 +799,6 @@ function assertNoUnsupportedPointDrag(
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
-    'flatRuntime="maps" currently supports PointLayer, ClusterLayer and GeoJsonLayer; other map layer types remain explicitly MapLibre-backed.',
+    'flatRuntime="maps" supports PointLayer and GeoJsonLayer only as direct feature layers; ClusterLayer is also supported through the aggregation render path; other map layer types remain explicitly MapLibre-backed.',
   );
 }
