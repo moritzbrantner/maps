@@ -590,7 +590,11 @@ mod tests {
         .unwrap();
         let plan = runtime.frame_plan().unwrap();
 
-        assert!(plan.placements.iter().all(|placement| placement.tile.z == 6));
+        assert!(
+            plan.placements
+                .iter()
+                .all(|placement| placement.tile.z == 6)
+        );
         assert!(
             plan.placements
                 .iter()
