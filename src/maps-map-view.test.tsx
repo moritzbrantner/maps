@@ -502,7 +502,7 @@ describe("Maps-owned MapView runtime", () => {
           <div>Map layer</div>
         </MapView>,
       ),
-    ).toThrow(/supports PointLayer and GeoJsonLayer only/);
+    ).toThrow(/supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer/);
 
     expect(() =>
       render(

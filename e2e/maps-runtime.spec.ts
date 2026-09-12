@@ -22,7 +22,7 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await expect(canvas).toBeVisible();
   await expect(overlay).toHaveCount(1);
   await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
-  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "3");
+  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
   await expect(map.locator('svg[data-map-overlay-runtime="maps"]')).toHaveCount(0);
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
   await expect(viewState).toContainText("13.4050,52.5200 | zoom 6.0000");
@@ -34,8 +34,18 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
 
   const overlayBox = await overlay.boundingBox();
   expect(overlayBox).toBeTruthy();
-  const pointPosition = await overlayPointPosition(page);
+  const flowPosition = await overlayFlowPosition(page);
 
+  await page.mouse.move(overlayBox!.x + flowPosition.x, overlayBox!.y + flowPosition.y);
+  await expect(interaction).toHaveText("flow:hover:acceptance-flow");
+  await expect(page.getByText("Hover flow acceptance-route")).toBeVisible();
+
+  await page.mouse.click(overlayBox!.x + flowPosition.x, overlayBox!.y + flowPosition.y);
+  await expect(interaction).toHaveText("flow:click:acceptance-flow");
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Flow acceptance-route");
+  await page.keyboard.press("Escape");
+
+  const pointPosition = await overlayPointPosition(page);
   await page.mouse.move(overlayBox!.x + pointPosition.x, overlayBox!.y + pointPosition.y);
   await expect(interaction).toHaveText("point:hover:acceptance-berlin");
   await expect(page.getByText("Hover Berlin")).toBeVisible();
@@ -160,7 +170,7 @@ test("ClusterLayer uses Rust aggregation and shared Canvas picking @smoke", asyn
   const interaction = page.getByTestId("maps-runtime-interaction");
 
   await expect(map).toHaveAttribute("data-map-ready", "true");
-  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "3");
+  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
   await expect(page.getByTestId("maps-runtime-cluster-summary")).toHaveText(
     "1 clusters / 3 points",
   );
@@ -292,6 +302,15 @@ async function overlayClusterPosition(page: Page) {
   const cluster = (await readOverlayTrace(page)).arcs.find((arc) => arc.radius > 12);
   if (!cluster) throw new Error("Canvas overlay cluster was not drawn.");
   return { x: cluster.x, y: cluster.y };
+}
+
+async function overlayFlowPosition(page: Page) {
+  const endpoints = (await readOverlayTrace(page)).arcs.filter(
+    (arc) => arc.radius >= 4 && arc.radius <= 6.5,
+  );
+  if (endpoints.length < 2) throw new Error("Canvas overlay flow endpoints were not drawn.");
+  const [from, to] = endpoints;
+  return { x: (from!.x + to!.x) / 2, y: (from!.y + to!.y) / 2 };
 }
 
 async function overlayPolygonBounds(page: Page) {

@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import {
   ClusterLayer,
+  FlowLayer,
   GeoJsonLayer,
   MapControls,
   MapView,
@@ -21,11 +22,22 @@ const ACCEPTANCE_CLUSTER_POINTS = [
   { id: "hamburg-c", label: "Hamburg C", latitude: 53.544, longitude: 9.982 },
 ] as const;
 
+const ACCEPTANCE_FLOWS = [
+  {
+    from: [11.8, 52] as [number, number],
+    id: "acceptance-route",
+    metrics: { weight: 1 },
+    to: [12.8, 52] as [number, number],
+  },
+] as const;
+
 export function MapsRuntimeAcceptance() {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [clusterSelectedId, setClusterSelectedId] = useState<string | null>(null);
   const [clusterSummary, setClusterSummary] = useState("pending");
+  const [flowHoveredId, setFlowHoveredId] = useState<string | null>(null);
+  const [flowSelectedId, setFlowSelectedId] = useState<string | null>(null);
   const [pointHoveredId, setPointHoveredId] = useState<string | null>("acceptance-berlin");
   const [pointSelectedId, setPointSelectedId] = useState<string | null>(null);
   const [zoneSelectedId, setZoneSelectedId] = useState<string | null>("acceptance-zone");
@@ -76,6 +88,29 @@ export function MapsRuntimeAcceptance() {
             </span>
           )}
           selectedFeatureId={clusterSelectedId}
+        />
+        <FlowLayer
+          flowColor="#0f766e"
+          flows={ACCEPTANCE_FLOWS}
+          getFeatureId={() => "acceptance-flow"}
+          hoveredFeatureId={flowHoveredId}
+          maxWidth={8}
+          minWidth={8}
+          onHoveredFeatureIdChange={(featureId, context) => {
+            setFlowHoveredId(featureId);
+            setLastInteraction(`flow:${context.source}:${featureId ?? "none"}`);
+          }}
+          onSelectedFeatureIdChange={(featureId, context) => {
+            setFlowSelectedId(featureId);
+            setLastInteraction(`flow:${context.source}:${featureId ?? "none"}`);
+          }}
+          renderFeaturePopup={(feature) => (
+            <span data-testid="maps-runtime-feature-popup">Flow {feature.flow.id}</span>
+          )}
+          renderFeatureTooltip={(feature) => <span>Hover flow {feature.flow.id}</span>}
+          selectedFeatureId={flowSelectedId}
+          showDirection
+          showEndpoints
         />
         <GeoJsonLayer
           featureCollection={{

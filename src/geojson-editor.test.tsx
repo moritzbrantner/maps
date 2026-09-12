@@ -357,6 +357,10 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
 
     const map = flatMock.getMaps()[0];
 
+    await waitFor(() => {
+      expect(map?.handlers.get("mousemove")?.length).toBeGreaterThan(0);
+    });
+
     act(() => {
       map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 0.02, lng: 5.03 } });
     });
