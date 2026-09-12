@@ -3,11 +3,22 @@
 import {
   Children,
   Fragment,
+  forwardRef,
   isValidElement,
-  type MouseEvent as ReactMouseEvent,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 
+import {
+  createCanvasMapScene,
+  drawCanvasMapScene,
+  hitTestCanvasMapScene,
+  type CanvasMapScene,
+  type MapScreenPoint,
+} from "./canvas-map-renderer";
 import {
   GeoJsonLayer,
   createGeoJsonLayerFeatures,
@@ -15,18 +26,38 @@ import {
   type GeoJsonLayerProps,
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
-import { getGeometryCenter, resolveFeatureStyle } from "./geojson-rendering";
-import type {
-  MapFeatureContextMenuContext,
-  MapFeatureInteractionChange,
-} from "./map-interaction";
+import { getGeometryCenter } from "./geojson-rendering";
+import type { MapFeatureInteractionProps } from "./map-interaction";
+import {
+  createCircleVectorRenderFrame,
+  createGeoJsonVectorRenderFrame,
+  type MapVectorRenderFrame,
+  type MapVectorRenderPrimitive,
+} from "./map-render-frame";
 import type { MapSurfaceContextValue } from "./map-surface-context";
-import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
-import type { TemporalGeoJsonSupportedGeometry } from "./temporal-geojson-types";
+import {
+  PointLayer,
+  createPointLayerFeatures,
+  type PointLayerFeature,
+  type PointLayerProps,
+} from "./point-layer";
 
 export type MapsProjectCoordinate = (
   coordinates: [longitude: number, latitude: number],
 ) => { x: number; y: number } | null;
+
+export type MapsOverlayPick = {
+  featureId: string;
+  primitiveId: string;
+};
+
+export type MapsOverlayLayersController = {
+  clearHover(): void;
+  handleClickAtClientPoint(clientX: number, clientY: number): boolean;
+  handleContextMenuAtClientPoint(clientX: number, clientY: number): boolean;
+  handleHoverAtClientPoint(clientX: number, clientY: number): MapsOverlayPick | null;
+  pickAtClientPoint(clientX: number, clientY: number): MapsOverlayPick | null;
+};
 
 type AnyRecord = Record<string, unknown>;
 type MapsOverlayInteractionSurface = Pick<
@@ -38,538 +69,444 @@ type MapsOverlayInteractionSurface = Pick<
   | "isFeatureSelected"
 >;
 
-type MapsFeaturePointerInteraction = Partial<{
-  onClick: (event: ReactMouseEvent<SVGElement>) => void;
-  onContextMenu: (event: ReactMouseEvent<SVGElement>) => void;
-  onMouseEnter: (event: ReactMouseEvent<SVGElement>) => void;
-  onMouseLeave: () => void;
-  onMouseMove: (event: ReactMouseEvent<SVGElement>) => void;
-}>;
-
-type MapsFeatureSvgCommon = {
-  className: string;
-  featureId: string;
-  interaction: MapsFeaturePointerInteraction;
-};
-
 type MapsOverlayLayersProps = {
   children: ReactNode;
   project: MapsProjectCoordinate;
   surface: MapsOverlayInteractionSurface;
 };
 
-export function MapsOverlayLayers({ children, project, surface }: MapsOverlayLayersProps) {
-  const layers = renderChildren(children, project, surface);
+type MapsFeatureInteractionOptions<TFeature> = MapFeatureInteractionProps<TFeature> & {
+  onFeatureSelect?: (feature: TFeature | null) => void;
+};
 
-  if (layers.length === 0) {
-    return null;
-  }
+type MapsOverlayInteraction = {
+  clearHover(): void;
+  click(position: MapScreenPoint): void;
+  contextMenu(position: MapScreenPoint): void;
+  featureId: string;
+  hover(position: MapScreenPoint): void;
+  key: string;
+};
 
-  return (
-    <svg
-      aria-hidden="true"
-      data-map-overlay-runtime="maps"
-      style={{
-        inset: 0,
-        overflow: "hidden",
-        pointerEvents: "none",
-        position: "absolute",
-        zIndex: 1,
-      }}
-      width="100%"
-      height="100%"
-    >
-      {layers}
-    </svg>
-  );
+type MapsOverlaySnapshot = {
+  frame: MapVectorRenderFrame<unknown>;
+  hoveredPrimitiveIds: Set<string>;
+  interactions: Map<string, MapsOverlayInteraction>;
+  selectedPrimitiveIds: Set<string>;
+};
+
+type MutableMapsOverlaySnapshot = MapsOverlaySnapshot & {
+  primitiveIds: Set<string>;
+};
+
+type InternalPick = {
+  interaction: MapsOverlayInteraction;
+  pick: MapsOverlayPick;
+  position: MapScreenPoint;
+};
+
+export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
+  function MapsOverlayLayers({ children, project, surface }, ref) {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const sceneRef = useRef<CanvasMapScene<unknown> | null>(null);
+    const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
+    const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
+    const lastHoveredKeyRef = useRef<string | null>(null);
+    const snapshot = useMemo(() => createOverlaySnapshot(children, surface), [children, surface]);
+
+    const clearHover = () => {
+      const interaction = lastHoveredInteractionRef.current;
+      if (interaction) {
+        interaction.clearHover();
+      }
+      lastHoveredInteractionRef.current = null;
+      lastHoveredKeyRef.current = null;
+    };
+
+    const pickInternal = (clientX: number, clientY: number): InternalPick | null => {
+      const canvas = canvasRef.current;
+      const scene = sceneRef.current;
+      const renderedSnapshot = renderedSnapshotRef.current;
+      if (!canvas || !scene || !renderedSnapshot) return null;
+
+      const position = getClientCanvasPosition(canvas, clientX, clientY);
+      const hit = hitTestCanvasMapScene(scene, position);
+      if (!hit) return null;
+      const primitive = hit.renderPrimitive;
+      const interaction = renderedSnapshot.interactions.get(primitive.primitiveId);
+      if (!interaction) return null;
+
+      return {
+        interaction,
+        pick: {
+          featureId: primitive.featureId,
+          primitiveId: primitive.primitiveId,
+        },
+        position,
+      };
+    };
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        clearHover,
+        handleClickAtClientPoint(clientX, clientY) {
+          const hit = pickInternal(clientX, clientY);
+          if (!hit) return false;
+          hit.interaction.click(hit.position);
+          return true;
+        },
+        handleContextMenuAtClientPoint(clientX, clientY) {
+          const hit = pickInternal(clientX, clientY);
+          if (!hit) return false;
+          hit.interaction.contextMenu(hit.position);
+          return true;
+        },
+        handleHoverAtClientPoint(clientX, clientY) {
+          const hit = pickInternal(clientX, clientY);
+          if (!hit) {
+            clearHover();
+            return null;
+          }
+
+          const previousKey = lastHoveredKeyRef.current;
+          if (previousKey && previousKey !== hit.interaction.key) {
+            lastHoveredInteractionRef.current?.clearHover();
+          }
+
+          lastHoveredKeyRef.current = hit.interaction.key;
+          lastHoveredInteractionRef.current = hit.interaction;
+          hit.interaction.hover(hit.position);
+          return hit.pick;
+        },
+        pickAtClientPoint(clientX, clientY) {
+          return pickInternal(clientX, clientY)?.pick ?? null;
+        },
+      }),
+      [],
+    );
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        sceneRef.current = null;
+        renderedSnapshotRef.current = null;
+        return;
+      }
+
+      const draw = () => {
+        const size = resizeCanvasBackingStore(canvas);
+        const scene = createCanvasMapScene(snapshot.frame, project, size);
+        sceneRef.current = scene;
+        renderedSnapshotRef.current = snapshot;
+
+        const context = getCanvasContext(canvas);
+        if (!context) return;
+
+        const ratio = Math.max(1, window.devicePixelRatio || 1);
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        drawCanvasMapScene(context, scene, {
+          hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
+          selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
+        });
+      };
+
+      draw();
+
+      if (typeof ResizeObserver === "undefined") {
+        return;
+      }
+
+      const observer = new ResizeObserver(draw);
+      observer.observe(canvas);
+      return () => {
+        observer.disconnect();
+      };
+    }, [project, snapshot]);
+
+    useEffect(() => {
+      return () => {
+        const interaction = lastHoveredInteractionRef.current;
+        lastHoveredInteractionRef.current = null;
+        lastHoveredKeyRef.current = null;
+        interaction?.clearHover();
+      };
+    }, []);
+
+    if (snapshot.frame.primitives.length === 0) {
+      return null;
+    }
+
+    return (
+      <canvas
+        aria-hidden="true"
+        data-map-overlay-backend="canvas2d"
+        data-map-overlay-primitives={snapshot.frame.primitives.length}
+        data-map-overlay-runtime="maps"
+        ref={canvasRef}
+        style={{
+          height: "100%",
+          inset: 0,
+          pointerEvents: "none",
+          position: "absolute",
+          width: "100%",
+          zIndex: 1,
+        }}
+      />
+    );
+  },
+);
+
+function createOverlaySnapshot(
+  children: ReactNode,
+  surface: MapsOverlayInteractionSurface,
+): MapsOverlaySnapshot {
+  const mutable: MutableMapsOverlaySnapshot = {
+    frame: { kind: "vector", primitives: [] },
+    hoveredPrimitiveIds: new Set(),
+    interactions: new Map(),
+    primitiveIds: new Set(),
+    selectedPrimitiveIds: new Set(),
+  };
+
+  collectChildren(children, surface, mutable, "root");
+
+  return {
+    frame: mutable.frame,
+    hoveredPrimitiveIds: mutable.hoveredPrimitiveIds,
+    interactions: mutable.interactions,
+    selectedPrimitiveIds: mutable.selectedPrimitiveIds,
+  };
 }
 
-function renderChildren(
+function collectChildren(
   children: ReactNode,
-  project: MapsProjectCoordinate,
   surface: MapsOverlayInteractionSurface,
-): ReactNode[] {
-  return Children.toArray(children).flatMap((child) => {
+  snapshot: MutableMapsOverlaySnapshot,
+  path: string,
+) {
+  Children.toArray(children).forEach((child, index) => {
     if (!isValidElement(child)) {
       throwUnsupportedMapsLayer();
     }
 
+    const childPath = `${path}.${index}`;
     if (child.type === Fragment) {
-      return renderChildren((child.props as { children?: ReactNode }).children, project, surface);
+      collectChildren(
+        (child.props as { children?: ReactNode }).children,
+        surface,
+        snapshot,
+        childPath,
+      );
+      return;
     }
 
     if (child.type === PointLayer) {
-      return [
-        <MapsPointLayer
-          key={child.key ?? "maps-point-layer"}
-          {...(child.props as PointLayerProps<AnyRecord>)}
-          project={project}
-          surface={surface}
-        />,
-      ];
+      appendPointLayer(
+        child.props as PointLayerProps<AnyRecord>,
+        surface,
+        snapshot,
+        resolveLayerPrefix("point", child.key, childPath),
+      );
+      return;
     }
 
     if (child.type === GeoJsonLayer) {
-      return [
-        <MapsGeoJsonLayer
-          key={child.key ?? "maps-geojson-layer"}
-          {...(child.props as GeoJsonLayerProps<AnyRecord>)}
-          project={project}
-          surface={surface}
-        />,
-      ];
+      appendGeoJsonLayer(
+        child.props as GeoJsonLayerProps<AnyRecord>,
+        surface,
+        snapshot,
+        resolveLayerPrefix("geojson", child.key, childPath),
+      );
+      return;
     }
 
     throwUnsupportedMapsLayer();
   });
 }
 
-function MapsPointLayer({
-  draggable,
-  filterPoint,
-  getPointColor,
-  getPointRadius,
-  hoveredFeatureId,
-  onFeatureContextMenu,
-  onFeatureDrag,
-  onFeatureDragEnd,
-  onFeatureHover,
-  onFeatureSelect,
-  onHoveredFeatureIdChange,
-  onSelectedFeatureIdChange,
-  points,
-  pointColor = "#0f172a",
-  pointRadius = 6,
-  project,
-  renderFeatureContextMenu,
-  renderFeaturePopup,
-  renderFeatureTooltip,
-  selectedFeatureId,
-  getFeatureId,
-  surface,
-}: PointLayerProps<AnyRecord> & {
-  project: MapsProjectCoordinate;
-  surface: MapsOverlayInteractionSurface;
-}) {
-  assertNoUnsupportedPointDrag({
-    draggable,
-    onFeatureDrag,
-    onFeatureDragEnd,
+function appendPointLayer(
+  props: PointLayerProps<AnyRecord>,
+  surface: MapsOverlayInteractionSurface,
+  snapshot: MutableMapsOverlaySnapshot,
+  fallbackPrefix: string,
+) {
+  assertNoUnsupportedPointDrag(props);
+  const features = createPointLayerFeatures(props.points, { filterPoint: props.filterPoint });
+  const prefix = props.layerId ? `point:${props.layerId}` : fallbackPrefix;
+  const frame = createCircleVectorRenderFrame(features, {
+    getCoordinates: (feature) => feature.coordinates,
+    getFeatureId: (feature) => props.getFeatureId?.(feature) || feature.point.id,
+    getFillColor: (feature) => props.getPointColor?.(feature) ?? props.pointColor ?? "#0f172a",
+    getRadius: (feature) => props.getPointRadius?.(feature) ?? props.pointRadius ?? 6,
+    primitivePrefix: prefix,
   });
 
-  return createPointLayerFeatures(points, { filterPoint }).flatMap((feature) => {
-    const position = project(feature.coordinates);
-    if (!position) return [];
-    const featureId = getFeatureId?.(feature) || feature.point.id;
-    const resolveFeatureId = () => featureId;
-    const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, resolveFeatureId);
-    const selected = surface.isFeatureSelected(feature, selectedFeatureId, resolveFeatureId);
-    const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius);
-    const interaction = createFeaturePointerInteraction({
-      coordinates: feature.coordinates,
+  for (const primitive of frame.primitives) {
+    const feature = primitive.feature;
+    const resolveFeatureId = () => primitive.featureId;
+    const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, resolveFeatureId);
+    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, resolveFeatureId);
+    const interaction = createFeatureInteraction(
+      `${prefix}|${primitive.featureId}`,
       feature,
-      featureId,
-      getFeatureId: resolveFeatureId,
-      onFeatureContextMenu,
-      onFeatureHover,
-      onFeatureSelect,
-      onHoveredFeatureIdChange,
-      onSelectedFeatureIdChange,
-      renderFeatureContextMenu,
-      renderFeaturePopup,
-      renderFeatureTooltip,
+      primitive.featureId,
+      feature.coordinates,
+      props,
       surface,
-    });
-
-    return [
-      <circle
-        key={featureId}
-        className={mapsFeatureClassName("mb-maps__point-marker", hovered, selected)}
-        cx={position.x}
-        cy={position.y}
-        data-map-feature-id={featureId}
-        data-map-feature-interactive="true"
-        fill={getPointColor?.(feature) ?? pointColor}
-        fillOpacity={0.92}
-        r={radius}
-        stroke="#ffffff"
-        strokeWidth={selected ? 3 : 2}
-        style={interactiveFeatureStyle}
-        {...interaction}
-      />,
-    ];
-  });
-}
-
-function MapsGeoJsonLayer({
-  featureCollection,
-  getFeatureId,
-  getFeatureStyle,
-  hoveredFeatureId,
-  isFeatureInteractive,
-  lineColor,
-  lineOpacity,
-  lineWidth,
-  onFeatureContextMenu,
-  onFeatureHover,
-  onFeatureSelect,
-  onHoveredFeatureIdChange,
-  onSelectedFeatureIdChange,
-  pointColor,
-  pointRadius,
-  polygonFillColor,
-  polygonFillOpacity,
-  polygonStrokeColor,
-  polygonStrokeWidth,
-  project,
-  renderFeatureContextMenu,
-  renderFeaturePopup,
-  renderFeatureTooltip,
-  selectedFeatureId,
-  surface,
-}: GeoJsonLayerProps<AnyRecord> & {
-  project: MapsProjectCoordinate;
-  surface: MapsOverlayInteractionSurface;
-}) {
-  const baseStyle: GeoJsonLayerStyle = compactStyle({
-    lineColor,
-    lineOpacity,
-    lineWidth,
-    pointColor,
-    pointRadius,
-    polygonFillColor,
-    polygonFillOpacity,
-    polygonStrokeColor,
-    polygonStrokeWidth,
-  });
-
-  return createGeoJsonLayerFeatures(featureCollection).flatMap((feature) => {
-    const featureId = getFeatureId?.(feature) || feature.id;
-    const resolveFeatureId = () => featureId;
-    const hovered = surface.isFeatureHovered(feature, hoveredFeatureId, resolveFeatureId);
-    const selected = surface.isFeatureSelected(feature, selectedFeatureId, resolveFeatureId);
-    const style = resolveFeatureStyle(feature, baseStyle, getFeatureStyle);
-    const interactive = isFeatureInteractive?.(feature) ?? true;
-    const interaction = interactive
-      ? createFeaturePointerInteraction({
-          coordinates: getGeometryCenter(feature.geometry),
-          feature,
-          featureId,
-          getFeatureId: resolveFeatureId,
-          onFeatureContextMenu,
-          onFeatureHover,
-          onFeatureSelect,
-          onHoveredFeatureIdChange,
-          onSelectedFeatureIdChange,
-          renderFeatureContextMenu,
-          renderFeaturePopup,
-          renderFeatureTooltip,
-          surface,
-        })
-      : {};
-
-    return renderGeometry(
-      feature,
-      featureId,
-      style,
-      hovered,
-      selected,
-      project,
-      {
-        className: mapsFeatureClassName("mb-maps__geojson-feature", hovered, selected),
-        featureId,
-        interaction,
-      },
-      interactive,
     );
-  });
+
+    appendPrimitive(snapshot, primitive, interaction, hovered, selected);
+  }
 }
 
-function renderGeometry(
-  feature: GeoJsonLayerFeature<AnyRecord>,
-  featureId: string,
-  style: Required<GeoJsonLayerStyle>,
+function appendGeoJsonLayer(
+  props: GeoJsonLayerProps<AnyRecord>,
+  surface: MapsOverlayInteractionSurface,
+  snapshot: MutableMapsOverlaySnapshot,
+  fallbackPrefix: string,
+) {
+  const features = createGeoJsonLayerFeatures(props.featureCollection);
+  const prefix = props.layerId ? `geojson:${props.layerId}` : fallbackPrefix;
+  const frame = createGeoJsonVectorRenderFrame(features, {
+    getFeatureId: props.getFeatureId,
+    getFeatureStyle: props.getFeatureStyle,
+    isFeatureInteractive: props.isFeatureInteractive,
+    primitivePrefix: prefix,
+    style: compactStyle({
+      lineColor: props.lineColor,
+      lineOpacity: props.lineOpacity,
+      lineWidth: props.lineWidth,
+      pointColor: props.pointColor,
+      pointRadius: props.pointRadius,
+      polygonFillColor: props.polygonFillColor,
+      polygonFillOpacity: props.polygonFillOpacity,
+      polygonStrokeColor: props.polygonStrokeColor,
+      polygonStrokeWidth: props.polygonStrokeWidth,
+    }),
+  });
+
+  for (const primitive of frame.primitives) {
+    const feature = primitive.feature;
+    const resolveFeatureId = () => primitive.featureId;
+    const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, resolveFeatureId);
+    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, resolveFeatureId);
+    const interaction = primitive.interactive
+      ? createFeatureInteraction(
+          `${prefix}|${primitive.featureId}`,
+          feature,
+          primitive.featureId,
+          getGeometryCenter(feature.geometry),
+          props,
+          surface,
+        )
+      : null;
+
+    appendPrimitive(snapshot, primitive, interaction, hovered, selected);
+  }
+}
+
+function appendPrimitive<TFeature>(
+  snapshot: MutableMapsOverlaySnapshot,
+  primitive: MapVectorRenderPrimitive<TFeature>,
+  interaction: MapsOverlayInteraction | null,
   hovered: boolean,
   selected: boolean,
-  project: MapsProjectCoordinate,
-  common: MapsFeatureSvgCommon,
-  interactive: boolean,
-): ReactNode[] {
-  const geometry = feature.geometry;
-
-  switch (geometry.type) {
-    case "Point":
-      return renderGeoJsonPoint(
-        geometry.coordinates,
-        featureId,
-        style,
-        selected,
-        project,
-        common,
-        interactive,
-      );
-    case "MultiPoint":
-      return geometry.coordinates.flatMap((coordinates, index) =>
-        renderGeoJsonPoint(
-          coordinates,
-          `${featureId}:${index}`,
-          style,
-          selected,
-          project,
-          common,
-          interactive,
-        ),
-      );
-    case "LineString":
-      return renderLine(geometry, featureId, style, selected, project, common, interactive);
-    case "MultiLineString":
-      return geometry.coordinates.flatMap((coordinates, index) =>
-        renderLine(
-          { coordinates, type: "LineString" },
-          `${featureId}:${index}`,
-          style,
-          selected,
-          project,
-          common,
-          interactive,
-        ),
-      );
-    case "Polygon":
-      return renderPolygon(geometry, featureId, style, selected, project, common, interactive);
-    case "MultiPolygon":
-      return geometry.coordinates.flatMap((coordinates, index) =>
-        renderPolygon(
-          { coordinates, type: "Polygon" },
-          `${featureId}:${index}`,
-          style,
-          selected,
-          project,
-          common,
-          interactive,
-        ),
-      );
+) {
+  if (snapshot.primitiveIds.has(primitive.primitiveId)) {
+    throw new Error(`Duplicate Maps render primitive identity: ${primitive.primitiveId}`);
   }
+
+  snapshot.primitiveIds.add(primitive.primitiveId);
+  snapshot.frame.primitives.push(primitive as MapVectorRenderPrimitive<unknown>);
+  if (interaction) snapshot.interactions.set(primitive.primitiveId, interaction);
+  if (hovered) snapshot.hoveredPrimitiveIds.add(primitive.primitiveId);
+  if (selected) snapshot.selectedPrimitiveIds.add(primitive.primitiveId);
 }
 
-function renderGeoJsonPoint(
-  coordinates: [number, number],
+function createFeatureInteraction<TFeature>(
   key: string,
-  style: Required<GeoJsonLayerStyle>,
-  selected: boolean,
-  project: MapsProjectCoordinate,
-  common: MapsFeatureSvgCommon,
-  interactive: boolean,
-): ReactNode[] {
-  const position = project(coordinates);
-  if (!position) return [];
-
-  return [
-    <circle
-      key={key}
-      className={common.className}
-      cx={position.x}
-      cy={position.y}
-      data-map-feature-id={common.featureId}
-      data-map-feature-interactive={String(interactive)}
-      fill={style.pointColor}
-      fillOpacity={0.94}
-      r={style.pointRadius}
-      stroke="#ffffff"
-      strokeWidth={selected ? 3 : 2}
-      style={interactive ? interactiveFeatureStyle : nonInteractiveFeatureStyle}
-      {...common.interaction}
-    />,
-  ];
-}
-
-function renderLine(
-  geometry: Extract<TemporalGeoJsonSupportedGeometry, { type: "LineString" }>,
-  key: string,
-  style: Required<GeoJsonLayerStyle>,
-  selected: boolean,
-  project: MapsProjectCoordinate,
-  common: MapsFeatureSvgCommon,
-  interactive: boolean,
-): ReactNode[] {
-  const path = projectPath(geometry.coordinates, project, false);
-  if (!path) return [];
-
-  return [
-    <path
-      key={key}
-      className={common.className}
-      d={path}
-      data-map-feature-id={common.featureId}
-      data-map-feature-interactive={String(interactive)}
-      fill="none"
-      stroke={style.lineColor}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeOpacity={style.lineOpacity}
-      strokeWidth={selected ? style.lineWidth + 1.5 : style.lineWidth}
-      style={interactive ? interactiveFeatureStyle : nonInteractiveFeatureStyle}
-      {...common.interaction}
-    />,
-  ];
-}
-
-function renderPolygon(
-  geometry: Extract<TemporalGeoJsonSupportedGeometry, { type: "Polygon" }>,
-  key: string,
-  style: Required<GeoJsonLayerStyle>,
-  selected: boolean,
-  project: MapsProjectCoordinate,
-  common: MapsFeatureSvgCommon,
-  interactive: boolean,
-): ReactNode[] {
-  const paths = geometry.coordinates.map((ring) => projectPath(ring, project, true));
-  if (paths.some((path) => !path)) return [];
-
-  return [
-    <path
-      key={key}
-      className={common.className}
-      d={paths.join(" ")}
-      data-map-feature-id={common.featureId}
-      data-map-feature-interactive={String(interactive)}
-      fill={style.polygonFillColor}
-      fillOpacity={style.polygonFillOpacity}
-      fillRule="evenodd"
-      stroke={style.polygonStrokeColor}
-      strokeOpacity={0.9}
-      strokeWidth={selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth}
-      style={interactive ? interactiveFeatureStyle : nonInteractiveFeatureStyle}
-      {...common.interaction}
-    />,
-  ];
-}
-
-function createFeaturePointerInteraction<TFeature>({
-  coordinates,
-  feature,
-  featureId,
-  getFeatureId,
-  onFeatureContextMenu,
-  onFeatureHover,
-  onFeatureSelect,
-  onHoveredFeatureIdChange,
-  onSelectedFeatureIdChange,
-  renderFeatureContextMenu,
-  renderFeaturePopup,
-  renderFeatureTooltip,
-  surface,
-}: {
-  coordinates: [longitude: number, latitude: number];
-  feature: TFeature;
-  featureId: string;
-  getFeatureId: (feature: TFeature) => string;
-  onFeatureContextMenu?: (feature: TFeature) => void;
-  onFeatureHover?: (feature: TFeature | null) => void;
-  onFeatureSelect?: (feature: TFeature | null) => void;
-  onHoveredFeatureIdChange?: (
-    featureId: string | null,
-    context: MapFeatureInteractionChange<TFeature>,
-  ) => void;
-  onSelectedFeatureIdChange?: (
-    featureId: string | null,
-    context: MapFeatureInteractionChange<TFeature>,
-  ) => void;
-  renderFeatureContextMenu?: (
-    feature: TFeature,
-    context: MapFeatureContextMenuContext<TFeature>,
-  ) => ReactNode;
-  renderFeaturePopup?: (feature: TFeature) => ReactNode;
-  renderFeatureTooltip?: (feature: TFeature) => ReactNode;
-  surface: MapsOverlayInteractionSurface;
-}): MapsFeaturePointerInteraction {
-  const interactionId = () => featureId;
+  feature: TFeature,
+  featureId: string,
+  coordinates: [longitude: number, latitude: number],
+  options: MapsFeatureInteractionOptions<TFeature>,
+  surface: MapsOverlayInteractionSurface,
+): MapsOverlayInteraction {
+  const getFeatureId = () => featureId;
 
   return {
-    onClick(event) {
-      event.stopPropagation();
-      surface.handleFeatureClick(feature, getPointerPosition(event), {
-        getFeatureId: interactionId,
-        onFeatureSelect,
-        onSelectedFeatureIdChange,
-        renderFeaturePopup,
-      });
-    },
-    onContextMenu(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      surface.handleFeatureContextMenu(feature, getPointerPosition(event), {
-        coordinates,
-        getFeatureId: interactionId,
-        onFeatureContextMenu,
-        onFeatureSelect,
-        onSelectedFeatureIdChange,
-        renderFeatureContextMenu,
-        renderFeaturePopup,
-      });
-    },
-    onMouseEnter(event) {
-      surface.handleFeatureHover(feature, getPointerPosition(event), {
-        getFeatureId,
-        onHoveredFeatureIdChange,
-        onFeatureHover,
-        renderFeatureTooltip,
-      });
-    },
-    onMouseLeave() {
+    clearHover() {
       surface.handleFeatureHover(null, null, {
         getFeatureId,
-        onHoveredFeatureIdChange,
-        onFeatureHover,
-        renderFeatureTooltip,
+        onFeatureHover: options.onFeatureHover,
+        onHoveredFeatureIdChange: options.onHoveredFeatureIdChange,
+        renderFeatureTooltip: options.renderFeatureTooltip,
       });
     },
-    onMouseMove(event) {
-      surface.handleFeatureHover(feature, getPointerPosition(event), {
+    click(position) {
+      surface.handleFeatureClick(feature, position, {
         getFeatureId,
-        onHoveredFeatureIdChange,
-        onFeatureHover,
-        renderFeatureTooltip,
+        onFeatureSelect: options.onFeatureSelect,
+        onSelectedFeatureIdChange: options.onSelectedFeatureIdChange,
+        renderFeaturePopup: options.renderFeaturePopup,
       });
     },
+    contextMenu(position) {
+      surface.handleFeatureContextMenu(feature, position, {
+        coordinates,
+        getFeatureId,
+        onFeatureContextMenu: options.onFeatureContextMenu,
+        onFeatureSelect: options.onFeatureSelect,
+        onSelectedFeatureIdChange: options.onSelectedFeatureIdChange,
+        renderFeatureContextMenu: options.renderFeatureContextMenu,
+        renderFeaturePopup: options.renderFeaturePopup,
+      });
+    },
+    featureId,
+    hover(position) {
+      surface.handleFeatureHover(feature, position, {
+        getFeatureId,
+        onFeatureHover: options.onFeatureHover,
+        onHoveredFeatureIdChange: options.onHoveredFeatureIdChange,
+        renderFeatureTooltip: options.renderFeatureTooltip,
+      });
+    },
+    key,
   };
 }
 
-function getPointerPosition(event: ReactMouseEvent<SVGElement>) {
-  const overlay = event.currentTarget.ownerSVGElement;
-  const bounds = overlay?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+function resolveLayerPrefix(kind: string, key: string | null, path: string) {
+  return `${kind}:${key ?? path}`;
+}
 
+function getClientCanvasPosition(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+  const bounds = canvas.getBoundingClientRect();
   return {
-    x: event.clientX - bounds.left,
-    y: event.clientY - bounds.top,
+    x: clientX - bounds.left,
+    y: clientY - bounds.top,
   };
 }
 
-function projectPath(
-  coordinates: readonly [number, number][],
-  project: MapsProjectCoordinate,
-  close: boolean,
-) {
-  const points = coordinates.map(project);
-  if (points.some((point) => !point) || points.length === 0) return null;
-  const [first, ...rest] = points as Array<{ x: number; y: number }>;
-  const commands = [`M ${first.x} ${first.y}`];
+function resizeCanvasBackingStore(canvas: HTMLCanvasElement) {
+  const bounds = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(bounds.width || canvas.clientWidth || 1));
+  const height = Math.max(1, Math.round(bounds.height || canvas.clientHeight || 1));
+  const ratio = Math.max(1, window.devicePixelRatio || 1);
+  const backingWidth = Math.max(1, Math.round(width * ratio));
+  const backingHeight = Math.max(1, Math.round(height * ratio));
 
-  for (const point of rest) {
-    commands.push(`L ${point.x} ${point.y}`);
-  }
-  if (close) commands.push("Z");
+  if (canvas.width !== backingWidth) canvas.width = backingWidth;
+  if (canvas.height !== backingHeight) canvas.height = backingHeight;
 
-  return commands.join(" ");
+  return { height, width };
 }
 
-function mapsFeatureClassName(base: string, hovered: boolean, selected: boolean) {
-  return [
-    base,
-    hovered ? "mb-maps__feature--hovered" : null,
-    selected ? "mb-maps__feature--selected" : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
+function getCanvasContext(canvas: HTMLCanvasElement) {
+  try {
+    return canvas.getContext("2d");
+  } catch {
+    return null;
+  }
 }
 
 function compactStyle(style: GeoJsonLayerStyle): GeoJsonLayerStyle {
@@ -587,15 +524,6 @@ function assertNoUnsupportedPointDrag(
     );
   }
 }
-
-const interactiveFeatureStyle = {
-  cursor: "pointer",
-  pointerEvents: "all" as const,
-};
-
-const nonInteractiveFeatureStyle = {
-  pointerEvents: "none" as const,
-};
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
