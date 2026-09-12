@@ -18,6 +18,7 @@ const IMPLEMENTATIONS = new Set(["candidate", "reference"]);
 const PROFILE_ITERATIONS = 12;
 const VITE_BUILD_TIMEOUT_MS = 15_000;
 const BROWSER_STAGE_TIMEOUT_MS = 10_000;
+const PREVIEW_REQUEST_TIMEOUT_MS = 1_000;
 const PREVIEW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const implementation = process.env.MAPS_RUNTIME_PROFILE_IMPLEMENTATION;
@@ -96,7 +97,11 @@ try {
 
   const browser = await chromium.launch({ timeout: BROWSER_STAGE_TIMEOUT_MS });
   try {
-    const page = await browser.newPage();
+    const page = await withTimeout(
+      browser.newPage(),
+      BROWSER_STAGE_TIMEOUT_MS,
+      `${implementation} Chromium page creation`,
+    );
     await page.goto(`http://127.0.0.1:${previewPort}/`, {
       timeout: BROWSER_STAGE_TIMEOUT_MS,
       waitUntil: "load",
@@ -225,24 +230,38 @@ function run(command, args, cwd, timeout) {
 }
 
 async function waitForHttp(url) {
+  const deadline = Date.now() + BROWSER_STAGE_TIMEOUT_MS;
   let lastError;
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  while (Date.now() < deadline) {
     if (preview?.exitCode !== null) {
       throw new Error(`Vite preview exited before runtime evidence was served (code ${preview.exitCode})`);
     }
 
+    const remainingMs = deadline - Date.now();
+    const controller = new AbortController();
+    const requestTimeout = setTimeout(
+      () => controller.abort(),
+      Math.min(PREVIEW_REQUEST_TIMEOUT_MS, Math.max(1, remainingMs)),
+    );
+
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: controller.signal });
       if (response.ok) return;
+      lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
+    } finally {
+      clearTimeout(requestTimeout);
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const delayMs = Math.min(50, Math.max(0, deadline - Date.now()));
+    if (delayMs > 0) await delay(delayMs);
   }
 
-  throw new Error(`runtime profile preview did not become ready: ${String(lastError ?? "timeout")}`);
+  throw new Error(
+    `runtime profile preview did not become ready within ${BROWSER_STAGE_TIMEOUT_MS}ms: ${String(lastError ?? "timeout")}`,
+  );
 }
 
 async function stopPreview(child) {
