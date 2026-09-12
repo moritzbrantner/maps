@@ -25,26 +25,26 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Refresh lockfile
+      - name: Refresh lockfile and packaged styles
         env:
           GH_PACKAGES_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ github.token }}
-        run: bun install
-
-      - name: Verify audit and styles
         run: |
-          bun run verify:audit
+          bun install
           bun run build:styles
+          bun run verify:audit
+          node ./scripts/verify-package-styles.mjs .
+          wc -c maplibre.css styles.css styles.full.css
 
-      - name: Commit lockfile update
+      - name: Commit generated dependency artifacts
         run: |
-          if git diff --quiet -- bun.lock; then
-            echo "bun.lock is already current"
+          if git diff --quiet -- bun.lock maplibre.css styles.css styles.full.css; then
+            echo "Dependency artifacts are already current"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bun.lock
-          git commit -m "Refresh MapLibre fallback lock"
+          git add bun.lock maplibre.css styles.css styles.full.css
+          git commit -m "Refresh MapLibre fallback package artifacts"
           git push origin HEAD:feat/maps-independent-runtime
