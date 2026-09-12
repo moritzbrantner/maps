@@ -44,7 +44,9 @@ export type CanvasMapScene<TFeature = unknown> = {
 
 export type CanvasMapDrawOptions = {
   hoveredFeatureId?: string | null;
+  hoveredPrimitiveIds?: ReadonlySet<string>;
   selectedFeatureId?: string | null;
+  selectedPrimitiveIds?: ReadonlySet<string>;
 };
 
 export function createCanvasMapScene<TFeature = unknown>(
@@ -139,8 +141,12 @@ function drawPrimitive<TFeature>(
   options: CanvasMapDrawOptions,
 ) {
   const primitive = scenePrimitive.renderPrimitive;
-  const selected = options.selectedFeatureId === primitive.featureId;
-  const hovered = options.hoveredFeatureId === primitive.featureId;
+  const selected = options.selectedPrimitiveIds
+    ? options.selectedPrimitiveIds.has(primitive.primitiveId)
+    : options.selectedFeatureId === primitive.featureId;
+  const hovered = options.hoveredPrimitiveIds
+    ? options.hoveredPrimitiveIds.has(primitive.primitiveId)
+    : options.hoveredFeatureId === primitive.featureId;
 
   switch (scenePrimitive.kind) {
     case "circle":

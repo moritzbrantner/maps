@@ -193,7 +193,7 @@ describe("Maps-owned MapView runtime", () => {
     });
   });
 
-  test("renders PointLayer through Rust-owned screen projection", async () => {
+  test("renders PointLayer through the shared Canvas2D overlay using Rust projection", async () => {
     render(
       <MapView
         flatRuntime="maps"
@@ -202,30 +202,40 @@ describe("Maps-owned MapView runtime", () => {
         mapStyle={{ tiles: false }}
       >
         <PointLayer
-          hoveredFeatureId="berlin"
-          points={[{ id: "berlin", latitude: 52.52, longitude: 13.405 }]}
+          points={[{ id: "berlin", label: "Berlin", latitude: 52.52, longitude: 13.405 }]}
           pointColor="#dc2626"
           pointRadius={8}
+          renderFeatureTooltip={(feature) => <span>Projected {feature.point.label}</span>}
         />
       </MapView>,
     );
 
     const map = screen.getByLabelText("Point overlay Maps runtime");
+    const baseCanvas = getBaseCanvas(map);
 
     await waitFor(() => {
       expect(map.getAttribute("data-map-ready")).toBe("true");
-      expect(map.querySelector('[data-map-overlay-runtime="maps"]')).toBeTruthy();
+      const overlay = getOverlayCanvas(map);
+      expect(overlay.getAttribute("data-map-overlay-backend")).toBe("canvas2d");
+      expect(overlay.getAttribute("data-map-overlay-primitives")).toBe("1");
     });
 
-    const point = map.querySelector('[data-map-feature-id="berlin"]');
-    expect(Number(point?.getAttribute("cx"))).toBeCloseTo(534.05, 10);
-    expect(Number(point?.getAttribute("cy"))).toBeCloseTo(37.4, 10);
-    expect(point?.getAttribute("fill")).toBe("#dc2626");
-    expect(point?.getAttribute("r")).toBe("8");
-    expect(point?.getAttribute("class")).toContain("mb-maps__feature--hovered");
+    fireEvent.pointerMove(baseCanvas, {
+      clientX: 534.05,
+      clientY: 37.4,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Projected Berlin")).toBeTruthy();
+    });
+    expect(map.querySelector("svg[data-map-overlay-runtime=\"maps\"]")).toBeNull();
   });
 
-  test("renders GeoJsonLayer points, lines, and polygons through Rust projection", async () => {
+  test("normalizes GeoJSON point, line, and polygon geometry into one Canvas overlay", async () => {
+    const onSelectedFeatureIdChange = vi.fn();
+
     render(
       <MapView
         flatRuntime="maps"
@@ -273,27 +283,30 @@ describe("Maps-owned MapView runtime", () => {
             ],
             type: "FeatureCollection",
           }}
+          onSelectedFeatureIdChange={onSelectedFeatureIdChange}
           selectedFeatureId="polygon-a"
         />
       </MapView>,
     );
 
     const map = screen.getByLabelText("GeoJSON overlay Maps runtime");
+    const baseCanvas = getBaseCanvas(map);
 
     await waitFor(() => {
       expect(map.getAttribute("data-map-ready")).toBe("true");
-      expect(map.querySelector('[data-map-feature-id="point-a"]')).toBeTruthy();
+      expect(getOverlayCanvas(map).getAttribute("data-map-overlay-primitives")).toBe("3");
     });
 
-    expect(map.querySelector('[data-map-feature-id="line-a"]')?.getAttribute("d")).toBe(
-      "M 410 290 L 430 280",
-    );
-    const polygon = map.querySelector('[data-map-feature-id="polygon-a"]');
-    expect(polygon?.getAttribute("d")).toBe("M 400 300 L 420 300 L 420 290 L 400 300 Z");
-    expect(polygon?.getAttribute("class")).toContain("mb-maps__feature--selected");
+    clickSurface(baseCanvas, 415, 297);
+    await waitFor(() => {
+      expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
+        "polygon-a",
+        expect.objectContaining({ featureId: "polygon-a", source: "click" }),
+      );
+    });
   });
 
-  test("routes point picks through the shared feature interaction contract", async () => {
+  test("routes point picks through MapSurfaceContext while the Canvas remains non-interactive", async () => {
     const onFeatureContextMenu = vi.fn();
     const onFeatureHover = vi.fn();
     const onFeatureSelect = vi.fn();
@@ -327,25 +340,29 @@ describe("Maps-owned MapView runtime", () => {
     );
 
     const map = screen.getByLabelText("Interactive point Maps runtime");
+    const baseCanvas = getBaseCanvas(map);
+
     await waitFor(() => {
       expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(getOverlayCanvas(map).style.pointerEvents).toBe("none");
     });
 
-    const point = map.querySelector('[data-map-feature-id="stable-berlin"]')!;
-    expect(point.getAttribute("data-map-feature-interactive")).toBe("true");
-
-    fireEvent.mouseEnter(point, { clientX: 54, clientY: 72 });
+    fireEvent.pointerMove(baseCanvas, {
+      clientX: 534.05,
+      clientY: 37.4,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
     await waitFor(() => {
       expect(onFeatureHover).toHaveBeenCalledWith(expect.objectContaining({ point: expect.anything() }));
       expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
         "stable-berlin",
         expect.objectContaining({ featureId: "stable-berlin", source: "hover" }),
       );
-      expect(point.getAttribute("class")).toContain("mb-maps__feature--hovered");
       expect(screen.getByText("Tooltip Berlin")).toBeTruthy();
     });
 
-    fireEvent.click(point, { clientX: 60, clientY: 80 });
+    clickSurface(baseCanvas, 534.05, 37.4);
     await waitFor(() => {
       expect(onFeatureSelect).toHaveBeenCalledWith(expect.objectContaining({ point: expect.anything() }));
       expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
@@ -355,7 +372,7 @@ describe("Maps-owned MapView runtime", () => {
       expect(screen.getByText("Popup Berlin")).toBeTruthy();
     });
 
-    fireEvent.contextMenu(point, { clientX: 70, clientY: 90 });
+    fireEvent.contextMenu(baseCanvas, { clientX: 534.05, clientY: 37.4 });
     await waitFor(() => {
       expect(onFeatureContextMenu).toHaveBeenCalledWith(
         expect.objectContaining({ point: expect.anything() }),
@@ -367,7 +384,7 @@ describe("Maps-owned MapView runtime", () => {
       expect(screen.getByText("Context Berlin 13.405,52.52")).toBeTruthy();
     });
 
-    fireEvent.mouseLeave(point);
+    fireEvent.pointerLeave(map);
     await waitFor(() => {
       expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
         null,
@@ -376,7 +393,7 @@ describe("Maps-owned MapView runtime", () => {
     });
   });
 
-  test("honors GeoJSON per-feature interactivity at the Maps picking boundary", async () => {
+  test("honors GeoJSON per-feature interactivity at the Canvas picking boundary", async () => {
     const onSelectedFeatureIdChange = vi.fn();
 
     render(
@@ -390,7 +407,7 @@ describe("Maps-owned MapView runtime", () => {
           featureCollection={{
             features: [
               {
-                geometry: { coordinates: [1, 2], type: "Point" },
+                geometry: { coordinates: [5, 5], type: "Point" },
                 id: "ignored-point",
                 properties: {},
                 type: "Feature",
@@ -421,19 +438,16 @@ describe("Maps-owned MapView runtime", () => {
     );
 
     const map = screen.getByLabelText("Interactive GeoJSON Maps runtime");
+    const baseCanvas = getBaseCanvas(map);
     await waitFor(() => {
       expect(map.getAttribute("data-map-ready")).toBe("true");
+      expect(getOverlayCanvas(map).getAttribute("data-map-overlay-primitives")).toBe("2");
     });
 
-    const ignored = map.querySelector('[data-map-feature-id="ignored-point"]')!;
-    const picked = map.querySelector('[data-map-feature-id="picked-polygon"]')!;
-    expect(ignored.getAttribute("data-map-feature-interactive")).toBe("false");
-    expect(picked.getAttribute("data-map-feature-interactive")).toBe("true");
-
-    fireEvent.click(ignored, { clientX: 10, clientY: 10 });
+    clickSurface(baseCanvas, 450, 275);
     expect(onSelectedFeatureIdChange).not.toHaveBeenCalled();
 
-    fireEvent.click(picked, { clientX: 20, clientY: 20 });
+    clickSurface(baseCanvas, 415, 297);
     await waitFor(() => {
       expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
         "picked-polygon",
@@ -442,7 +456,7 @@ describe("Maps-owned MapView runtime", () => {
     });
   });
 
-  test("routes map context menus through the shared MapView contract", async () => {
+  test("routes map context menus through the shared MapView contract when no feature is hit", async () => {
     const onMapContextMenu = vi.fn();
 
     render(
@@ -466,7 +480,7 @@ describe("Maps-owned MapView runtime", () => {
       expect(map.getAttribute("data-map-ready")).toBe("true");
     });
 
-    fireEvent.contextMenu(map.querySelector('[data-flat-runtime="maps"]')!);
+    fireEvent.contextMenu(getBaseCanvas(map), { clientX: 120, clientY: 80 });
 
     expect(onMapContextMenu).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -532,3 +546,22 @@ describe("Maps-owned MapView runtime", () => {
     ).toThrow(/onMapReady is MapLibre-specific/);
   });
 });
+
+function getBaseCanvas(map: HTMLElement) {
+  return map.querySelector('canvas[data-flat-runtime="maps"]') as HTMLCanvasElement;
+}
+
+function getOverlayCanvas(map: HTMLElement) {
+  return map.querySelector('canvas[data-map-overlay-runtime="maps"]') as HTMLCanvasElement;
+}
+
+function clickSurface(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+  fireEvent.pointerDown(canvas, {
+    button: 0,
+    clientX,
+    clientY,
+    pointerId: 1,
+    pointerType: "mouse",
+  });
+  fireEvent.click(canvas, { button: 0, clientX, clientY });
+}

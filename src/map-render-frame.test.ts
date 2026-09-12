@@ -47,7 +47,7 @@ describe("MapVectorRenderFrame", () => {
       featureId: "point:p-1",
       kind: "circle",
       label: null,
-      primitiveId: "layer-a:point:p-1",
+      primitiveId: '["layer-a","point:p-1"]',
     });
     expect(result.primitives[1]).toMatchObject({
       center: [30, 40],
@@ -55,7 +55,7 @@ describe("MapVectorRenderFrame", () => {
       featureId: "cluster:7",
       kind: "circle",
       label: "12",
-      primitiveId: "layer-a:cluster:7",
+      primitiveId: '["layer-a","cluster:7"]',
     });
   });
 
@@ -84,8 +84,8 @@ describe("MapVectorRenderFrame", () => {
       "semantic-road",
     ]);
     expect(result.primitives.map((primitive) => primitive.primitiveId)).toEqual([
-      "roads-layer:semantic-road:line:0",
-      "roads-layer:semantic-road:line:1",
+      '["roads-layer","semantic-road","line",0]',
+      '["roads-layer","semantic-road","line",1]',
     ]);
     expect(result.primitives.every((primitive) => primitive.feature === feature)).toBe(true);
   });
