@@ -5,7 +5,7 @@
   "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
   "initialCamera": { "longitude": 0, "latitude": 0, "zoom": 4, "bearing": 0, "pitch": 0 },
   "source": { "minZoom": 0, "maxZoom": 19, "tileSize": 256 },
-  "limits": { "maxVisibleTiles": 8, "cacheCapacity": 8, "loadConcurrency": 4 },
+  "limits": { "maxVisibleTiles": 24, "cacheCapacity": 24, "loadConcurrency": 4 },
   "journey": [
     { "type": "settle" },
     { "type": "pan-screen", "dx": 960, "dy": 0 },
