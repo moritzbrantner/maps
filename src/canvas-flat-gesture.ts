@@ -27,6 +27,9 @@ export function createMapsPointerGesture() {
     clear() {
       pointers.clear();
     },
+    pointerCount() {
+      return pointers.size;
+    },
     pointerDown(pointerId: number, point: Point) {
       pointers.set(pointerId, point);
     },
