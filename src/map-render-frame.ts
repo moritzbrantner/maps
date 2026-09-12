@@ -4,10 +4,13 @@ import type { MapPointClusterRenderFrame } from "./point-cluster-render-frame";
 
 export type MapRenderCoordinate = [longitude: number, latitude: number];
 
-type MapRenderPrimitiveBase<TFeature> = {
+type MapRenderFeatureBase<TFeature> = {
   feature: TFeature;
   featureId: string;
   interactive: boolean;
+};
+
+type MapRenderPrimitiveBase<TFeature> = MapRenderFeatureBase<TFeature> & {
   primitiveId: string;
 };
 
@@ -105,78 +108,80 @@ export function createGeoJsonVectorRenderFrame<
 
   return {
     kind: "vector",
-    primitives: features.flatMap((feature) => {
-      const featureId = options.getFeatureId?.(feature) || feature.id;
-      const style = resolveFeatureStyle(feature, options.style ?? {}, options.getFeatureStyle);
-      const interactive = options.isFeatureInteractive?.(feature) ?? true;
-      const base = {
-        feature,
-        featureId,
-        interactive,
-      };
+    primitives: features.flatMap<MapVectorRenderPrimitive<GeoJsonLayerFeature<TProperties>>>(
+      (feature) => {
+        const featureId = options.getFeatureId?.(feature) || feature.id;
+        const style = resolveFeatureStyle(feature, options.style ?? {}, options.getFeatureStyle);
+        const interactive = options.isFeatureInteractive?.(feature) ?? true;
+        const base: MapRenderFeatureBase<GeoJsonLayerFeature<TProperties>> = {
+          feature,
+          featureId,
+          interactive,
+        };
 
-      switch (feature.geometry.type) {
-        case "Point":
-          return [
-            createGeoJsonCircle(
-              base,
-              `${primitivePrefix}:${featureId}:point`,
-              feature.geometry.coordinates,
-              style,
-            ),
-          ];
-        case "MultiPoint":
-          return feature.geometry.coordinates.map((coordinates, index) =>
-            createGeoJsonCircle(
-              base,
-              `${primitivePrefix}:${featureId}:point:${index}`,
-              coordinates,
-              style,
-            ),
-          );
-        case "LineString":
-          return [
-            createGeoJsonLine(
-              base,
-              `${primitivePrefix}:${featureId}:line`,
-              feature.geometry.coordinates,
-              style,
-            ),
-          ];
-        case "MultiLineString":
-          return feature.geometry.coordinates.map((coordinates, index) =>
-            createGeoJsonLine(
-              base,
-              `${primitivePrefix}:${featureId}:line:${index}`,
-              coordinates,
-              style,
-            ),
-          );
-        case "Polygon":
-          return [
-            createGeoJsonPolygon(
-              base,
-              `${primitivePrefix}:${featureId}:polygon`,
-              feature.geometry.coordinates,
-              style,
-            ),
-          ];
-        case "MultiPolygon":
-          return feature.geometry.coordinates.map((rings, index) =>
-            createGeoJsonPolygon(
-              base,
-              `${primitivePrefix}:${featureId}:polygon:${index}`,
-              rings,
-              style,
-            ),
-          );
-      }
-    }),
+        switch (feature.geometry.type) {
+          case "Point":
+            return [
+              createGeoJsonCircle(
+                base,
+                `${primitivePrefix}:${featureId}:point`,
+                feature.geometry.coordinates,
+                style,
+              ),
+            ];
+          case "MultiPoint":
+            return feature.geometry.coordinates.map((coordinates, index) =>
+              createGeoJsonCircle(
+                base,
+                `${primitivePrefix}:${featureId}:point:${index}`,
+                coordinates,
+                style,
+              ),
+            );
+          case "LineString":
+            return [
+              createGeoJsonLine(
+                base,
+                `${primitivePrefix}:${featureId}:line`,
+                feature.geometry.coordinates,
+                style,
+              ),
+            ];
+          case "MultiLineString":
+            return feature.geometry.coordinates.map((coordinates, index) =>
+              createGeoJsonLine(
+                base,
+                `${primitivePrefix}:${featureId}:line:${index}`,
+                coordinates,
+                style,
+              ),
+            );
+          case "Polygon":
+            return [
+              createGeoJsonPolygon(
+                base,
+                `${primitivePrefix}:${featureId}:polygon`,
+                feature.geometry.coordinates,
+                style,
+              ),
+            ];
+          case "MultiPolygon":
+            return feature.geometry.coordinates.map((rings, index) =>
+              createGeoJsonPolygon(
+                base,
+                `${primitivePrefix}:${featureId}:polygon:${index}`,
+                rings,
+                style,
+              ),
+            );
+        }
+      },
+    ),
   };
 }
 
 function createGeoJsonCircle<TFeature>(
-  base: MapRenderPrimitiveBase<TFeature>,
+  base: MapRenderFeatureBase<TFeature>,
   primitiveId: string,
   center: readonly [number, number],
   style: Required<GeoJsonLayerStyle>,
@@ -197,7 +202,7 @@ function createGeoJsonCircle<TFeature>(
 }
 
 function createGeoJsonLine<TFeature>(
-  base: MapRenderPrimitiveBase<TFeature>,
+  base: MapRenderFeatureBase<TFeature>,
   primitiveId: string,
   coordinates: readonly (readonly [number, number])[],
   style: Required<GeoJsonLayerStyle>,
@@ -214,7 +219,7 @@ function createGeoJsonLine<TFeature>(
 }
 
 function createGeoJsonPolygon<TFeature>(
-  base: MapRenderPrimitiveBase<TFeature>,
+  base: MapRenderFeatureBase<TFeature>,
   primitiveId: string,
   rings: readonly (readonly (readonly [number, number])[])[],
   style: Required<GeoJsonLayerStyle>,
