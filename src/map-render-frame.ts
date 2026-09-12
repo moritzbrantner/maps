@@ -110,14 +110,26 @@ export function createPointClusterVectorRenderFrame<TProperties = Record<string,
   frame: MapPointClusterRenderFrame<TProperties>,
   options: { primitivePrefix?: string } = {},
 ): MapVectorRenderFrame<(typeof frame.features)[number]["feature"]> {
-  return createCircleVectorRenderFrame(frame.features, {
-    getCoordinates: (renderFeature) => renderFeature.coordinates,
-    getFeatureId: (renderFeature) => renderFeature.id,
-    getFillColor: (renderFeature) => renderFeature.fillColor,
-    getLabel: (renderFeature) => renderFeature.label,
-    getRadius: (renderFeature) => renderFeature.radius,
-    primitivePrefix: options.primitivePrefix ?? "point-cluster",
-  }) as MapVectorRenderFrame<(typeof frame.features)[number]["feature"]>;
+  const primitivePrefix = options.primitivePrefix ?? "point-cluster";
+
+  return {
+    kind: "vector",
+    primitives: frame.features.map((renderFeature) => ({
+      center: copyCoordinate(renderFeature.coordinates),
+      feature: renderFeature.feature,
+      featureId: renderFeature.id,
+      fillColor: renderFeature.fillColor,
+      fillOpacity: 0.92,
+      interactive: true,
+      kind: "circle" as const,
+      label: renderFeature.label,
+      primitiveId: `${primitivePrefix}:${renderFeature.id}`,
+      radius: renderFeature.radius,
+      strokeColor: "#ffffff",
+      strokeOpacity: 1,
+      strokeWidth: 2,
+    })),
+  };
 }
 
 export type CreateGeoJsonVectorRenderFrameOptions<
