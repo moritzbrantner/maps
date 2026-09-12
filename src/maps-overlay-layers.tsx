@@ -22,7 +22,6 @@ import {
 import {
   GeoJsonLayer,
   createGeoJsonLayerFeatures,
-  type GeoJsonLayerFeature,
   type GeoJsonLayerProps,
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
@@ -35,12 +34,7 @@ import {
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
 import type { MapSurfaceContextValue } from "./map-surface-context";
-import {
-  PointLayer,
-  createPointLayerFeatures,
-  type PointLayerFeature,
-  type PointLayerProps,
-} from "./point-layer";
+import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
 
 export type MapsProjectCoordinate = (
   coordinates: [longitude: number, latitude: number],
@@ -518,7 +512,7 @@ function compactStyle(style: GeoJsonLayerStyle): GeoJsonLayerStyle {
 function assertNoUnsupportedPointDrag(
   props: Pick<PointLayerProps<AnyRecord>, "draggable" | "onFeatureDrag" | "onFeatureDragEnd">,
 ) {
-  if (Object.values(props).some(Boolean)) {
+  if (props.draggable || props.onFeatureDrag || props.onFeatureDragEnd) {
     throw new Error(
       'flatRuntime="maps" does not support draggable PointLayer features yet; drag/edit contracts remain explicit until a Maps-owned editing slice lands.',
     );
