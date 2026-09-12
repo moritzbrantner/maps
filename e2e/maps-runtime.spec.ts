@@ -66,15 +66,15 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchStart",
     touchPoints: [
-      { x: touchCenter.x - 40, y: touchCenter.y },
-      { x: touchCenter.x + 40, y: touchCenter.y },
+      { id: 0, x: touchCenter.x - 40, y: touchCenter.y },
+      { id: 1, x: touchCenter.x + 40, y: touchCenter.y },
     ],
   });
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchMove",
     touchPoints: [
-      { x: touchCenter.x - 80, y: touchCenter.y - 12 },
-      { x: touchCenter.x + 80, y: touchCenter.y + 12 },
+      { id: 0, x: touchCenter.x - 80, y: touchCenter.y - 12 },
+      { id: 1, x: touchCenter.x + 80, y: touchCenter.y + 12 },
     ],
   });
   await cdp.send("Input.dispatchTouchEvent", {
