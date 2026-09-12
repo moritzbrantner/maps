@@ -17,6 +17,10 @@ const INITIAL_VIEW_STATE: MapViewState = {
 export function MapsRuntimeAcceptance() {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
+  const [pointHoveredId, setPointHoveredId] = useState<string | null>("acceptance-berlin");
+  const [pointSelectedId, setPointSelectedId] = useState<string | null>(null);
+  const [zoneSelectedId, setZoneSelectedId] = useState<string | null>("acceptance-zone");
+  const [lastInteraction, setLastInteraction] = useState("none");
 
   return (
     <main style={{ margin: "0 auto", maxWidth: 1120, padding: 24 }}>
@@ -61,13 +65,31 @@ export function MapsRuntimeAcceptance() {
             ],
             type: "FeatureCollection",
           }}
+          onSelectedFeatureIdChange={(featureId, context) => {
+            setZoneSelectedId(featureId);
+            setLastInteraction(`geojson:${context.source}:${featureId ?? "none"}`);
+          }}
           polygonFillColor="#2563eb"
           polygonFillOpacity={0.12}
           polygonStrokeColor="#2563eb"
-          selectedFeatureId="acceptance-zone"
+          renderFeaturePopup={(feature) => (
+            <span data-testid="maps-runtime-feature-popup">GeoJSON {feature.id}</span>
+          )}
+          selectedFeatureId={zoneSelectedId}
         />
         <PointLayer
-          hoveredFeatureId="acceptance-berlin"
+          hoveredFeatureId={pointHoveredId}
+          onFeatureContextMenu={(feature) => {
+            setLastInteraction(`point:context-menu:${feature.point.id}`);
+          }}
+          onHoveredFeatureIdChange={(featureId, context) => {
+            setPointHoveredId(featureId);
+            setLastInteraction(`point:${context.source}:${featureId ?? "none"}`);
+          }}
+          onSelectedFeatureIdChange={(featureId, context) => {
+            setPointSelectedId(featureId);
+            setLastInteraction(`point:${context.source}:${featureId ?? "none"}`);
+          }}
           pointColor="#dc2626"
           pointRadius={8}
           points={[
@@ -78,6 +100,17 @@ export function MapsRuntimeAcceptance() {
               longitude: 13.405,
             },
           ]}
+          renderFeatureContextMenu={(feature, context) => (
+            <button type="button">
+              Context {feature.point.label} at {context.coordinates[0].toFixed(3)},
+              {context.coordinates[1].toFixed(3)}
+            </button>
+          )}
+          renderFeaturePopup={(feature) => (
+            <span data-testid="maps-runtime-feature-popup">Selected {feature.point.label}</span>
+          )}
+          renderFeatureTooltip={(feature) => <span>Hover {feature.point.label}</span>}
+          selectedFeatureId={pointSelectedId}
         />
         <MapControls aria-label="Maps runtime acceptance controls">
           <button
@@ -102,6 +135,7 @@ export function MapsRuntimeAcceptance() {
             {viewState.center[0].toFixed(4)},{viewState.center[1].toFixed(4)} | zoom{" "}
             {viewState.zoom.toFixed(4)}
           </output>
+          <output data-testid="maps-runtime-interaction">{lastInteraction}</output>
         </MapControls>
       </MapView>
     </main>
