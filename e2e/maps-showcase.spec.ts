@@ -11,7 +11,8 @@ test("Pages showcase makes the Map Library capabilities and runtime boundary vis
   await expect(page.getByRole("tab", { name: "Editor" })).toBeVisible();
 
   const runtimeStatus = page.getByTestId("rust-runtime-status");
-  await expect(runtimeStatus).toHaveAttribute("data-state", /verified|unavailable/);
+  await expect(runtimeStatus).toHaveAttribute("data-state", "authoritative");
+  await expect(runtimeStatus).toContainText("Rust authoritative");
   await expect(page.getByText("MapLibre + Canvas2D", { exact: true })).toBeVisible();
   await expect(page.locator(".mb-maps").first()).toBeVisible();
 });

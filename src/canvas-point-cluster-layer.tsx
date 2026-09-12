@@ -1,19 +1,13 @@
 "use client";
 
-import {
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   createPointAggregationIndex,
   type AggregatedMapFeature,
   type MapPoint,
   type MapPointFilter,
+  type PointAggregationIndex,
   type PointAggregationIndexOptions,
   type VisibleAggregationSummary,
 } from "./aggregation";
@@ -90,21 +84,30 @@ export function CanvasPointClusterLayer<
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<CanvasPointClusterScene<TProperties> | null>(null);
   const hoveredIdRef = useRef<string | null>(null);
+  const indexRef = useRef<PointAggregationIndex<TProperties> | null>(null);
   const [resizeVersion, setResizeVersion] = useState(0);
-  const index = useMemo(
-    () =>
-      mode === "clusters"
-        ? createPointAggregationIndex(points, {
-            filterPoint,
-            maxZoom,
-            minZoom,
-            radius: clusterRadius,
-          })
-        : null,
-    [clusterRadius, filterPoint, maxZoom, minZoom, mode, points],
-  );
 
-  useEffect(() => () => index?.dispose(), [index]);
+  useEffect(() => {
+    if (mode !== "clusters") {
+      indexRef.current = null;
+      return;
+    }
+
+    const index = createPointAggregationIndex(points, {
+      filterPoint,
+      maxZoom,
+      minZoom,
+      radius: clusterRadius,
+    });
+    indexRef.current = index;
+
+    return () => {
+      if (indexRef.current === index) {
+        indexRef.current = null;
+      }
+      index.dispose();
+    };
+  }, [clusterRadius, filterPoint, maxZoom, minZoom, mode, points]);
 
   useEffect(() => {
     const container = surface?.maplibreMap?.getContainer();
@@ -130,6 +133,7 @@ export function CanvasPointClusterLayer<
       ],
       zoom: map.getZoom(),
     };
+    const index = indexRef.current;
     const frame =
       mode === "clusters" && index
         ? createPointClusterRenderFrame(index.getViewportAggregation(query), getFeatureId)
@@ -163,9 +167,12 @@ export function CanvasPointClusterLayer<
     });
     onViewportAggregationChange?.(frame.summary);
   }, [
+    clusterRadius,
+    filterPoint,
     getFeatureId,
     hoveredFeatureId,
-    index,
+    maxZoom,
+    minZoom,
     mode,
     onViewportAggregationChange,
     points,

@@ -30,10 +30,12 @@ for (const packageDir of packageDirs) {
   const packageName = packageJson.name ?? path.relative(rootDir, packageDir) ?? packageDir;
   const stylesPath = path.join(packageDir, "styles.css");
   const fullStylesPath = path.join(packageDir, "styles.full.css");
+  const mapLibreStylesPath = path.join(packageDir, "maplibre.css");
   const files = Array.isArray(packageJson.files) ? packageJson.files : [];
   const sideEffects = Array.isArray(packageJson.sideEffects) ? packageJson.sideEffects : [];
   const stylesExport = packageJson.exports?.["./styles.css"];
   const fullStylesExport = packageJson.exports?.["./styles.full.css"];
+  const mapLibreStylesExport = packageJson.exports?.["./maplibre.css"];
   const shipsStyles =
     existsSync(stylesPath) ||
     files.includes("styles.css") ||
@@ -63,8 +65,8 @@ for (const packageDir of packageDirs) {
     errors.push(`${packageName}: styles.css must include package map component styles`);
   }
 
-  if (!/\.maplibregl-/.test(stylesheet)) {
-    errors.push(`${packageName}: styles.css must include MapLibre GL styles`);
+  if (packageName === "@moritzbrantner/maps" && !/@import\s+"\.\/maplibre\.css";/.test(stylesheet)) {
+    errors.push(`${packageName}: styles.css must reference the packaged MapLibre fallback stylesheet`);
   }
 
   if (hasTailwindPreflight(stylesheet)) {
@@ -90,12 +92,41 @@ for (const packageDir of packageDirs) {
     errors.push(`${packageName}: styles.full.css must include package map component styles`);
   }
 
-  if (!/\.maplibregl-/.test(fullStylesheet)) {
-    errors.push(`${packageName}: styles.full.css must include MapLibre GL styles`);
+  if (
+    packageName === "@moritzbrantner/maps" &&
+    !/@import\s+"\.\/maplibre\.css";/.test(fullStylesheet)
+  ) {
+    errors.push(
+      `${packageName}: styles.full.css must reference the packaged MapLibre fallback stylesheet`,
+    );
   }
 
   if (!hasTailwindPreflight(fullStylesheet)) {
     errors.push(`${packageName}: styles.full.css must preserve Tailwind preflight/global reset output`);
+  }
+
+  if (packageName === "@moritzbrantner/maps") {
+    if (!existsSync(mapLibreStylesPath)) {
+      errors.push(`${packageName}: missing packaged MapLibre fallback stylesheet`);
+    } else {
+      const mapLibreStylesheet = readFileSync(mapLibreStylesPath, "utf8");
+
+      if (!/^\/\* Generated from the pinned maplibre-gl fallback dependency\./.test(mapLibreStylesheet)) {
+        errors.push(`${packageName}: maplibre.css must be generated from the pinned fallback dependency`);
+      }
+
+      if (!/\.maplibregl-/.test(mapLibreStylesheet)) {
+        errors.push(`${packageName}: maplibre.css must include MapLibre GL styles`);
+      }
+    }
+
+    if (!files.includes("maplibre.css")) {
+      errors.push(`${packageName}: package.json files must include maplibre.css`);
+    }
+
+    if (mapLibreStylesExport !== "./maplibre.css") {
+      errors.push(`${packageName}: package.json exports must expose ./maplibre.css`);
+    }
   }
 
   if (!files.includes("styles.css")) {

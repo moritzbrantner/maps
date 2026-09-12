@@ -7,7 +7,13 @@ import type {
 } from "./aggregation-runtime";
 import type { ViewportAggregationQuery } from "./aggregation";
 
-const DEFAULT_MAPS_WASM_PACKAGE = "@moritzbrantner/maps/wasm";
+export const DEFAULT_MAPS_WASM_PACKAGE = "@moritzbrantner/maps/wasm";
+
+let configuredMapsWasmPackage: string | undefined;
+
+export type MapsWasmModuleBase = {
+  default?: (moduleOrPath?: unknown) => Promise<unknown>;
+};
 
 type MapsAggregationWasmIndex = {
   free?: () => void;
@@ -22,15 +28,18 @@ type MapsAggregationWasmIndexConstructor = new (
   options: MapsAggregationRuntimeOptions,
 ) => MapsAggregationWasmIndex;
 
-type MapsAggregationWasmModule = {
-  default?: (moduleOrPath?: unknown) => Promise<unknown>;
+type MapsAggregationWasmModule = MapsWasmModuleBase & {
   MapsPointAggregationIndex?: MapsAggregationWasmIndexConstructor;
 };
 
+export function configureMapsWasmPackage(packageName?: string) {
+  configuredMapsWasmPackage = packageName;
+}
+
 export async function loadMapsAggregationWasmRuntime(
-  packageName = DEFAULT_MAPS_WASM_PACKAGE,
+  packageName?: string,
 ): Promise<MapsAggregationWasmRuntime> {
-  const wasmModule = await importOptionalWasmModule(packageName);
+  const wasmModule = await importMapsWasmModule<MapsAggregationWasmModule>(packageName);
   await wasmModule.default?.();
   const Constructor = wasmModule.MapsPointAggregationIndex;
 
@@ -70,16 +79,26 @@ export async function loadMapsAggregationWasmRuntime(
   };
 }
 
+/**
+ * Single reviewed dynamic-import boundary for the version-matched Maps WASM
+ * package. Runtime-specific loaders reuse this function instead of creating
+ * additional constructor-based import sites or independent package resolution.
+ * Hosted applications can configure one exact module URL for all Maps runtime
+ * loaders while published consumers keep the package self-reference default.
+ */
+export async function importMapsWasmModule<TModule extends MapsWasmModuleBase>(
+  packageName?: string,
+): Promise<TModule> {
+  const dynamicImport = new Function("specifier", "return import(specifier)") as (
+    specifier: string,
+  ) => Promise<TModule>;
+  const resolvedPackage = packageName ?? configuredMapsWasmPackage ?? DEFAULT_MAPS_WASM_PACKAGE;
+
+  return dynamicImport(resolvedPackage);
+}
+
 function assertLive(disposed: boolean) {
   if (disposed) {
     throw new Error("Maps WASM point aggregation index has been disposed.");
   }
-}
-
-async function importOptionalWasmModule(packageName: string): Promise<MapsAggregationWasmModule> {
-  const dynamicImport = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<MapsAggregationWasmModule>;
-
-  return dynamicImport(packageName);
 }

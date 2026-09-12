@@ -5,7 +5,9 @@
 //! React, MapLibre, or JavaScript runtime concerns.
 
 mod aggregation;
+mod bounded_runtime;
 mod engine;
+mod flat_runtime;
 mod scenario;
 
 use std::collections::BTreeMap;
@@ -15,10 +17,15 @@ pub use aggregation::{
     PointAggregationIndex, PointAggregationOptions, ViewportAggregation, ViewportAggregationQuery,
     VisibleAggregationSummary,
 };
+pub use bounded_runtime::BoundedFlatRasterRuntime;
 pub use engine::{
     GeographicCoordinate, MapCamera, MapViewportBounds, ScreenCoordinate, TileId, ViewportSize,
     WorldCoordinate, clamp_mercator_latitude, project_web_mercator, unproject_web_mercator,
     world_size, wrap_longitude,
+};
+pub use flat_runtime::{
+    FlatRasterRuntime, FlatRasterRuntimeError, FlatRasterRuntimeLimits, RasterFramePlan,
+    RasterSourceSpec, RasterTilePlacement,
 };
 use geo_core::{BBox, Coordinate};
 pub use scenario::{

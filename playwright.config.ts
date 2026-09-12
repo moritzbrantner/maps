@@ -42,7 +42,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: "bun run dev -- --host 127.0.0.1 --port 5181",
+    command: "VITE_MAPS_WASM_SHOWCASE=1 bun run dev -- --host 127.0.0.1 --port 5181",
     reuseExistingServer: false,
     url: "http://127.0.0.1:5181",
   },

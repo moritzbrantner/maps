@@ -1,6 +1,7 @@
 "use client";
 
 import { useContext, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import type { MapMouseEvent } from "maplibre-gl";
 
 import { toLatLng } from "./map-display";
 import type { FlatLayer, FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
@@ -85,71 +86,75 @@ export function BeeLineMeasurementLayer({
       return;
     }
 
-    return registerMapLibreLayer(resolvedLayerId, ({ layer, flat, map }) => {
-      reconcileFlatLayerEntries<FlatMeasurementCacheEntry>({
-        cache: flatMeasurementCacheRef.current,
-        layer,
-        plans: measurements.map((measurement) => {
-          const signature = createFlatMeasurementSignature(
-            measurement,
-            measurementDistanceFormat,
-            measurementLineColor,
-          );
+    return registerMapLibreLayer(
+      resolvedLayerId,
+      ({ layer, flat, map }) => {
+        reconcileFlatLayerEntries<FlatMeasurementCacheEntry>({
+          cache: flatMeasurementCacheRef.current,
+          layer,
+          plans: measurements.map((measurement) => {
+            const signature = createFlatMeasurementSignature(
+              measurement,
+              measurementDistanceFormat,
+              measurementLineColor,
+            );
 
-          return {
-            key: measurement.id,
-            render: () => {
-              const layers = renderCompletedFlatMeasurement({
-                flat,
-                layer,
-                measurement,
-                measurementDistanceFormat,
-                measurementLineColor,
-                onSelect: emitSelect,
-              });
+            return {
+              key: measurement.id,
+              render: () => {
+                const layers = renderCompletedFlatMeasurement({
+                  flat,
+                  layer,
+                  measurement,
+                  measurementDistanceFormat,
+                  measurementLineColor,
+                  onSelect: emitSelect,
+                });
 
-              return layers.length > 0 ? { layers, signature } : null;
-            },
-            signature,
-          };
-        }),
-      });
+                return layers.length > 0 ? { layers, signature } : null;
+              },
+              signature,
+            };
+          }),
+        });
 
-      if (draft?.to && draft.distanceMeters !== undefined) {
-        const signature = createFlatMeasurementDraftSignature(draft, draftLineColor);
-        const draftState = flatDraftStateRef.current;
+        if (draft?.to && draft.distanceMeters !== undefined) {
+          const signature = createFlatMeasurementDraftSignature(draft, draftLineColor);
+          const draftState = flatDraftStateRef.current;
 
-        if (draftState.signature !== signature) {
+          if (draftState.signature !== signature) {
+            resetFlatLayerResourceState({
+              remove: (entry) => removeFlatLayerEntry(layer, entry),
+              state: draftState,
+            });
+
+            const layers = renderDraftFlatMeasurement({
+              draft,
+              flat,
+              layer,
+              measurementDraftLineColor: draftLineColor,
+            });
+
+            draftState.resource = layers.length > 0 ? { layers, signature } : null;
+            draftState.signature = draftState.resource ? signature : null;
+          }
+        } else if (flatDraftStateRef.current.resource) {
           resetFlatLayerResourceState({
             remove: (entry) => removeFlatLayerEntry(layer, entry),
-            state: draftState,
+            state: flatDraftStateRef.current,
           });
-
-          const layers = renderDraftFlatMeasurement({
-            draft,
-            flat,
-            layer,
-            measurementDraftLineColor: draftLineColor,
-          });
-
-          draftState.resource = layers.length > 0 ? { layers, signature } : null;
-          draftState.signature = draftState.resource ? signature : null;
         }
-      } else if (flatDraftStateRef.current.resource) {
-        resetFlatLayerResourceState({
-          remove: (entry) => removeFlatLayerEntry(layer, entry),
-          state: flatDraftStateRef.current,
-        });
-      }
 
-      const container = map.getContainer();
+        const container = map.getContainer();
 
-      if (isMeasuring) {
-        container.style.cursor = "crosshair";
-      } else if (container.style.cursor === "crosshair") {
-        container.style.cursor = "";
-      }
-    }, { preserveOnRender: true, renderOnViewStateChange: false });
+        if (isMeasuring) {
+          container.style.cursor = "crosshair";
+        } else if (container.style.cursor === "crosshair") {
+          container.style.cursor = "";
+        }
+      },
+      { preserveOnRender: true, renderOnViewStateChange: false },
+    );
   }, [
     draft,
     draftLineColor,
@@ -176,7 +181,7 @@ export function BeeLineMeasurementLayer({
       emitDraftChange(null);
     }
 
-    function handleClick(event: { latlng?: { lat?: number; lng?: number } }) {
+    function handleClick(event: MapMouseEvent) {
       const nextCoordinate = getEventCoordinate(event);
 
       if (!nextCoordinate) {
@@ -207,7 +212,7 @@ export function BeeLineMeasurementLayer({
       clearDraft();
     }
 
-    function handleMouseMove(event: { latlng?: { lat?: number; lng?: number } }) {
+    function handleMouseMove(event: MapMouseEvent) {
       if (!draftFrom) {
         return;
       }
@@ -248,12 +253,7 @@ export function BeeLineMeasurementLayer({
       document.removeEventListener("keydown", handleKeyDown);
       clearDraft();
     };
-  }, [
-    display,
-    flatMap,
-    isMeasuring,
-    measurementDistanceFormat,
-  ]);
+  }, [display, flatMap, isMeasuring, measurementDistanceFormat]);
 
   return null;
 }
@@ -397,11 +397,11 @@ function createFlatMeasurementDraftSignature(
   });
 }
 
-function getEventCoordinate(event: {
-  latlng?: { lat?: number; lng?: number };
-  lngLat?: { lat?: number; lng?: number };
-}) {
-  const latlng = event.latlng ?? event.lngLat;
+function getEventCoordinate(event: MapMouseEvent) {
+  const compatibleEvent = event as MapMouseEvent & {
+    latlng?: { lat?: number; lng?: number };
+  };
+  const latlng = compatibleEvent.lngLat ?? compatibleEvent.latlng;
 
   return normalizeMapCoordinate([latlng?.lng ?? Number.NaN, latlng?.lat ?? Number.NaN]);
 }
