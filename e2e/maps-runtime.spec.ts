@@ -59,6 +59,23 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   );
   await page.keyboard.press("Escape");
 
+  // Exercise aggregation/picking against a known canonical camera before the
+  // rest of this acceptance deliberately moves outside the cluster viewport.
+  const beforeClusterExpand = parseViewState(await viewState.textContent());
+  const clusterPosition = await overlayClusterPosition(page);
+  await page.mouse.click(overlayBox!.x + clusterPosition.x, overlayBox!.y + clusterPosition.y);
+  await expect(interaction).toHaveText("cluster:click:acceptance-cluster");
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Cluster 3");
+  await expect
+    .poll(async () => parseViewState(await viewState.textContent()).zoom)
+    .toBeGreaterThan(beforeClusterExpand.zoom);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Reset acceptance view" }).click();
+  await expect(viewState).toHaveText("13.4050,52.5200 | zoom 6.0000");
+  await expect(clusterSummary).toHaveText("1/0/3");
+  await expect.poll(async () => overlayClusterPosition(page)).not.toBeNull();
+
   const initialViewState = await viewState.textContent();
   const initialPointPosition = await overlayPointPosition(page);
   const initialPolygonBounds = await overlayPolygonBounds(page);
@@ -146,16 +163,10 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     constrained.zoom - 0.0001,
   );
 
-  await expect(clusterSummary).toHaveText("1/0/3");
-  const beforeClusterExpand = parseViewState(await viewState.textContent());
-  const clusterPosition = await overlayClusterPosition(page);
-  await page.mouse.click(overlayBox!.x + clusterPosition.x, overlayBox!.y + clusterPosition.y);
-  await expect(interaction).toHaveText("cluster:click:acceptance-cluster");
-  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Cluster 3");
-  await expect
-    .poll(async () => parseViewState(await viewState.textContent()).zoom)
-    .toBeGreaterThan(beforeClusterExpand.zoom);
-
+  // The cluster is intentionally outside the viewport after the camera stress
+  // sequence. The aggregation summary must therefore update rather than remain
+  // pinned to its initial state.
+  await expect(clusterSummary).toHaveText("0/0/0");
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
 });
 
