@@ -14,10 +14,10 @@ type MapRenderPrimitiveBase<TFeature> = MapRenderFeatureBase<TFeature> & {
   primitiveId: string;
 };
 
-export type MapRenderArrow<TFeature = unknown> = MapRenderPrimitiveBase<TFeature> & {
+export type MapRenderDirectionMarker<TFeature = unknown> = MapRenderPrimitiveBase<TFeature> & {
   anchor: MapRenderCoordinate;
   color: string;
-  kind: "arrow";
+  kind: "direction-marker";
   opacity: number;
   previous: MapRenderCoordinate;
   size: number;
@@ -54,7 +54,7 @@ export type MapRenderPolygon<TFeature = unknown> = MapRenderPrimitiveBase<TFeatu
 };
 
 export type MapVectorRenderPrimitive<TFeature = unknown> =
-  | MapRenderArrow<TFeature>
+  | MapRenderDirectionMarker<TFeature>
   | MapRenderCircle<TFeature>
   | MapRenderLine<TFeature>
   | MapRenderPolygon<TFeature>;
