@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import {
+  ClusterLayer,
   GeoJsonLayer,
   MapControls,
   MapView,
@@ -14,9 +15,17 @@ const INITIAL_VIEW_STATE: MapViewState = {
   zoom: 6,
 };
 
+const ACCEPTANCE_CLUSTER_POINTS = [
+  { id: "hamburg-a", label: "Hamburg A", latitude: 53.5511, longitude: 9.9937 },
+  { id: "hamburg-b", label: "Hamburg B", latitude: 53.557, longitude: 10.006 },
+  { id: "hamburg-c", label: "Hamburg C", latitude: 53.544, longitude: 9.982 },
+] as const;
+
 export function MapsRuntimeAcceptance() {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
+  const [clusterSelectedId, setClusterSelectedId] = useState<string | null>(null);
+  const [clusterSummary, setClusterSummary] = useState("pending");
   const [pointHoveredId, setPointHoveredId] = useState<string | null>("acceptance-berlin");
   const [pointSelectedId, setPointSelectedId] = useState<string | null>(null);
   const [zoneSelectedId, setZoneSelectedId] = useState<string | null>("acceptance-zone");
@@ -26,9 +35,9 @@ export function MapsRuntimeAcceptance() {
     <main style={{ margin: "0 auto", maxWidth: 1120, padding: 24 }}>
       <h1>Maps-owned flat runtime acceptance</h1>
       <p>
-        This path constructs the Rust/WASM camera and tile runtime directly. It intentionally uses
-        no MapLibre instance and no raster network source so interaction evidence stays
-        deterministic.
+        This path constructs the Rust/WASM camera, tile, and aggregation runtimes directly. It
+        intentionally uses no MapLibre instance and no raster network source so interaction evidence
+        stays deterministic.
       </p>
       <MapView
         flatRuntime="maps"
@@ -42,6 +51,32 @@ export function MapsRuntimeAcceptance() {
         }}
         viewState={viewState}
       >
+        <ClusterLayer
+          clusterRadius={48}
+          getFeatureId={(feature) =>
+            feature.kind === "cluster"
+              ? "acceptance-hamburg-cluster"
+              : `acceptance-hamburg-point:${feature.point.id}`
+          }
+          onSelectedFeatureIdChange={(featureId, context) => {
+            setClusterSelectedId(featureId);
+            setLastInteraction(`cluster:${context.source}:${featureId ?? "none"}`);
+          }}
+          onViewportAggregationChange={(summary) => {
+            setClusterSummary(
+              `${summary.visibleClusterCount} clusters / ${summary.visiblePointCount} points`,
+            );
+          }}
+          points={ACCEPTANCE_CLUSTER_POINTS}
+          renderFeaturePopup={(feature) => (
+            <span data-testid="maps-runtime-feature-popup">
+              {feature.kind === "cluster"
+                ? `Cluster ${feature.pointCount}`
+                : `Cluster point ${feature.point.label}`}
+            </span>
+          )}
+          selectedFeatureId={clusterSelectedId}
+        />
         <GeoJsonLayer
           featureCollection={{
             features: [
@@ -136,6 +171,7 @@ export function MapsRuntimeAcceptance() {
             {viewState.zoom.toFixed(4)}
           </output>
           <output data-testid="maps-runtime-interaction">{lastInteraction}</output>
+          <output data-testid="maps-runtime-cluster-summary">{clusterSummary}</output>
         </MapControls>
       </MapView>
     </main>
