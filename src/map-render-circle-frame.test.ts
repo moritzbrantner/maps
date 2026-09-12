@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { createCircleVectorRenderFrame } from "./map-render-frame";
+import {
+  createCircleVectorRenderFrame,
+  createGeoJsonVectorRenderFrame,
+} from "./map-render-frame";
 
 describe("createCircleVectorRenderFrame", () => {
   it("keeps semantic identity separate from renderer primitive identity", () => {
@@ -17,8 +20,33 @@ describe("createCircleVectorRenderFrame", () => {
       feature,
       featureId: "feature:berlin",
       kind: "circle",
-      primitiveId: "point-layer:capital:feature:berlin",
+      primitiveId: '["point-layer:capital","feature:berlin"]',
     });
+  });
+
+  it("keeps delimiter-bearing layer and feature identities unambiguous", () => {
+    const left = createCircleVectorRenderFrame(
+      [{ coordinates: [1, 2] as [number, number], id: "c" }],
+      {
+        getCoordinates: (feature) => feature.coordinates,
+        getFeatureId: (feature) => feature.id,
+        getFillColor: () => "#000000",
+        getRadius: () => 4,
+        primitivePrefix: "point:a:b",
+      },
+    );
+    const right = createCircleVectorRenderFrame(
+      [{ coordinates: [1, 2] as [number, number], id: "b:c" }],
+      {
+        getCoordinates: (feature) => feature.coordinates,
+        getFeatureId: (feature) => feature.id,
+        getFillColor: () => "#000000",
+        getRadius: () => 4,
+        primitivePrefix: "point:a",
+      },
+    );
+
+    expect(left.primitives[0]?.primitiveId).not.toBe(right.primitives[0]?.primitiveId);
   });
 
   it("carries interaction eligibility without adding callbacks to the frame", () => {
@@ -45,5 +73,25 @@ describe("createCircleVectorRenderFrame", () => {
 
     coordinates[0] = 99;
     expect(frame.primitives[0]).toMatchObject({ center: [5, 6], radius: 0 });
+  });
+});
+
+describe("createGeoJsonVectorRenderFrame", () => {
+  it("clamps negative point radii before they become Canvas2D input", () => {
+    const frame = createGeoJsonVectorRenderFrame(
+      [
+        {
+          geometry: { coordinates: [13.405, 52.52], type: "Point" },
+          id: "berlin",
+          properties: {},
+          sourceIndex: 0,
+        },
+      ],
+      {
+        getFeatureStyle: () => ({ pointRadius: -5 }),
+      },
+    );
+
+    expect(frame.primitives[0]).toMatchObject({ kind: "circle", radius: 0 });
   });
 });
