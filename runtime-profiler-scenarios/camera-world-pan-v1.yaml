@@ -1,0 +1,19 @@
+schema_version: runtime-profiler/scenario/v1
+id: maps-camera-world-pan-v1
+target:
+  type: command
+  program: bun
+  args:
+    - ./scripts/profile-engine-camera-runtime.mjs
+  working_directory: ..
+  inherit_env:
+    - HOME
+    - MAPS_RUNTIME_PROFILE_IMPLEMENTATION
+    - PLAYWRIGHT_BROWSERS_PATH
+    - XDG_CACHE_HOME
+run:
+  warmup_iterations: 1
+  measurement_iterations: 5
+  timeout_seconds: 45
+collectors:
+  - process
