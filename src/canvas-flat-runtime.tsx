@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
 import {
@@ -29,6 +29,7 @@ import {
   type MapsFlatRasterRuntime,
   type MapsRasterTileId,
 } from "./flat-runtime-wasm";
+import { loadMapsWgpuBaseMapRenderer, type MapsWgpuBaseMapRenderer } from "./wgpu-base-map-wasm";
 
 const DEFAULT_TILE_SIZE = 256;
 const DEFAULT_SOURCE_MAX_ZOOM = 19;
@@ -79,7 +80,10 @@ export function MapsCanvasFlatRuntime({
   wasmPackage,
 }: MapsCanvasFlatRuntimeProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rendererRef = useRef<MapsWgpuBaseMapRenderer | null>(null);
   const runtimeRef = useRef<MapsFlatRasterRuntime | null>(null);
+  const [baseRenderer, setBaseRenderer] = useState<"pending" | "wgpu" | "canvas2d">("pending");
   const imagesRef = useRef<Map<string, ImageBitmap>>(new Map());
   const loadsRef = useRef<Map<string, ActiveTileLoad>>(new Map());
   const syncFrameRef = useRef<(() => MapsFlatRasterFrame) | null>(null);
@@ -88,7 +92,9 @@ export function MapsCanvasFlatRuntime({
   >(null);
   const source = resolveTileLayerOptions(mapStyle);
   const sourceKey = source
-    ? [source.url, source.options.minZoom, source.options.maxZoom, source.options.tileSize].join(":")
+    ? [source.url, source.options.minZoom, source.options.maxZoom, source.options.tileSize].join(
+        ":",
+      )
     : "no-raster-source";
   const boundsKey = maxBounds?.join(":") ?? "unbounded";
   const sourceRef = useRef(source);
@@ -166,11 +172,15 @@ export function MapsCanvasFlatRuntime({
   useEffect(() => {
     let cancelled = false;
     let resizeObserver: ResizeObserver | null = null;
+    let disposeFrameSynchronizer: (() => void) | null = null;
 
     async function initialize() {
       const canvas = canvasRef.current;
-      if (!canvas) return;
+      const fallbackCanvas = fallbackCanvasRef.current;
+      if (!canvas || !fallbackCanvas) return;
 
+      resizeCanvasBackingStore(canvas);
+      resizeCanvasBackingStore(fallbackCanvas);
       const size = getCanvasCssSize(canvas);
       const currentSource = sourceRef.current;
       const runtime = await loadMapsFlatRasterRuntime(
@@ -194,17 +204,42 @@ export function MapsCanvasFlatRuntime({
         return;
       }
 
-      runtimeRef.current = runtime;
-      resizeCanvasBackingStore(canvas);
+      let renderer: MapsWgpuBaseMapRenderer | null = null;
+      try {
+        renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
+      } catch {
+        renderer = null;
+      }
 
-      const syncFrame = createFrameSynchronizer({
+      if (cancelled) {
+        renderer?.dispose();
+        runtime.dispose();
+        return;
+      }
+
+      runtimeRef.current = runtime;
+      rendererRef.current = renderer;
+      setBaseRenderer(renderer ? "wgpu" : "canvas2d");
+
+      const activateCanvasFallback = () => {
+        rendererRef.current?.dispose();
+        rendererRef.current = null;
+        setBaseRenderer("canvas2d");
+      };
+
+      const frameSynchronizer = createFrameSynchronizer({
         canvas,
+        fallbackCanvas,
         images: imagesRef.current,
         loads: loadsRef.current,
+        renderer: () => rendererRef.current,
         runtime,
         source: () => sourceRef.current,
         onError: (error) => onErrorRef.current?.(error),
+        onRendererFailure: activateCanvasFallback,
       });
+      const syncFrame = frameSynchronizer.syncFrame;
+      disposeFrameSynchronizer = frameSynchronizer.dispose;
       const emitViewState = (frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => {
         const nextViewState = frameViewState(frame);
         viewStateEchoTrackerRef.current.record(nextViewState);
@@ -248,6 +283,12 @@ export function MapsCanvasFlatRuntime({
         cancelKineticPan();
         const nextSize = getCanvasCssSize(canvas);
         resizeCanvasBackingStore(canvas);
+        resizeCanvasBackingStore(fallbackCanvas);
+        try {
+          rendererRef.current?.resize(canvas.width, canvas.height);
+        } catch {
+          activateCanvasFallback();
+        }
         runtime.resize(nextSize.width, nextSize.height);
         emitConstraintCorrection(syncFrame(), "prop-change");
       });
@@ -265,6 +306,7 @@ export function MapsCanvasFlatRuntime({
     return () => {
       cancelled = true;
       resizeObserver?.disconnect();
+      disposeFrameSynchronizer?.();
       cancelKineticPan();
       onControllerReadyRef.current?.(null);
       syncFrameRef.current = null;
@@ -277,6 +319,8 @@ export function MapsCanvasFlatRuntime({
       loadsRef.current.clear();
       for (const image of imagesRef.current.values()) image.close();
       imagesRef.current.clear();
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
       runtimeRef.current?.dispose();
       runtimeRef.current = null;
     };
@@ -301,122 +345,197 @@ export function MapsCanvasFlatRuntime({
   }, [viewState.center[0], viewState.center[1], viewState.zoom]);
 
   return (
-    <canvas
-      className="mb-maps__canvas mb-maps__canvas-flat"
-      data-flat-runtime="maps"
-      ref={canvasRef}
-      style={{ touchAction: "none" }}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        cancelKineticPan();
-        const runtime = runtimeRef.current;
-        if (!runtime) return;
-        const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
+    <>
+      <canvas
+        className="mb-maps__canvas mb-maps__canvas-flat"
+        data-flat-runtime="maps"
+        data-map-base-renderer={baseRenderer}
+        data-map-base-tiles="0"
+        ref={canvasRef}
+        style={{ touchAction: "none" }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          cancelKineticPan();
+          const runtime = runtimeRef.current;
+          if (!runtime) return;
+          const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
 
-        onContextMenuRef.current?.({
-          coordinates: runtime.unproject(position.x, position.y),
-          position,
-        });
-      }}
-      onPointerDown={(event) => {
-        if (!runtimeRef.current || (event.pointerType === "mouse" && event.button !== 0)) return;
-        cancelKineticPan();
-        velocityTrackerRef.current.clear();
-        pointerTimesRef.current.set(event.pointerId, event.timeStamp);
-        gestureRef.current.pointerDown(
-          event.pointerId,
-          pointerPosition(event.currentTarget, event.clientX, event.clientY),
-        );
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }}
-      onPointerMove={(event) => {
-        const runtime = runtimeRef.current;
-        const syncFrame = syncFrameRef.current;
-        if (!runtime || !syncFrame) return;
-
-        const previousTime = pointerTimesRef.current.get(event.pointerId);
-        pointerTimesRef.current.set(event.pointerId, event.timeStamp);
-        const delta = gestureRef.current.pointerMove(
-          event.pointerId,
-          pointerPosition(event.currentTarget, event.clientX, event.clientY),
-        );
-        if (!delta) return;
-
-        if (delta.type === "pan") {
-          if (previousTime !== undefined) {
-            velocityTrackerRef.current.record(
-              delta.deltaX,
-              delta.deltaY,
-              event.timeStamp - previousTime,
-            );
-          }
-          runtime.panBy(delta.deltaX, delta.deltaY);
-          emitViewStateRef.current?.(syncFrame(), "pan");
-          return;
-        }
-
-        velocityTrackerRef.current.clear();
-        if (delta.deltaX !== 0 || delta.deltaY !== 0) {
-          runtime.panBy(delta.deltaX, delta.deltaY);
-        }
-        if (delta.deltaZoom !== 0) {
-          const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
-          runtime.zoomAbout(delta.deltaZoom, delta.x, delta.y, 0, effectiveMaxZoom);
-        }
-        emitViewStateRef.current?.(syncFrame(), delta.deltaZoom === 0 ? "pan" : "zoom");
-      }}
-      onPointerUp={(event) => {
-        const lastMoveTime = pointerTimesRef.current.get(event.pointerId);
-        pointerTimesRef.current.delete(event.pointerId);
-        gestureRef.current.pointerUp(event.pointerId);
-
-        if (gestureRef.current.pointerCount() === 0) {
-          const velocity = velocityTrackerRef.current.release(
-            lastMoveTime === undefined ? Number.POSITIVE_INFINITY : event.timeStamp - lastMoveTime,
-          );
-          if (velocity) startKineticPan(velocity);
-        } else {
+          onContextMenuRef.current?.({
+            coordinates: runtime.unproject(position.x, position.y),
+            position,
+          });
+        }}
+        onPointerDown={(event) => {
+          if (!runtimeRef.current || (event.pointerType === "mouse" && event.button !== 0)) return;
+          cancelKineticPan();
           velocityTrackerRef.current.clear();
-        }
-      }}
-      onPointerCancel={(event) => {
-        pointerTimesRef.current.delete(event.pointerId);
-        gestureRef.current.pointerUp(event.pointerId);
-        velocityTrackerRef.current.clear();
-        cancelKineticPan();
-      }}
-      onWheel={(event) => {
-        event.preventDefault();
-        cancelKineticPan();
-        velocityTrackerRef.current.clear();
-        const runtime = runtimeRef.current;
-        const syncFrame = syncFrameRef.current;
-        if (!runtime || !syncFrame) return;
-        const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
-        const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+          pointerTimesRef.current.set(event.pointerId, event.timeStamp);
+          gestureRef.current.pointerDown(
+            event.pointerId,
+            pointerPosition(event.currentTarget, event.clientX, event.clientY),
+          );
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const runtime = runtimeRef.current;
+          const syncFrame = syncFrameRef.current;
+          if (!runtime || !syncFrame) return;
 
-        runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
-        emitViewStateRef.current?.(syncFrame(), "zoom");
-      }}
-    />
+          const previousTime = pointerTimesRef.current.get(event.pointerId);
+          pointerTimesRef.current.set(event.pointerId, event.timeStamp);
+          const delta = gestureRef.current.pointerMove(
+            event.pointerId,
+            pointerPosition(event.currentTarget, event.clientX, event.clientY),
+          );
+          if (!delta) return;
+
+          if (delta.type === "pan") {
+            if (previousTime !== undefined) {
+              velocityTrackerRef.current.record(
+                delta.deltaX,
+                delta.deltaY,
+                event.timeStamp - previousTime,
+              );
+            }
+            runtime.panBy(delta.deltaX, delta.deltaY);
+            emitViewStateRef.current?.(syncFrame(), "pan");
+            return;
+          }
+
+          velocityTrackerRef.current.clear();
+          if (delta.deltaX !== 0 || delta.deltaY !== 0) {
+            runtime.panBy(delta.deltaX, delta.deltaY);
+          }
+          if (delta.deltaZoom !== 0) {
+            const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+            runtime.zoomAbout(delta.deltaZoom, delta.x, delta.y, 0, effectiveMaxZoom);
+          }
+          emitViewStateRef.current?.(syncFrame(), delta.deltaZoom === 0 ? "pan" : "zoom");
+        }}
+        onPointerUp={(event) => {
+          const lastMoveTime = pointerTimesRef.current.get(event.pointerId);
+          pointerTimesRef.current.delete(event.pointerId);
+          gestureRef.current.pointerUp(event.pointerId);
+
+          if (gestureRef.current.pointerCount() === 0) {
+            const velocity = velocityTrackerRef.current.release(
+              lastMoveTime === undefined
+                ? Number.POSITIVE_INFINITY
+                : event.timeStamp - lastMoveTime,
+            );
+            if (velocity) startKineticPan(velocity);
+          } else {
+            velocityTrackerRef.current.clear();
+          }
+        }}
+        onPointerCancel={(event) => {
+          pointerTimesRef.current.delete(event.pointerId);
+          gestureRef.current.pointerUp(event.pointerId);
+          velocityTrackerRef.current.clear();
+          cancelKineticPan();
+        }}
+        onWheel={(event) => {
+          event.preventDefault();
+          cancelKineticPan();
+          velocityTrackerRef.current.clear();
+          const runtime = runtimeRef.current;
+          const syncFrame = syncFrameRef.current;
+          if (!runtime || !syncFrame) return;
+          const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
+          const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+
+          runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
+          emitViewStateRef.current?.(syncFrame(), "zoom");
+        }}
+      />
+      <canvas
+        aria-hidden="true"
+        className="mb-maps__canvas mb-maps__canvas-flat"
+        data-map-base-fallback="canvas2d"
+        ref={fallbackCanvasRef}
+        style={{
+          pointerEvents: "none",
+          touchAction: "none",
+          visibility: baseRenderer === "canvas2d" ? "visible" : "hidden",
+        }}
+      />
+    </>
   );
 }
 
 function createFrameSynchronizer({
   canvas,
+  fallbackCanvas,
   images,
   loads,
+  renderer,
   runtime,
   source,
   onError,
+  onRendererFailure,
 }: {
   canvas: HTMLCanvasElement;
+  fallbackCanvas: HTMLCanvasElement;
   images: Map<string, ImageBitmap>;
   loads: Map<string, ActiveTileLoad>;
+  renderer: () => MapsWgpuBaseMapRenderer | null;
   runtime: MapsFlatRasterRuntime;
   source: () => ReturnType<typeof resolveTileLayerOptions>;
   onError: (error: unknown) => void;
+  onRendererFailure: () => void;
 }) {
+  let disposed = false;
+  let rendererRetryFrame: number | null = null;
+
+  function cancelRendererRetry() {
+    if (rendererRetryFrame !== null) {
+      cancelAnimationFrame(rendererRetryFrame);
+      rendererRetryFrame = null;
+    }
+  }
+
+  function scheduleRendererRetry() {
+    if (disposed || rendererRetryFrame !== null) return;
+    rendererRetryFrame = requestAnimationFrame(() => {
+      rendererRetryFrame = null;
+      if (!disposed) renderFrame(runtime.frame());
+    });
+  }
+
+  function failRenderer() {
+    cancelRendererRetry();
+    onRendererFailure();
+  }
+
+  function renderFrame(frame: MapsFlatRasterFrame) {
+    if (disposed) return;
+    const currentRenderer = renderer();
+    if (currentRenderer) {
+      try {
+        const drawnTiles = currentRenderer.render(
+          frame.placements,
+          frame.camera.width,
+          frame.camera.height,
+        );
+        const hasDecodedVisibleTile = frame.placements.some((placement) =>
+          images.has(placement.tile.key),
+        );
+        if (drawnTiles === 0 && hasDecodedVisibleTile) {
+          scheduleRendererRetry();
+          return;
+        }
+        cancelRendererRetry();
+        canvas.dataset.mapBaseTiles = String(drawnTiles);
+        return;
+      } catch {
+        failRenderer();
+      }
+    }
+
+    cancelRendererRetry();
+    canvas.dataset.mapBaseTiles = String(drawCanvasFrame(fallbackCanvas, images, frame));
+  }
+
   function syncFrame(): MapsFlatRasterFrame {
     let frame = runtime.frame();
 
@@ -425,6 +544,14 @@ function createFrameSynchronizer({
       loads.delete(tile.key);
     }
     for (const tile of frame.evictions) {
+      const currentRenderer = renderer();
+      if (currentRenderer) {
+        try {
+          currentRenderer.evictTile(tile.key);
+        } catch {
+          failRenderer();
+        }
+      }
       images.get(tile.key)?.close();
       images.delete(tile.key);
     }
@@ -435,11 +562,11 @@ function createFrameSynchronizer({
         for (const tile of frame.requests) runtime.markLoaded(tile);
         frame = runtime.frame();
       }
-      drawFrame(canvas, images, frame);
+      renderFrame(frame);
       return frame;
     }
 
-    drawFrame(canvas, images, frame);
+    renderFrame(frame);
 
     for (const tile of frame.requests) {
       if (loads.has(tile.key) || images.has(tile.key)) continue;
@@ -453,7 +580,16 @@ function createFrameSynchronizer({
             image.close();
             return;
           }
+
           images.set(tile.key, image);
+          const currentRenderer = renderer();
+          if (currentRenderer) {
+            try {
+              currentRenderer.uploadTile(tile.key, image);
+            } catch {
+              failRenderer();
+            }
+          }
           runtime.markLoaded(tile);
           syncFrame();
         })
@@ -468,7 +604,13 @@ function createFrameSynchronizer({
     return frame;
   }
 
-  return syncFrame;
+  return {
+    dispose() {
+      disposed = true;
+      cancelRendererRetry();
+    },
+    syncFrame,
+  };
 }
 
 function frameViewState(frame: MapsFlatRasterFrame): MapViewState {
@@ -495,18 +637,19 @@ function buildRasterTileUrl(url: string, tile: MapsRasterTileId) {
     .replaceAll("{s}", "a");
 }
 
-function drawFrame(
+function drawCanvasFrame(
   canvas: HTMLCanvasElement,
   images: Map<string, ImageBitmap>,
   frame: MapsFlatRasterFrame,
 ) {
   const context = canvas.getContext("2d");
-  if (!context) return;
+  if (!context) return 0;
 
   const ratio = Math.max(1, window.devicePixelRatio || 1);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, frame.camera.width, frame.camera.height);
 
+  let drawnTiles = 0;
   for (const placement of frame.placements) {
     const image = images.get(placement.tile.key);
     if (!image) continue;
@@ -517,7 +660,10 @@ function drawFrame(
       placement.screenWidth,
       placement.screenHeight,
     );
+    drawnTiles += 1;
   }
+
+  return drawnTiles;
 }
 
 function resizeCanvasBackingStore(canvas: HTMLCanvasElement) {

@@ -11,6 +11,9 @@ import {
   type MapViewState,
 } from "../src";
 
+const ACCEPTANCE_RASTER_TILE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
 const INITIAL_VIEW_STATE: MapViewState = {
   center: [13.405, 52.52],
   zoom: 6,
@@ -48,14 +51,19 @@ export function MapsRuntimeAcceptance() {
       <h1>Maps-owned flat runtime acceptance</h1>
       <p>
         This path constructs the Rust/WASM camera, tile, and aggregation runtimes directly. It
-        intentionally uses no MapLibre instance and no raster network source so interaction evidence
-        stays deterministic.
+        intentionally uses no MapLibre instance. A deterministic embedded raster tile exercises the
+        first-party base renderer without external network dependence.
       </p>
       <MapView
         flatRuntime="maps"
         fitToData={false}
         mapLabel="Maps Rust runtime acceptance"
-        mapStyle={{ tiles: false }}
+        mapStyle={{
+          maxZoom: 19,
+          minZoom: 0,
+          tileSize: 256,
+          tiles: ACCEPTANCE_RASTER_TILE,
+        }}
         maxBounds={[-25, 34, 35, 66]}
         onMapControllerReady={setController}
         onViewStateChange={(next) => {

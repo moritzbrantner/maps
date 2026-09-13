@@ -69,6 +69,13 @@ const allowlist = [
     rationale:
       "Maps lazy-loads its version-matched package-owned WASM entrypoint without pulling browser initialization into the server-safe core bundle; explicit overrides remain test/integration hooks.",
   },
+  {
+    path: "src/wgpu-base-map-wasm.ts",
+    ruleId: "function-constructor",
+    text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
+    rationale:
+      "The first-party wgpu host lazy-loads its version-matched package-owned WASM entrypoint without moving geographic camera or tile-runtime authority out of Maps; Canvas2D fallback remains browser-host behavior.",
+  },
 ];
 
 const findings = [];
