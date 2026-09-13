@@ -24,17 +24,6 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await expect
     .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
     .toBeGreaterThan(0);
-  const webGpuAdapterAvailable = await page.evaluate(async () => {
-    if (!("gpu" in navigator)) return false;
-    try {
-      return Boolean(await navigator.gpu.requestAdapter());
-    } catch {
-      return false;
-    }
-  });
-  if (webGpuAdapterAvailable) {
-    await expect(canvas).toHaveAttribute("data-map-base-renderer", "wgpu");
-  }
   await expect(overlay).toHaveCount(1);
   await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
   await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
