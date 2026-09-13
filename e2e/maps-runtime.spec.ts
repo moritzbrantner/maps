@@ -111,11 +111,10 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     steps: 4,
   });
   await page.mouse.up();
+  const releasedViewState = await viewState.textContent();
 
   await expect.poll(async () => viewState.textContent()).not.toBe(zoomedViewState);
   await expect.poll(async () => overlayPointPosition(page)).not.toEqual(zoomedPointPosition);
-
-  const releasedViewState = await viewState.textContent();
   await expect.poll(async () => viewState.textContent()).not.toBe(releasedViewState);
 
   await page.waitForTimeout(850);
