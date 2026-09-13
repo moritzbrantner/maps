@@ -76,6 +76,7 @@ pub struct MapsWgpuBaseMapRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    surface_view_format: wgpu::TextureFormat,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -107,6 +108,7 @@ impl MapsWgpuBaseMapRenderer {
             })
             .await
             .map_err(|error| js_error("could not acquire wgpu adapter", error))?;
+        let capabilities = surface.get_capabilities(&adapter);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
@@ -116,7 +118,20 @@ impl MapsWgpuBaseMapRenderer {
         let mut config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| JsValue::from_str("wgpu surface has no compatible configuration"))?;
+        if !capabilities
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+        {
+            return Err(JsValue::from_str(
+                "wgpu surface does not support premultiplied-alpha compositing",
+            ));
+        }
+        config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         config.present_mode = wgpu::PresentMode::AutoVsync;
+        let surface_view_format = config.format.add_srgb_suffix();
+        if surface_view_format != config.format {
+            config.view_formats = vec![surface_view_format];
+        }
         surface.configure(&device, &config);
 
         let camera_bind_group_layout =
@@ -229,7 +244,7 @@ impl MapsWgpuBaseMapRenderer {
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: surface_view_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -244,6 +259,7 @@ impl MapsWgpuBaseMapRenderer {
             device,
             queue,
             config,
+            surface_view_format,
             camera_buffer,
             camera_bind_group,
             texture_bind_group_layout,
@@ -378,9 +394,11 @@ impl MapsWgpuBaseMapRenderer {
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
         };
-        let view = surface_frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let view = surface_frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Maps base-map sRGB surface view"),
+            format: Some(self.surface_view_format),
+            ..Default::default()
+        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
