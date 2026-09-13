@@ -394,11 +394,13 @@ impl MapsWgpuBaseMapRenderer {
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
         };
-        let view = surface_frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("Maps base-map sRGB surface view"),
-            format: Some(self.surface_view_format),
-            ..Default::default()
-        });
+        let view = surface_frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                label: Some("Maps base-map sRGB surface view"),
+                format: Some(self.surface_view_format),
+                ..Default::default()
+            });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
