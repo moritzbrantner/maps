@@ -1,5 +1,9 @@
-import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
+import type { MapsWasmModuleBase } from "./aggregation-wasm";
 import type { MapsRasterTilePlacement } from "./flat-runtime-wasm";
+
+export const DEFAULT_MAPS_WGPU_WASM_PACKAGE = "@moritzbrantner/maps-wgpu/wasm";
+
+let configuredMapsWgpuWasmPackage: string | undefined;
 
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
@@ -29,16 +33,20 @@ type MapsWgpuBaseMapWasmModule = MapsWasmModuleBase & {
   createWgpuBaseMapRenderer?: (canvas: HTMLCanvasElement) => Promise<MapsWgpuBaseMapWasmRenderer>;
 };
 
+export function configureMapsWgpuWasmPackage(packageName?: string) {
+  configuredMapsWgpuWasmPackage = packageName;
+}
+
 export async function loadMapsWgpuBaseMapRenderer(
   canvas: HTMLCanvasElement,
   packageName?: string,
 ): Promise<MapsWgpuBaseMapRenderer> {
-  const wasmModule = await importMapsWasmModule<MapsWgpuBaseMapWasmModule>(packageName);
+  const wasmModule = await importMapsWgpuWasmModule(packageName);
   await wasmModule.default?.();
   const createRenderer = wasmModule.createWgpuBaseMapRenderer;
 
   if (!createRenderer) {
-    throw new Error("Maps WASM wgpu base-map renderer is unavailable.");
+    throw new Error("Maps wgpu base-map renderer is unavailable.");
   }
 
   const renderer = await createRenderer(canvas);
@@ -67,6 +75,16 @@ export async function loadMapsWgpuBaseMapRenderer(
       renderer.uploadTile(key, image);
     },
   };
+}
+
+async function importMapsWgpuWasmModule(packageName?: string): Promise<MapsWgpuBaseMapWasmModule> {
+  const dynamicImport = new Function("specifier", "return import(specifier)") as (
+    specifier: string,
+  ) => Promise<MapsWgpuBaseMapWasmModule>;
+  const resolvedPackage =
+    packageName ?? configuredMapsWgpuWasmPackage ?? DEFAULT_MAPS_WGPU_WASM_PACKAGE;
+
+  return dynamicImport(resolvedPackage);
 }
 
 function assertLive(disposed: boolean) {
