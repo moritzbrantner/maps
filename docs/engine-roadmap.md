@@ -4,6 +4,8 @@ This document is the authoritative long-term roadmap for evolving `@moritzbrantn
 
 The target is not "MapLibre rewritten in Rust". The target is a Maps-owned geographic engine with deterministic Rust semantics, a thin browser host, and replaceable Canvas2D/WebGPU pixel backends. The project should first reach Leaflet-class independence, then incrementally pursue MapLibre-class vector-map and cartography capabilities.
 
+"First-party" describes semantic ownership, not implementation isolation. Maps should own map behavior while composing existing lower-level workspace foundations instead of rebuilding generic 3D, geo, asset, evidence, or rendering primitives locally. ADR 0007 defines that boundary.
+
 ## Target architecture
 
 ```text
@@ -22,23 +24,50 @@ maps-wasm
     |
     v
 Maps Rust Engine
-  - camera + projection
-  - viewport + transforms
+  - geographic camera semantics
+  - Web Mercator + world wrapping
+  - viewport + map constraints
   - tile addressing + scheduling
   - tile/source cache
   - vector/raster sources
   - spatial indexes + clustering
-  - geometry + topology
+  - map geometry + topology
   - style evaluation
   - label placement
   - render preparation
+    |
+    +--> narrow adapters to existing lower-level foundations
+    |      - moenarch-geo-core / geo-analysis
+    |      - 3d-lab renderer-independent math/camera/spatial primitives
+    |      - asset-tooling for reproducible generated/static assets
+    |      - runtime-profiler / Moonlight / coding-tooling evidence boundaries
     |
     v
 typed Maps render frames
     |
     +--> Canvas2D reference backend
-    +--> WebGPU production backend
+    +--> wgpu/WebGPU production backend
 ```
+
+The arrow to shared foundations is not an authority transfer. Maps converts between map-domain state and generic primitives through narrow adapters; longitude/latitude/zoom/bearing/pitch, projection behavior, tile semantics, style/cartography behavior and map interaction identity remain Maps-owned.
+
+## Foundation authority map
+
+Before adding a local subsystem, check the existing workspace authorities first.
+
+| Concern | Authority / source of primitives | Maps responsibility |
+| --- | --- | --- |
+| Geographic geometry and generic geo algorithms | `moenarch-geo-core` / `geo-analysis` | Map-product semantics, projection/runtime policy and public map behavior |
+| Renderer-independent vectors, transforms, view/projection camera math | `3d-lab` Rust foundations when compatible | Convert `MapCamera` and Mercator state into a stable local render frame; preserve geographic authority and required precision |
+| Generic 3D/spatial interoperability | `3d-lab` spatial contracts | Define map-specific anchoring/overlay semantics and never move GIS truth into the 3D layer |
+| Generated/static assets and provenance | `asset-tooling` | Define map/cartographic asset requirements and consume reproducible outputs |
+| Renderer-agnostic data/frame computation | `viz-engine` only when a genuinely generic contract fits | Keep camera, tiles, styles, labels and map interaction semantics in Maps |
+| Runtime evidence | `runtime-profiler` | Own representative Maps scenarios |
+| Evidence verdict policy | Moonlight | Supply map-specific comparable evidence, not duplicate threshold logic |
+| Deterministic capability/conformance discovery | `coding-tooling` | Declare Maps capabilities and consume the shared checks |
+| Map-specific Canvas/wgpu pixels and picking | Maps render backends | Consume Maps-owned frames; never acquire independent geographic truth |
+
+When a shared API is close but incomplete, prefer improving or extracting the generic foundation before writing a parallel Maps implementation. Do not create a generic abstraction merely because reuse is imaginable; a concrete second consumer and a stable authority boundary are required.
 
 ## Milestone A — Engine Contract & Evidence Platform
 
@@ -52,17 +81,18 @@ Deliverables:
 - `runtime-profiler` scenarios that capture immutable reference/candidate evidence.
 - Moonlight evaluation of semantic and performance evidence through neutral `agent.evidence/v1` / `agent.evaluation-result/v1` boundaries.
 - Exact-head CI that reuses the exact validated build/evidence artifacts instead of recomputing them downstream.
+- An explicit foundation seam check for work that touches generic math/camera, spatial structures, renderer lifecycle, assets or cross-project data/frame contracts.
 
 Exit criterion: one named Maps scenario can be executed against an immutable reference and candidate, profiled with strictly comparable evidence, and evaluated by Moonlight without bespoke one-off glue.
 
 ## Milestone B — Independent Map Runtime
 
-Build a complete Rust-owned camera, interaction and raster-tile runtime rather than isolated camera experiments.
+Build a complete Rust-owned geographic camera, interaction and raster-tile runtime rather than isolated camera experiments.
 
 Deliverables:
 
 - Web Mercator projection and world wrapping.
-- Canonical camera state: center, zoom, bearing, pitch, viewport.
+- Canonical geographic camera state: center, zoom, bearing, pitch, viewport.
 - Project/unproject and fit-bounds semantics.
 - Visible-world and visible-tile calculation.
 - Drag, wheel, pinch/touch, resize and kinetic camera transitions through a thin browser input adapter.
@@ -70,6 +100,7 @@ Deliverables:
 - Source scheduling, cancellation, request deduplication, bounded cache and deterministic eviction.
 - Raster source loading and Canvas2D rendering.
 - MapLibre-free `MapView` mode with point/GeoJSON overlays.
+- For matrix-backed bearing/pitch work, Maps-owned conversion from precise geographic/Mercator state into a stable local render frame, followed by reuse of renderer-independent shared 3D camera/matrix primitives where their contracts are suitable. Do not add a second general-purpose camera/math stack to Maps.
 
 Exit criterion: a useful `MapView` renders and interacts with raster basemaps and application data with no MapLibre instance or runtime dependency in the execution path. This is Leaflet-class independence v1.
 
@@ -82,11 +113,13 @@ Deliverables:
 - Typed render batches for points/clusters, lines, polygon fills/strokes, raster quads, flows and scalar/heat surfaces.
 - Stable Maps-owned feature and picking identity.
 - Canvas2D as the deterministic correctness/reference backend.
-- WebGPU resource lifetime, packed buffers, dirty-range updates, batching, reusable pipelines, viewport uniforms and GPU picking.
+- wgpu resource lifetime, packed buffers, dirty-range updates, batching, map-specific reusable pipelines, viewport uniforms and GPU picking.
 - Device-loss handling and deterministic Canvas fallback.
 - Measured renderer selection using canonical scenarios rather than "WebGPU whenever available".
 
-Exit criterion: the complete Leaflet-class feature set renders without MapLibre; Canvas2D and WebGPU consume the same map-domain render model.
+The wgpu backend is allowed to own the GPU surface/device/queue and map-specific pipelines/textures because it is a Maps pixel backend. It must not become a general scene graph, transform hierarchy, asset system, camera authority or second 3D engine. Extract shared GPU infrastructure only when a concrete second consumer demonstrates a stable generic contract.
+
+Exit criterion: the complete Leaflet-class feature set renders without MapLibre; Canvas2D and wgpu consume the same map-domain render model.
 
 ## Milestone D — Vector Map Engine
 
@@ -134,7 +167,7 @@ Candidates:
 - extreme-scale datasets;
 - advanced temporal mapping.
 
-Reuse lower-level 3D, shader, geo or asset tooling only at clear primitive boundaries. Those projects do not become semantic authorities for Maps.
+Advanced work starts with an authority review across Maps, the existing 3D foundations, geo-analysis and asset-tooling. Maps owns geographic/cartographic meaning; shared repositories own their generic primitives. Do not start terrain, globe, extrusion, scene/camera, mesh or asset work by creating a minimal Maps-local substitute for an existing foundation.
 
 ## Evidence architecture
 
@@ -191,7 +224,9 @@ A scenario identity must remain stable enough to compare baseline/candidate evid
 12. Runtime claims require comparable evidence. Missing or incomparable profiling is unavailable/inconclusive, never green.
 13. Measure the costs that architectural choices can move: frame-time distribution, long tasks/main-thread work, memory, WASM bridge cost, GPU upload cost, picking latency and source-level hotspots where supported.
 14. Compute once and reuse exact validated artifacts/evidence across downstream jobs.
-15. Reuse lower-level foundations only when they reduce duplicate correctness logic; do not introduce a generic scene-graph/visualization authority into Maps.
-16. Promote implementation authority only after deterministic parity and representative performance evidence; once promoted, fail closed rather than silently switching authorities mid-session.
-17. Keep fallback boundaries explicit and testable (SSR/no-WASM/no-WebGPU/device loss) instead of sprinkling best-effort fallback throughout semantic code.
-18. Delete superseded implementations and stale benchmark harnesses after their replacement is proven; convergence is part of the milestone, not optional cleanup.
+15. Before implementing generic camera/matrix, spatial, renderer-lifecycle, asset or cross-project frame infrastructure locally, inspect the existing lower-level repositories and reuse or improve the established authority when one exists.
+16. Reuse lower-level foundations through narrow adapters. Do not let a generic scene/visualization/3D layer become the semantic authority for Maps.
+17. Promote implementation authority only after deterministic parity and representative performance evidence; once promoted, fail closed rather than silently switching authorities mid-session.
+18. Keep fallback boundaries explicit and testable (SSR/no-WASM/no-WebGPU/device loss) instead of sprinkling best-effort fallback throughout semantic code.
+19. Delete superseded implementations and stale benchmark harnesses after their replacement is proven; convergence is part of the milestone, not optional cleanup.
+20. Do not create a new shared abstraction for hypothetical reuse. Extraction requires a concrete second consumer and a contract that removes duplicated correctness logic rather than only boilerplate.
