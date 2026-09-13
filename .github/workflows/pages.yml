@@ -5,6 +5,7 @@ on:
     paths:
       - "crates/**"
       - "demo/**"
+      - "e2e-hosted/**"
       - "src/**"
       - "scripts/build-maps-wasm.mjs"
       - "Cargo.lock"
@@ -13,6 +14,7 @@ on:
       - "index.html"
       - "package.json"
       - "bun.lock"
+      - "playwright.hosted.config.ts"
       - "vite.config.*"
       - ".github/workflows/pages.yml"
   push:
@@ -23,8 +25,6 @@ on:
 permissions:
   contents: read
   packages: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages' }}
@@ -63,9 +63,42 @@ jobs:
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
+  verify-hosted-example:
+    name: Verify hosted Example
+    needs: build-example
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@680d4f7bda61361b10865d8835bc7ef69a24061b
+    with:
+      node_version: "24"
+      bun_version: "1.3.14"
+      install_command: bun install --frozen-lockfile
+      prebuilt_artifact_run_id: ${{ needs.build-example.outputs.producer_run_id }}
+      prebuilt_artifact_receipt_name: ${{ needs.build-example.outputs.receipt_artifact_name }}
+      prebuilt_artifact_name: ${{ needs.build-example.outputs.artifact_name }}
+      prebuilt_artifact_digest: ${{ needs.build-example.outputs.artifact_digest }}
+      prebuilt_source_sha: ${{ needs.build-example.outputs.source_sha }}
+      prebuilt_artifact_key: ${{ needs.build-example.outputs.artifact_key }}
+      prebuilt_identity_digest: ${{ needs.build-example.outputs.identity_digest }}
+      prebuilt_artifact_destination: dist
+      e2e_command: bunx playwright test --config playwright.hosted.config.ts
+      install_playwright: true
+      install_playwright_browsers: chromium
+      artifact_paths: |
+        playwright-report-hosted
+        test-results-hosted
+      artifact_name_suffix: "-hosted-pages"
+      upload_artifacts_on: failure
+    secrets:
+      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+
   deploy-example:
     name: Deploy Example
-    needs: build-example
+    needs:
+      - build-example
+      - verify-hosted-example
     if: ${{ github.event_name != 'pull_request' }}
     permissions:
       actions: read
