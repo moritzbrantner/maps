@@ -36,40 +36,66 @@ export async function loadMapsWgpuBaseMapRenderer(
   canvas: HTMLCanvasElement,
   packageName?: string,
 ): Promise<MapsWgpuBaseMapRenderer> {
-  const wasmModule = await importMapsWasmModule<MapsWgpuBaseMapWasmModule>(packageName);
-  await wasmModule.default?.();
-  const createRenderer = wasmModule.createWgpuBaseMapRenderer;
+  canvas.style.opacity = "0";
 
-  if (!createRenderer) {
-    throw new Error("Maps wgpu base-map renderer is unavailable.");
+  try {
+    const wasmModule = await importMapsWasmModule<MapsWgpuBaseMapWasmModule>(packageName);
+    await wasmModule.default?.();
+    const createRenderer = wasmModule.createWgpuBaseMapRenderer;
+
+    if (!createRenderer) {
+      throw new Error("Maps wgpu base-map renderer is unavailable.");
+    }
+
+    const renderer = await createRenderer(canvas);
+    let disposed = false;
+    canvas.style.opacity = "1";
+
+    return {
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        canvas.style.opacity = "0";
+        renderer.free?.();
+      },
+      evictTile(key) {
+        runRendererOperation(canvas, () => {
+          assertLive(disposed);
+          renderer.evictTile(key);
+        });
+      },
+      render(placements, viewportWidth, viewportHeight) {
+        return runRendererOperation(canvas, () => {
+          assertLive(disposed);
+          return renderer.render(placements, viewportWidth, viewportHeight);
+        });
+      },
+      resize(width, height) {
+        runRendererOperation(canvas, () => {
+          assertLive(disposed);
+          renderer.resize(width, height);
+        });
+      },
+      uploadTile(key, image) {
+        runRendererOperation(canvas, () => {
+          assertLive(disposed);
+          renderer.uploadTile(key, image);
+        });
+      },
+    };
+  } catch (error) {
+    canvas.style.opacity = "0";
+    throw error;
   }
+}
 
-  const renderer = await createRenderer(canvas);
-  let disposed = false;
-
-  return {
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      renderer.free?.();
-    },
-    evictTile(key) {
-      assertLive(disposed);
-      renderer.evictTile(key);
-    },
-    render(placements, viewportWidth, viewportHeight) {
-      assertLive(disposed);
-      return renderer.render(placements, viewportWidth, viewportHeight);
-    },
-    resize(width, height) {
-      assertLive(disposed);
-      renderer.resize(width, height);
-    },
-    uploadTile(key, image) {
-      assertLive(disposed);
-      renderer.uploadTile(key, image);
-    },
-  };
+function runRendererOperation<T>(canvas: HTMLCanvasElement, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    canvas.style.opacity = "0";
+    throw error;
+  }
 }
 
 function assertLive(disposed: boolean) {
