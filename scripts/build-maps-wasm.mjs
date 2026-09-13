@@ -37,6 +37,8 @@ run("wasm-bindgen", [
   "--target",
   "web",
   "--typescript",
+  "--remove-name-section",
+  "--remove-producers-section",
 ]);
 
 console.log(`Built Maps WASM package artifact in ${path.relative(rootDir, outDir)}.`);
