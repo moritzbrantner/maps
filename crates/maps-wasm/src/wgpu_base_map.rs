@@ -1,4 +1,8 @@
 use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -45,7 +49,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  return textureSample(raster_tile, raster_sampler, input.uv);
+  let sampled = textureSample(raster_tile, raster_sampler, input.uv);
+  return vec4<f32>(sampled.rgb * sampled.a, sampled.a);
 }
 "#;
 
@@ -77,6 +82,7 @@ pub struct MapsWgpuBaseMapRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     surface_view_format: wgpu::TextureFormat,
+    device_lost: Arc<AtomicBool>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -113,6 +119,11 @@ impl MapsWgpuBaseMapRenderer {
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .map_err(|error| js_error("could not acquire wgpu device", error))?;
+        let device_lost = Arc::new(AtomicBool::new(false));
+        let lost_signal = Arc::clone(&device_lost);
+        device.set_device_lost_callback(move |_reason, _message| {
+            lost_signal.store(true, Ordering::Release);
+        });
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
         let mut config = surface
@@ -260,6 +271,7 @@ impl MapsWgpuBaseMapRenderer {
             queue,
             config,
             surface_view_format,
+            device_lost,
             camera_buffer,
             camera_bind_group,
             texture_bind_group_layout,
@@ -269,6 +281,11 @@ impl MapsWgpuBaseMapRenderer {
             vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             tiles: HashMap::new(),
         })
+    }
+
+    #[wasm_bindgen(js_name = isDeviceLost)]
+    pub fn is_device_lost(&self) -> bool {
+        self.device_lost.load(Ordering::Acquire)
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
