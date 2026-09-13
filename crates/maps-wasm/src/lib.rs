@@ -34,29 +34,21 @@ struct WasmMapPointInput {
     metrics: BTreeMap<String, f64>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmPointAggregationOptions {
-    #[serde(default)]
-    min_zoom: Option<u8>,
-    #[serde(default)]
-    max_zoom: Option<u8>,
-    #[serde(default)]
-    radius: Option<f64>,
-    #[serde(default)]
-    extent: Option<f64>,
+impl From<WasmMapPointInput> for MapPoint {
+    fn from(point: WasmMapPointInput) -> Self {
+        Self {
+            id: point.id,
+            label: point.label,
+            latitude: point.latitude,
+            longitude: point.longitude,
+            metrics: point.metrics,
+        }
+    }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WasmViewportAggregationQuery {
-    bounds: [f64; 4],
-    zoom: f64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmMapPoint {
+struct WasmIndexedMapPoint {
     id: String,
     label: String,
     latitude: f64,
@@ -64,279 +56,290 @@ struct WasmMapPoint {
     metrics: BTreeMap<String, f64>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmClusteredMapPoint {
-    kind: &'static str,
-    point_id: String,
-    coordinates: [f64; 2],
-    metrics: BTreeMap<String, f64>,
-    point: WasmMapPoint,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmClusteredMapCluster {
-    kind: &'static str,
-    cluster_id: u64,
-    point_count: usize,
-    coordinates: [f64; 2],
-    expansion_zoom: f64,
-    metrics: BTreeMap<String, f64>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum WasmAggregatedMapFeature {
-    Point(WasmClusteredMapPoint),
-    Cluster(WasmClusteredMapCluster),
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmViewportAggregationSummary {
-    bounds: [f64; 4],
-    zoom: f64,
-    visible_point_count: usize,
-    visible_cluster_count: usize,
-    visible_unclustered_count: usize,
-    metrics: BTreeMap<String, f64>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmViewportAggregation {
-    features: Vec<WasmAggregatedMapFeature>,
-    summary: WasmViewportAggregationSummary,
-}
-
-impl From<WasmPointAggregationOptions> for PointAggregationOptions {
-    fn from(options: WasmPointAggregationOptions) -> Self {
-        let defaults = PointAggregationOptions::default();
+impl From<IndexedMapPoint> for WasmIndexedMapPoint {
+    fn from(point: IndexedMapPoint) -> Self {
         Self {
-            min_zoom: options.min_zoom.unwrap_or(defaults.min_zoom),
-            max_zoom: options.max_zoom.unwrap_or(defaults.max_zoom),
-            radius: options.radius.unwrap_or(defaults.radius),
-            extent: options.extent.unwrap_or(defaults.extent),
-        }
-    }
-}
-
-impl From<WasmViewportAggregationQuery> for ViewportAggregationQuery {
-    fn from(query: WasmViewportAggregationQuery) -> Self {
-        Self {
-            bounds: query.bounds,
-            zoom: query.zoom,
-        }
-    }
-}
-
-impl From<&IndexedMapPoint> for WasmMapPoint {
-    fn from(point: &IndexedMapPoint) -> Self {
-        Self {
-            id: point.id.clone(),
-            label: point.label.clone(),
+            id: point.id,
+            label: point.label,
             latitude: point.latitude,
             longitude: point.longitude,
-            metrics: point.metrics.clone(),
+            metrics: point.metrics,
         }
     }
+}
+
+impl From<WasmIndexedMapPoint> for IndexedMapPoint {
+    fn from(point: WasmIndexedMapPoint) -> Self {
+        Self {
+            id: point.id,
+            label: point.label,
+            latitude: point.latitude,
+            longitude: point.longitude,
+            metrics: point.metrics,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmPointAggregationOptions {
+    extent: Option<f64>,
+    max_zoom: Option<f64>,
+    min_zoom: Option<f64>,
+    radius: Option<f64>,
+}
+
+impl WasmPointAggregationOptions {
+    fn into_core(self) -> Result<PointAggregationOptions, JsValue> {
+        let defaults = PointAggregationOptions::default();
+        Ok(PointAggregationOptions {
+            extent: self.extent.unwrap_or(defaults.extent),
+            max_zoom: decode_zoom(self.max_zoom, defaults.max_zoom, "maxZoom")?,
+            min_zoom: decode_zoom(self.min_zoom, defaults.min_zoom, "minZoom")?,
+            radius: self.radius.unwrap_or(defaults.radius),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WasmViewportAggregationQuery {
+    bounds: [f64; 4],
+    zoom: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmVisibleAggregationSummary {
+    bounds: [f64; 4],
+    metrics: BTreeMap<String, f64>,
+    visible_cluster_count: usize,
+    visible_point_count: usize,
+    visible_unclustered_count: usize,
+    zoom: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum WasmAggregatedMapFeature {
+    Cluster {
+        #[serde(rename = "clusterId")]
+        cluster_id: usize,
+        coordinates: [f64; 2],
+        #[serde(rename = "expansionZoom")]
+        expansion_zoom: usize,
+        metrics: BTreeMap<String, f64>,
+        #[serde(rename = "pointCount")]
+        point_count: usize,
+        #[serde(rename = "pointCountAbbreviated")]
+        point_count_abbreviated: String,
+    },
+    Point {
+        coordinates: [f64; 2],
+        metrics: BTreeMap<String, f64>,
+        #[serde(rename = "pointId")]
+        point_id: String,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct WasmViewportAggregation {
+    features: Vec<WasmAggregatedMapFeature>,
+    summary: WasmVisibleAggregationSummary,
 }
 
 impl From<ViewportAggregation> for WasmViewportAggregation {
     fn from(aggregation: ViewportAggregation) -> Self {
+        let features = aggregation
+            .features
+            .into_iter()
+            .map(|feature| match feature {
+                AggregatedMapFeature::Cluster(cluster) => WasmAggregatedMapFeature::Cluster {
+                    cluster_id: cluster.cluster_id,
+                    coordinates: cluster.coordinates,
+                    expansion_zoom: cluster.expansion_zoom,
+                    metrics: cluster.metrics,
+                    point_count: cluster.point_count,
+                    point_count_abbreviated: cluster.point_count_abbreviated,
+                },
+                AggregatedMapFeature::Point(point) => WasmAggregatedMapFeature::Point {
+                    coordinates: point.coordinates,
+                    metrics: point.metrics,
+                    point_id: point.point.id,
+                },
+            })
+            .collect();
+
         Self {
-            features: aggregation
-                .features
-                .into_iter()
-                .map(|feature| match feature {
-                    AggregatedMapFeature::Point(feature) => {
-                        WasmAggregatedMapFeature::Point(WasmClusteredMapPoint {
-                            kind: "point",
-                            point_id: feature.point_id,
-                            coordinates: feature.coordinates,
-                            metrics: feature.metrics,
-                            point: WasmMapPoint::from(&feature.point),
-                        })
-                    }
-                    AggregatedMapFeature::Cluster(feature) => {
-                        WasmAggregatedMapFeature::Cluster(WasmClusteredMapCluster {
-                            kind: "cluster",
-                            cluster_id: feature.cluster_id,
-                            point_count: feature.point_count,
-                            coordinates: feature.coordinates,
-                            expansion_zoom: feature.expansion_zoom,
-                            metrics: feature.metrics,
-                        })
-                    }
-                })
-                .collect(),
-            summary: WasmViewportAggregationSummary {
+            features,
+            summary: WasmVisibleAggregationSummary {
                 bounds: aggregation.summary.bounds,
-                zoom: aggregation.summary.zoom,
-                visible_point_count: aggregation.summary.visible_point_count,
-                visible_cluster_count: aggregation.summary.visible_cluster_count,
-                visible_unclustered_count: aggregation.summary.visible_unclustered_count,
                 metrics: aggregation.summary.metrics,
+                visible_cluster_count: aggregation.summary.visible_cluster_count,
+                visible_point_count: aggregation.summary.visible_point_count,
+                visible_unclustered_count: aggregation.summary.visible_unclustered_count,
+                zoom: aggregation.summary.zoom,
             },
         }
     }
 }
 
-#[wasm_bindgen(js_name = normalizeMapPoints)]
-pub fn normalize_map_points_wasm(points: JsValue) -> Result<JsValue, JsValue> {
-    let inputs = serde_wasm_bindgen::from_value::<Vec<WasmMapPointInput>>(points)
-        .map_err(|error| js_error("invalid map point input", error))?;
-    let normalized = normalize_map_points(inputs.into_iter().map(|point| MapPoint {
-        id: point.id,
-        label: point.label,
-        latitude: point.latitude,
-        longitude: point.longitude,
-        metrics: point.metrics,
-    }));
-
-    serde_wasm_bindgen::to_value(
-        &normalized
-            .iter()
-            .map(WasmMapPoint::from)
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|error| js_error("could not serialize normalized map points", error))
-}
-
-#[wasm_bindgen(js_name = getBoundsFromPoints)]
-pub fn get_bounds_from_points_wasm(points: JsValue) -> Result<JsValue, JsValue> {
-    let points = serde_wasm_bindgen::from_value::<Vec<WasmMapPointInput>>(points)
-        .map_err(|error| js_error("invalid map point input", error))?;
-    let normalized = normalize_map_points(points.into_iter().map(|point| MapPoint {
-        id: point.id,
-        label: point.label,
-        latitude: point.latitude,
-        longitude: point.longitude,
-        metrics: point.metrics,
-    }));
-    serde_wasm_bindgen::to_value(&get_bounds_from_points(&normalized))
-        .map_err(|error| js_error("could not serialize point bounds", error))
-}
-
+/// Direct WASM handle over the Maps-owned Rust point aggregation index.
 #[wasm_bindgen]
 pub struct MapsPointAggregationIndex {
-    index: CorePointAggregationIndex,
+    inner: CorePointAggregationIndex,
 }
 
 #[wasm_bindgen]
 impl MapsPointAggregationIndex {
     #[wasm_bindgen(constructor)]
     pub fn new(points: JsValue, options: JsValue) -> Result<MapsPointAggregationIndex, JsValue> {
-        let points = serde_wasm_bindgen::from_value::<Vec<WasmMapPointInput>>(points)
-            .map_err(|error| js_error("invalid aggregation point input", error))?;
-        let options = serde_wasm_bindgen::from_value::<WasmPointAggregationOptions>(options)
-            .map_err(|error| js_error("invalid aggregation options", error))?;
-        let normalized = normalize_map_points(points.into_iter().map(|point| MapPoint {
-            id: point.id,
-            label: point.label,
-            latitude: point.latitude,
-            longitude: point.longitude,
-            metrics: point.metrics,
-        }));
-        let index = CorePointAggregationIndex::new(normalized, options.into())
-            .map_err(|error| js_error("could not build aggregation index", error))?;
+        let points = serde_wasm_bindgen::from_value::<Vec<WasmIndexedMapPoint>>(points)
+            .map_err(to_js_error)?
+            .into_iter()
+            .map(IndexedMapPoint::from)
+            .collect();
+        let options = if options.is_null() || options.is_undefined() {
+            PointAggregationOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value::<WasmPointAggregationOptions>(options)
+                .map_err(to_js_error)?
+                .into_core()?
+        };
+        let inner = CorePointAggregationIndex::new(points, options).map_err(to_js_error)?;
 
-        Ok(Self { index })
+        Ok(Self { inner })
     }
 
     #[wasm_bindgen(js_name = getViewportAggregation)]
-    pub fn get_viewport_aggregation(&self, query: JsValue) -> Result<JsValue, JsValue> {
+    pub fn get_viewport_aggregation(&mut self, query: JsValue) -> Result<JsValue, JsValue> {
         let query = serde_wasm_bindgen::from_value::<WasmViewportAggregationQuery>(query)
-            .map_err(|error| js_error("invalid viewport aggregation query", error))?;
+            .map_err(to_js_error)?;
         let aggregation = self
-            .index
-            .get_viewport_aggregation(query.into())
-            .map_err(|error| js_error("could not query aggregation index", error))?;
-        serde_wasm_bindgen::to_value(&WasmViewportAggregation::from(aggregation))
-            .map_err(|error| js_error("could not serialize viewport aggregation", error))
-    }
+            .inner
+            .get_viewport_aggregation(ViewportAggregationQuery {
+                bounds: query.bounds,
+                zoom: query.zoom,
+            })
+            .map_err(to_js_error)?;
 
-    #[wasm_bindgen(js_name = getClusterExpansionZoom)]
-    pub fn get_cluster_expansion_zoom(&self, cluster_id: u64) -> Result<f64, JsValue> {
-        self.index
-            .get_cluster_expansion_zoom(cluster_id)
-            .map_err(|error| js_error("could not query cluster expansion zoom", error))
+        encode_json_compatible(&WasmViewportAggregation::from(aggregation))
     }
 
     #[wasm_bindgen(js_name = getClusterLeaves)]
     pub fn get_cluster_leaves(
         &self,
-        cluster_id: u64,
+        cluster_id: f64,
         limit: usize,
         offset: usize,
     ) -> Result<JsValue, JsValue> {
+        let cluster_id = decode_identifier(cluster_id, "clusterId")?;
         let leaves = self
-            .index
+            .inner
             .get_cluster_leaves(cluster_id, limit, offset)
-            .map_err(|error| js_error("could not query cluster leaves", error))?;
-        serde_wasm_bindgen::to_value(
-            &leaves.iter().map(WasmMapPoint::from).collect::<Vec<_>>(),
-        )
-        .map_err(|error| js_error("could not serialize cluster leaves", error))
+            .map_err(to_js_error)?
+            .into_iter()
+            .map(WasmIndexedMapPoint::from)
+            .collect::<Vec<_>>();
+
+        encode_json_compatible(&leaves)
+    }
+
+    #[wasm_bindgen(js_name = getClusterExpansionZoom)]
+    pub fn get_cluster_expansion_zoom(&self, cluster_id: f64) -> Result<usize, JsValue> {
+        self.inner
+            .get_cluster_expansion_zoom(decode_identifier(cluster_id, "clusterId")?)
+            .map_err(to_js_error)
     }
 
     #[wasm_bindgen(js_name = getPointById)]
     pub fn get_point_by_id(&self, point_id: &str) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(&self.index.get_point_by_id(point_id).map(WasmMapPoint::from))
-            .map_err(|error| js_error("could not serialize point lookup", error))
+        encode_json_compatible(
+            &self
+                .inner
+                .get_point_by_id(point_id)
+                .map(WasmIndexedMapPoint::from),
+        )
     }
 }
 
-fn js_error(context: &str, error: impl std::fmt::Display) -> JsValue {
-    JsValue::from_str(&format!("{context}: {error}"))
+/// Normalizes native map points using the Maps-owned Rust contract.
+#[wasm_bindgen(js_name = normalizeMapPoints)]
+pub fn normalize_map_points_for_js(points: JsValue) -> Result<JsValue, JsValue> {
+    let points = decode_points(points)?;
+    let normalized = normalize_map_points(points)
+        .into_iter()
+        .map(WasmIndexedMapPoint::from)
+        .collect::<Vec<_>>();
+
+    encode_json_compatible(&normalized)
+}
+
+/// Computes `[west, south, east, north]` bounds from finite native map points.
+#[wasm_bindgen(js_name = boundsFromMapPoints)]
+pub fn bounds_from_map_points_for_js(points: JsValue) -> Result<JsValue, JsValue> {
+    let points = decode_points(points)?;
+    let bounds = get_bounds_from_points(&points).map(maps_core::MapBounds::as_array);
+
+    encode_json_compatible(&bounds)
+}
+
+fn decode_points(points: JsValue) -> Result<Vec<MapPoint>, JsValue> {
+    serde_wasm_bindgen::from_value::<Vec<WasmMapPointInput>>(points)
+        .map(|points| points.into_iter().map(MapPoint::from).collect())
+        .map_err(to_js_error)
+}
+
+fn decode_zoom(value: Option<f64>, default: u8, name: &str) -> Result<u8, JsValue> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if !value.is_finite() || value.fract() != 0.0 || !(0.0..=254.0).contains(&value) {
+        return Err(JsValue::from_str(&format!(
+            "{name} must be an integer between 0 and 254"
+        )));
+    }
+
+    Ok(value as u8)
+}
+
+fn decode_identifier(value: f64, name: &str) -> Result<usize, JsValue> {
+    if !value.is_finite() || value.fract() != 0.0 || value < 0.0 || value > usize::MAX as f64 {
+        return Err(JsValue::from_str(&format!(
+            "{name} must be a non-negative integer"
+        )));
+    }
+
+    Ok(value as usize)
+}
+
+fn encode_json_compatible<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(to_js_error)
+}
+
+fn to_js_error(error: impl ToString) -> JsValue {
+    JsValue::from_str(&error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn options() -> JsValue {
-        serde_wasm_bindgen::to_value(&serde_json::json!({
-            "minZoom": 0,
-            "maxZoom": 16,
-            "radius": 72,
-            "extent": 512,
-        }))
-        .unwrap()
-    }
-
-    fn points() -> JsValue {
-        serde_wasm_bindgen::to_value(&serde_json::json!([
-            {
-                "id": "berlin-a",
-                "label": "Berlin A",
-                "latitude": 52.52,
-                "longitude": 13.405,
-                "metrics": { "demand": 8, "revenue": 1200 }
-            },
-            {
-                "id": "berlin-b",
-                "label": "Berlin B",
-                "latitude": 52.5204,
-                "longitude": 13.4054,
-                "metrics": { "demand": 5, "revenue": 900 }
-            }
-        ]))
-        .unwrap()
-    }
-
     #[test]
-    fn aggregates_points() {
-        let index = MapsPointAggregationIndex::new(points(), options()).unwrap();
-        let query = serde_wasm_bindgen::to_value(&serde_json::json!({
-            "bounds": [-180, -85, 180, 85],
-            "zoom": 4,
-        }))
-        .unwrap();
+    fn transport_conversion_does_not_own_map_semantics() {
+        let point = WasmMapPointInput {
+            id: Some("point-1".to_owned()),
+            label: Some("Point 1".to_owned()),
+            latitude: 49.0,
+            longitude: 8.0,
+            metrics: BTreeMap::from([("demand".to_owned(), 42.0)]),
+        };
 
-        let result = index.get_viewport_aggregation(query).unwrap();
-        let aggregation: serde_json::Value = serde_wasm_bindgen::from_value(result).unwrap();
-        assert_eq!(aggregation["summary"]["visiblePointCount"], 2);
+        let point = MapPoint::from(point);
+
+        assert_eq!(point.id.as_deref(), Some("point-1"));
+        assert_eq!(point.label.as_deref(), Some("Point 1"));
+        assert_eq!(point.metrics.get("demand"), Some(&42.0));
     }
 }
