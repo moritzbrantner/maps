@@ -486,12 +486,40 @@ function createFrameSynchronizer({
 }) {
   let disposed = false;
   let rendererRetryFrame: number | null = null;
+  let deviceLossMonitorFrame: number | null = null;
 
   function cancelRendererRetry() {
     if (rendererRetryFrame !== null) {
       cancelAnimationFrame(rendererRetryFrame);
       rendererRetryFrame = null;
     }
+  }
+
+  function cancelDeviceLossMonitor() {
+    if (deviceLossMonitorFrame !== null) {
+      cancelAnimationFrame(deviceLossMonitorFrame);
+      deviceLossMonitorFrame = null;
+    }
+  }
+
+  function scheduleDeviceLossMonitor() {
+    if (disposed || deviceLossMonitorFrame !== null || !renderer()) return;
+    deviceLossMonitorFrame = requestAnimationFrame(() => {
+      deviceLossMonitorFrame = null;
+      if (disposed) return;
+      const currentRenderer = renderer();
+      if (!currentRenderer) return;
+      try {
+        if (currentRenderer.isDeviceLost()) {
+          failRenderer();
+          return;
+        }
+      } catch {
+        failRenderer();
+        return;
+      }
+      scheduleDeviceLossMonitor();
+    });
   }
 
   function scheduleRendererRetry() {
@@ -504,8 +532,11 @@ function createFrameSynchronizer({
 
   function failRenderer() {
     cancelRendererRetry();
+    cancelDeviceLossMonitor();
     onRendererFailure();
   }
+
+  scheduleDeviceLossMonitor();
 
   function renderFrame(frame: MapsFlatRasterFrame) {
     if (disposed) return;
@@ -608,6 +639,7 @@ function createFrameSynchronizer({
     dispose() {
       disposed = true;
       cancelRendererRetry();
+      cancelDeviceLossMonitor();
     },
     syncFrame,
   };
