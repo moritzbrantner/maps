@@ -34,6 +34,7 @@ import { loadMapsWgpuBaseMapRenderer, type MapsWgpuBaseMapRenderer } from "./wgp
 const DEFAULT_TILE_SIZE = 256;
 const DEFAULT_SOURCE_MAX_ZOOM = 19;
 const MAX_MAP_ZOOM = 22;
+const DEVICE_LOSS_POLL_MS = 250;
 
 type MapsCanvasFitBoundsOptions = MapFitBoundsOptions & {
   reason?: MapViewStateChangeReason;
@@ -486,7 +487,8 @@ function createFrameSynchronizer({
 }) {
   let disposed = false;
   let rendererRetryFrame: number | null = null;
-  let deviceLossMonitorFrame: number | null = null;
+  let deviceLossMonitorTimer: number | null = null;
+  let lastFrame: MapsFlatRasterFrame | null = null;
 
   function cancelRendererRetry() {
     if (rendererRetryFrame !== null) {
@@ -496,30 +498,33 @@ function createFrameSynchronizer({
   }
 
   function cancelDeviceLossMonitor() {
-    if (deviceLossMonitorFrame !== null) {
-      cancelAnimationFrame(deviceLossMonitorFrame);
-      deviceLossMonitorFrame = null;
+    if (deviceLossMonitorTimer !== null) {
+      window.clearInterval(deviceLossMonitorTimer);
+      deviceLossMonitorTimer = null;
     }
   }
 
-  function scheduleDeviceLossMonitor() {
-    if (disposed || deviceLossMonitorFrame !== null || !renderer()) return;
-    deviceLossMonitorFrame = requestAnimationFrame(() => {
-      deviceLossMonitorFrame = null;
+  function startDeviceLossMonitor() {
+    if (disposed || deviceLossMonitorTimer !== null || !renderer()) return;
+    deviceLossMonitorTimer = window.setInterval(() => {
       if (disposed) return;
       const currentRenderer = renderer();
-      if (!currentRenderer) return;
-      try {
-        if (currentRenderer.isDeviceLost()) {
-          failRenderer();
-          return;
-        }
-      } catch {
-        failRenderer();
+      if (!currentRenderer) {
+        cancelDeviceLossMonitor();
         return;
       }
-      scheduleDeviceLossMonitor();
-    });
+      try {
+        if (!currentRenderer.isDeviceLost()) return;
+      } catch {
+        // Treat an unreadable renderer state as renderer failure below.
+      }
+
+      const retainedFrame = lastFrame ?? runtime.frame();
+      failRenderer();
+      canvas.dataset.mapBaseTiles = String(
+        drawCanvasFrame(fallbackCanvas, images, retainedFrame),
+      );
+    }, DEVICE_LOSS_POLL_MS);
   }
 
   function scheduleRendererRetry() {
@@ -536,10 +541,11 @@ function createFrameSynchronizer({
     onRendererFailure();
   }
 
-  scheduleDeviceLossMonitor();
+  startDeviceLossMonitor();
 
   function renderFrame(frame: MapsFlatRasterFrame) {
     if (disposed) return;
+    lastFrame = frame;
     const currentRenderer = renderer();
     if (currentRenderer) {
       try {
@@ -640,6 +646,7 @@ function createFrameSynchronizer({
       disposed = true;
       cancelRendererRetry();
       cancelDeviceLossMonitor();
+      lastFrame = null;
     },
     syncFrame,
   };
