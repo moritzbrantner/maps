@@ -11,6 +11,10 @@ import {
   type MapsPanVelocity,
 } from "./canvas-flat-inertia";
 import {
+  areMapsViewStatesEqual,
+  createMapsViewStateEchoTracker,
+} from "./canvas-flat-view-state-sync";
+import {
   normalizeMapMaxZoom,
   resolveTileLayerOptions,
   type MapBounds,
@@ -101,7 +105,7 @@ export function MapsCanvasFlatRuntime({
   const kineticStateRef = useRef<MapsKineticPanState | null>(null);
   const kineticFrameRef = useRef<number | null>(null);
   const kineticLastFrameTimeRef = useRef<number | null>(null);
-  const lastEmittedViewStateRef = useRef<MapViewState | null>(null);
+  const viewStateEchoTrackerRef = useRef(createMapsViewStateEchoTracker());
 
   sourceRef.current = source;
   maxZoomRef.current = maxZoom;
@@ -203,14 +207,14 @@ export function MapsCanvasFlatRuntime({
       });
       const emitViewState = (frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => {
         const nextViewState = frameViewState(frame);
-        lastEmittedViewStateRef.current = nextViewState;
+        viewStateEchoTrackerRef.current.record(nextViewState);
         onViewStateChangeRef.current(nextViewState, reason);
       };
       const emitConstraintCorrection = (
         frame: MapsFlatRasterFrame,
         reason: MapViewStateChangeReason,
       ) => {
-        if (!areViewStatesEqual(frameViewState(frame), viewStateRef.current)) {
+        if (!areMapsViewStatesEqual(frameViewState(frame), viewStateRef.current)) {
           emitViewState(frame, reason);
         }
       };
@@ -268,7 +272,7 @@ export function MapsCanvasFlatRuntime({
       gestureRef.current.clear();
       velocityTrackerRef.current.clear();
       pointerTimesRef.current.clear();
-      lastEmittedViewStateRef.current = null;
+      viewStateEchoTrackerRef.current.clear();
       for (const load of loadsRef.current.values()) load.abort.abort();
       loadsRef.current.clear();
       for (const image of imagesRef.current.values()) image.close();
@@ -283,16 +287,15 @@ export function MapsCanvasFlatRuntime({
     const syncFrame = syncFrameRef.current;
     if (!runtime || !syncFrame) return;
 
-    const lastEmitted = lastEmittedViewStateRef.current;
-    if (lastEmitted && areViewStatesEqual(lastEmitted, viewState)) {
-      lastEmittedViewStateRef.current = null;
-    } else {
-      cancelKineticPan();
+    if (viewStateEchoTrackerRef.current.acknowledge(viewState)) {
+      return;
     }
 
+    viewStateEchoTrackerRef.current.clear();
+    cancelKineticPan();
     runtime.setViewState(viewState);
     const frame = syncFrame();
-    if (!areViewStatesEqual(frameViewState(frame), viewState)) {
+    if (!areMapsViewStatesEqual(frameViewState(frame), viewState)) {
       emitViewStateRef.current?.(frame, "prop-change");
     }
   }, [viewState.center[0], viewState.center[1], viewState.zoom]);
@@ -473,14 +476,6 @@ function frameViewState(frame: MapsFlatRasterFrame): MapViewState {
     center: frame.camera.center,
     zoom: frame.camera.zoom,
   };
-}
-
-function areViewStatesEqual(left: MapViewState, right: MapViewState) {
-  return (
-    Math.abs(left.center[0] - right.center[0]) < 1e-10 &&
-    Math.abs(left.center[1] - right.center[1]) < 1e-10 &&
-    Math.abs(left.zoom - right.zoom) < 1e-10
-  );
 }
 
 async function loadRasterTile(url: string, signal: AbortSignal) {
