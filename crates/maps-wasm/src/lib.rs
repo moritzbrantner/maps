@@ -4,6 +4,8 @@
 //! values to and from that domain contract.
 
 mod engine_scenario;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod wgpu_base_map;
 
 use std::collections::BTreeMap;
 

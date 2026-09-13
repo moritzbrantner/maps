@@ -22,6 +22,9 @@ serde-json = { package = "serde_json", version = "=1.0.151" }
 serde-wasm-bindgen = "=0.6.5"
 supercluster = { version = "=3.0.8", features = ["cluster_metadata"] }
 wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "=0.4.78"
+web-sys = { version = "=0.3.105", features = ["HtmlCanvasElement", "ImageBitmap"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "webgpu", "wgsl"] }
 
 [profile.release]
 codegen-units = 1

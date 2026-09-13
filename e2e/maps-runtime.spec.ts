@@ -20,6 +20,21 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await expect(map).toHaveAttribute("data-map-ready", "true");
   await expect(map).toHaveAttribute("data-map-runtime", "maps");
   await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-map-base-renderer", /^(wgpu|canvas2d)$/);
+  await expect
+    .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
+    .toBeGreaterThan(0);
+  const webGpuAdapterAvailable = await page.evaluate(async () => {
+    if (!("gpu" in navigator)) return false;
+    try {
+      return Boolean(await navigator.gpu.requestAdapter());
+    } catch {
+      return false;
+    }
+  });
+  if (webGpuAdapterAvailable) {
+    await expect(canvas).toHaveAttribute("data-map-base-renderer", "wgpu");
+  }
   await expect(overlay).toHaveCount(1);
   await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
   await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
@@ -59,7 +74,9 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     button: "right",
   });
   await expect(interaction).toHaveText("point:context-menu:acceptance-berlin");
-  await expect(page.getByRole("button", { name: /Context Berlin at 13\.405,52\.520/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Context Berlin at 13\.405,52\.520/ }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
 
   const polygonPosition = await polygonPickPosition(page);

@@ -1,7 +1,4 @@
-import {
-  importMapsWasmModule,
-  type MapsWasmModuleBase,
-} from "./aggregation-wasm";
+import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
 import type { MapsRasterTilePlacement } from "./flat-runtime-wasm";
 
 export type MapsWgpuBaseMapRenderer = {
@@ -29,9 +26,7 @@ type MapsWgpuBaseMapWasmRenderer = {
 };
 
 type MapsWgpuBaseMapWasmModule = MapsWasmModuleBase & {
-  createWgpuBaseMapRenderer?: (
-    canvas: HTMLCanvasElement,
-  ) => Promise<MapsWgpuBaseMapWasmRenderer>;
+  createWgpuBaseMapRenderer?: (canvas: HTMLCanvasElement) => Promise<MapsWgpuBaseMapWasmRenderer>;
 };
 
 export async function loadMapsWgpuBaseMapRenderer(
