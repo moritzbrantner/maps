@@ -7,6 +7,7 @@ import type { MapsRasterTilePlacement } from "./flat-runtime-wasm";
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
   evictTile(key: string): void;
+  isDeviceLost(): boolean;
   render(
     placements: MapsRasterTilePlacement[],
     viewportWidth: number,
@@ -19,6 +20,7 @@ export type MapsWgpuBaseMapRenderer = {
 type MapsWgpuBaseMapWasmRenderer = {
   evictTile(key: string): void;
   free?: () => void;
+  isDeviceLost(): boolean;
   render(
     placements: MapsRasterTilePlacement[],
     viewportWidth: number,
@@ -62,6 +64,12 @@ export async function loadMapsWgpuBaseMapRenderer(
         runRendererOperation(canvas, () => {
           assertLive(disposed);
           renderer.evictTile(key);
+        });
+      },
+      isDeviceLost() {
+        return runRendererOperation(canvas, () => {
+          assertLive(disposed);
+          return renderer.isDeviceLost();
         });
       },
       render(placements, viewportWidth, viewportHeight) {
