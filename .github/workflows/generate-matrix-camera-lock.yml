@@ -1,0 +1,38 @@
+name: Generate matrix camera lockfile
+
+on:
+  push:
+    branches:
+      - feat/maps-matrix-camera
+    paths:
+      - Cargo.toml
+      - crates/maps-core/Cargo.toml
+
+permissions:
+  contents: write
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/maps-matrix-camera
+          fetch-depth: 0
+      - name: Set up pinned Rust
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
+      - name: Generate Cargo lockfile
+        run: cargo generate-lockfile
+      - name: Commit generated lockfile
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "build: lock shared 3d camera foundation"
+          git push origin HEAD:feat/maps-matrix-camera
