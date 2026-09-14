@@ -29,7 +29,7 @@ pub use flat_runtime::{
     RasterRenderCamera, RasterSourceSpec, RasterTilePlacement,
 };
 use geo_core::{BBox, Coordinate};
-pub use matrix_camera::MapLocalRenderFrame;
+pub use matrix_camera::{MapLocalRenderFrame, MapLocalViewportBounds};
 pub use scenario::{
     CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
     EngineScenarioObservation, ProjectionObservation, ViewportObservation,
