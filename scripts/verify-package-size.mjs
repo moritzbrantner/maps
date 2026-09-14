@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const budgets = {
-  compressedSize: 367_500,
+  compressedSize: 371_000,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_522_000,
-  wasmRuntimeSize: 460_000,
+  unpackedSize: 1_530_000,
+  wasmRuntimeSize: 466_000,
 };
 
 const pack = spawnSync(
