@@ -283,8 +283,16 @@ mod tests {
 
         assert!((bounds.west + 400.0).abs() < 1.0e-3, "west={}", bounds.west);
         assert!((bounds.east - 400.0).abs() < 1.0e-3, "east={}", bounds.east);
-        assert!((bounds.south + 300.0).abs() < 1.0e-3, "south={}", bounds.south);
-        assert!((bounds.north - 300.0).abs() < 1.0e-3, "north={}", bounds.north);
+        assert!(
+            (bounds.south + 300.0).abs() < 1.0e-3,
+            "south={}",
+            bounds.south
+        );
+        assert!(
+            (bounds.north - 300.0).abs() < 1.0e-3,
+            "north={}",
+            bounds.north
+        );
     }
 
     #[test]
