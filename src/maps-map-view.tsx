@@ -179,38 +179,60 @@ export function MapsMapView({
 
   const setSurfaceViewState = useCallback(
     (next: MapViewState, reason: MapViewStateChangeReason = "programmatic") => {
+      const resolvedNext =
+        reason === "cluster-expand"
+          ? {
+              ...next,
+              ...(currentViewState.bearing === undefined
+                ? {}
+                : { bearing: currentViewState.bearing }),
+              ...(currentViewState.pitch === undefined ? {} : { pitch: currentViewState.pitch }),
+            }
+          : next;
       const runtime = runtimeControllerRef.current;
 
       if (runtime) {
-        runtime.setViewState(next, reason);
+        runtime.setViewState(resolvedNext, reason);
         return;
       }
 
-      setViewState(next, reason);
+      setViewState(resolvedNext, reason);
     },
-    [setViewState],
+    [currentViewState.bearing, currentViewState.pitch, setViewState],
   );
 
   const projectCoordinate = useCallback(
     (coordinates: [longitude: number, latitude: number]) => {
       return runtimeControllerRef.current?.project(coordinates) ?? null;
     },
-    [currentViewState.center[0], currentViewState.center[1], currentViewState.zoom, isReady],
+    [
+      currentViewState.center[0],
+      currentViewState.center[1],
+      currentViewState.zoom,
+      currentViewState.bearing,
+      currentViewState.pitch,
+      isReady,
+    ],
   );
 
   const getViewportAggregationQuery = useCallback(
-    (width: number, height: number): ViewportAggregationQuery | null => {
+    (_width: number, _height: number): ViewportAggregationQuery | null => {
       const runtime = runtimeControllerRef.current;
       if (!runtime) return null;
 
-      const bottomLeft = runtime.unproject(0, height);
-      const topRight = runtime.unproject(width, 0);
       return {
-        bounds: [bottomLeft[0], bottomLeft[1], topRight[0], topRight[1]],
+        bounds: runtime.getVisibleBounds(),
         zoom: currentViewState.zoom,
       };
     },
-    [currentViewState.center[0], currentViewState.center[1], currentViewState.zoom, isReady],
+    [
+      currentViewState.center[0],
+      currentViewState.center[1],
+      currentViewState.zoom,
+      currentViewState.bearing,
+      currentViewState.pitch,
+      isReady,
+    ],
   );
 
   const handleMapContextMenu = useCallback(
@@ -460,7 +482,7 @@ export function MapsMapView({
           throwUnsupportedMapsInteraction();
         }
       },
-      setViewState,
+      setViewState: setSurfaceViewState,
       viewState: currentViewState,
     }),
     [
@@ -470,7 +492,7 @@ export function MapsMapView({
       getFeatureId,
       handleBackgroundClick,
       hovered,
-      setViewState,
+      setSurfaceViewState,
     ],
   );
 

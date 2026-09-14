@@ -14,6 +14,8 @@ export type MapDisplayMode = "flat" | "globe";
 export type MapViewState = {
   center: [longitude: number, latitude: number];
   zoom: number;
+  bearing?: number;
+  pitch?: number;
 };
 
 export type MapBounds = [west: number, south: number, east: number, north: number];

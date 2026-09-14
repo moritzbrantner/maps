@@ -20,6 +20,7 @@ vi.mock("./canvas-flat-runtime", async () => {
       bounds: [number, number, number, number],
       options?: { maxZoom?: number; reason?: Reason },
     ) => void;
+    getVisibleBounds: () => [number, number, number, number];
     project: (coordinates: [number, number]) => { x: number; y: number };
     setViewState: (viewState: ViewState, reason?: Reason) => void;
     unproject: (x: number, y: number) => [number, number];
@@ -46,6 +47,9 @@ vi.mock("./canvas-flat-runtime", async () => {
             },
             options.reason ?? "fit-bounds",
           );
+        },
+        getVisibleBounds() {
+          return [-180, -85, 180, 85];
         },
         project(coordinates) {
           return {

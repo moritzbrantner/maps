@@ -25,6 +25,10 @@ pub fn execute_engine_scenario_for_js(scenario_json: &str) -> Result<JsValue, Js
 struct WasmFlatRasterRuntimeConfig {
     center: [f64; 2],
     zoom: f64,
+    #[serde(default)]
+    bearing: f64,
+    #[serde(default)]
+    pitch: f64,
     width: f64,
     height: f64,
     source: WasmRasterSourceSpec,
@@ -159,8 +163,8 @@ impl MapsFlatRasterRuntime {
             config.center[0],
             config.center[1],
             config.zoom,
-            0.0,
-            0.0,
+            config.bearing,
+            config.pitch,
             viewport,
         )
         .ok_or_else(|| JsValue::from_str("invalid flat raster camera"))?;
@@ -192,9 +196,11 @@ impl MapsFlatRasterRuntime {
         longitude: f64,
         latitude: f64,
         zoom: f64,
+        bearing: f64,
+        pitch: f64,
     ) -> Result<(), JsValue> {
         self.inner
-            .set_view_state(longitude, latitude, zoom)
+            .set_camera_state(longitude, latitude, zoom, bearing, pitch)
             .map_err(to_js_error)
     }
 
@@ -206,6 +212,28 @@ impl MapsFlatRasterRuntime {
     pub fn pan_by(&mut self, delta_x: f64, delta_y: f64) -> Result<(), JsValue> {
         self.inner
             .pan_by_pixels(delta_x, delta_y)
+            .map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = panBetween)]
+    pub fn pan_between(
+        &mut self,
+        previous_x: f64,
+        previous_y: f64,
+        current_x: f64,
+        current_y: f64,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .pan_between_screen_points(
+                ScreenCoordinate {
+                    x: previous_x,
+                    y: previous_y,
+                },
+                ScreenCoordinate {
+                    x: current_x,
+                    y: current_y,
+                },
+            )
             .map_err(to_js_error)
     }
 
@@ -265,9 +293,8 @@ impl MapsFlatRasterRuntime {
     pub fn project(&self, longitude: f64, latitude: f64) -> Result<JsValue, JsValue> {
         let screen = self
             .inner
-            .camera()
             .project_screen(longitude, latitude)
-            .ok_or_else(|| JsValue::from_str("screen projection is unavailable"))?;
+            .map_err(to_js_error)?;
         encode_json_compatible(&[screen.x, screen.y])
     }
 

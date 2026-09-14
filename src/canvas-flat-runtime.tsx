@@ -42,8 +42,14 @@ type MapsCanvasFitBoundsOptions = MapFitBoundsOptions & {
   reason?: MapViewStateChangeReason;
 };
 
+type ScreenPoint = {
+  x: number;
+  y: number;
+};
+
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
+  getVisibleBounds(): MapBounds;
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
@@ -114,6 +120,7 @@ export function MapsCanvasFlatRuntime({
   const kineticStateRef = useRef<MapsKineticPanState | null>(null);
   const kineticFrameRef = useRef<number | null>(null);
   const kineticLastFrameTimeRef = useRef<number | null>(null);
+  const kineticAnchorRef = useRef<ScreenPoint | null>(null);
   const viewStateEchoTrackerRef = useRef(createMapsViewStateEchoTracker());
 
   sourceRef.current = source;
@@ -132,23 +139,26 @@ export function MapsCanvasFlatRuntime({
     kineticFrameRef.current = null;
     kineticStateRef.current = null;
     kineticLastFrameTimeRef.current = null;
+    kineticAnchorRef.current = null;
   }
 
-  function startKineticPan(velocity: MapsPanVelocity) {
+  function startKineticPan(velocity: MapsPanVelocity, anchor: ScreenPoint) {
     cancelKineticPan();
     const initial = createMapsKineticPanState(velocity);
     if (!initial) return;
 
     kineticStateRef.current = initial;
     kineticLastFrameTimeRef.current = performance.now();
+    kineticAnchorRef.current = anchor;
 
     const tick = (now: number) => {
       kineticFrameRef.current = null;
       const state = kineticStateRef.current;
       const lastFrameTime = kineticLastFrameTimeRef.current;
+      const previousAnchor = kineticAnchorRef.current;
       const runtime = runtimeRef.current;
       const syncFrame = syncFrameRef.current;
-      if (!state || lastFrameTime === null || !runtime || !syncFrame) {
+      if (!state || lastFrameTime === null || !previousAnchor || !runtime || !syncFrame) {
         cancelKineticPan();
         return;
       }
@@ -158,7 +168,23 @@ export function MapsCanvasFlatRuntime({
       kineticLastFrameTimeRef.current = now;
 
       if (step.deltaX !== 0 || step.deltaY !== 0) {
-        runtime.panBy(step.deltaX, step.deltaY);
+        const currentAnchor = {
+          x: previousAnchor.x + step.deltaX,
+          y: previousAnchor.y + step.deltaY,
+        };
+        try {
+          runtime.panBetween(
+            previousAnchor.x,
+            previousAnchor.y,
+            currentAnchor.x,
+            currentAnchor.y,
+          );
+        } catch (error) {
+          cancelKineticPan();
+          onErrorRef.current?.(error);
+          return;
+        }
+        kineticAnchorRef.current = currentAnchor;
         emitViewStateRef.current?.(syncFrame(), "pan");
       }
 
@@ -166,6 +192,7 @@ export function MapsCanvasFlatRuntime({
         kineticFrameRef.current = requestAnimationFrame(tick);
       } else {
         kineticLastFrameTimeRef.current = null;
+        kineticAnchorRef.current = null;
       }
     };
 
@@ -188,9 +215,11 @@ export function MapsCanvasFlatRuntime({
       const currentSource = sourceRef.current;
       const runtime = await loadMapsFlatRasterRuntime(
         {
+          bearing: viewStateRef.current.bearing ?? 0,
           center: viewStateRef.current.center,
           height: size.height,
           maxBounds,
+          pitch: viewStateRef.current.pitch ?? 0,
           source: {
             maxZoom: Math.round(currentSource?.options.maxZoom ?? DEFAULT_SOURCE_MAX_ZOOM),
             minZoom: Math.round(currentSource?.options.minZoom ?? 0),
@@ -270,6 +299,10 @@ export function MapsCanvasFlatRuntime({
           runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
           emitViewState(syncFrame(), options.reason ?? "fit-bounds");
         },
+        getVisibleBounds() {
+          const bounds = runtime.frame().visibleBounds;
+          return [bounds.west, bounds.south, bounds.east, bounds.north];
+        },
         project(coordinates) {
           const [x, y] = runtime.project(coordinates[0], coordinates[1]);
           return { x, y };
@@ -347,7 +380,13 @@ export function MapsCanvasFlatRuntime({
     if (!areMapsViewStatesEqual(frameViewState(frame), viewState)) {
       emitViewStateRef.current?.(frame, "prop-change");
     }
-  }, [viewState.center[0], viewState.center[1], viewState.zoom]);
+  }, [
+    viewState.center[0],
+    viewState.center[1],
+    viewState.zoom,
+    viewState.bearing,
+    viewState.pitch,
+  ]);
 
   return (
     <>
@@ -394,28 +433,33 @@ export function MapsCanvasFlatRuntime({
           );
           if (!delta) return;
 
-          if (delta.type === "pan") {
-            if (previousTime !== undefined) {
-              velocityTrackerRef.current.record(
-                delta.deltaX,
-                delta.deltaY,
-                event.timeStamp - previousTime,
-              );
+          try {
+            if (delta.type === "pan") {
+              if (previousTime !== undefined) {
+                velocityTrackerRef.current.record(
+                  delta.deltaX,
+                  delta.deltaY,
+                  event.timeStamp - previousTime,
+                );
+              }
+              runtime.panBetween(delta.previousX, delta.previousY, delta.x, delta.y);
+              emitViewStateRef.current?.(syncFrame(), "pan");
+              return;
             }
-            runtime.panBy(delta.deltaX, delta.deltaY);
-            emitViewStateRef.current?.(syncFrame(), "pan");
-            return;
-          }
 
-          velocityTrackerRef.current.clear();
-          if (delta.deltaX !== 0 || delta.deltaY !== 0) {
-            runtime.panBy(delta.deltaX, delta.deltaY);
+            velocityTrackerRef.current.clear();
+            if (delta.deltaX !== 0 || delta.deltaY !== 0) {
+              runtime.panBetween(delta.previousX, delta.previousY, delta.x, delta.y);
+            }
+            if (delta.deltaZoom !== 0) {
+              const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+              runtime.zoomAbout(delta.deltaZoom, delta.x, delta.y, 0, effectiveMaxZoom);
+            }
+            emitViewStateRef.current?.(syncFrame(), delta.deltaZoom === 0 ? "pan" : "zoom");
+          } catch (error) {
+            velocityTrackerRef.current.clear();
+            onErrorRef.current?.(error);
           }
-          if (delta.deltaZoom !== 0) {
-            const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
-            runtime.zoomAbout(delta.deltaZoom, delta.x, delta.y, 0, effectiveMaxZoom);
-          }
-          emitViewStateRef.current?.(syncFrame(), delta.deltaZoom === 0 ? "pan" : "zoom");
         }}
         onPointerUp={(event) => {
           const lastMoveTime = pointerTimesRef.current.get(event.pointerId);
@@ -428,7 +472,12 @@ export function MapsCanvasFlatRuntime({
                 ? Number.POSITIVE_INFINITY
                 : event.timeStamp - lastMoveTime,
             );
-            if (velocity) startKineticPan(velocity);
+            if (velocity) {
+              startKineticPan(
+                velocity,
+                pointerPosition(event.currentTarget, event.clientX, event.clientY),
+              );
+            }
           } else {
             velocityTrackerRef.current.clear();
           }
@@ -449,8 +498,12 @@ export function MapsCanvasFlatRuntime({
           const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
           const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
 
-          runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
-          emitViewStateRef.current?.(syncFrame(), "zoom");
+          try {
+            runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
+            emitViewStateRef.current?.(syncFrame(), "zoom");
+          } catch (error) {
+            onErrorRef.current?.(error);
+          }
         }}
       />
       <canvas
@@ -653,10 +706,19 @@ function createFrameSynchronizer({
 }
 
 function frameViewState(frame: MapsFlatRasterFrame): MapViewState {
-  return {
+  const viewState: MapViewState = {
     center: frame.camera.center,
     zoom: frame.camera.zoom,
   };
+
+  if (frame.camera.bearing !== 0) {
+    viewState.bearing = frame.camera.bearing;
+  }
+  if (frame.camera.pitch !== 0) {
+    viewState.pitch = frame.camera.pitch;
+  }
+
+  return viewState;
 }
 
 async function loadRasterTile(url: string, signal: AbortSignal) {

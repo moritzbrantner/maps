@@ -364,7 +364,9 @@ export function MapView({
 
     if (usesMapLibreRuntime && map) {
       const camera = {
+        bearing: next.bearing ?? 0,
         center: next.center,
+        pitch: next.pitch ?? 0,
         zoom: next.zoom,
         ...(options.durationMs === undefined ? {} : { duration: options.durationMs }),
       };
@@ -395,7 +397,12 @@ export function MapView({
     }
 
     lastCommittedFlatStateRef.current = currentViewState;
-    map.jumpTo({ center: currentViewState.center, zoom: currentViewState.zoom });
+    map.jumpTo({
+      bearing: currentViewState.bearing ?? 0,
+      center: currentViewState.center,
+      pitch: currentViewState.pitch ?? 0,
+      zoom: currentViewState.zoom,
+    });
   });
 
   const emitFlatMoveEnd = useEffectEvent(() => {
@@ -455,10 +462,12 @@ export function MapView({
       isFlatStyleReadyRef.current = false;
       localMap = new maplibre.Map({
         attributionControl: showAttributionControl ? {} : false,
+        bearing: currentViewState.bearing ?? 0,
         center: currentViewState.center,
         container: containerRef.current,
         ...(resolvedMaxBounds ? { maxBounds: toMapLibreBounds(resolvedMaxBounds) } : {}),
         ...(resolvedMaxZoom === undefined ? {} : { maxZoom: resolvedMaxZoom }),
+        pitch: currentViewState.pitch ?? 0,
         style: resolveMapLibreDisplayStyle(mapStyle, mapDisplay),
         zoom: currentViewState.zoom,
       });

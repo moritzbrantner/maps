@@ -73,11 +73,21 @@ export function suppressNativeContextMenu(event: MapLibreMapContextMenuEvent) {
 
 export function getMapLibreViewState(map: MapLibreMap): MapViewState {
   const center = map.getCenter?.() ?? { lat: 25, lng: 12 };
-
-  return {
+  const bearing = map.getBearing?.() ?? 0;
+  const pitch = map.getPitch?.() ?? 0;
+  const viewState: MapViewState = {
     center: [center.lng, center.lat],
     zoom: map.getZoom(),
   };
+
+  if (bearing !== 0) {
+    viewState.bearing = bearing;
+  }
+  if (pitch !== 0) {
+    viewState.pitch = pitch;
+  }
+
+  return viewState;
 }
 
 function isCoordinate(value: unknown): value is [number, number] {

@@ -83,6 +83,7 @@ type MapsFlatRasterWasmFrame = {
 };
 
 export type MapsFlatRasterRuntimeConfig = {
+  bearing?: number;
   center: [longitude: number, latitude: number];
   height: number;
   limits?: {
@@ -91,6 +92,7 @@ export type MapsFlatRasterRuntimeConfig = {
     maxVisibleTiles: number;
   };
   maxBounds?: MapBounds;
+  pitch?: number;
   source: {
     maxZoom: number;
     minZoom: number;
@@ -106,6 +108,7 @@ export type MapsFlatRasterRuntime = {
   frame(): MapsFlatRasterFrame;
   markFailed(tile: MapsRasterTileId): void;
   markLoaded(tile: MapsRasterTileId): void;
+  panBetween(previousX: number, previousY: number, currentX: number, currentY: number): void;
   panBy(deltaX: number, deltaY: number): void;
   project(longitude: number, latitude: number): [x: number, y: number];
   resize(width: number, height: number): void;
@@ -133,10 +136,17 @@ type MapsFlatRasterWasmRuntime = {
   free?: () => void;
   markFailed(z: number, x: number, y: number): void;
   markLoaded(z: number, x: number, y: number): void;
+  panBetween(previousX: number, previousY: number, currentX: number, currentY: number): void;
   panBy(deltaX: number, deltaY: number): void;
   project(longitude: number, latitude: number): [x: number, y: number];
   resize(width: number, height: number): void;
-  setViewState(longitude: number, latitude: number, zoom: number): void;
+  setViewState(
+    longitude: number,
+    latitude: number,
+    zoom: number,
+    bearing: number,
+    pitch: number,
+  ): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
   zoomAbout(
     deltaZoom: number,
@@ -192,6 +202,10 @@ export async function loadMapsFlatRasterRuntime(
       assertLive(disposed);
       runtime.markLoaded(tile.z, tile.x, tile.y);
     },
+    panBetween(previousX, previousY, currentX, currentY) {
+      assertLive(disposed);
+      runtime.panBetween(previousX, previousY, currentX, currentY);
+    },
     panBy(deltaX, deltaY) {
       assertLive(disposed);
       runtime.panBy(deltaX, deltaY);
@@ -206,7 +220,13 @@ export async function loadMapsFlatRasterRuntime(
     },
     setViewState(viewState) {
       assertLive(disposed);
-      runtime.setViewState(viewState.center[0], viewState.center[1], viewState.zoom);
+      runtime.setViewState(
+        viewState.center[0],
+        viewState.center[1],
+        viewState.zoom,
+        viewState.bearing ?? 0,
+        viewState.pitch ?? 0,
+      );
     },
     unproject(x, y) {
       assertLive(disposed);

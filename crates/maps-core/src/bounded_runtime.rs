@@ -75,6 +75,29 @@ impl BoundedFlatRasterRuntime {
         self.apply_camera_constraint()
     }
 
+    pub fn set_camera_state(
+        &mut self,
+        longitude: f64,
+        latitude: f64,
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        let candidate = MapCamera::new(
+            longitude,
+            latitude,
+            zoom,
+            bearing,
+            pitch,
+            self.inner.camera().viewport,
+        )
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        validate_bounded_camera(candidate, self.max_bounds)?;
+        self.inner
+            .set_camera_state(longitude, latitude, zoom, bearing, pitch)?;
+        self.apply_camera_constraint()
+    }
+
     pub fn resize(&mut self, width: f64, height: f64) -> Result<(), FlatRasterRuntimeError> {
         self.inner.resize(width, height)?;
         self.apply_camera_constraint()
@@ -86,6 +109,15 @@ impl BoundedFlatRasterRuntime {
         delta_y: f64,
     ) -> Result<(), FlatRasterRuntimeError> {
         self.inner.pan_by_pixels(delta_x, delta_y)?;
+        self.apply_camera_constraint()
+    }
+
+    pub fn pan_between_screen_points(
+        &mut self,
+        previous: ScreenCoordinate,
+        current: ScreenCoordinate,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        self.inner.pan_between_screen_points(previous, current)?;
         self.apply_camera_constraint()
     }
 
@@ -380,6 +412,23 @@ mod tests {
             Err(FlatRasterRuntimeError::UnsupportedCamera)
         ));
         assert_eq!(runtime.max_bounds(), None);
+    }
+
+    #[test]
+    fn bounded_oriented_update_fails_without_mutating_camera() {
+        let bounds = europe_bounds();
+        let mut runtime = BoundedFlatRasterRuntime::new(
+            runtime([13.405, 52.52], 6.0, 960.0, 620.0),
+            Some(bounds),
+        )
+        .unwrap();
+        let before = runtime.camera();
+
+        assert!(matches!(
+            runtime.set_camera_state(14.0, 53.0, 7.0, 30.0, 35.0),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        ));
+        assert_eq!(runtime.camera(), before);
     }
 
     #[test]
