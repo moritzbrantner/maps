@@ -57,8 +57,6 @@ type MapsWgpuApplicationFrameFactory = (
   interaction: MapScreenInteractionState,
 ) => MapsWgpuApplicationFrame | null;
 
-export type MapsCanvasRendererKind = "canvas2d" | "wgpu";
-
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   getVisibleBounds(): MapBounds;
@@ -82,7 +80,6 @@ type MapsCanvasFlatRuntimeProps = {
   onControllerReady?: (controller: MapsCanvasFlatRuntimeController | null) => void;
   onError?: (error: unknown) => void;
   onReady?: () => void;
-  onRendererChange?: (renderer: MapsCanvasRendererKind) => void;
   onViewStateChange: (viewState: MapViewState, reason: MapViewStateChangeReason) => void;
   viewState: MapViewState;
   wasmPackage?: string;
@@ -101,7 +98,6 @@ export function MapsCanvasFlatRuntime({
   onControllerReady,
   onError,
   onReady,
-  onRendererChange,
   onViewStateChange,
   viewState,
   wasmPackage,
@@ -110,7 +106,7 @@ export function MapsCanvasFlatRuntime({
   const fallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<MapsWgpuBaseMapRenderer | null>(null);
   const runtimeRef = useRef<MapsFlatRasterRuntime | null>(null);
-  const [baseRenderer, setBaseRenderer] = useState<"pending" | MapsCanvasRendererKind>("pending");
+  const [baseRenderer, setBaseRenderer] = useState<"pending" | "canvas2d" | "wgpu">("pending");
   const imagesRef = useRef<Map<string, ImageBitmap>>(new Map());
   const loadsRef = useRef<Map<string, ActiveTileLoad>>(new Map());
   const syncFrameRef = useRef<(() => MapsFlatRasterFrame) | null>(null);
@@ -132,7 +128,6 @@ export function MapsCanvasFlatRuntime({
   const onControllerReadyRef = useRef(onControllerReady);
   const onErrorRef = useRef(onError);
   const onReadyRef = useRef(onReady);
-  const onRendererChangeRef = useRef(onRendererChange);
   const gestureRef = useRef(createMapsPointerGesture());
   const velocityTrackerRef = useRef(createMapsPanVelocityTracker());
   const pointerTimesRef = useRef<Map<number, number>>(new Map());
@@ -150,7 +145,6 @@ export function MapsCanvasFlatRuntime({
   onControllerReadyRef.current = onControllerReady;
   onErrorRef.current = onError;
   onReadyRef.current = onReady;
-  onRendererChangeRef.current = onRendererChange;
 
   function cancelKineticPan() {
     if (kineticFrameRef.current !== null) {
@@ -278,15 +272,12 @@ export function MapsCanvasFlatRuntime({
 
       runtimeRef.current = runtime;
       rendererRef.current = renderer;
-      const rendererKind: MapsCanvasRendererKind = renderer ? "wgpu" : "canvas2d";
-      setBaseRenderer(rendererKind);
-      onRendererChangeRef.current?.(rendererKind);
+      setBaseRenderer(renderer ? "wgpu" : "canvas2d");
 
       const activateCanvasFallback = () => {
         rendererRef.current?.dispose();
         rendererRef.current = null;
         setBaseRenderer("canvas2d");
-        onRendererChangeRef.current?.("canvas2d");
       };
 
       const frameSynchronizer = createFrameSynchronizer({
