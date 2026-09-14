@@ -249,8 +249,8 @@ impl FlatRasterRuntime {
         Ok(())
     }
 
-    /// Pans by pointer delta in CSS pixels. Positive x/y means the pointer moved
-    /// right/down, so the geographic camera center follows the Maps-owned camera orientation.
+    /// Pans a north-up zero-pitch camera by a pointer delta in CSS pixels.
+    /// Oriented cameras require explicit screen anchors via `pan_between_screen_points`.
     pub fn pan_by_pixels(
         &mut self,
         delta_x: f64,
@@ -261,33 +261,72 @@ impl FlatRasterRuntime {
         }
 
         validate_camera(self.camera)?;
-        if is_flat_camera(self.camera) {
-            let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
-                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-            let size = self
-                .camera
-                .world_size()
-                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-            let next = unproject_web_mercator(WorldCoordinate {
-                x: center.x - delta_x / size,
-                y: center.y - delta_y / size,
-            })
-            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-
-            return self.set_view_state(next.longitude, next.latitude, self.camera.zoom);
+        if !is_flat_camera(self.camera) {
+            return Err(FlatRasterRuntimeError::UnsupportedCamera);
         }
 
-        let next_center = self
+        let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let size = self
             .camera
-            .unproject_screen_matrix(ScreenCoordinate {
-                x: self.camera.viewport.width * 0.5 - delta_x,
-                y: self.camera.viewport.height * 0.5 - delta_y,
-            })
+            .world_size()
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let next = unproject_web_mercator(WorldCoordinate {
+            x: center.x - delta_x / size,
+            y: center.y - delta_y / size,
+        })
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+
+        self.set_view_state(next.longitude, next.latitude, self.camera.zoom)
+    }
+
+    /// Pans by moving the geographic ground point under `previous` to `current`.
+    /// This explicit anchor contract is required for perspective cameras because
+    /// screen-space translation is not geographically translation-invariant.
+    pub fn pan_between_screen_points(
+        &mut self,
+        previous: ScreenCoordinate,
+        current: ScreenCoordinate,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        if !previous.x.is_finite()
+            || !previous.y.is_finite()
+            || !current.x.is_finite()
+            || !current.y.is_finite()
+        {
+            return Err(FlatRasterRuntimeError::InvalidCamera);
+        }
+
+        validate_camera(self.camera)?;
+        if is_flat_camera(self.camera) {
+            return self.pan_by_pixels(current.x - previous.x, current.y - previous.y);
+        }
+
+        let previous_ground = self
+            .camera
+            .unproject_screen_matrix(previous)
             .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
-        self.set_view_state(
+        let current_ground = self
+            .camera
+            .unproject_screen_matrix(current)
+            .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
+        let previous_world = project_web_mercator(previous_ground.longitude, previous_ground.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let current_world = project_web_mercator(current_ground.longitude, current_ground.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let center_world = project_web_mercator(self.camera.longitude, self.camera.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let next_center = unproject_web_mercator(WorldCoordinate {
+            x: center_world.x + shortest_world_delta(previous_world.x - current_world.x),
+            y: center_world.y + previous_world.y - current_world.y,
+        })
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+
+        self.set_camera_state(
             next_center.longitude,
             next_center.latitude,
             self.camera.zoom,
+            self.camera.bearing,
+            self.camera.pitch,
         )
     }
 
@@ -929,24 +968,31 @@ mod tests {
     }
 
     #[test]
-    fn oriented_pan_moves_center_to_the_pre_pan_ground_coordinate() {
+    fn oriented_pan_preserves_off_center_ground_anchor() {
         let mut runtime = runtime_with_camera([13.405, 52.52], 8.0, 45.0, 35.0, 800.0, 600.0);
-        let delta_x = 90.0;
-        let delta_y = -40.0;
-        let expected = runtime
-            .unproject_screen(ScreenCoordinate {
-                x: 400.0 - delta_x,
-                y: 300.0 - delta_y,
-            })
+        let previous = ScreenCoordinate { x: 640.0, y: 170.0 };
+        let current = ScreenCoordinate { x: 710.0, y: 225.0 };
+        let before = runtime.unproject_screen(previous).unwrap();
+
+        runtime
+            .pan_between_screen_points(previous, current)
             .unwrap();
+        let after = runtime.unproject_screen(current).unwrap();
 
-        runtime.pan_by_pixels(delta_x, delta_y).unwrap();
-        let camera = runtime.camera();
+        assert!((before.longitude - after.longitude).abs() < 1.0e-5);
+        assert!((before.latitude - after.latitude).abs() < 1.0e-5);
+        assert_eq!(runtime.camera().bearing, 45.0);
+        assert_eq!(runtime.camera().pitch, 35.0);
+    }
 
-        assert!((camera.longitude - expected.longitude).abs() < 1.0e-6);
-        assert!((camera.latitude - expected.latitude).abs() < 1.0e-6);
-        assert_eq!(camera.bearing, 45.0);
-        assert_eq!(camera.pitch, 35.0);
+    #[test]
+    fn oriented_delta_only_pan_fails_closed() {
+        let mut runtime = runtime_with_camera([13.405, 52.52], 8.0, 45.0, 35.0, 800.0, 600.0);
+
+        assert!(matches!(
+            runtime.pan_by_pixels(70.0, 55.0),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        ));
     }
 
     #[test]
