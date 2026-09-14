@@ -2,7 +2,10 @@ import {
   importMapsWasmModule,
   type MapsWasmModuleBase,
 } from "./aggregation-wasm";
-import type { MapsRasterTilePlacement } from "./flat-runtime-wasm";
+import type {
+  MapsRasterRenderCamera,
+  MapsRasterTilePlacement,
+} from "./flat-runtime-wasm";
 
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
@@ -10,8 +13,7 @@ export type MapsWgpuBaseMapRenderer = {
   isDeviceLost(): boolean;
   render(
     placements: MapsRasterTilePlacement[],
-    viewportWidth: number,
-    viewportHeight: number,
+    renderCamera: MapsRasterRenderCamera,
   ): number;
   resize(width: number, height: number): void;
   uploadTile(key: string, image: ImageBitmap): void;
@@ -23,8 +25,7 @@ type MapsWgpuBaseMapWasmRenderer = {
   isDeviceLost(): boolean;
   render(
     placements: MapsRasterTilePlacement[],
-    viewportWidth: number,
-    viewportHeight: number,
+    renderCamera: MapsRasterRenderCamera,
   ): number;
   resize(width: number, height: number): void;
   uploadTile(key: string, image: ImageBitmap): void;
@@ -72,10 +73,10 @@ export async function loadMapsWgpuBaseMapRenderer(
           return renderer.isDeviceLost();
         });
       },
-      render(placements, viewportWidth, viewportHeight) {
+      render(placements, renderCamera) {
         return runRendererOperation(canvas, () => {
           assertLive(disposed);
-          return renderer.render(placements, viewportWidth, viewportHeight);
+          return renderer.render(placements, renderCamera);
         });
       },
       resize(width, height) {

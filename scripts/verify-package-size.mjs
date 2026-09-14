@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const budgets = {
-  compressedSize: 365_000,
+  compressedSize: 365_500,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,

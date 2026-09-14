@@ -9,13 +9,13 @@ use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, ImageBitmap};
 
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
+const CAMERA_UNIFORM_SIZE: u64 = 64;
 const VERTEX_SIZE: u64 = 16;
 const VERTICES_PER_TILE: u32 = 4;
 
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
-  viewport: vec2<f32>,
-  _padding: vec2<f32>,
+  view_projection: mat4x4<f32>,
 };
 
 @group(0) @binding(0)
@@ -39,10 +39,8 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
-  let x = input.position.x / camera.viewport.x * 2.0 - 1.0;
-  let y = 1.0 - input.position.y / camera.viewport.y * 2.0;
   var output: VertexOutput;
-  output.position = vec4<f32>(x, y, 0.0, 1.0);
+  output.position = camera.view_projection * vec4<f32>(input.position, 0.0, 1.0);
   output.uv = input.uv;
   return output;
 }
@@ -56,12 +54,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct WgpuRasterRenderCamera {
+    view_projection: [f32; 16],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WgpuRasterTilePlacement {
     tile: WgpuRasterTileId,
-    screen_x: f64,
-    screen_y: f64,
-    screen_width: f64,
-    screen_height: f64,
+    local_west: f64,
+    local_north: f64,
+    local_size: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,7 +186,7 @@ impl MapsWgpuBaseMapRenderer {
             });
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Maps base camera uniform"),
-            size: 16,
+            size: CAMERA_UNIFORM_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -375,19 +378,22 @@ impl MapsWgpuBaseMapRenderer {
     pub fn render(
         &mut self,
         placements: JsValue,
-        viewport_width: f64,
-        viewport_height: f64,
+        render_camera: JsValue,
     ) -> Result<usize, JsValue> {
-        if !viewport_width.is_finite()
-            || !viewport_height.is_finite()
-            || viewport_width <= 0.0
-            || viewport_height <= 0.0
-        {
-            return Err(JsValue::from_str("invalid wgpu base-camera viewport"));
-        }
-
         let placements = serde_wasm_bindgen::from_value::<Vec<WgpuRasterTilePlacement>>(placements)
             .map_err(|error| js_error("invalid wgpu raster placements", error))?;
+        let render_camera = serde_wasm_bindgen::from_value::<WgpuRasterRenderCamera>(render_camera)
+            .map_err(|error| js_error("invalid wgpu raster render camera", error))?;
+        if render_camera
+            .view_projection
+            .into_iter()
+            .any(|value| !value.is_finite())
+        {
+            return Err(JsValue::from_str(
+                "wgpu raster render camera contains non-finite matrix values",
+            ));
+        }
+
         let mut vertices = Vec::with_capacity(placements.len() * 4 * VERTEX_SIZE as usize);
         for placement in &placements {
             append_tile_vertices(&mut vertices, placement)?;
@@ -405,7 +411,7 @@ impl MapsWgpuBaseMapRenderer {
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            &camera_uniform_bytes(viewport_width as f32, viewport_height as f32),
+            &camera_uniform_bytes(render_camera.view_projection),
         );
 
         let Some(surface_frame) = self.acquire_surface_frame()? else {
@@ -513,22 +519,27 @@ fn append_tile_vertices(
     placement: &WgpuRasterTilePlacement,
 ) -> Result<(), JsValue> {
     let values = [
-        placement.screen_x,
-        placement.screen_y,
-        placement.screen_width,
-        placement.screen_height,
+        placement.local_west,
+        placement.local_north,
+        placement.local_size,
     ];
-    if values.iter().any(|value| !value.is_finite())
-        || placement.screen_width <= 0.0
-        || placement.screen_height <= 0.0
-    {
-        return Err(JsValue::from_str("invalid raster tile screen placement"));
+    if values.iter().any(|value| !value.is_finite()) || placement.local_size <= 0.0 {
+        return Err(JsValue::from_str("invalid raster tile local placement"));
     }
 
-    let left = placement.screen_x as f32;
-    let top = placement.screen_y as f32;
-    let right = (placement.screen_x + placement.screen_width) as f32;
-    let bottom = (placement.screen_y + placement.screen_height) as f32;
+    let left = placement.local_west as f32;
+    let top = placement.local_north as f32;
+    let right = (placement.local_west + placement.local_size) as f32;
+    let bottom = (placement.local_north - placement.local_size) as f32;
+    if [left, top, right, bottom]
+        .into_iter()
+        .any(|value| !value.is_finite())
+    {
+        return Err(JsValue::from_str(
+            "raster tile local placement is not representable as f32",
+        ));
+    }
+
     for vertex in [
         [left, top, 0.0, 0.0],
         [left, bottom, 0.0, 1.0],
@@ -542,10 +553,12 @@ fn append_tile_vertices(
     Ok(())
 }
 
-fn camera_uniform_bytes(width: f32, height: f32) -> [u8; 16] {
-    let mut bytes = [0; 16];
-    bytes[0..4].copy_from_slice(&width.to_le_bytes());
-    bytes[4..8].copy_from_slice(&height.to_le_bytes());
+fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
+    let mut bytes = [0; 64];
+    for (index, value) in view_projection.into_iter().enumerate() {
+        let offset = index * 4;
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
     bytes
 }
 
