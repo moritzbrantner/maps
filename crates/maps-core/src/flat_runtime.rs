@@ -309,8 +309,9 @@ impl FlatRasterRuntime {
             .camera
             .unproject_screen_matrix(current)
             .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
-        let previous_world = project_web_mercator(previous_ground.longitude, previous_ground.latitude)
-            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let previous_world =
+            project_web_mercator(previous_ground.longitude, previous_ground.latitude)
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         let current_world = project_web_mercator(current_ground.longitude, current_ground.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         let center_world = project_web_mercator(self.camera.longitude, self.camera.latitude)
