@@ -21,9 +21,9 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde-json = { package = "serde_json", version = "=1.0.151" }
 serde-wasm-bindgen = "=0.6.5"
 supercluster = { version = "=3.0.8", features = ["cluster_metadata"] }
-three-d-camera = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "34e06b45f89703618fe23e6071edc5ad563ed88a" }
-three-d-core = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "34e06b45f89703618fe23e6071edc5ad563ed88a" }
-three-d-projective = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "34e06b45f89703618fe23e6071edc5ad563ed88a" }
+three-d-camera = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "d41c46c89a16545e654899dba493b27dc9510f85" }
+three-d-core = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "d41c46c89a16545e654899dba493b27dc9510f85" }
+three-d-projective = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "d41c46c89a16545e654899dba493b27dc9510f85" }
 wasm-bindgen = "=0.2.128"
 wasm-bindgen-futures = "=0.4.78"
 web-sys = { version = "=0.3.105", features = ["HtmlCanvasElement", "ImageBitmap"] }
