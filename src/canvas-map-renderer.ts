@@ -4,53 +4,28 @@ import type {
   MapRenderLine,
   MapRenderPolygon,
   MapVectorRenderFrame,
-  MapVectorRenderPrimitive,
 } from "./map-render-frame";
+import {
+  createMapScreenRenderFrame,
+  type MapScreenCircle,
+  type MapScreenDirectionMarker,
+  type MapScreenLine,
+  type MapScreenPoint as SharedMapScreenPoint,
+  type MapScreenPolygon,
+  type MapScreenProject,
+  type MapScreenRenderFrame,
+  type MapScreenRenderPrimitive,
+} from "./map-screen-render-frame";
 
-export type MapScreenPoint = { x: number; y: number };
-export type MapRenderProject = (
-  coordinate: [longitude: number, latitude: number],
-) => MapScreenPoint | null;
-
-type CanvasScenePrimitiveBase<TFeature> = {
-  renderPrimitive: MapVectorRenderPrimitive<TFeature>;
-};
-
-export type CanvasCircleScenePrimitive<TFeature = unknown> = CanvasScenePrimitiveBase<TFeature> & {
-  kind: "circle";
-  x: number;
-  y: number;
-};
-
+export type MapScreenPoint = SharedMapScreenPoint;
+export type MapRenderProject = MapScreenProject;
+export type CanvasCircleScenePrimitive<TFeature = unknown> = MapScreenCircle<TFeature>;
 export type CanvasDirectionMarkerScenePrimitive<TFeature = unknown> =
-  CanvasScenePrimitiveBase<TFeature> & {
-    angle: number;
-    kind: "direction-marker";
-    x: number;
-    y: number;
-  };
-
-export type CanvasLineScenePrimitive<TFeature = unknown> = CanvasScenePrimitiveBase<TFeature> & {
-  kind: "line";
-  points: MapScreenPoint[];
-};
-
-export type CanvasPolygonScenePrimitive<TFeature = unknown> = CanvasScenePrimitiveBase<TFeature> & {
-  kind: "polygon";
-  rings: MapScreenPoint[][];
-};
-
-export type CanvasMapScenePrimitive<TFeature = unknown> =
-  | CanvasCircleScenePrimitive<TFeature>
-  | CanvasDirectionMarkerScenePrimitive<TFeature>
-  | CanvasLineScenePrimitive<TFeature>
-  | CanvasPolygonScenePrimitive<TFeature>;
-
-export type CanvasMapScene<TFeature = unknown> = {
-  height: number;
-  primitives: Array<CanvasMapScenePrimitive<TFeature>>;
-  width: number;
-};
+  MapScreenDirectionMarker<TFeature>;
+export type CanvasLineScenePrimitive<TFeature = unknown> = MapScreenLine<TFeature>;
+export type CanvasPolygonScenePrimitive<TFeature = unknown> = MapScreenPolygon<TFeature>;
+export type CanvasMapScenePrimitive<TFeature = unknown> = MapScreenRenderPrimitive<TFeature>;
+export type CanvasMapScene<TFeature = unknown> = MapScreenRenderFrame<TFeature>;
 
 export type CanvasMapDrawOptions = {
   hoveredFeatureId?: string | null;
@@ -64,11 +39,7 @@ export function createCanvasMapScene<TFeature = unknown>(
   project: MapRenderProject,
   size: { height: number; width: number },
 ): CanvasMapScene<TFeature> {
-  return {
-    height: Math.max(0, size.height),
-    primitives: frame.primitives.flatMap((primitive) => projectPrimitive(primitive, project)),
-    width: Math.max(0, size.width),
-  };
+  return createMapScreenRenderFrame(frame, project, size);
 }
 
 export function hitTestCanvasMapScene<TFeature = unknown>(
@@ -97,66 +68,6 @@ export function drawCanvasMapScene<TFeature = unknown>(
   for (const primitive of scene.primitives) {
     drawPrimitive(context, primitive, options);
   }
-}
-
-function projectPrimitive<TFeature>(
-  primitive: MapVectorRenderPrimitive<TFeature>,
-  project: MapRenderProject,
-): Array<CanvasMapScenePrimitive<TFeature>> {
-  switch (primitive.kind) {
-    case "circle": {
-      const center = project(primitive.center);
-      if (!isFinitePoint(center)) return [];
-      return [{ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y }];
-    }
-    case "direction-marker": {
-      const anchor = project(primitive.anchor);
-      const previous = project(primitive.previous);
-      if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return [];
-      return [
-        {
-          angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
-          kind: "direction-marker",
-          renderPrimitive: primitive,
-          x: anchor.x,
-          y: anchor.y,
-        },
-      ];
-    }
-    case "line": {
-      const points = projectCoordinates(primitive.coordinates, project);
-      if (!points || points.length < 2) return [];
-      return [{ kind: "line", points, renderPrimitive: primitive }];
-    }
-    case "polygon": {
-      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project));
-      if (rings.some((ring) => !ring || ring.length < 3)) return [];
-      return [
-        {
-          kind: "polygon",
-          renderPrimitive: primitive,
-          rings: rings as MapScreenPoint[][],
-        },
-      ];
-    }
-  }
-}
-
-function projectCoordinates(
-  coordinates: readonly [number, number][],
-  project: MapRenderProject,
-): MapScreenPoint[] | null {
-  const points: MapScreenPoint[] = [];
-  for (const coordinate of coordinates) {
-    const point = project([coordinate[0], coordinate[1]]);
-    if (!isFinitePoint(point)) return null;
-    points.push(point);
-  }
-  return points;
-}
-
-function isFinitePoint(point: MapScreenPoint | null): point is MapScreenPoint {
-  return point !== null && Number.isFinite(point.x) && Number.isFinite(point.y);
 }
 
 function drawPrimitive<TFeature>(
