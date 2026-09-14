@@ -53,9 +53,11 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
   const draggedGroundAfter = parseCoordinate(await contextCoordinate.textContent());
   expectCoordinateClose(draggedGroundAfter, draggedGroundBefore, 0.0002);
 
+  // Chromium touch injection is pixel-addressed. Use an integer browser coordinate so the touch
+  // midpoint and the mouse-based geographic probe observe exactly the same screen anchor.
   const zoomAnchor = {
-    x: box!.x + box!.width * 0.7,
-    y: box!.y + box!.height * 0.4,
+    x: Math.round(box!.x + box!.width * 0.7),
+    y: Math.round(box!.y + box!.height * 0.4),
   };
   await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
   const zoomGroundBefore = parseCoordinate(await contextCoordinate.textContent());
