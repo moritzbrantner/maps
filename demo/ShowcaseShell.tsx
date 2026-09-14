@@ -9,6 +9,7 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
     getRustRuntimeStatus,
     getRustRuntimeStatus,
   );
+  const pagesBase = import.meta.env.BASE_URL;
 
   return (
     <div className="maps-showcase">
@@ -24,6 +25,11 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
             editing in one live workbench. Maps owns the domain logic; Rust/WASM now owns supported
             point aggregation while browser renderers remain replaceable pixel backends.
           </p>
+          <nav className="maps-showcase__project-links" aria-label="Project evidence">
+            <a href={`${pagesBase}stats/`}>Stats</a>
+            <a href={`${pagesBase}evidence/`}>Evidence</a>
+            <a href="https://github.com/moritzbrantner/maps">Source</a>
+          </nav>
         </div>
 
         <div className="maps-showcase__runtime-grid" aria-label="Runtime architecture">
