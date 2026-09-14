@@ -5,7 +5,7 @@ import type { MapScreenRenderFrame } from "./map-screen-render-frame";
 import { createMapsWgpuApplicationFrame } from "./wgpu-application-frame";
 
 describe("wgpu application frame", () => {
-  test("packs a complete circle frame with interaction-adjusted stroke width", () => {
+  test("packs a complete labeled circle frame with interaction-adjusted stroke width", () => {
     const primitive: MapRenderCircle = {
       center: [0, 0],
       feature: null,
@@ -34,7 +34,12 @@ describe("wgpu application frame", () => {
     ).toEqual({
       circles: [
         {
-          fillColor: [0.2, 0.4, 0.6, 0.5],
+          fillColor: [
+            0.033104766570885055,
+            0.13286832155381798,
+            0.31854677812509186,
+            0.5,
+          ],
           radius: 7,
           strokeColor: [1, 1, 1, 0.6000000000000001],
           strokeWidth: 3.5,
