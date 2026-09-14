@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "Maps",
+    "repository": "moritzbrantner/maps",
+    "basePath": "/maps/",
+    "kicker": "Map engine and React map library",
+    "description": "Map building blocks and first-party map-engine foundations with Rust-owned geographic semantics and replaceable rendering backends."
+  },
+  "links": [
+    {
+      "label": "Demo",
+      "href": "/maps/"
+    },
+    {
+      "label": "Source",
+      "href": "https://github.com/moritzbrantner/maps"
+    }
+  ],
+  "evidenceSources": [
+    {
+      "id": "coding-tooling",
+      "label": "Repository verification",
+      "kind": "coding-tooling-analysis-v1",
+      "producer": "coding-tooling",
+      "url": "https://moritzbrantner.github.io/coding-tooling/analysis.json/?repo=moritzbrantner/maps"
+    },
+    {
+      "id": "runtime",
+      "label": "Runtime and Moonlight evidence",
+      "kind": "project-evidence-v1",
+      "producer": "runtime-profiler + Moonlight",
+      "url": "/maps/evidence/runtime.json"
+    }
+  ]
+}
