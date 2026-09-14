@@ -55,7 +55,7 @@ jobs:
         rm -rf .github-pages-template
         git init .github-pages-template
         git -C .github-pages-template remote add origin https://github.com/moritzbrantner/github-pages-template.git
-        git -C .github-pages-template fetch --depth 1 origin edc56ad5b1f74fa80965b26b62e07edce52fd3fd
+        git -C .github-pages-template fetch --depth 1 origin 930cd4509df4bf41447422dc3c739cef20aba9ea
         git -C .github-pages-template checkout --detach FETCH_HEAD
       build_command: |
         bun run build:wasm
