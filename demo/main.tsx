@@ -31,12 +31,13 @@ async function bootstrap() {
   await initializeHostedRustRuntime();
 
   const acceptanceMode = new URLSearchParams(window.location.search).get("acceptance");
-  const content =
-    acceptanceMode === "maps-runtime"
-      ? <MapsRuntimeAcceptance />
-      : acceptanceMode === "maps-runtime-oriented"
-        ? <MapsOrientedRuntimeAcceptance />
-        : <App />;
+  let content = <App />;
+
+  if (acceptanceMode === "maps-runtime") {
+    content = <MapsRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-oriented") {
+    content = <MapsOrientedRuntimeAcceptance />;
+  }
 
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
