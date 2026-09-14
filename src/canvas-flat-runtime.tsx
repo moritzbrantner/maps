@@ -34,10 +34,7 @@ import {
   type MapsFlatRasterRuntime,
   type MapsRasterTileId,
 } from "./flat-runtime-wasm";
-import {
-  createMapsWgpuApplicationFrame,
-  type MapsWgpuApplicationFrame,
-} from "./wgpu-application-frame";
+import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 import { loadMapsWgpuBaseMapRenderer, type MapsWgpuBaseMapRenderer } from "./wgpu-base-map-wasm";
 
 const DEFAULT_TILE_SIZE = 256;
@@ -54,6 +51,11 @@ type ScreenPoint = {
   x: number;
   y: number;
 };
+
+type MapsWgpuApplicationFrameFactory = (
+  frame: MapScreenRenderFrame<unknown>,
+  interaction: MapScreenInteractionState,
+) => MapsWgpuApplicationFrame | null;
 
 export type MapsCanvasRendererKind = "canvas2d" | "wgpu";
 
@@ -255,11 +257,16 @@ export function MapsCanvasFlatRuntime({
       }
 
       let renderer: MapsWgpuBaseMapRenderer | null = null;
+      let packApplicationFrame: MapsWgpuApplicationFrameFactory | null = null;
       if (currentSource) {
         try {
           renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
+          packApplicationFrame = (await import("./wgpu-application-frame"))
+            .createMapsWgpuApplicationFrame;
         } catch {
+          renderer?.dispose();
           renderer = null;
+          packApplicationFrame = null;
         }
       }
 
@@ -287,6 +294,7 @@ export function MapsCanvasFlatRuntime({
         fallbackCanvas,
         images: imagesRef.current,
         loads: loadsRef.current,
+        packApplicationFrame,
         renderer: () => rendererRef.current,
         runtime,
         source: () => sourceRef.current,
@@ -550,6 +558,7 @@ function createFrameSynchronizer({
   fallbackCanvas,
   images,
   loads,
+  packApplicationFrame,
   renderer,
   runtime,
   source,
@@ -560,6 +569,7 @@ function createFrameSynchronizer({
   fallbackCanvas: HTMLCanvasElement;
   images: Map<string, ImageBitmap>;
   loads: Map<string, ActiveTileLoad>;
+  packApplicationFrame: MapsWgpuApplicationFrameFactory | null;
   renderer: () => MapsWgpuBaseMapRenderer | null;
   runtime: MapsFlatRasterRuntime;
   source: () => ReturnType<typeof resolveTileLayerOptions>;
@@ -660,12 +670,12 @@ function createFrameSynchronizer({
     interaction: MapScreenInteractionState,
   ) {
     const currentRenderer = renderer();
-    if (!currentRenderer) {
+    if (!currentRenderer || !packApplicationFrame) {
       applicationFrame = null;
       return false;
     }
 
-    const next = createMapsWgpuApplicationFrame(frame, interaction);
+    const next = packApplicationFrame(frame, interaction);
     applicationFrame = next;
     renderFrame(lastFrame ?? runtime.frame());
     return next !== null && renderer() !== null;
