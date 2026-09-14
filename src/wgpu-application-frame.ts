@@ -89,28 +89,31 @@ function parseSupportedCssColor(value: string, opacity: number): MapsWgpuColor |
   if (!Number.isFinite(opacity)) return null;
   const normalizedOpacity = clamp01(opacity);
   const text = value.trim().toLowerCase();
+  let rgba: MapsWgpuColor | null = null;
 
   if (text.startsWith("#")) {
-    const rgba = parseHexColor(text.slice(1));
-    return rgba ? [rgba[0], rgba[1], rgba[2], rgba[3] * normalizedOpacity] : null;
+    rgba = parseHexColor(text.slice(1));
+  } else {
+    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(
+      text,
+    );
+    if (match) {
+      const red = Number(match[1]);
+      const green = Number(match[2]);
+      const blue = Number(match[3]);
+      const alpha = match[4] === undefined ? 1 : Number(match[4]);
+      if ([red, green, blue, alpha].every(Number.isFinite)) {
+        rgba = [clamp01(red / 255), clamp01(green / 255), clamp01(blue / 255), clamp01(alpha)];
+      }
+    }
   }
 
-  const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(
-    text,
-  );
-  if (!match) return null;
-
-  const red = Number(match[1]);
-  const green = Number(match[2]);
-  const blue = Number(match[3]);
-  const alpha = match[4] === undefined ? 1 : Number(match[4]);
-  if (![red, green, blue, alpha].every(Number.isFinite)) return null;
-
+  if (!rgba) return null;
   return [
-    clamp01(red / 255),
-    clamp01(green / 255),
-    clamp01(blue / 255),
-    clamp01(alpha) * normalizedOpacity,
+    srgbToLinear(rgba[0]),
+    srgbToLinear(rgba[1]),
+    srgbToLinear(rgba[2]),
+    rgba[3] * normalizedOpacity,
   ];
 }
 
@@ -126,6 +129,10 @@ function parseHexColor(hex: string): MapsWgpuColor | null {
   const withAlpha = expanded.length === 6 ? `${expanded}ff` : expanded;
   const parts = [0, 2, 4, 6].map((offset) => Number.parseInt(withAlpha.slice(offset, offset + 2), 16));
   return [parts[0]! / 255, parts[1]! / 255, parts[2]! / 255, parts[3]! / 255];
+}
+
+function srgbToLinear(value: number) {
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
 function clamp01(value: number) {
