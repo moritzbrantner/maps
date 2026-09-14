@@ -11,7 +11,9 @@ use web_sys::{HtmlCanvasElement, ImageBitmap};
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
 const CAMERA_UNIFORM_SIZE: u64 = 64;
 const VERTEX_SIZE: u64 = 16;
+const APPLICATION_VERTEX_SIZE: u64 = 24;
 const VERTICES_PER_TILE: u32 = 4;
+const CIRCLE_SEGMENTS: usize = 24;
 
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
@@ -52,6 +54,31 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+const APPLICATION_SHADER: &str = r#"
+struct VertexInput {
+  @location(0) position: vec2<f32>,
+  @location(1) color: vec4<f32>,
+};
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var output: VertexOutput;
+  output.position = vec4<f32>(input.position, 0.0, 1.0);
+  output.color = input.color;
+  return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  return vec4<f32>(input.color.rgb * input.color.a, input.color.a);
+}
+"#;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WgpuRasterRenderCamera {
@@ -70,6 +97,25 @@ struct WgpuRasterTilePlacement {
 #[derive(Debug, Deserialize)]
 struct WgpuRasterTileId {
     key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WgpuApplicationFrame {
+    circles: Vec<WgpuApplicationCircle>,
+    height: f64,
+    width: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WgpuApplicationCircle {
+    fill_color: [f32; 4],
+    radius: f64,
+    stroke_color: [f32; 4],
+    stroke_width: f64,
+    x: f64,
+    y: f64,
 }
 
 struct TileTexture {
@@ -93,6 +139,9 @@ pub struct MapsWgpuBaseMapRenderer {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: u64,
+    application_pipeline: wgpu::RenderPipeline,
+    application_vertex_buffer: wgpu::Buffer,
+    application_vertex_capacity: u64,
     tiles: HashMap<String, TileTexture>,
 }
 
@@ -268,6 +317,76 @@ impl MapsWgpuBaseMapRenderer {
         });
         let vertex_buffer = create_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
+        let application_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Maps application screen-space shader"),
+            source: wgpu::ShaderSource::Wgsl(APPLICATION_SHADER.into()),
+        });
+        let application_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Maps application pipeline layout"),
+                bind_group_layouts: &[],
+                immediate_size: 0,
+            });
+        let application_attributes = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 8,
+                shader_location: 1,
+            },
+        ];
+        let application_vertex_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: APPLICATION_VERTEX_SIZE,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &application_attributes,
+        })];
+        let premultiplied_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let application_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Maps application circle pipeline"),
+            layout: Some(&application_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &application_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &application_vertex_buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &application_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_view_format,
+                    blend: Some(premultiplied_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let application_vertex_buffer =
+            create_application_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
+
         Ok(Self {
             surface,
             device,
@@ -282,6 +401,9 @@ impl MapsWgpuBaseMapRenderer {
             pipeline,
             vertex_buffer,
             vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
+            application_pipeline,
+            application_vertex_buffer,
+            application_vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             tiles: HashMap::new(),
         })
     }
@@ -330,7 +452,7 @@ impl MapsWgpuBaseMapRenderer {
                 origin: wgpu::Origin2d::ZERO,
                 flip_y: false,
             },
-            wgpu::CopyExternalImageDestInfo {
+            &wgpu::CopyExternalImageDestInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
@@ -379,11 +501,15 @@ impl MapsWgpuBaseMapRenderer {
         &mut self,
         placements: JsValue,
         render_camera: JsValue,
+        application_frame: JsValue,
     ) -> Result<usize, JsValue> {
         let placements = serde_wasm_bindgen::from_value::<Vec<WgpuRasterTilePlacement>>(placements)
             .map_err(|error| js_error("invalid wgpu raster placements", error))?;
         let render_camera = serde_wasm_bindgen::from_value::<WgpuRasterRenderCamera>(render_camera)
             .map_err(|error| js_error("invalid wgpu raster render camera", error))?;
+        let application_frame =
+            serde_wasm_bindgen::from_value::<Option<WgpuApplicationFrame>>(application_frame)
+                .map_err(|error| js_error("invalid wgpu application frame", error))?;
         if render_camera
             .view_projection
             .into_iter()
@@ -414,6 +540,25 @@ impl MapsWgpuBaseMapRenderer {
             &camera_uniform_bytes(render_camera.view_projection),
         );
 
+        let mut application_vertices = Vec::new();
+        if let Some(frame) = application_frame.as_ref() {
+            append_application_vertices(&mut application_vertices, frame)?;
+        }
+        let application_required = application_vertices.len() as u64;
+        if application_required > self.application_vertex_capacity {
+            let capacity = application_required
+                .next_power_of_two()
+                .max(INITIAL_VERTEX_BUFFER_SIZE);
+            self.application_vertex_buffer = create_application_vertex_buffer(&self.device, capacity);
+            self.application_vertex_capacity = capacity;
+        }
+        if !application_vertices.is_empty() {
+            self.queue
+                .write_buffer(&self.application_vertex_buffer, 0, &application_vertices);
+        }
+        let application_vertex_count =
+            (application_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
         };
@@ -427,7 +572,7 @@ impl MapsWgpuBaseMapRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Maps base-map command encoder"),
+                label: Some("Maps map-frame command encoder"),
             });
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
@@ -446,7 +591,7 @@ impl MapsWgpuBaseMapRenderer {
         let mut drawn_tiles = 0;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Maps base-map render pass"),
+                label: Some("Maps raster and application render pass"),
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -465,6 +610,12 @@ impl MapsWgpuBaseMapRenderer {
                 let first = index as u32 * VERTICES_PER_TILE;
                 pass.draw(first..first + VERTICES_PER_TILE, 0..1);
                 drawn_tiles += 1;
+            }
+
+            if application_vertex_count > 0 {
+                pass.set_pipeline(&self.application_pipeline);
+                pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
+                pass.draw(0..application_vertex_count, 0..1);
             }
         }
 
@@ -514,6 +665,15 @@ fn create_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
     })
 }
 
+fn create_application_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Maps application screen-space vertices"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn append_tile_vertices(
     output: &mut Vec<u8>,
     placement: &WgpuRasterTilePlacement,
@@ -551,6 +711,116 @@ fn append_tile_vertices(
         }
     }
     Ok(())
+}
+
+fn append_application_vertices(
+    output: &mut Vec<u8>,
+    frame: &WgpuApplicationFrame,
+) -> Result<(), JsValue> {
+    if !frame.width.is_finite()
+        || !frame.height.is_finite()
+        || frame.width <= 0.0
+        || frame.height <= 0.0
+    {
+        return Err(JsValue::from_str("invalid wgpu application frame extent"));
+    }
+
+    for circle in &frame.circles {
+        append_application_circle(output, frame.width, frame.height, circle)?;
+    }
+    Ok(())
+}
+
+fn append_application_circle(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    circle: &WgpuApplicationCircle,
+) -> Result<(), JsValue> {
+    if [circle.x, circle.y, circle.radius, circle.stroke_width]
+        .into_iter()
+        .any(|value| !value.is_finite())
+        || circle.radius < 0.0
+        || circle.stroke_width < 0.0
+        || !valid_color(circle.fill_color)
+        || !valid_color(circle.stroke_color)
+    {
+        return Err(JsValue::from_str("invalid wgpu application circle"));
+    }
+
+    for segment in 0..CIRCLE_SEGMENTS {
+        let angle_a = std::f64::consts::TAU * segment as f64 / CIRCLE_SEGMENTS as f64;
+        let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
+        let a = point_on_circle(circle.x, circle.y, circle.radius, angle_a);
+        let b = point_on_circle(circle.x, circle.y, circle.radius, angle_b);
+        append_application_vertex(output, width, height, circle.x, circle.y, circle.fill_color)?;
+        append_application_vertex(output, width, height, a.0, a.1, circle.fill_color)?;
+        append_application_vertex(output, width, height, b.0, b.1, circle.fill_color)?;
+    }
+
+    if circle.stroke_width > 0.0 {
+        let inner_radius = (circle.radius - circle.stroke_width / 2.0).max(0.0);
+        let outer_radius = circle.radius + circle.stroke_width / 2.0;
+        for segment in 0..CIRCLE_SEGMENTS {
+            let angle_a = std::f64::consts::TAU * segment as f64 / CIRCLE_SEGMENTS as f64;
+            let angle_b =
+                std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
+            let inner_a = point_on_circle(circle.x, circle.y, inner_radius, angle_a);
+            let inner_b = point_on_circle(circle.x, circle.y, inner_radius, angle_b);
+            let outer_a = point_on_circle(circle.x, circle.y, outer_radius, angle_a);
+            let outer_b = point_on_circle(circle.x, circle.y, outer_radius, angle_b);
+
+            for point in [inner_a, outer_a, outer_b, inner_a, outer_b, inner_b] {
+                append_application_vertex(
+                    output,
+                    width,
+                    height,
+                    point.0,
+                    point.1,
+                    circle.stroke_color,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn append_application_vertex(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    x: f64,
+    y: f64,
+    color: [f32; 4],
+) -> Result<(), JsValue> {
+    let clip_x = (x / width * 2.0 - 1.0) as f32;
+    let clip_y = (1.0 - y / height * 2.0) as f32;
+    if !clip_x.is_finite() || !clip_y.is_finite() {
+        return Err(JsValue::from_str(
+            "wgpu application position is not representable as f32",
+        ));
+    }
+
+    output.extend_from_slice(&clip_x.to_le_bytes());
+    output.extend_from_slice(&clip_y.to_le_bytes());
+    for value in color {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(())
+}
+
+fn point_on_circle(center_x: f64, center_y: f64, radius: f64, angle: f64) -> (f64, f64) {
+    (
+        center_x + angle.cos() * radius,
+        center_y + angle.sin() * radius,
+    )
+}
+
+fn valid_color(color: [f32; 4]) -> bool {
+    color
+        .into_iter()
+        .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
 }
 
 fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
