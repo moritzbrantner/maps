@@ -20,6 +20,8 @@ export function createMapsViewStateEchoTracker() {
       pending.push({
         center: [viewState.center[0], viewState.center[1]],
         zoom: viewState.zoom,
+        bearing: viewState.bearing,
+        pitch: viewState.pitch,
       });
 
       if (pending.length > MAX_PENDING_VIEW_STATE_ECHOES) {
@@ -33,6 +35,8 @@ export function areMapsViewStatesEqual(left: MapViewState, right: MapViewState) 
   return (
     Math.abs(left.center[0] - right.center[0]) < 1e-10 &&
     Math.abs(left.center[1] - right.center[1]) < 1e-10 &&
-    Math.abs(left.zoom - right.zoom) < 1e-10
+    Math.abs(left.zoom - right.zoom) < 1e-10 &&
+    Math.abs((left.bearing ?? 0) - (right.bearing ?? 0)) < 1e-10 &&
+    Math.abs((left.pitch ?? 0) - (right.pitch ?? 0)) < 1e-10
   );
 }
