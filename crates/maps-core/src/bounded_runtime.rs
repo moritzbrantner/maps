@@ -27,6 +27,7 @@ impl BoundedFlatRasterRuntime {
         max_bounds: Option<MapBounds>,
     ) -> Result<Self, FlatRasterRuntimeError> {
         validate_max_bounds(max_bounds)?;
+        validate_bounded_camera(inner.camera(), max_bounds)?;
         let mut runtime = Self { inner, max_bounds };
         runtime.apply_camera_constraint()?;
         Ok(runtime)
@@ -52,6 +53,7 @@ impl BoundedFlatRasterRuntime {
         max_bounds: Option<MapBounds>,
     ) -> Result<(), FlatRasterRuntimeError> {
         validate_max_bounds(max_bounds)?;
+        validate_bounded_camera(self.inner.camera(), max_bounds)?;
         let previous = self.max_bounds;
         self.max_bounds = max_bounds;
 
@@ -113,6 +115,14 @@ impl BoundedFlatRasterRuntime {
         self.apply_camera_constraint()
     }
 
+    pub fn project_screen(
+        &self,
+        longitude: f64,
+        latitude: f64,
+    ) -> Result<ScreenCoordinate, FlatRasterRuntimeError> {
+        self.inner.project_screen(longitude, latitude)
+    }
+
     pub fn unproject_screen(
         &self,
         screen: ScreenCoordinate,
@@ -136,6 +146,7 @@ impl BoundedFlatRasterRuntime {
         let Some(bounds) = self.max_bounds else {
             return Ok(());
         };
+        validate_bounded_camera(self.inner.camera(), self.max_bounds)?;
         let constrained = constrain_camera_to_bounds(self.inner.camera(), bounds)?;
         self.inner.set_view_state(
             constrained.longitude,
@@ -143,6 +154,16 @@ impl BoundedFlatRasterRuntime {
             constrained.zoom,
         )
     }
+}
+
+fn validate_bounded_camera(
+    camera: MapCamera,
+    max_bounds: Option<MapBounds>,
+) -> Result<(), FlatRasterRuntimeError> {
+    if max_bounds.is_some() && (camera.bearing != 0.0 || camera.pitch != 0.0) {
+        return Err(FlatRasterRuntimeError::UnsupportedCamera);
+    }
+    Ok(())
 }
 
 fn validate_max_bounds(max_bounds: Option<MapBounds>) -> Result<(), FlatRasterRuntimeError> {
@@ -269,6 +290,31 @@ mod tests {
         .unwrap()
     }
 
+    fn oriented_runtime(
+        center: [f64; 2],
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+        width: f64,
+        height: f64,
+    ) -> FlatRasterRuntime {
+        let camera = MapCamera::new(
+            center[0],
+            center[1],
+            zoom,
+            bearing,
+            pitch,
+            ViewportSize::new(width, height).unwrap(),
+        )
+        .unwrap();
+        FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(0, 19, 256).unwrap(),
+            FlatRasterRuntimeLimits::default(),
+        )
+        .unwrap()
+    }
+
     fn europe_bounds() -> MapBounds {
         MapBounds::new([-25.0, 34.0, 35.0, 66.0]).unwrap()
     }
@@ -310,6 +356,30 @@ mod tests {
 
         assert!(runtime.camera().zoom > 1.0);
         assert_camera_inside_bounds(&runtime, bounds);
+    }
+
+    #[test]
+    fn oriented_camera_with_max_bounds_fails_closed() {
+        let bounds = europe_bounds();
+        let inner = oriented_runtime([13.405, 52.52], 6.0, 30.0, 35.0, 960.0, 620.0);
+
+        assert!(matches!(
+            BoundedFlatRasterRuntime::new(inner, Some(bounds)),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        ));
+    }
+
+    #[test]
+    fn oriented_camera_without_max_bounds_remains_supported() {
+        let inner = oriented_runtime([13.405, 52.52], 6.0, 30.0, 35.0, 960.0, 620.0);
+        let mut runtime = BoundedFlatRasterRuntime::new(inner, None).unwrap();
+
+        assert!(runtime.frame_plan().is_ok());
+        assert!(matches!(
+            runtime.set_max_bounds(Some(europe_bounds())),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        ));
+        assert_eq!(runtime.max_bounds(), None);
     }
 
     #[test]
