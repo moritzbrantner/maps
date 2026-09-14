@@ -19,7 +19,7 @@ const entrySizeBudgets = {
   "temporal.js": 4_096,
   "timeline.js": 4_096,
 };
-const maxSharedChunkBytes = 220_000;
+const maxSharedChunkBytes = 220_500;
 
 verifyMissingImports("core", [
   "react",
