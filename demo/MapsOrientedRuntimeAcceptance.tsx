@@ -82,9 +82,7 @@ export function MapsOrientedRuntimeAcceptance() {
           <output data-testid="maps-oriented-context-coordinate">
             {formatCoordinate(contextCoordinate)}
           </output>
-          <output data-testid="maps-oriented-selected-point">
-            {selectedPointId ?? "none"}
-          </output>
+          <output data-testid="maps-oriented-selected-point">{selectedPointId ?? "none"}</output>
         </MapControls>
       </MapView>
     </main>
