@@ -14,6 +14,19 @@ const FIELD_OF_VIEW_Y_RADIANS: f32 = core::f32::consts::FRAC_PI_4;
 const RAY_EPSILON: f64 = 1.0e-12;
 const FAR_PLANE_MULTIPLIER: f32 = 4096.0;
 
+/// Conservative local-map-plane bounds for the ground visible through a viewport.
+///
+/// Coordinates use the same CSS-pixel local frame as raster placements: +x east, +y north.
+/// The bounds are available only when every viewport corner has a finite forward intersection
+/// with the z=0 map plane. Cameras whose top edge crosses the horizon therefore fail closed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapLocalViewportBounds {
+    pub west: f64,
+    pub south: f64,
+    pub east: f64,
+    pub north: f64,
+}
+
 /// Renderer-neutral local camera frame derived from one canonical `MapCamera`.
 ///
 /// The local plane uses CSS pixels around the current map center: +x is east, +y is north,
@@ -100,6 +113,16 @@ impl MapCamera {
     pub fn unproject_screen_matrix(self, screen: ScreenCoordinate) -> Option<GeographicCoordinate> {
         self.local_render_frame()?.unproject(screen)
     }
+
+    /// Returns conservative local ground bounds for the viewport under this camera.
+    ///
+    /// This is the tile-cover primitive for bearing/pitch-aware runtimes. It deliberately fails
+    /// when any viewport corner lies beyond the ground horizon, allowing callers to reject that
+    /// camera instead of under-fetching tiles from an unbounded footprint.
+    #[must_use]
+    pub fn local_viewport_bounds_matrix(self) -> Option<MapLocalViewportBounds> {
+        self.local_render_frame()?.viewport_ground_bounds()
+    }
 }
 
 impl MapLocalRenderFrame {
@@ -140,6 +163,57 @@ impl MapLocalRenderFrame {
     /// unprojection to the authoritative north-up `MapCamera` path.
     #[must_use]
     pub fn unproject(self, screen: ScreenCoordinate) -> Option<GeographicCoordinate> {
+        let [local_x, local_y] = self.unproject_local(screen)?;
+        let flat_screen = ScreenCoordinate {
+            x: self.flat_camera.viewport.width * 0.5 + local_x,
+            y: self.flat_camera.viewport.height * 0.5 - local_y,
+        };
+        self.flat_camera.unproject_screen(flat_screen)
+    }
+
+    /// Returns an axis-aligned conservative bound of the ground footprint in the local map plane.
+    #[must_use]
+    pub fn viewport_ground_bounds(self) -> Option<MapLocalViewportBounds> {
+        let width = self.flat_camera.viewport.width;
+        let height = self.flat_camera.viewport.height;
+        let corners = [
+            ScreenCoordinate { x: 0.0, y: 0.0 },
+            ScreenCoordinate { x: width, y: 0.0 },
+            ScreenCoordinate {
+                x: width,
+                y: height,
+            },
+            ScreenCoordinate { x: 0.0, y: height },
+        ];
+
+        let mut west = f64::INFINITY;
+        let mut south = f64::INFINITY;
+        let mut east = f64::NEG_INFINITY;
+        let mut north = f64::NEG_INFINITY;
+        for corner in corners {
+            let [x, y] = self.unproject_local(corner)?;
+            west = west.min(x);
+            east = east.max(x);
+            south = south.min(y);
+            north = north.max(y);
+        }
+
+        if ![west, south, east, north].into_iter().all(f64::is_finite)
+            || west > east
+            || south > north
+        {
+            return None;
+        }
+
+        Some(MapLocalViewportBounds {
+            west,
+            south,
+            east,
+            north,
+        })
+    }
+
+    fn unproject_local(self, screen: ScreenCoordinate) -> Option<[f64; 2]> {
         if !screen.x.is_finite() || !screen.y.is_finite() {
             return None;
         }
@@ -171,11 +245,11 @@ impl MapLocalRenderFrame {
 
         let local_x = ray_start[0] + delta[0] * factor;
         let local_y = ray_start[1] + delta[1] * factor;
-        let flat_screen = ScreenCoordinate {
-            x: width * 0.5 + local_x,
-            y: height * 0.5 - local_y,
-        };
-        self.flat_camera.unproject_screen(flat_screen)
+        if !local_x.is_finite() || !local_y.is_finite() {
+            return None;
+        }
+
+        Some([local_x, local_y])
     }
 }
 
@@ -184,4 +258,60 @@ fn checked_f32(value: f64) -> Option<f32> {
         return None;
     }
     Some(value as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ViewportSize;
+
+    fn camera(bearing: f64, pitch: f64) -> MapCamera {
+        MapCamera::new(
+            13.405,
+            52.52,
+            8.0,
+            bearing,
+            pitch,
+            ViewportSize::new(800.0, 600.0).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn north_up_viewport_footprint_matches_half_viewport_extents() {
+        let bounds = camera(0.0, 0.0).local_viewport_bounds_matrix().unwrap();
+
+        assert!((bounds.west + 400.0).abs() < 1.0e-3, "west={}", bounds.west);
+        assert!((bounds.east - 400.0).abs() < 1.0e-3, "east={}", bounds.east);
+        assert!((bounds.south + 300.0).abs() < 1.0e-3, "south={}", bounds.south);
+        assert!((bounds.north - 300.0).abs() < 1.0e-3, "north={}", bounds.north);
+    }
+
+    #[test]
+    fn bearing_expands_axis_aligned_tile_cover_footprint() {
+        let base = camera(0.0, 0.0).local_viewport_bounds_matrix().unwrap();
+        let rotated = camera(45.0, 0.0).local_viewport_bounds_matrix().unwrap();
+
+        assert!(rotated.west < base.west);
+        assert!(rotated.east > base.east);
+        assert!(rotated.south < base.south);
+        assert!(rotated.north > base.north);
+    }
+
+    #[test]
+    fn practical_pitch_has_finite_conservative_ground_footprint() {
+        let bounds = camera(30.0, 60.0).local_viewport_bounds_matrix().unwrap();
+
+        assert!(bounds.west.is_finite());
+        assert!(bounds.east.is_finite());
+        assert!(bounds.south.is_finite());
+        assert!(bounds.north.is_finite());
+        assert!(bounds.west < bounds.east);
+        assert!(bounds.south < bounds.north);
+    }
+
+    #[test]
+    fn camera_crossing_ground_horizon_fails_closed() {
+        assert!(camera(0.0, 85.0).local_viewport_bounds_matrix().is_none());
+    }
 }
