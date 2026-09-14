@@ -14,7 +14,6 @@ import { getBoundsFromPoints, type ViewportAggregationQuery } from "./aggregatio
 import {
   MapsCanvasFlatRuntime,
   type MapsCanvasFlatRuntimeController,
-  type MapsCanvasRendererKind,
 } from "./canvas-flat-runtime";
 import {
   FeatureOverlays,
@@ -92,7 +91,6 @@ export function MapsMapView({
   const lastFitBoundsKeyRef = useRef<string | null>(null);
   const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
-  const [mapsRenderer, setMapsRenderer] = useState<MapsCanvasRendererKind>("canvas2d");
   const [runtimeError, setRuntimeError] = useState<unknown>(null);
   const [hovered, setHovered] = useState<{ feature: unknown; id: string | null } | null>(null);
   const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
@@ -222,11 +220,9 @@ export function MapsMapView({
   );
 
   const renderApplicationFrame = useCallback(
-    (frame: MapScreenRenderFrame<unknown>, interaction: MapScreenInteractionState) => {
-      if (mapsRenderer !== "wgpu") return false;
-      return runtimeControllerRef.current?.renderApplicationFrame(frame, interaction) ?? false;
-    },
-    [mapsRenderer],
+    (frame: MapScreenRenderFrame<unknown>, interaction: MapScreenInteractionState) =>
+      runtimeControllerRef.current?.renderApplicationFrame(frame, interaction) ?? false,
+    [],
   );
 
   const getViewportAggregationQuery = useCallback(
@@ -620,7 +616,6 @@ export function MapsMapView({
             runtimeControllerRef.current = controller;
             if (!controller) {
               setIsReady(false);
-              setMapsRenderer("canvas2d");
             }
           }}
           onError={(error) => {
@@ -631,7 +626,6 @@ export function MapsMapView({
           onReady={() => {
             setIsReady(true);
           }}
-          onRendererChange={setMapsRenderer}
           onViewStateChange={setViewState}
           viewState={currentViewState}
         />
