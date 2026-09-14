@@ -22,6 +22,7 @@ import {
 } from "./aggregation";
 import {
   createCanvasMapScene,
+  drawCanvasMapLabels,
   drawCanvasMapScene,
   hitTestCanvasMapScene,
   type CanvasMapScene,
@@ -53,6 +54,7 @@ import {
   type MapVectorRenderFrame,
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
+import type { MapScreenInteractionState } from "./map-screen-render-frame";
 import type { MapSurfaceContextValue } from "./map-surface-context";
 import { createPointClusterRenderFrame } from "./point-cluster-render-frame";
 import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
@@ -89,6 +91,10 @@ type MapsOverlayLayersProps = {
   children: ReactNode;
   getViewport: (width: number, height: number) => ViewportAggregationQuery | null;
   project: MapsProjectCoordinate;
+  renderApplicationFrame?: (
+    frame: CanvasMapScene<unknown>,
+    interaction: MapScreenInteractionState,
+  ) => boolean;
   surface: MapsOverlayInteractionSurface;
 };
 
@@ -156,7 +162,10 @@ type InternalPick = {
 };
 
 export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
-  function MapsOverlayLayers({ children, getViewport, project, surface }, ref) {
+  function MapsOverlayLayers(
+    { children, getViewport, project, renderApplicationFrame, surface },
+    ref,
+  ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<CanvasMapScene<unknown> | null>(null);
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
@@ -273,6 +282,12 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         return;
       }
 
+      const clearApplicationFrame = () => {
+        const scene = sceneRef.current;
+        if (!scene || !renderApplicationFrame) return;
+        renderApplicationFrame({ ...scene, primitives: [] }, {});
+      };
+
       const draw = () => {
         const size = resizeCanvasBackingStore(canvas);
         const snapshot = createOverlaySnapshot(
@@ -282,28 +297,39 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           getViewport(size.width, size.height),
         );
         const scene = createCanvasMapScene(snapshot.frame, project, size);
+        const interaction: MapScreenInteractionState = {
+          hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
+          selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
+        };
         sceneRef.current = scene;
         renderedSnapshotRef.current = snapshot;
         canvas.dataset.mapOverlayPrimitives = String(snapshot.frame.primitives.length);
+
+        const renderedByWgpu = renderApplicationFrame?.(scene, interaction) ?? false;
+        canvas.dataset.mapOverlayBackend = renderedByWgpu ? "wgpu" : "canvas2d";
 
         const context = getCanvasContext(canvas);
         if (!context) return;
 
         const ratio = Math.max(1, window.devicePixelRatio || 1);
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
-        drawCanvasMapScene(context, scene, {
-          hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
-          selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
-        });
+        if (renderedByWgpu) {
+          drawCanvasMapLabels(context, scene);
+        } else {
+          drawCanvasMapScene(context, scene, interaction);
+        }
       };
 
       draw();
 
-      if (typeof ResizeObserver === "undefined") return;
+      if (typeof ResizeObserver === "undefined") return clearApplicationFrame;
       const observer = new ResizeObserver(draw);
       observer.observe(canvas);
-      return () => observer.disconnect();
-    }, [entries, getViewport, project, surface]);
+      return () => {
+        observer.disconnect();
+        clearApplicationFrame();
+      };
+    }, [entries, getViewport, project, renderApplicationFrame, surface]);
 
     useEffect(() => {
       return () => {
