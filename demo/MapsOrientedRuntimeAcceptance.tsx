@@ -18,6 +18,15 @@ const INITIAL_VIEW_STATE: MapViewState = {
   zoom: 7,
 };
 
+const ACCEPTANCE_POINTS = [
+  {
+    id: "oriented-berlin",
+    label: "Berlin",
+    latitude: 52.52,
+    longitude: 13.405,
+  },
+] as const;
+
 export function MapsOrientedRuntimeAcceptance() {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
   const [contextCoordinate, setContextCoordinate] = useState<[number, number] | null>(null);
@@ -27,10 +36,6 @@ export function MapsOrientedRuntimeAcceptance() {
   return (
     <main style={{ margin: "0 auto", maxWidth: 1120, padding: 24 }}>
       <h1>Maps-owned oriented runtime acceptance</h1>
-      <p>
-        This path exercises bearing and pitch through the first-party Rust/WASM camera and both
-        Maps-owned pixel backends. It intentionally has no MapLibre instance or max-bounds fallback.
-      </p>
       <MapView
         flatRuntime="maps"
         fitToData={false}
@@ -49,19 +54,10 @@ export function MapsOrientedRuntimeAcceptance() {
         viewState={viewState}
       >
         <PointLayer
-          onSelectedFeatureIdChange={(featureId) => {
-            setSelectedPointId(featureId);
-          }}
+          onSelectedFeatureIdChange={setSelectedPointId}
           pointColor="#dc2626"
           pointRadius={10}
-          points={[
-            {
-              id: "oriented-berlin",
-              label: "Berlin",
-              latitude: 52.52,
-              longitude: 13.405,
-            },
-          ]}
+          points={ACCEPTANCE_POINTS}
           renderFeaturePopup={(feature) => (
             <span data-testid="maps-oriented-feature-popup">Selected {feature.point.label}</span>
           )}
@@ -82,15 +78,9 @@ export function MapsOrientedRuntimeAcceptance() {
           >
             Apply oriented state
           </button>
-          <output data-testid="maps-oriented-view-state">
-            {viewState.center[0].toFixed(5)},{viewState.center[1].toFixed(5)} | zoom{" "}
-            {viewState.zoom.toFixed(5)} | bearing {(viewState.bearing ?? 0).toFixed(5)} | pitch{" "}
-            {(viewState.pitch ?? 0).toFixed(5)}
-          </output>
+          <output data-testid="maps-oriented-view-state">{formatViewState(viewState)}</output>
           <output data-testid="maps-oriented-context-coordinate">
-            {contextCoordinate
-              ? `${contextCoordinate[0].toFixed(7)},${contextCoordinate[1].toFixed(7)}`
-              : "none"}
+            {formatCoordinate(contextCoordinate)}
           </output>
           <output data-testid="maps-oriented-selected-point">
             {selectedPointId ?? "none"}
@@ -99,4 +89,18 @@ export function MapsOrientedRuntimeAcceptance() {
       </MapView>
     </main>
   );
+}
+
+function formatViewState(viewState: MapViewState) {
+  const [longitude, latitude] = viewState.center;
+  return [
+    `${longitude.toFixed(5)},${latitude.toFixed(5)}`,
+    `zoom ${viewState.zoom.toFixed(5)}`,
+    `bearing ${(viewState.bearing ?? 0).toFixed(5)}`,
+    `pitch ${(viewState.pitch ?? 0).toFixed(5)}`,
+  ].join(" | ");
+}
+
+function formatCoordinate(coordinate: [number, number] | null) {
+  return coordinate ? `${coordinate[0].toFixed(7)},${coordinate[1].toFixed(7)}` : "none";
 }
