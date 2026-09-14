@@ -549,7 +549,8 @@ impl MapsWgpuBaseMapRenderer {
             let capacity = application_required
                 .next_power_of_two()
                 .max(INITIAL_VERTEX_BUFFER_SIZE);
-            self.application_vertex_buffer = create_application_vertex_buffer(&self.device, capacity);
+            self.application_vertex_buffer =
+                create_application_vertex_buffer(&self.device, capacity);
             self.application_vertex_capacity = capacity;
         }
         if !application_vertices.is_empty() {
@@ -763,8 +764,7 @@ fn append_application_circle(
         let outer_radius = circle.radius + circle.stroke_width / 2.0;
         for segment in 0..CIRCLE_SEGMENTS {
             let angle_a = std::f64::consts::TAU * segment as f64 / CIRCLE_SEGMENTS as f64;
-            let angle_b =
-                std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
+            let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
             let inner_a = point_on_circle(circle.x, circle.y, inner_radius, angle_a);
             let inner_b = point_on_circle(circle.x, circle.y, inner_radius, angle_b);
             let outer_a = point_on_circle(circle.x, circle.y, outer_radius, angle_a);
