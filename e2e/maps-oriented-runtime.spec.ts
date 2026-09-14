@@ -69,6 +69,17 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
   const zoomGroundAfter = parseCoordinate(await contextCoordinate.textContent());
   expectCoordinateClose(zoomGroundAfter, zoomGroundBefore, 0.0002);
 
+  await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
+  const pinchGroundBefore = parseCoordinate(await contextCoordinate.textContent());
+  const viewBeforePinch = await viewState.textContent();
+
+  await pinchZoomAt(page, zoomAnchor);
+  await expect.poll(async () => viewState.textContent()).not.toBe(viewBeforePinch);
+
+  await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
+  const pinchGroundAfter = parseCoordinate(await contextCoordinate.textContent());
+  expectCoordinateClose(pinchGroundAfter, pinchGroundBefore, 0.0002);
+
   await page.getByRole("button", { name: "Apply oriented state" }).click();
   await expect(viewState).toContainText("zoom 7.50000 | bearing 55.00000 | pitch 35.00000");
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
@@ -77,6 +88,30 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
 async function probeCoordinate(page: Page, output: Locator, x: number, y: number) {
   await page.mouse.click(x, y, { button: "right" });
   await expect(output).not.toHaveText("none");
+}
+
+async function pinchZoomAt(page: Page, center: { x: number; y: number }) {
+  const client = await page.context().newCDPSession(page);
+
+  try {
+    await client.send("Input.dispatchTouchEvent", {
+      touchPoints: [
+        { id: 1, x: center.x - 24, y: center.y },
+        { id: 2, x: center.x + 24, y: center.y },
+      ],
+      type: "touchStart",
+    });
+    await client.send("Input.dispatchTouchEvent", {
+      touchPoints: [
+        { id: 1, x: center.x - 76, y: center.y },
+        { id: 2, x: center.x + 76, y: center.y },
+      ],
+      type: "touchMove",
+    });
+    await client.send("Input.dispatchTouchEvent", { touchPoints: [], type: "touchEnd" });
+  } finally {
+    await client.detach();
+  }
 }
 
 function parseCoordinate(text: string | null): [number, number] {
