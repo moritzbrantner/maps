@@ -13,6 +13,7 @@ import "./project-links.css";
 import { initializeMapsAggregationWasm } from "../src/aggregation-runtime";
 import { configureMapsWasmPackage } from "../src/aggregation-wasm";
 import { App } from "./App";
+import { MapsOrientedRuntimeAcceptance } from "./MapsOrientedRuntimeAcceptance";
 import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
 import {
   markRustRuntimeLoaded,
@@ -30,7 +31,12 @@ async function bootstrap() {
   await initializeHostedRustRuntime();
 
   const acceptanceMode = new URLSearchParams(window.location.search).get("acceptance");
-  const content = acceptanceMode === "maps-runtime" ? <MapsRuntimeAcceptance /> : <App />;
+  const content =
+    acceptanceMode === "maps-runtime"
+      ? <MapsRuntimeAcceptance />
+      : acceptanceMode === "maps-runtime-oriented"
+        ? <MapsOrientedRuntimeAcceptance />
+        : <App />;
 
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
