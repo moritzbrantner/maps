@@ -643,7 +643,12 @@ mod tests {
         let mut runtime = runtime([13.405, 52.52], 5.0, width, height);
         let plan = runtime.frame_plan().unwrap();
 
-        assert!(plan.render_camera.view_projection.into_iter().all(f32::is_finite));
+        assert!(
+            plan.render_camera
+                .view_projection
+                .into_iter()
+                .all(f32::is_finite)
+        );
         assert!(!plan.placements.is_empty());
         for placement in plan.placements {
             assert!((placement.screen_x - (width * 0.5 + placement.local_west)).abs() < 1e-9);
