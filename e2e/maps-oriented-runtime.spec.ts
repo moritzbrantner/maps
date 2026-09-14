@@ -53,8 +53,8 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
   const draggedGroundAfter = parseCoordinate(await contextCoordinate.textContent());
   expectCoordinateClose(draggedGroundAfter, draggedGroundBefore, 0.0002);
 
-  // Chromium touch injection is pixel-addressed. Use an integer browser coordinate so the touch
-  // midpoint and the mouse-based geographic probe observe exactly the same screen anchor.
+  // Chromium wheel/touch injection is pixel-addressed. Use an integer browser coordinate so all
+  // browser input and the geographic probes observe exactly the same off-center screen anchor.
   const zoomAnchor = {
     x: Math.round(box!.x + box!.width * 0.7),
     y: Math.round(box!.y + box!.height * 0.4),
@@ -63,8 +63,7 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
   const zoomGroundBefore = parseCoordinate(await contextCoordinate.textContent());
   const viewBeforeZoom = await viewState.textContent();
 
-  await page.mouse.move(zoomAnchor.x, zoomAnchor.y);
-  await page.mouse.wheel(0, -220);
+  await wheelZoomAt(page, zoomAnchor);
   await expect.poll(async () => viewState.textContent()).not.toBe(viewBeforeZoom);
 
   await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
@@ -90,6 +89,22 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
 async function probeCoordinate(page: Page, output: Locator, x: number, y: number) {
   await page.mouse.click(x, y, { button: "right" });
   await expect(output).not.toHaveText("none");
+}
+
+async function wheelZoomAt(page: Page, center: { x: number; y: number }) {
+  const client = await page.context().newCDPSession(page);
+
+  try {
+    await client.send("Input.dispatchMouseEvent", {
+      deltaX: 0,
+      deltaY: -220,
+      type: "mouseWheel",
+      x: center.x,
+      y: center.y,
+    });
+  } finally {
+    await client.detach();
+  }
 }
 
 async function pinchZoomAt(page: Page, center: { x: number; y: number }) {
