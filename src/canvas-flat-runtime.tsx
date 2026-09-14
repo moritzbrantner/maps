@@ -24,12 +24,20 @@ import {
   type MapViewStateChangeReason,
   type RasterMapStyle,
 } from "./map-display";
+import type {
+  MapScreenInteractionState,
+  MapScreenRenderFrame,
+} from "./map-screen-render-frame";
 import {
   loadMapsFlatRasterRuntime,
   type MapsFlatRasterFrame,
   type MapsFlatRasterRuntime,
   type MapsRasterTileId,
 } from "./flat-runtime-wasm";
+import {
+  createMapsWgpuApplicationFrame,
+  type MapsWgpuApplicationFrame,
+} from "./wgpu-application-frame";
 import { loadMapsWgpuBaseMapRenderer, type MapsWgpuBaseMapRenderer } from "./wgpu-base-map-wasm";
 
 const DEFAULT_TILE_SIZE = 256;
@@ -47,10 +55,16 @@ type ScreenPoint = {
   y: number;
 };
 
+export type MapsCanvasRendererKind = "canvas2d" | "wgpu";
+
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   getVisibleBounds(): MapBounds;
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
+  renderApplicationFrame(
+    frame: MapScreenRenderFrame<unknown>,
+    interaction?: MapScreenInteractionState,
+  ): boolean;
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
 };
@@ -66,6 +80,7 @@ type MapsCanvasFlatRuntimeProps = {
   onControllerReady?: (controller: MapsCanvasFlatRuntimeController | null) => void;
   onError?: (error: unknown) => void;
   onReady?: () => void;
+  onRendererChange?: (renderer: MapsCanvasRendererKind) => void;
   onViewStateChange: (viewState: MapViewState, reason: MapViewStateChangeReason) => void;
   viewState: MapViewState;
   wasmPackage?: string;
@@ -84,6 +99,7 @@ export function MapsCanvasFlatRuntime({
   onControllerReady,
   onError,
   onReady,
+  onRendererChange,
   onViewStateChange,
   viewState,
   wasmPackage,
@@ -92,7 +108,7 @@ export function MapsCanvasFlatRuntime({
   const fallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<MapsWgpuBaseMapRenderer | null>(null);
   const runtimeRef = useRef<MapsFlatRasterRuntime | null>(null);
-  const [baseRenderer, setBaseRenderer] = useState<"pending" | "wgpu" | "canvas2d">("pending");
+  const [baseRenderer, setBaseRenderer] = useState<"pending" | MapsCanvasRendererKind>("pending");
   const imagesRef = useRef<Map<string, ImageBitmap>>(new Map());
   const loadsRef = useRef<Map<string, ActiveTileLoad>>(new Map());
   const syncFrameRef = useRef<(() => MapsFlatRasterFrame) | null>(null);
@@ -114,6 +130,7 @@ export function MapsCanvasFlatRuntime({
   const onControllerReadyRef = useRef(onControllerReady);
   const onErrorRef = useRef(onError);
   const onReadyRef = useRef(onReady);
+  const onRendererChangeRef = useRef(onRendererChange);
   const gestureRef = useRef(createMapsPointerGesture());
   const velocityTrackerRef = useRef(createMapsPanVelocityTracker());
   const pointerTimesRef = useRef<Map<number, number>>(new Map());
@@ -131,6 +148,7 @@ export function MapsCanvasFlatRuntime({
   onControllerReadyRef.current = onControllerReady;
   onErrorRef.current = onError;
   onReadyRef.current = onReady;
+  onRendererChangeRef.current = onRendererChange;
 
   function cancelKineticPan() {
     if (kineticFrameRef.current !== null) {
@@ -253,12 +271,15 @@ export function MapsCanvasFlatRuntime({
 
       runtimeRef.current = runtime;
       rendererRef.current = renderer;
-      setBaseRenderer(renderer ? "wgpu" : "canvas2d");
+      const rendererKind: MapsCanvasRendererKind = renderer ? "wgpu" : "canvas2d";
+      setBaseRenderer(rendererKind);
+      onRendererChangeRef.current?.(rendererKind);
 
       const activateCanvasFallback = () => {
         rendererRef.current?.dispose();
         rendererRef.current = null;
         setBaseRenderer("canvas2d");
+        onRendererChangeRef.current?.("canvas2d");
       };
 
       const frameSynchronizer = createFrameSynchronizer({
@@ -306,6 +327,9 @@ export function MapsCanvasFlatRuntime({
         project(coordinates) {
           const [x, y] = runtime.project(coordinates[0], coordinates[1]);
           return { x, y };
+        },
+        renderApplicationFrame(frame, interaction = {}) {
+          return frameSynchronizer.setApplicationFrame(frame, interaction);
         },
         setViewState(next, reason = "programmatic") {
           cancelKineticPan();
@@ -546,6 +570,7 @@ function createFrameSynchronizer({
   let rendererRetryFrame: number | null = null;
   let deviceLossMonitorTimer: number | null = null;
   let lastFrame: MapsFlatRasterFrame | null = null;
+  let applicationFrame: MapsWgpuApplicationFrame | null = null;
 
   function cancelRendererRetry() {
     if (rendererRetryFrame !== null) {
@@ -606,7 +631,11 @@ function createFrameSynchronizer({
     const currentRenderer = renderer();
     if (currentRenderer) {
       try {
-        const drawnTiles = currentRenderer.render(frame.placements, frame.renderCamera);
+        const drawnTiles = currentRenderer.render(
+          frame.placements,
+          frame.renderCamera,
+          applicationFrame,
+        );
         const hasDecodedVisibleTile = frame.placements.some((placement) =>
           images.has(placement.tile.key),
         );
@@ -624,6 +653,22 @@ function createFrameSynchronizer({
 
     cancelRendererRetry();
     canvas.dataset.mapBaseTiles = String(drawCanvasFrame(fallbackCanvas, images, frame));
+  }
+
+  function setApplicationFrame(
+    frame: MapScreenRenderFrame<unknown>,
+    interaction: MapScreenInteractionState,
+  ) {
+    const currentRenderer = renderer();
+    if (!currentRenderer) {
+      applicationFrame = null;
+      return false;
+    }
+
+    const next = createMapsWgpuApplicationFrame(frame, interaction);
+    applicationFrame = next;
+    renderFrame(lastFrame ?? runtime.frame());
+    return next !== null && renderer() !== null;
   }
 
   function syncFrame(): MapsFlatRasterFrame {
@@ -700,7 +745,9 @@ function createFrameSynchronizer({
       cancelRendererRetry();
       cancelDeviceLossMonitor();
       lastFrame = null;
+      applicationFrame = null;
     },
+    setApplicationFrame,
     syncFrame,
   };
 }
