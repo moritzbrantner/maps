@@ -25,9 +25,10 @@ export type MapsWgpuApplicationFrame = {
 /**
  * Packs the currently supported first-party application geometry for the Rust/wgpu backend.
  *
- * This first production consumer deliberately accepts only complete, unlabeled circle-only frames.
- * Mixed frames, labels, unsupported primitive kinds, unsupported CSS colors, or non-finite values
- * fail closed to the Canvas renderer instead of producing a visually weaker partial GPU result.
+ * This first production consumer deliberately accepts only complete circle-only frames.
+ * Labels stay on the Canvas overlay while wgpu owns the circle pixels. Mixed frames,
+ * unsupported primitive kinds, unsupported CSS colors, or non-finite values fail closed to the
+ * Canvas renderer instead of producing a visually weaker partial GPU result.
  */
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
@@ -48,7 +49,6 @@ export function createMapsWgpuApplicationFrame(
     if (scenePrimitive.kind !== "circle") return null;
 
     const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
-    if (primitive.label !== null) return null;
     const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
     const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
     const strokeWidth = resolveMapScreenStrokeWidth(
