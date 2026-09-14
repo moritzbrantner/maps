@@ -8,9 +8,7 @@
 use crate::{GeographicCoordinate, MapCamera, ScreenCoordinate};
 use three_d_camera::PerspectiveCamera;
 use three_d_core::Vec3;
-use three_d_projective::{
-    transform_point_projective_f64, untransform_point_projective_f64,
-};
+use three_d_projective::{transform_point_projective_f64, untransform_point_projective_f64};
 
 const FIELD_OF_VIEW_Y_RADIANS: f32 = core::f32::consts::FRAC_PI_4;
 const RAY_EPSILON: f64 = 1.0e-12;
@@ -118,11 +116,9 @@ impl MapLocalRenderFrame {
         let half_width = self.flat_camera.viewport.width * 0.5;
         let half_height = self.flat_camera.viewport.height * 0.5;
         let local = [flat.x - half_width, -(flat.y - half_height), 0.0];
-        let ndc = transform_point_projective_f64(
-            self.shared_camera.view_projection_matrix(),
-            local,
-        )
-        .ok()?;
+        let ndc =
+            transform_point_projective_f64(self.shared_camera.view_projection_matrix(), local)
+                .ok()?;
 
         let x = (ndc[0] + 1.0) * half_width;
         let y = (1.0 - ndc[1]) * half_height;
