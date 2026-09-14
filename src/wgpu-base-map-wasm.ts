@@ -6,6 +6,7 @@ import type {
   MapsRasterRenderCamera,
   MapsRasterTilePlacement,
 } from "./flat-runtime-wasm";
+import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
@@ -14,6 +15,7 @@ export type MapsWgpuBaseMapRenderer = {
   render(
     placements: MapsRasterTilePlacement[],
     renderCamera: MapsRasterRenderCamera,
+    applicationFrame?: MapsWgpuApplicationFrame | null,
   ): number;
   resize(width: number, height: number): void;
   uploadTile(key: string, image: ImageBitmap): void;
@@ -26,6 +28,7 @@ type MapsWgpuBaseMapWasmRenderer = {
   render(
     placements: MapsRasterTilePlacement[],
     renderCamera: MapsRasterRenderCamera,
+    applicationFrame: MapsWgpuApplicationFrame | null,
   ): number;
   resize(width: number, height: number): void;
   uploadTile(key: string, image: ImageBitmap): void;
@@ -73,10 +76,10 @@ export async function loadMapsWgpuBaseMapRenderer(
           return renderer.isDeviceLost();
         });
       },
-      render(placements, renderCamera) {
+      render(placements, renderCamera, applicationFrame = null) {
         return runRendererOperation(canvas, () => {
           assertLive(disposed);
-          return renderer.render(placements, renderCamera);
+          return renderer.render(placements, renderCamera, applicationFrame);
         });
       },
       resize(width, height) {
