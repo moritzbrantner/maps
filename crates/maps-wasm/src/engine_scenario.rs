@@ -72,6 +72,9 @@ impl From<TileId> for WasmTileId {
 struct WasmRasterTilePlacement {
     tile: WasmTileId,
     world_copy: i32,
+    local_west: f64,
+    local_north: f64,
+    local_size: f64,
     screen_x: f64,
     screen_y: f64,
     screen_width: f64,
@@ -83,12 +86,21 @@ impl From<RasterTilePlacement> for WasmRasterTilePlacement {
         Self {
             tile: placement.tile.into(),
             world_copy: placement.world_copy,
+            local_west: placement.local_west,
+            local_north: placement.local_north,
+            local_size: placement.local_size,
             screen_x: placement.screen_x,
             screen_y: placement.screen_y,
             screen_width: placement.screen_width,
             screen_height: placement.screen_height,
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmRasterRenderCamera {
+    view_projection: [f32; 16],
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +129,7 @@ struct WasmVisibleBounds {
 #[serde(rename_all = "camelCase")]
 struct WasmRasterFramePlan {
     camera: WasmCameraState,
+    render_camera: WasmRasterRenderCamera,
     visible_bounds: WasmVisibleBounds,
     placements: Vec<WasmRasterTilePlacement>,
     requests: Vec<WasmTileId>,
@@ -299,6 +312,9 @@ fn wasm_frame_plan(camera: MapCamera, plan: RasterFramePlan) -> WasmRasterFrameP
             pitch: camera.pitch,
             width: camera.viewport.width,
             height: camera.viewport.height,
+        },
+        render_camera: WasmRasterRenderCamera {
+            view_projection: plan.render_camera.view_projection,
         },
         visible_bounds: WasmVisibleBounds {
             west: plan.visible_bounds.west,

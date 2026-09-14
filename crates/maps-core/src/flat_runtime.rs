@@ -82,15 +82,30 @@ impl FlatRasterRuntimeLimits {
     }
 }
 
-/// One screen placement of a canonical XYZ tile.
+/// Renderer-neutral camera data derived from the authoritative `MapCamera`.
 ///
-/// A canonical tile may appear more than once when the viewport spans world
-/// copies. `world_copy` distinguishes placement while `tile` remains the single
-/// request/cache identity.
+/// Local raster geometry uses CSS-pixel units around the viewport center and is transformed by
+/// this column-major matrix. Renderers consume this derived state; they never own geographic
+/// longitude/latitude/zoom/bearing/pitch truth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RasterRenderCamera {
+    pub view_projection: [f32; 16],
+}
+
+/// One placement of a canonical XYZ tile.
+///
+/// A canonical tile may appear more than once when the viewport spans world copies. `world_copy`
+/// distinguishes placement while `tile` remains the single request/cache identity. The local
+/// map-plane fields are the durable renderer-neutral geometry: origin at the map center, +x east,
+/// +y north, with `local_west`/`local_north` naming the north-west corner. The screen rectangle is
+/// retained during renderer migration and remains exactly equivalent at bearing=0/pitch=0.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterTilePlacement {
     pub tile: TileId,
     pub world_copy: i32,
+    pub local_west: f64,
+    pub local_north: f64,
+    pub local_size: f64,
     pub screen_x: f64,
     pub screen_y: f64,
     pub screen_width: f64,
@@ -100,6 +115,7 @@ pub struct RasterTilePlacement {
 /// Deterministic browser work produced by one runtime frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RasterFramePlan {
+    pub render_camera: RasterRenderCamera,
     pub visible_bounds: MapViewportBounds,
     pub placements: Vec<RasterTilePlacement>,
     pub requests: Vec<TileId>,
@@ -353,6 +369,13 @@ impl FlatRasterRuntime {
 
     pub fn frame_plan(&mut self) -> Result<RasterFramePlan, FlatRasterRuntimeError> {
         validate_camera(self.camera)?;
+        let local_render_frame = self
+            .camera
+            .local_render_frame()
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let render_camera = RasterRenderCamera {
+            view_projection: local_render_frame.view_projection_elements(),
+        };
         let placements =
             visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;
         let visible_bounds = self
@@ -403,6 +426,7 @@ impl FlatRasterRuntime {
         }
 
         Ok(RasterFramePlan {
+            render_camera,
             visible_bounds,
             placements,
             requests: request_candidates,
@@ -516,12 +540,17 @@ fn visible_tile_placements(
             .ok_or(FlatRasterRuntimeError::InvalidSource)?;
             let tile_world_x = unwrapped_x as f64 / dimension as f64;
             let tile_world_y = y as f64 / dimension as f64;
+            let local_west = (tile_world_x - center.x) * size;
+            let local_north = (center.y - tile_world_y) * size;
 
             placements.push(RasterTilePlacement {
                 tile,
                 world_copy,
-                screen_x: camera.viewport.width / 2.0 + (tile_world_x - center.x) * size,
-                screen_y: camera.viewport.height / 2.0 + (tile_world_y - center.y) * size,
+                local_west,
+                local_north,
+                local_size: tile_screen_size,
+                screen_x: camera.viewport.width / 2.0 + local_west,
+                screen_y: camera.viewport.height / 2.0 - local_north,
                 screen_width: tile_screen_size,
                 screen_height: tile_screen_size,
             });
@@ -605,6 +634,28 @@ mod tests {
                 .iter()
                 .all(|placement| (placement.screen_height - 256.0).abs() < 1e-9)
         );
+    }
+
+    #[test]
+    fn raster_frame_exposes_local_plane_without_changing_flat_alignment() {
+        let width = 800.0;
+        let height = 600.0;
+        let mut runtime = runtime([13.405, 52.52], 5.0, width, height);
+        let plan = runtime.frame_plan().unwrap();
+
+        assert!(
+            plan.render_camera
+                .view_projection
+                .into_iter()
+                .all(f32::is_finite)
+        );
+        assert!(!plan.placements.is_empty());
+        for placement in plan.placements {
+            assert!((placement.screen_x - (width * 0.5 + placement.local_west)).abs() < 1e-9);
+            assert!((placement.screen_y - (height * 0.5 - placement.local_north)).abs() < 1e-9);
+            assert!((placement.screen_width - placement.local_size).abs() < 1e-9);
+            assert!((placement.screen_height - placement.local_size).abs() < 1e-9);
+        }
     }
 
     #[test]

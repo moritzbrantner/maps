@@ -13,9 +13,33 @@ export type MapsRasterTileId = {
 
 type MapsRasterTileCoordinates = Omit<MapsRasterTileId, "key">;
 
+export type MapsRasterRenderCamera = {
+  viewProjection: [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+};
+
 export type MapsRasterTilePlacement = {
   tile: MapsRasterTileId;
   worldCopy: number;
+  localWest: number;
+  localNorth: number;
+  localSize: number;
   screenX: number;
   screenY: number;
   screenWidth: number;
@@ -34,6 +58,7 @@ export type MapsFlatRasterFrame = {
   cancellations: MapsRasterTileId[];
   evictions: MapsRasterTileId[];
   placements: MapsRasterTilePlacement[];
+  renderCamera: MapsRasterRenderCamera;
   requests: MapsRasterTileId[];
   visibleBounds: {
     crossesAntimeridian: boolean;
@@ -52,6 +77,7 @@ type MapsFlatRasterWasmFrame = {
   placements: Array<
     Omit<MapsRasterTilePlacement, "tile"> & { tile: MapsRasterTileCoordinates }
   >;
+  renderCamera: MapsRasterRenderCamera;
   requests: MapsRasterTileCoordinates[];
   visibleBounds: MapsFlatRasterFrame["visibleBounds"];
 };

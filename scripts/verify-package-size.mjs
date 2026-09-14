@@ -10,8 +10,8 @@ const budgets = {
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_510_000,
-  wasmRuntimeSize: 450_000,
+  unpackedSize: 1_515_000,
+  wasmRuntimeSize: 460_000,
 };
 
 const pack = spawnSync(
