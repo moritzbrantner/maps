@@ -221,7 +221,7 @@ export function MapsMapView({
 
   const renderApplicationFrame = useCallback(
     (frame: MapScreenRenderFrame<unknown>, interaction: MapScreenInteractionState) =>
-      runtimeControllerRef.current?.renderApplicationFrame(frame, interaction) ?? false,
+      runtimeControllerRef.current?.renderApplicationFrame?.(frame, interaction) ?? false,
     [],
   );
 
