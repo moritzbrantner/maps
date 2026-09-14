@@ -120,6 +120,13 @@ impl MapLocalRenderFrame {
             transform_point_projective_f64(self.shared_camera.view_projection_matrix(), local)
                 .ok()?;
 
+        // The shared perspective camera uses WebGPU depth semantics. A finite projective result
+        // outside the forward [0, 1] depth interval is behind the eye or outside the configured
+        // near/far frustum and must not be mirrored back onto the map screen.
+        if !(0.0..=1.0).contains(&ndc[2]) {
+            return None;
+        }
+
         let x = (ndc[0] + 1.0) * half_width;
         let y = (1.0 - ndc[1]) * half_height;
         if !x.is_finite() || !y.is_finite() {

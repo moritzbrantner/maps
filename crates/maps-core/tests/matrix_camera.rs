@@ -102,6 +102,16 @@ fn project_unproject_round_trips_across_bearing_and_pitch() {
 }
 
 #[test]
+fn points_behind_pitched_camera_fail_closed() {
+    let camera = camera(0.0, 60.0);
+
+    assert!(
+        camera.project_screen_matrix(13.405, 48.0).is_none(),
+        "a point beyond the camera on the opposite side of the pitched view must not mirror onto screen"
+    );
+}
+
+#[test]
 fn local_render_frame_exposes_finite_shared_matrix() {
     let elements = camera(37.0, 50.0)
         .local_render_frame()

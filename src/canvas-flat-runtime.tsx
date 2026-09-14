@@ -206,10 +206,12 @@ export function MapsCanvasFlatRuntime({
       }
 
       let renderer: MapsWgpuBaseMapRenderer | null = null;
-      try {
-        renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
-      } catch {
-        renderer = null;
+      if (currentSource) {
+        try {
+          renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
+        } catch {
+          renderer = null;
+        }
       }
 
       if (cancelled) {
