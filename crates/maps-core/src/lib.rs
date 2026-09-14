@@ -8,6 +8,7 @@ mod aggregation;
 mod bounded_runtime;
 mod engine;
 mod flat_runtime;
+mod matrix_camera;
 mod scenario;
 
 use std::collections::BTreeMap;
@@ -27,6 +28,7 @@ pub use flat_runtime::{
     FlatRasterRuntime, FlatRasterRuntimeError, FlatRasterRuntimeLimits, RasterFramePlan,
     RasterSourceSpec, RasterTilePlacement,
 };
+pub use matrix_camera::MapLocalRenderFrame;
 use geo_core::{BBox, Coordinate};
 pub use scenario::{
     CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
