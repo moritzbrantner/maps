@@ -27,9 +27,14 @@ const ACCEPTANCE_POINTS = [
   },
 ] as const;
 
+type ContextProbe = {
+  coordinates: [number, number];
+  sequence: number;
+};
+
 export function MapsOrientedRuntimeAcceptance() {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
-  const [contextCoordinate, setContextCoordinate] = useState<[number, number] | null>(null);
+  const [contextProbe, setContextProbe] = useState<ContextProbe | null>(null);
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
 
@@ -47,7 +52,10 @@ export function MapsOrientedRuntimeAcceptance() {
           tiles: ACCEPTANCE_RASTER_TILE,
         }}
         onMapContextMenu={(context) => {
-          setContextCoordinate(context.coordinates);
+          setContextProbe((current) => ({
+            coordinates: context.coordinates,
+            sequence: (current?.sequence ?? 0) + 1,
+          }));
         }}
         onMapControllerReady={setController}
         onViewStateChange={setViewState}
@@ -80,7 +88,7 @@ export function MapsOrientedRuntimeAcceptance() {
           </button>
           <output data-testid="maps-oriented-view-state">{formatViewState(viewState)}</output>
           <output data-testid="maps-oriented-context-coordinate">
-            {formatCoordinate(contextCoordinate)}
+            {formatContextProbe(contextProbe)}
           </output>
           <output data-testid="maps-oriented-selected-point">{selectedPointId ?? "none"}</output>
         </MapControls>
@@ -99,6 +107,8 @@ function formatViewState(viewState: MapViewState) {
   ].join(" | ");
 }
 
-function formatCoordinate(coordinate: [number, number] | null) {
-  return coordinate ? `${coordinate[0].toFixed(7)},${coordinate[1].toFixed(7)}` : "none";
+function formatContextProbe(probe: ContextProbe | null) {
+  return probe
+    ? `${probe.sequence}|${probe.coordinates[0].toFixed(7)},${probe.coordinates[1].toFixed(7)}`
+    : "none";
 }
