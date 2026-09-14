@@ -3,12 +3,18 @@ export type MapsPointerGestureDelta =
       type: "pan";
       deltaX: number;
       deltaY: number;
+      previousX: number;
+      previousY: number;
+      x: number;
+      y: number;
     }
   | {
       type: "pinch";
       deltaX: number;
       deltaY: number;
       deltaZoom: number;
+      previousX: number;
+      previousY: number;
       x: number;
       y: number;
     };
@@ -48,7 +54,15 @@ export function createMapsPointerGesture() {
         const deltaX = point.x - previousPoint.x;
         const deltaY = point.y - previousPoint.y;
         if (deltaX === 0 && deltaY === 0) return null;
-        return { type: "pan", deltaX, deltaY };
+        return {
+          type: "pan",
+          deltaX,
+          deltaY,
+          previousX: previousPoint.x,
+          previousY: previousPoint.y,
+          x: point.x,
+          y: point.y,
+        };
       }
 
       const previousLeft = pointers.get(activePair[0]);
@@ -79,6 +93,8 @@ export function createMapsPointerGesture() {
         deltaX,
         deltaY,
         deltaZoom,
+        previousX: previousCenter.x,
+        previousY: previousCenter.y,
         x: nextCenter.x,
         y: nextCenter.y,
       };
