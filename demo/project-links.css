@@ -1,0 +1,23 @@
+.maps-showcase__project-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.maps-showcase__project-links a {
+  color: #ccfbf1;
+  font-size: 0.86rem;
+  font-weight: 720;
+  text-underline-offset: 0.2em;
+}
+
+.maps-showcase__project-links a:hover {
+  color: #ffffff;
+}
+
+.maps-showcase__project-links a:focus-visible {
+  outline: 2px solid #99f6e4;
+  outline-offset: 4px;
+  border-radius: 2px;
+}
