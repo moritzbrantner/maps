@@ -19,8 +19,10 @@ getrandom = "=0.4.3"
 maps-core = { path = "crates/maps-core" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde-json = { package = "serde_json", version = "=1.0.151" }
-serde-wasm-bindgen = "=0.6.5"
 supercluster = { version = "=3.0.8", features = ["cluster_metadata"] }
+three-d-camera = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "75387c8d9e76675111b0f76610dc5044cbc4a08e" }
+three-d-core = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "75387c8d9e76675111b0f76610dc5044cbc4a08e" }
+three-d-projective = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "75387c8d9e76675111b0f76610dc5044cbc4a08e" }
 wasm-bindgen = "=0.2.128"
 wasm-bindgen-futures = "=0.4.78"
 web-sys = { version = "=0.3.105", features = ["HtmlCanvasElement", "ImageBitmap"] }
