@@ -549,11 +549,7 @@ function createFrameSynchronizer({
     const currentRenderer = renderer();
     if (currentRenderer) {
       try {
-        const drawnTiles = currentRenderer.render(
-          frame.placements,
-          frame.camera.width,
-          frame.camera.height,
-        );
+        const drawnTiles = currentRenderer.render(frame.placements, frame.renderCamera);
         const hasDecodedVisibleTile = frame.placements.some((placement) =>
           images.has(placement.tile.key),
         );
