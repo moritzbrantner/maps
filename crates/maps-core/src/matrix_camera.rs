@@ -63,11 +63,7 @@ impl MapCamera {
             -ground_up.y * pitch_sin * distance,
             pitch_cos * distance,
         );
-        let up = Vec3::new(
-            ground_up.x * pitch_cos,
-            ground_up.y * pitch_cos,
-            pitch_sin,
-        );
+        let up = Vec3::new(ground_up.x * pitch_cos, ground_up.y * pitch_cos, pitch_sin);
 
         let near = (distance * 1.0e-4).max(0.01);
         let viewport_extent = width.max(height);
@@ -91,11 +87,7 @@ impl MapCamera {
 
     /// Projects through the matrix-backed camera while preserving Maps-owned geographic truth.
     #[must_use]
-    pub fn project_screen_matrix(
-        self,
-        longitude: f64,
-        latitude: f64,
-    ) -> Option<ScreenCoordinate> {
+    pub fn project_screen_matrix(self, longitude: f64, latitude: f64) -> Option<ScreenCoordinate> {
         self.local_render_frame()?.project(longitude, latitude)
     }
 
@@ -104,10 +96,7 @@ impl MapCamera {
     /// Rays that do not hit the map plane inside the configured shared-camera depth range fail
     /// closed instead of inventing a geographic result beyond the horizon.
     #[must_use]
-    pub fn unproject_screen_matrix(
-        self,
-        screen: ScreenCoordinate,
-    ) -> Option<GeographicCoordinate> {
+    pub fn unproject_screen_matrix(self, screen: ScreenCoordinate) -> Option<GeographicCoordinate> {
         self.local_render_frame()?.unproject(screen)
     }
 }
@@ -130,8 +119,8 @@ impl MapLocalRenderFrame {
             checked_f32(-(flat.y - half_height))?,
             0.0,
         );
-        let ndc = transform_point_projective(self.shared_camera.view_projection_matrix(), local)
-            .ok()?;
+        let ndc =
+            transform_point_projective(self.shared_camera.view_projection_matrix(), local).ok()?;
 
         let x = (f64::from(ndc.x) + 1.0) * half_width;
         let y = (1.0 - f64::from(ndc.y)) * half_height;
