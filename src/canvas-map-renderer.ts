@@ -7,8 +7,10 @@ import type {
 } from "./map-render-frame";
 import {
   createMapScreenRenderFrame,
+  resolveMapScreenStrokeWidth,
   type MapScreenCircle,
   type MapScreenDirectionMarker,
+  type MapScreenInteractionState,
   type MapScreenLine,
   type MapScreenPoint as SharedMapScreenPoint,
   type MapScreenPolygon,
@@ -27,11 +29,9 @@ export type CanvasPolygonScenePrimitive<TFeature = unknown> = MapScreenPolygon<T
 export type CanvasMapScenePrimitive<TFeature = unknown> = MapScreenRenderPrimitive<TFeature>;
 export type CanvasMapScene<TFeature = unknown> = MapScreenRenderFrame<TFeature>;
 
-export type CanvasMapDrawOptions = {
+export type CanvasMapDrawOptions = MapScreenInteractionState & {
   hoveredFeatureId?: string | null;
-  hoveredPrimitiveIds?: ReadonlySet<string>;
   selectedFeatureId?: string | null;
-  selectedPrimitiveIds?: ReadonlySet<string>;
 };
 
 export function createCanvasMapScene<TFeature = unknown>(
@@ -70,22 +70,30 @@ export function drawCanvasMapScene<TFeature = unknown>(
   }
 }
 
+export function drawCanvasMapLabels<TFeature = unknown>(
+  context: CanvasRenderingContext2D,
+  scene: CanvasMapScene<TFeature>,
+) {
+  context.clearRect(0, 0, scene.width, scene.height);
+
+  for (const scenePrimitive of scene.primitives) {
+    if (scenePrimitive.kind !== "circle") continue;
+    const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<TFeature>;
+    if (!primitive.label) continue;
+    drawCircleLabel(context, scenePrimitive, primitive.label);
+  }
+}
+
 function drawPrimitive<TFeature>(
   context: CanvasRenderingContext2D,
   scenePrimitive: CanvasMapScenePrimitive<TFeature>,
   options: CanvasMapDrawOptions,
 ) {
   const primitive = scenePrimitive.renderPrimitive;
-  const selected = options.selectedPrimitiveIds
-    ? options.selectedPrimitiveIds.has(primitive.primitiveId)
-    : options.selectedFeatureId === primitive.featureId;
-  const hovered = options.hoveredPrimitiveIds
-    ? options.hoveredPrimitiveIds.has(primitive.primitiveId)
-    : options.hoveredFeatureId === primitive.featureId;
 
   switch (scenePrimitive.kind) {
     case "circle":
-      drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, selected, hovered);
+      drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, options);
       return;
     case "direction-marker":
       drawDirectionMarker(
@@ -95,16 +103,10 @@ function drawPrimitive<TFeature>(
       );
       return;
     case "line":
-      drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, selected, hovered);
+      drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, options);
       return;
     case "polygon":
-      drawPolygon(
-        context,
-        scenePrimitive,
-        primitive as MapRenderPolygon<TFeature>,
-        selected,
-        hovered,
-      );
+      drawPolygon(context, scenePrimitive, primitive as MapRenderPolygon<TFeature>, options);
   }
 }
 
@@ -132,8 +134,7 @@ function drawCircle<TFeature>(
   context: CanvasRenderingContext2D,
   scene: CanvasCircleScenePrimitive<TFeature>,
   primitive: MapRenderCircle<TFeature>,
-  selected: boolean,
-  hovered: boolean,
+  options: CanvasMapDrawOptions,
 ) {
   context.beginPath();
   context.arc(scene.x, scene.y, primitive.radius, 0, Math.PI * 2);
@@ -141,32 +142,40 @@ function drawCircle<TFeature>(
   context.globalAlpha = primitive.fillOpacity;
   context.fill();
   context.globalAlpha = primitive.strokeOpacity;
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  context.lineWidth = resolveCanvasStrokeWidth(primitive, options);
   context.strokeStyle = primitive.strokeColor;
   context.stroke();
   context.globalAlpha = 1;
 
   if (primitive.label) {
-    context.fillStyle = "#ffffff";
-    context.font = "600 12px system-ui, sans-serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText(primitive.label, scene.x, scene.y);
+    drawCircleLabel(context, scene, primitive.label);
   }
+}
+
+function drawCircleLabel<TFeature>(
+  context: CanvasRenderingContext2D,
+  scene: CanvasCircleScenePrimitive<TFeature>,
+  label: string,
+) {
+  context.globalAlpha = 1;
+  context.fillStyle = "#ffffff";
+  context.font = "600 12px system-ui, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, scene.x, scene.y);
 }
 
 function drawLine<TFeature>(
   context: CanvasRenderingContext2D,
   scene: CanvasLineScenePrimitive<TFeature>,
   primitive: MapRenderLine<TFeature>,
-  selected: boolean,
-  hovered: boolean,
+  options: CanvasMapDrawOptions,
 ) {
   traceLine(context, scene.points, false);
   context.globalAlpha = primitive.strokeOpacity;
   context.lineCap = "round";
   context.lineJoin = "round";
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  context.lineWidth = resolveCanvasStrokeWidth(primitive, options);
   context.strokeStyle = primitive.strokeColor;
   context.stroke();
   context.globalAlpha = 1;
@@ -176,8 +185,7 @@ function drawPolygon<TFeature>(
   context: CanvasRenderingContext2D,
   scene: CanvasPolygonScenePrimitive<TFeature>,
   primitive: MapRenderPolygon<TFeature>,
-  selected: boolean,
-  hovered: boolean,
+  options: CanvasMapDrawOptions,
 ) {
   context.beginPath();
   for (const ring of scene.rings) {
@@ -188,10 +196,22 @@ function drawPolygon<TFeature>(
   context.fill("evenodd");
   context.globalAlpha = primitive.strokeOpacity;
   context.lineJoin = "round";
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  context.lineWidth = resolveCanvasStrokeWidth(primitive, options);
   context.strokeStyle = primitive.strokeColor;
   context.stroke();
   context.globalAlpha = 1;
+}
+
+function resolveCanvasStrokeWidth(
+  primitive: MapRenderCircle | MapRenderLine | MapRenderPolygon,
+  options: CanvasMapDrawOptions,
+) {
+  if (options.selectedPrimitiveIds || options.hoveredPrimitiveIds) {
+    return resolveMapScreenStrokeWidth(primitive.strokeWidth, primitive.primitiveId, options);
+  }
+  const selected = options.selectedFeatureId === primitive.featureId;
+  const hovered = options.hoveredFeatureId === primitive.featureId;
+  return Math.max(0, primitive.strokeWidth + (selected ? 1.5 : hovered ? 1 : 0));
 }
 
 function traceLine(
@@ -209,10 +229,6 @@ function traceLine(
     context.lineTo(point.x, point.y);
   }
   if (close) context.closePath();
-}
-
-function interactionStrokeWidth(base: number, selected: boolean, hovered: boolean) {
-  return Math.max(0, base + (selected ? 1.5 : hovered ? 1 : 0));
 }
 
 function hitPrimitive<TFeature>(
