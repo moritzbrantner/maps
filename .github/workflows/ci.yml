@@ -188,6 +188,13 @@ jobs:
         run: cargo install --git https://github.com/moritzbrantner/moonlight.git --rev b5803275fb62b1fee659c42a31209adca6e3da04 --locked moonlight-cli --bin moonlight-runtime-profile
       - name: Capture and evaluate runtime evidence
         run: bun run verify:engine-runtime-evidence
+      - name: Normalize runtime evidence for Pages
+        run: |
+          node ./scripts/build-pages-runtime-evidence.mjs \
+            --evaluation .runtime-profiler/maps-camera-world-pan-v1/moonlight-evaluation.json \
+            --output .runtime-profiler/maps-camera-world-pan-v1/project-evidence.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --revision "$GITHUB_SHA"
       - name: Preserve runtime evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
@@ -196,3 +203,31 @@ jobs:
           path: .runtime-profiler/maps-camera-world-pan-v1
           if-no-files-found: warn
           retention-days: 7
+
+  publish-runtime-observation:
+    name: Publish Runtime Observation
+    needs:
+      - fast-validation
+      - rust-validation
+      - wasm-package-validation
+      - package-validation
+      - browser-smoke
+      - runtime-evidence
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: maps-runtime-observation
+      cancel-in-progress: true
+    steps:
+      - name: Publish normalized runtime observation
+        uses: moritzbrantner/reusable-workflows/.github/actions/publish-observation@d49da40ef4ad1d951e7c72674e38a95a9c64df5a
+        with:
+          artifact_name: maps-milestone-b-runtime-evidence
+          artifact_source_path: project-evidence.json
+          branch: project-observations
+          destination_path: evidence/runtime.json
+          source_sha: ${{ github.sha }}
+          github_token: ${{ github.token }}
