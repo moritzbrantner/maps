@@ -38,8 +38,14 @@ fn zero_bearing_and_pitch_preserve_flat_projection() {
             .project_screen_matrix(longitude, latitude)
             .expect("matrix projection is supported");
 
-        assert!((flat.x - matrix.x).abs() <= SCREEN_EPSILON, "x: {flat:?} != {matrix:?}");
-        assert!((flat.y - matrix.y).abs() <= SCREEN_EPSILON, "y: {flat:?} != {matrix:?}");
+        assert!(
+            (flat.x - matrix.x).abs() <= SCREEN_EPSILON,
+            "x: {flat:?} != {matrix:?}"
+        );
+        assert!(
+            (flat.y - matrix.y).abs() <= SCREEN_EPSILON,
+            "y: {flat:?} != {matrix:?}"
+        );
     }
 }
 
@@ -60,7 +66,10 @@ fn bearing_rotates_map_without_changing_geographic_authority() {
         .expect("east point projects");
 
     assert!((east.x - 400.0).abs() <= SCREEN_EPSILON);
-    assert!(east.y < 300.0, "positive bearing should rotate east toward screen-up");
+    assert!(
+        east.y < 300.0,
+        "positive bearing should rotate east toward screen-up"
+    );
 }
 
 #[test]
