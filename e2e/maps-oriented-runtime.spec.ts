@@ -37,9 +37,12 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
     y: box!.y + box!.height * 0.68,
   };
   const dragEnd = { x: dragStart.x + 72, y: dragStart.y + 34 };
-
-  await probeCoordinate(page, contextCoordinate, dragStart.x, dragStart.y);
-  const draggedGroundBefore = parseCoordinate(await contextCoordinate.textContent());
+  const draggedGroundBefore = await probeCoordinate(
+    page,
+    contextCoordinate,
+    dragStart.x,
+    dragStart.y,
+  );
 
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
@@ -49,8 +52,12 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
   await page.waitForTimeout(180);
   await page.mouse.up();
 
-  await probeCoordinate(page, contextCoordinate, dragEnd.x, dragEnd.y);
-  const draggedGroundAfter = parseCoordinate(await contextCoordinate.textContent());
+  const draggedGroundAfter = await probeCoordinate(
+    page,
+    contextCoordinate,
+    dragEnd.x,
+    dragEnd.y,
+  );
   expectCoordinateClose(draggedGroundAfter, draggedGroundBefore, 0.0002);
 
   // Chromium wheel/touch injection is pixel-addressed. Use an integer browser coordinate so all
@@ -59,26 +66,42 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
     x: Math.round(box!.x + box!.width * 0.7),
     y: Math.round(box!.y + box!.height * 0.4),
   };
-  await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
-  const zoomGroundBefore = parseCoordinate(await contextCoordinate.textContent());
+  const zoomGroundBefore = await probeCoordinate(
+    page,
+    contextCoordinate,
+    zoomAnchor.x,
+    zoomAnchor.y,
+  );
   const viewBeforeZoom = await viewState.textContent();
 
   await wheelZoomAt(page, zoomAnchor);
   await expect.poll(async () => viewState.textContent()).not.toBe(viewBeforeZoom);
 
-  await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
-  const zoomGroundAfter = parseCoordinate(await contextCoordinate.textContent());
+  const zoomGroundAfter = await probeCoordinate(
+    page,
+    contextCoordinate,
+    zoomAnchor.x,
+    zoomAnchor.y,
+  );
   expectCoordinateClose(zoomGroundAfter, zoomGroundBefore, 0.0002);
 
-  await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
-  const pinchGroundBefore = parseCoordinate(await contextCoordinate.textContent());
+  const pinchGroundBefore = await probeCoordinate(
+    page,
+    contextCoordinate,
+    zoomAnchor.x,
+    zoomAnchor.y,
+  );
   const viewBeforePinch = await viewState.textContent();
 
   await pinchZoomAt(page, zoomAnchor);
   await expect.poll(async () => viewState.textContent()).not.toBe(viewBeforePinch);
 
-  await probeCoordinate(page, contextCoordinate, zoomAnchor.x, zoomAnchor.y);
-  const pinchGroundAfter = parseCoordinate(await contextCoordinate.textContent());
+  const pinchGroundAfter = await probeCoordinate(
+    page,
+    contextCoordinate,
+    zoomAnchor.x,
+    zoomAnchor.y,
+  );
   expectCoordinateClose(pinchGroundAfter, pinchGroundBefore, 0.0002);
 
   await page.getByRole("button", { name: "Apply oriented state" }).click();
@@ -87,8 +110,10 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
 });
 
 async function probeCoordinate(page: Page, output: Locator, x: number, y: number) {
+  const previous = await output.textContent();
   await page.mouse.click(x, y, { button: "right" });
-  await expect(output).not.toHaveText("none");
+  await expect.poll(async () => output.textContent()).not.toBe(previous);
+  return parseCoordinate(await output.textContent());
 }
 
 async function wheelZoomAt(page: Page, center: { x: number; y: number }) {
@@ -132,7 +157,8 @@ async function pinchZoomAt(page: Page, center: { x: number; y: number }) {
 }
 
 function parseCoordinate(text: string | null): [number, number] {
-  const [longitude = Number.NaN, latitude = Number.NaN] = (text ?? "").split(",").map(Number);
+  const coordinateText = (text ?? "").split("|").at(-1) ?? "";
+  const [longitude = Number.NaN, latitude = Number.NaN] = coordinateText.split(",").map(Number);
   expect(Number.isFinite(longitude)).toBe(true);
   expect(Number.isFinite(latitude)).toBe(true);
   return [longitude, latitude];
