@@ -10,6 +10,7 @@ import {
   type MapsKineticPanState,
   type MapsPanVelocity,
 } from "./canvas-flat-inertia";
+import { drawCanvasRasterTile } from "./canvas-raster-projective";
 import {
   areMapsViewStatesEqual,
   createMapsViewStateEchoTracker,
@@ -35,6 +36,7 @@ const DEFAULT_TILE_SIZE = 256;
 const DEFAULT_SOURCE_MAX_ZOOM = 19;
 const MAX_MAP_ZOOM = 22;
 const DEVICE_LOSS_POLL_MS = 250;
+const CANVAS_PROJECTIVE_SUBDIVISIONS = 8;
 
 type MapsCanvasFitBoundsOptions = MapFitBoundsOptions & {
   reason?: MapViewStateChangeReason;
@@ -686,18 +688,25 @@ function drawCanvasFrame(
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, frame.camera.width, frame.camera.height);
 
+  const viewport = { height: frame.camera.height, width: frame.camera.width };
+  const subdivisions = frame.camera.pitch === 0 ? 1 : CANVAS_PROJECTIVE_SUBDIVISIONS;
   let drawnTiles = 0;
   for (const placement of frame.placements) {
     const image = images.get(placement.tile.key);
     if (!image) continue;
-    context.drawImage(
-      image,
-      placement.screenX,
-      placement.screenY,
-      placement.screenWidth,
-      placement.screenHeight,
-    );
-    drawnTiles += 1;
+    if (
+      drawCanvasRasterTile(
+        context,
+        image,
+        placement,
+        frame.renderCamera,
+        viewport,
+        ratio,
+        subdivisions,
+      )
+    ) {
+      drawnTiles += 1;
+    }
   }
 
   return drawnTiles;

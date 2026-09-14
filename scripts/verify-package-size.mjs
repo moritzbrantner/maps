@@ -6,11 +6,11 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const budgets = {
-  compressedSize: 365_500,
+  compressedSize: 367_500,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_515_000,
+  unpackedSize: 1_522_000,
   wasmRuntimeSize: 460_000,
 };
 
