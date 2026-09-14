@@ -359,8 +359,7 @@ impl FlatRasterRuntime {
         let center_world = project_web_mercator(self.camera.longitude, self.camera.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         let next_center = unproject_web_mercator(WorldCoordinate {
-            x: center_world.x
-                + shortest_world_delta(anchor_world.x - provisional_anchor_world.x),
+            x: center_world.x + shortest_world_delta(anchor_world.x - provisional_anchor_world.x),
             y: center_world.y + anchor_world.y - provisional_anchor_world.y,
         })
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
@@ -607,10 +606,7 @@ fn camera_ground_world_bounds(
     let east = center.x + local.east / size;
     let north = (center.y - local.north / size).clamp(0.0, 1.0);
     let south = (center.y - local.south / size).clamp(0.0, 1.0);
-    if ![west, south, east, north].into_iter().all(f64::is_finite)
-        || west > east
-        || north > south
-    {
+    if ![west, south, east, north].into_iter().all(f64::is_finite) || west > east || north > south {
         return Err(FlatRasterRuntimeError::UnsupportedCamera);
     }
 
@@ -733,8 +729,8 @@ fn visible_tile_placements(
     let min_x = (ground_bounds.west * dimension as f64).floor() as i64;
     let max_x = ((ground_bounds.east * dimension as f64).ceil() as i64 - 1).max(min_x);
     let min_y = ((ground_bounds.north * dimension as f64).floor() as i64).clamp(0, dimension - 1);
-    let max_y = ((ground_bounds.south * dimension as f64).ceil() as i64 - 1)
-        .clamp(min_y, dimension - 1);
+    let max_y =
+        ((ground_bounds.south * dimension as f64).ceil() as i64 - 1).clamp(min_y, dimension - 1);
     let columns =
         usize::try_from(max_x - min_x + 1).map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
     let rows =
