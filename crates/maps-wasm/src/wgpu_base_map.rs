@@ -452,7 +452,7 @@ impl MapsWgpuBaseMapRenderer {
                 origin: wgpu::Origin2d::ZERO,
                 flip_y: false,
             },
-            &wgpu::CopyExternalImageDestInfo {
+            wgpu::CopyExternalImageDestInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
