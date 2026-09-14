@@ -8,6 +8,11 @@ export type MapScreenProject = (
   coordinate: [longitude: number, latitude: number],
 ) => MapScreenPoint | null;
 
+export type MapScreenInteractionState = {
+  hoveredPrimitiveIds?: ReadonlySet<string>;
+  selectedPrimitiveIds?: ReadonlySet<string>;
+};
+
 type MapScreenPrimitiveBase<TFeature> = {
   renderPrimitive: MapVectorRenderPrimitive<TFeature>;
 };
@@ -42,7 +47,7 @@ export type MapScreenRenderPrimitive<TFeature = unknown> =
   | MapScreenPolygon<TFeature>;
 
 /**
- * Maps-owned screen-space render frame shared by pixel backends and hit testing.
+ * Maps-owned screen-space render frame shared by concrete pixel backends and hit testing.
  *
  * Geographic projection remains authoritative in the Maps runtime. This frame
  * contains only the finite projected positions needed by browser renderers;
@@ -64,6 +69,16 @@ export function createMapScreenRenderFrame<TFeature = unknown>(
     primitives: frame.primitives.flatMap((primitive) => projectPrimitive(primitive, project)),
     width: Math.max(0, size.width),
   };
+}
+
+export function resolveMapScreenStrokeWidth(
+  base: number,
+  primitiveId: string,
+  interaction: MapScreenInteractionState = {},
+) {
+  const selected = interaction.selectedPrimitiveIds?.has(primitiveId) ?? false;
+  const hovered = interaction.hoveredPrimitiveIds?.has(primitiveId) ?? false;
+  return Math.max(0, base + (selected ? 1.5 : hovered ? 1 : 0));
 }
 
 function projectPrimitive<TFeature>(
