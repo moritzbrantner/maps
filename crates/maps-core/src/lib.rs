@@ -26,7 +26,7 @@ pub use engine::{
 };
 pub use flat_runtime::{
     FlatRasterRuntime, FlatRasterRuntimeError, FlatRasterRuntimeLimits, RasterFramePlan,
-    RasterSourceSpec, RasterTilePlacement,
+    RasterRenderCamera, RasterSourceSpec, RasterTilePlacement,
 };
 use geo_core::{BBox, Coordinate};
 pub use matrix_camera::MapLocalRenderFrame;
