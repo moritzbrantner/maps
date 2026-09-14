@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 test("Maps-owned bearing and pitch stay aligned through browser interaction @smoke", async ({
   page,
@@ -74,15 +74,9 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
 });
 
-async function probeCoordinate(
-  page: Parameters<typeof test>[0] extends never ? never : any,
-  output: ReturnType<Parameters<typeof test>[1]> extends never ? never : any,
-  x: number,
-  y: number,
-) {
-  const previous = await output.textContent();
+async function probeCoordinate(page: Page, output: Locator, x: number, y: number) {
   await page.mouse.click(x, y, { button: "right" });
-  await expect.poll(async () => output.textContent()).not.toBe(previous);
+  await expect(output).not.toHaveText("none");
 }
 
 function parseCoordinate(text: string | null): [number, number] {
