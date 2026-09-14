@@ -10,13 +10,14 @@ use std::fmt;
 
 use crate::{
     GeographicCoordinate, MapCamera, MapViewportBounds, ScreenCoordinate, TileId, ViewportSize,
-    WorldCoordinate, project_web_mercator, unproject_web_mercator, world_size,
+    WorldCoordinate, project_web_mercator, unproject_web_mercator,
 };
 
 const CAMERA_TILE_SIZE: f64 = 512.0;
 const DEFAULT_MAX_VISIBLE_TILES: usize = 256;
 const DEFAULT_CACHE_CAPACITY: usize = 512;
 const DEFAULT_LOAD_CONCURRENCY: usize = 8;
+const WORLD_EPSILON: f64 = 1.0e-12;
 
 /// Raster pyramid metadata that affects deterministic tile selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,7 +143,7 @@ impl fmt::Display for FlatRasterRuntimeError {
             Self::InvalidBounds => write!(formatter, "invalid flat raster fit bounds"),
             Self::UnsupportedCamera => write!(
                 formatter,
-                "flat raster runtime currently requires a north-up zero-pitch camera",
+                "flat raster camera configuration is unsupported for this operation",
             ),
             Self::TileCoverOverflow { required, limit } => write!(
                 formatter,
@@ -205,30 +206,51 @@ impl FlatRasterRuntime {
         latitude: f64,
         zoom: f64,
     ) -> Result<(), FlatRasterRuntimeError> {
-        self.camera = MapCamera::new(
+        self.set_camera_state(
             longitude,
             latitude,
             zoom,
             self.camera.bearing,
             self.camera.pitch,
+        )
+    }
+
+    pub fn set_camera_state(
+        &mut self,
+        longitude: f64,
+        latitude: f64,
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        let next = MapCamera::new(
+            longitude,
+            latitude,
+            zoom,
+            bearing,
+            pitch,
             self.camera.viewport,
         )
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        validate_camera(self.camera)
+        validate_camera(next)?;
+        self.camera = next;
+        Ok(())
     }
 
     pub fn resize(&mut self, width: f64, height: f64) -> Result<(), FlatRasterRuntimeError> {
         let viewport =
             ViewportSize::new(width, height).ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        self.camera = self
+        let next = self
             .camera
             .with_viewport(viewport)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        validate_camera(next)?;
+        self.camera = next;
         Ok(())
     }
 
     /// Pans by pointer delta in CSS pixels. Positive x/y means the pointer moved
-    /// right/down, so the geographic camera center moves left/up respectively.
+    /// right/down, so the geographic camera center follows the Maps-owned camera orientation.
     pub fn pan_by_pixels(
         &mut self,
         delta_x: f64,
@@ -239,19 +261,34 @@ impl FlatRasterRuntime {
         }
 
         validate_camera(self.camera)?;
-        let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
+        if is_flat_camera(self.camera) {
+            let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+            let size = self
+                .camera
+                .world_size()
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+            let next = unproject_web_mercator(WorldCoordinate {
+                x: center.x - delta_x / size,
+                y: center.y - delta_y / size,
+            })
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        let size = self
-            .camera
-            .world_size()
-            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        let next = unproject_web_mercator(WorldCoordinate {
-            x: center.x - delta_x / size,
-            y: center.y - delta_y / size,
-        })
-        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
 
-        self.set_view_state(next.longitude, next.latitude, self.camera.zoom)
+            return self.set_view_state(next.longitude, next.latitude, self.camera.zoom);
+        }
+
+        let next_center = self
+            .camera
+            .unproject_screen_matrix(ScreenCoordinate {
+                x: self.camera.viewport.width * 0.5 - delta_x,
+                y: self.camera.viewport.height * 0.5 - delta_y,
+            })
+            .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
+        self.set_view_state(
+            next_center.longitude,
+            next_center.latitude,
+            self.camera.zoom,
+        )
     }
 
     /// Applies a zoom delta while keeping the geographic coordinate under the
@@ -274,23 +311,67 @@ impl FlatRasterRuntime {
         }
 
         validate_camera(self.camera)?;
+        if is_flat_camera(self.camera) {
+            let anchor = self
+                .camera
+                .unproject_screen(screen)
+                .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
+            let anchor_world = project_web_mercator(anchor.longitude, anchor.latitude)
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+            let zoom = (self.camera.zoom + delta_zoom).clamp(min_zoom, max_zoom);
+            let next_size = CAMERA_TILE_SIZE * 2.0_f64.powf(zoom);
+            if !next_size.is_finite() || next_size <= 0.0 {
+                return Err(FlatRasterRuntimeError::InvalidCamera);
+            }
+            let center_world = WorldCoordinate {
+                x: anchor_world.x - (screen.x - self.camera.viewport.width / 2.0) / next_size,
+                y: anchor_world.y - (screen.y - self.camera.viewport.height / 2.0) / next_size,
+            };
+            let center = unproject_web_mercator(center_world)
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+
+            return self.set_view_state(center.longitude, center.latitude, zoom);
+        }
+
         let anchor = self
             .camera
-            .unproject_screen(screen)
+            .unproject_screen_matrix(screen)
+            .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
+        let zoom = (self.camera.zoom + delta_zoom).clamp(min_zoom, max_zoom);
+        let provisional = MapCamera::new(
+            self.camera.longitude,
+            self.camera.latitude,
+            zoom,
+            self.camera.bearing,
+            self.camera.pitch,
+            self.camera.viewport,
+        )
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        validate_camera(provisional)?;
+        let provisional_anchor = provisional
+            .unproject_screen_matrix(screen)
             .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
         let anchor_world = project_web_mercator(anchor.longitude, anchor.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        let zoom = (self.camera.zoom + delta_zoom).clamp(min_zoom, max_zoom);
-        let next_size =
-            world_size(zoom, CAMERA_TILE_SIZE).ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        let center_world = WorldCoordinate {
-            x: anchor_world.x - (screen.x - self.camera.viewport.width / 2.0) / next_size,
-            y: anchor_world.y - (screen.y - self.camera.viewport.height / 2.0) / next_size,
-        };
-        let center =
-            unproject_web_mercator(center_world).ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let provisional_anchor_world =
+            project_web_mercator(provisional_anchor.longitude, provisional_anchor.latitude)
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let center_world = project_web_mercator(self.camera.longitude, self.camera.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let next_center = unproject_web_mercator(WorldCoordinate {
+            x: center_world.x
+                + shortest_world_delta(anchor_world.x - provisional_anchor_world.x),
+            y: center_world.y + anchor_world.y - provisional_anchor_world.y,
+        })
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
 
-        self.set_view_state(center.longitude, center.latitude, zoom)
+        self.set_camera_state(
+            next_center.longitude,
+            next_center.latitude,
+            zoom,
+            self.camera.bearing,
+            self.camera.pitch,
+        )
     }
 
     pub fn fit_bounds(
@@ -315,6 +396,10 @@ impl FlatRasterRuntime {
         }
 
         validate_camera(self.camera)?;
+        if !is_flat_camera(self.camera) {
+            return Err(FlatRasterRuntimeError::UnsupportedCamera);
+        }
+
         let north_west =
             project_web_mercator(west, north).ok_or(FlatRasterRuntimeError::InvalidBounds)?;
         let south_east =
@@ -345,13 +430,36 @@ impl FlatRasterRuntime {
         self.set_view_state(center.longitude, center.latitude, zoom)
     }
 
+    pub fn project_screen(
+        &self,
+        longitude: f64,
+        latitude: f64,
+    ) -> Result<ScreenCoordinate, FlatRasterRuntimeError> {
+        validate_camera(self.camera)?;
+        if is_flat_camera(self.camera) {
+            return self
+                .camera
+                .project_screen(longitude, latitude)
+                .ok_or(FlatRasterRuntimeError::UnsupportedCamera);
+        }
+        self.camera
+            .project_screen_matrix(longitude, latitude)
+            .ok_or(FlatRasterRuntimeError::UnsupportedCamera)
+    }
+
     pub fn unproject_screen(
         &self,
         screen: ScreenCoordinate,
     ) -> Result<GeographicCoordinate, FlatRasterRuntimeError> {
         validate_camera(self.camera)?;
+        if is_flat_camera(self.camera) {
+            return self
+                .camera
+                .unproject_screen(screen)
+                .ok_or(FlatRasterRuntimeError::UnsupportedCamera);
+        }
         self.camera
-            .unproject_screen(screen)
+            .unproject_screen_matrix(screen)
             .ok_or(FlatRasterRuntimeError::UnsupportedCamera)
     }
 
@@ -378,10 +486,7 @@ impl FlatRasterRuntime {
         };
         let placements =
             visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;
-        let visible_bounds = self
-            .camera
-            .visible_bounds()
-            .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
+        let visible_bounds = visible_bounds_for_camera(self.camera)?;
         let visible_tiles = placements
             .iter()
             .map(|placement| placement.tile)
@@ -453,14 +558,136 @@ impl FlatRasterRuntime {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CameraGroundWorldBounds {
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+}
+
+fn is_flat_camera(camera: MapCamera) -> bool {
+    camera.bearing == 0.0 && camera.pitch == 0.0
+}
+
 fn validate_camera(camera: MapCamera) -> Result<(), FlatRasterRuntimeError> {
-    if camera.bearing != 0.0 || camera.pitch != 0.0 {
-        return Err(FlatRasterRuntimeError::UnsupportedCamera);
-    }
     camera
         .world_size()
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+    if !is_flat_camera(camera) && camera.local_viewport_bounds_matrix().is_none() {
+        return Err(FlatRasterRuntimeError::UnsupportedCamera);
+    }
     Ok(())
+}
+
+fn camera_ground_world_bounds(
+    camera: MapCamera,
+) -> Result<CameraGroundWorldBounds, FlatRasterRuntimeError> {
+    let center = project_web_mercator(camera.longitude, camera.latitude)
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+    let size = camera
+        .world_size()
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+
+    if is_flat_camera(camera) {
+        let half_width_world = camera.viewport.width / size / 2.0;
+        let half_height_world = camera.viewport.height / size / 2.0;
+        return Ok(CameraGroundWorldBounds {
+            west: center.x - half_width_world,
+            east: center.x + half_width_world,
+            north: (center.y - half_height_world).clamp(0.0, 1.0),
+            south: (center.y + half_height_world).clamp(0.0, 1.0),
+        });
+    }
+
+    let local = camera
+        .local_viewport_bounds_matrix()
+        .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
+    let west = center.x + local.west / size;
+    let east = center.x + local.east / size;
+    let north = (center.y - local.north / size).clamp(0.0, 1.0);
+    let south = (center.y - local.south / size).clamp(0.0, 1.0);
+    if ![west, south, east, north].into_iter().all(f64::is_finite)
+        || west > east
+        || north > south
+    {
+        return Err(FlatRasterRuntimeError::UnsupportedCamera);
+    }
+
+    Ok(CameraGroundWorldBounds {
+        west,
+        south,
+        east,
+        north,
+    })
+}
+
+fn visible_bounds_for_camera(
+    camera: MapCamera,
+) -> Result<MapViewportBounds, FlatRasterRuntimeError> {
+    if is_flat_camera(camera) {
+        return camera
+            .visible_bounds()
+            .ok_or(FlatRasterRuntimeError::UnsupportedCamera);
+    }
+
+    let bounds = camera_ground_world_bounds(camera)?;
+    let north = unproject_web_mercator(WorldCoordinate {
+        x: 0.5,
+        y: bounds.north,
+    })
+    .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?
+    .latitude;
+    let south = unproject_web_mercator(WorldCoordinate {
+        x: 0.5,
+        y: bounds.south,
+    })
+    .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?
+    .latitude;
+    let longitude_span = bounds.east - bounds.west;
+
+    if longitude_span >= 1.0 - WORLD_EPSILON {
+        return Ok(MapViewportBounds {
+            west: -180.0,
+            south: south.min(north),
+            east: 180.0,
+            north: south.max(north),
+            crosses_antimeridian: false,
+            spans_full_world: true,
+        });
+    }
+
+    let west = unproject_web_mercator(WorldCoordinate {
+        x: bounds.west,
+        y: 0.5,
+    })
+    .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?
+    .longitude;
+    let east = unproject_web_mercator(WorldCoordinate {
+        x: bounds.east,
+        y: 0.5,
+    })
+    .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?
+    .longitude;
+
+    Ok(MapViewportBounds {
+        west,
+        south: south.min(north),
+        east,
+        north: south.max(north),
+        crosses_antimeridian: west > east,
+        spans_full_world: false,
+    })
+}
+
+fn shortest_world_delta(delta: f64) -> f64 {
+    if delta >= 0.5 {
+        delta - 1.0
+    } else if delta < -0.5 {
+        delta + 1.0
+    } else {
+        delta
+    }
 }
 
 fn fit_zoom_for_span(available_pixels: f64, normalized_span: f64) -> f64 {
@@ -502,16 +729,12 @@ fn visible_tile_placements(
     let dimension = 1_i64
         .checked_shl(u32::from(tile_zoom))
         .ok_or(FlatRasterRuntimeError::InvalidSource)?;
-    let half_width_world = camera.viewport.width / size / 2.0;
-    let half_height_world = camera.viewport.height / size / 2.0;
-    let west = center.x - half_width_world;
-    let east = center.x + half_width_world;
-    let north = (center.y - half_height_world).clamp(0.0, 1.0);
-    let south = (center.y + half_height_world).clamp(0.0, 1.0);
-    let min_x = (west * dimension as f64).floor() as i64;
-    let max_x = ((east * dimension as f64).ceil() as i64 - 1).max(min_x);
-    let min_y = ((north * dimension as f64).floor() as i64).clamp(0, dimension - 1);
-    let max_y = ((south * dimension as f64).ceil() as i64 - 1).clamp(min_y, dimension - 1);
+    let ground_bounds = camera_ground_world_bounds(camera)?;
+    let min_x = (ground_bounds.west * dimension as f64).floor() as i64;
+    let max_x = ((ground_bounds.east * dimension as f64).ceil() as i64 - 1).max(min_x);
+    let min_y = ((ground_bounds.north * dimension as f64).floor() as i64).clamp(0, dimension - 1);
+    let max_y = ((ground_bounds.south * dimension as f64).ceil() as i64 - 1)
+        .clamp(min_y, dimension - 1);
     let columns =
         usize::try_from(max_x - min_x + 1).map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
     let rows =
@@ -583,12 +806,23 @@ mod tests {
     use super::*;
 
     fn runtime(center: [f64; 2], zoom: f64, width: f64, height: f64) -> FlatRasterRuntime {
+        runtime_with_camera(center, zoom, 0.0, 0.0, width, height)
+    }
+
+    fn runtime_with_camera(
+        center: [f64; 2],
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+        width: f64,
+        height: f64,
+    ) -> FlatRasterRuntime {
         let camera = MapCamera::new(
             center[0],
             center[1],
             zoom,
-            0.0,
-            0.0,
+            bearing,
+            pitch,
             ViewportSize::new(width, height).unwrap(),
         )
         .unwrap();
@@ -656,6 +890,92 @@ mod tests {
             assert!((placement.screen_width - placement.local_size).abs() < 1e-9);
             assert!((placement.screen_height - placement.local_size).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn oriented_camera_produces_a_finite_conservative_frame() {
+        let mut runtime = runtime_with_camera([13.405, 52.52], 8.0, 30.0, 60.0, 800.0, 600.0);
+        let plan = runtime.frame_plan().unwrap();
+
+        assert!(!plan.placements.is_empty());
+        assert!(
+            plan.render_camera
+                .view_projection
+                .into_iter()
+                .all(f32::is_finite)
+        );
+        assert!(plan.visible_bounds.west.is_finite());
+        assert!(plan.visible_bounds.east.is_finite());
+        assert!(plan.visible_bounds.south.is_finite());
+        assert!(plan.visible_bounds.north.is_finite());
+    }
+
+    #[test]
+    fn camera_crossing_ground_horizon_is_rejected() {
+        let camera = MapCamera::new(
+            13.405,
+            52.52,
+            8.0,
+            0.0,
+            85.0,
+            ViewportSize::new(800.0, 600.0).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            FlatRasterRuntime::new(
+                camera,
+                RasterSourceSpec::new(0, 19, 512).unwrap(),
+                FlatRasterRuntimeLimits::default(),
+            ),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        ));
+    }
+
+    #[test]
+    fn oriented_pan_moves_center_to_the_pre_pan_ground_coordinate() {
+        let mut runtime = runtime_with_camera([13.405, 52.52], 8.0, 45.0, 35.0, 800.0, 600.0);
+        let delta_x = 90.0;
+        let delta_y = -40.0;
+        let expected = runtime
+            .unproject_screen(ScreenCoordinate {
+                x: 400.0 - delta_x,
+                y: 300.0 - delta_y,
+            })
+            .unwrap();
+
+        runtime.pan_by_pixels(delta_x, delta_y).unwrap();
+        let camera = runtime.camera();
+
+        assert!((camera.longitude - expected.longitude).abs() < 1.0e-6);
+        assert!((camera.latitude - expected.latitude).abs() < 1.0e-6);
+        assert_eq!(camera.bearing, 45.0);
+        assert_eq!(camera.pitch, 35.0);
+    }
+
+    #[test]
+    fn oriented_zoom_preserves_screen_anchor() {
+        let mut runtime = runtime_with_camera([13.405, 52.52], 8.0, 25.0, 45.0, 800.0, 600.0);
+        let screen = ScreenCoordinate { x: 620.0, y: 240.0 };
+        let before = runtime.unproject_screen(screen).unwrap();
+
+        runtime.zoom_about(1.25, screen, 0.0, 20.0).unwrap();
+        let after = runtime.unproject_screen(screen).unwrap();
+
+        assert!((before.longitude - after.longitude).abs() < 1.0e-5);
+        assert!((before.latitude - after.latitude).abs() < 1.0e-5);
+        assert_eq!(runtime.camera().bearing, 25.0);
+        assert_eq!(runtime.camera().pitch, 45.0);
+    }
+
+    #[test]
+    fn fit_bounds_fails_closed_for_oriented_camera() {
+        let mut runtime = runtime_with_camera([0.0, 0.0], 5.0, 30.0, 30.0, 800.0, 600.0);
+
+        assert!(matches!(
+            runtime.fit_bounds(-10.0, 40.0, 10.0, 50.0, 32.0, 12.0),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        ));
     }
 
     #[test]
