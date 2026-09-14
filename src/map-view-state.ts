@@ -155,5 +155,7 @@ export function serializeMapViewState(viewState: MapViewState) {
   return JSON.stringify({
     center: viewState.center.map((value) => Number(value.toFixed(8))),
     zoom: Number(viewState.zoom.toFixed(8)),
+    bearing: Number((viewState.bearing ?? 0).toFixed(8)),
+    pitch: Number((viewState.pitch ?? 0).toFixed(8)),
   });
 }
