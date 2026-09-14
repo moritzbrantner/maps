@@ -8,7 +8,9 @@ vi.mock("./canvas-flat-runtime", async () => {
   const React = await import("react");
 
   type ViewState = {
+    bearing?: number;
     center: [number, number];
+    pitch?: number;
     zoom: number;
   };
   type Reason =
@@ -24,6 +26,7 @@ vi.mock("./canvas-flat-runtime", async () => {
       bounds: [number, number, number, number],
       options?: { maxZoom?: number; reason?: Reason },
     ) => void;
+    getVisibleBounds: () => [number, number, number, number];
     project: (coordinates: [number, number]) => { x: number; y: number };
     setViewState: (viewState: ViewState, reason?: Reason) => void;
     unproject: (x: number, y: number) => [number, number];
@@ -45,6 +48,9 @@ vi.mock("./canvas-flat-runtime", async () => {
             },
             options.reason ?? "fit-bounds",
           );
+        },
+        getVisibleBounds() {
+          return [-180, -85, 180, 85];
         },
         project(coordinates) {
           return {
@@ -76,7 +82,7 @@ afterEach(() => {
 });
 
 describe("Maps-owned ClusterLayer Canvas runtime", () => {
-  test("uses viewport aggregation, shared picking, and cluster expansion without renderer authority", async () => {
+  test("uses Rust viewport bounds and preserves orientation through cluster expansion", async () => {
     const onFeatureSelect = vi.fn();
     const onSelectedFeatureIdChange = vi.fn();
     const onViewStateChange = vi.fn();
@@ -91,7 +97,7 @@ describe("Maps-owned ClusterLayer Canvas runtime", () => {
       <MapView
         flatRuntime="maps"
         fitToData={false}
-        initialViewState={{ center: [0, 0], zoom: 2 }}
+        initialViewState={{ bearing: 30, center: [0, 0], pitch: 25, zoom: 2 }}
         mapLabel="Cluster Canvas Maps runtime"
         mapStyle={{ tiles: false }}
         onViewStateChange={onViewStateChange}
@@ -119,7 +125,12 @@ describe("Maps-owned ClusterLayer Canvas runtime", () => {
           ?.getAttribute("data-map-overlay-primitives"),
       ).toBe("1");
       expect(onViewportAggregationChange).toHaveBeenCalledWith(
-        expect.objectContaining({ visibleClusterCount: 1, visiblePointCount: 3, zoom: 2 }),
+        expect.objectContaining({
+          bounds: [-180, -85, 180, 85],
+          visibleClusterCount: 1,
+          visiblePointCount: 3,
+          zoom: 2,
+        }),
       );
     });
 
@@ -141,7 +152,7 @@ describe("Maps-owned ClusterLayer Canvas runtime", () => {
         expect.objectContaining({ featureId: "stable-cluster", source: "click" }),
       );
       expect(onViewStateChange).toHaveBeenCalledWith(
-        expect.objectContaining({ zoom: expect.any(Number) }),
+        expect.objectContaining({ bearing: 30, pitch: 25, zoom: expect.any(Number) }),
         { display: "flat", reason: "cluster-expand" },
       );
     });
