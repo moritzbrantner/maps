@@ -1082,6 +1082,6 @@ function assertNoUnsupportedPointDrag(
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
-    'The direct-feature Maps runtime supports PointLayer, GeoJsonLayer, FlowLayer, ClusterLayer, and HeatLayer through Maps-owned semantic adapters. Other map layer types remain explicitly MapLibre-backed.',
+    'The direct-feature Maps runtime supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer, plus HeatLayer, through Maps-owned semantic adapters. Other map layer types remain explicitly MapLibre-backed.',
   );
 }
