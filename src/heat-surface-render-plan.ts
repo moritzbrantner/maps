@@ -1,7 +1,6 @@
 "use client";
 
 import { toLatLng } from "./map-display";
-import type { FlatMapAdapter } from "./maplibre-compat";
 import {
   METERS_PER_DEGREE_AT_EQUATOR,
   type HeatLayerFeatureCollection,
@@ -24,6 +23,13 @@ export type HeatSurfaceBounds = [
   east: number,
   north: number,
 ];
+
+export type HeatSurfaceViewport = {
+  containerPointToLatLng(point: [number, number]): { lat: number; lng: number };
+  getContainer(): { clientHeight: number; clientWidth: number };
+  getZoom(): number;
+  latLngToContainerPoint(input: { lat: number; lng: number }): { x: number; y: number };
+};
 
 export type HeatSurfaceCacheMetadata = {
   bounds: HeatSurfaceBounds;
@@ -76,7 +82,7 @@ export function createHeatSurfaceRenderPlan({
   data: HeatLayerFeatureCollection;
   height: number;
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   maxRasterPixels: number;
   minZoomDeltaForRebuild: number;
   mode: HeatLayerSurfaceMode;
@@ -129,7 +135,7 @@ export function getHeatLayerSurfaceQueryBounds({
   strategy,
 }: {
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   minZoomDeltaForRebuild: number;
   overscanRatio: number;
   radius: HeatLayerRadius;
@@ -171,7 +177,7 @@ function createViewportHeatSurfaceRenderPlan({
   data: HeatLayerFeatureCollection;
   height: number;
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   mode: HeatLayerSurfaceMode;
   radius: HeatLayerRadius;
   width: number;
@@ -271,7 +277,7 @@ function createStableHeatSurfaceRenderPlan({
   data: HeatLayerFeatureCollection;
   height: number;
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   maxRasterPixels: number;
   minZoomDeltaForRebuild: number;
   mode: HeatLayerSurfaceMode;
@@ -500,7 +506,7 @@ function isMeterHeatLayerRadius(radius: HeatLayerRadius): radius is { meters: nu
 }
 
 function getHeatLayerStableCoverageBounds(
-  map: FlatMapAdapter,
+  map: HeatSurfaceViewport,
   radius: { meters: number },
   intensity: number,
   overscanRatio: number,
@@ -627,7 +633,7 @@ function getHeatLayerZoomBucket(zoom: number, minZoomDeltaForRebuild: number) {
 function resolveHeatLayerProjectedRadius(
   radius: HeatLayerRadius,
   coordinate: [longitude: number, latitude: number],
-  map: FlatMapAdapter,
+  map: HeatSurfaceViewport,
 ) {
   if (typeof radius === "object" && "meters" in radius) {
     return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
@@ -647,7 +653,7 @@ function getHeatLayerDataInfluenceRadius(radius: HeatLayerRadius, intensity: num
 }
 
 function getHeatLayerPaddedBounds(
-  map: FlatMapAdapter,
+  map: HeatSurfaceViewport,
   radius: HeatLayerRadius,
   intensity: number,
 ): HeatSurfaceBounds {
