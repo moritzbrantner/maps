@@ -39,6 +39,10 @@ import type {
   MapContextMenuContext,
   MapFeatureContextMenuContext,
 } from "./map-interaction";
+import type {
+  MapScreenInteractionState,
+  MapScreenRenderFrame,
+} from "./map-screen-render-frame";
 import {
   MapsOverlayLayers,
   type MapsOverlayLayersController,
@@ -213,6 +217,12 @@ export function MapsMapView({
       currentViewState.pitch,
       isReady,
     ],
+  );
+
+  const renderApplicationFrame = useCallback(
+    (frame: MapScreenRenderFrame<unknown>, interaction: MapScreenInteractionState) =>
+      runtimeControllerRef.current?.renderApplicationFrame?.(frame, interaction) ?? false,
+    [],
   );
 
   const getViewportAggregationQuery = useCallback(
@@ -623,6 +633,7 @@ export function MapsMapView({
           ref={overlayControllerRef}
           getViewport={getViewportAggregationQuery}
           project={projectCoordinate}
+          renderApplicationFrame={renderApplicationFrame}
           surface={context}
         >
           {mapChildren.layers}

@@ -6,57 +6,31 @@ import type {
   MapVectorRenderFrame,
   MapVectorRenderPrimitive,
 } from "./map-render-frame";
+import type {
+  MapScreenCircle,
+  MapScreenDirectionMarker,
+  MapScreenInteractionState,
+  MapScreenLine,
+  MapScreenPoint as SharedMapScreenPoint,
+  MapScreenPolygon,
+  MapScreenProject,
+  MapScreenRenderFrame,
+  MapScreenRenderPrimitive,
+} from "./map-screen-render-frame";
 
-export type MapScreenPoint = { x: number; y: number };
-export type MapRenderProject = (
-  coordinate: [longitude: number, latitude: number],
-) => MapScreenPoint | null;
-
-type CanvasScenePrimitiveBase<TFeature> = {
-  renderPrimitive: MapVectorRenderPrimitive<TFeature>;
-};
-
-export type CanvasCircleScenePrimitive<TFeature = unknown> = CanvasScenePrimitiveBase<TFeature> & {
-  kind: "circle";
-  x: number;
-  y: number;
-};
-
+export type MapScreenPoint = SharedMapScreenPoint;
+export type MapRenderProject = MapScreenProject;
+export type CanvasCircleScenePrimitive<TFeature = unknown> = MapScreenCircle<TFeature>;
 export type CanvasDirectionMarkerScenePrimitive<TFeature = unknown> =
-  CanvasScenePrimitiveBase<TFeature> & {
-    angle: number;
-    kind: "direction-marker";
-    x: number;
-    y: number;
-  };
+  MapScreenDirectionMarker<TFeature>;
+export type CanvasLineScenePrimitive<TFeature = unknown> = MapScreenLine<TFeature>;
+export type CanvasPolygonScenePrimitive<TFeature = unknown> = MapScreenPolygon<TFeature>;
+export type CanvasMapScenePrimitive<TFeature = unknown> = MapScreenRenderPrimitive<TFeature>;
+export type CanvasMapScene<TFeature = unknown> = MapScreenRenderFrame<TFeature>;
 
-export type CanvasLineScenePrimitive<TFeature = unknown> = CanvasScenePrimitiveBase<TFeature> & {
-  kind: "line";
-  points: MapScreenPoint[];
-};
-
-export type CanvasPolygonScenePrimitive<TFeature = unknown> = CanvasScenePrimitiveBase<TFeature> & {
-  kind: "polygon";
-  rings: MapScreenPoint[][];
-};
-
-export type CanvasMapScenePrimitive<TFeature = unknown> =
-  | CanvasCircleScenePrimitive<TFeature>
-  | CanvasDirectionMarkerScenePrimitive<TFeature>
-  | CanvasLineScenePrimitive<TFeature>
-  | CanvasPolygonScenePrimitive<TFeature>;
-
-export type CanvasMapScene<TFeature = unknown> = {
-  height: number;
-  primitives: Array<CanvasMapScenePrimitive<TFeature>>;
-  width: number;
-};
-
-export type CanvasMapDrawOptions = {
+export type CanvasMapDrawOptions = MapScreenInteractionState & {
   hoveredFeatureId?: string | null;
-  hoveredPrimitiveIds?: ReadonlySet<string>;
   selectedFeatureId?: string | null;
-  selectedPrimitiveIds?: ReadonlySet<string>;
 };
 
 export function createCanvasMapScene<TFeature = unknown>(
@@ -96,6 +70,24 @@ export function drawCanvasMapScene<TFeature = unknown>(
 
   for (const primitive of scene.primitives) {
     drawPrimitive(context, primitive, options);
+  }
+}
+
+export function drawCanvasMapLabels<TFeature = unknown>(
+  context: CanvasRenderingContext2D,
+  scene: CanvasMapScene<TFeature>,
+) {
+  context.clearRect(0, 0, scene.width, scene.height);
+  for (const primitive of scene.primitives) {
+    if (primitive.kind !== "circle") continue;
+    const label = (primitive.renderPrimitive as MapRenderCircle<TFeature>).label;
+    if (!label) continue;
+    context.globalAlpha = 1;
+    context.fillStyle = "#ffffff";
+    context.font = "600 12px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(label, primitive.x, primitive.y);
   }
 }
 
