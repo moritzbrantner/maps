@@ -48,10 +48,8 @@ export type MapScreenRenderPrimitive<TFeature = unknown> =
 
 /**
  * Maps-owned screen-space render frame shared by concrete pixel backends and hit testing.
- *
- * Geographic projection remains authoritative in the Maps runtime. This frame
- * contains only the finite projected positions needed by browser renderers;
- * renderers must not recompute Mercator or camera semantics independently.
+ * Geographic projection remains authoritative in the Maps runtime; concrete renderers consume
+ * only these finite projected positions and never recompute Mercator or camera semantics.
  */
 export type MapScreenRenderFrame<TFeature = unknown> = {
   height: number;
@@ -64,60 +62,9 @@ export function createMapScreenRenderFrame<TFeature = unknown>(
   project: MapScreenProject,
   size: { height: number; width: number },
 ): MapScreenRenderFrame<TFeature> {
-  const primitives: Array<MapScreenRenderPrimitive<TFeature>> = [];
-
-  for (const primitive of frame.primitives) {
-    switch (primitive.kind) {
-      case "circle": {
-        const center = project(primitive.center);
-        if (isFinitePoint(center)) {
-          primitives.push({ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y });
-        }
-        break;
-      }
-      case "direction-marker": {
-        const anchor = project(primitive.anchor);
-        const previous = project(primitive.previous);
-        if (isFinitePoint(anchor) && isFinitePoint(previous)) {
-          primitives.push({
-            angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
-            kind: "direction-marker",
-            renderPrimitive: primitive,
-            x: anchor.x,
-            y: anchor.y,
-          });
-        }
-        break;
-      }
-      case "line": {
-        const points = projectCoordinates(primitive.coordinates, project);
-        if (points && points.length >= 2) {
-          primitives.push({ kind: "line", points, renderPrimitive: primitive });
-        }
-        break;
-      }
-      case "polygon": {
-        const rings: MapScreenPoint[][] = [];
-        let valid = true;
-        for (const ring of primitive.rings) {
-          const projected = projectCoordinates(ring, project);
-          if (!projected || projected.length < 3) {
-            valid = false;
-            break;
-          }
-          rings.push(projected);
-        }
-        if (valid) {
-          primitives.push({ kind: "polygon", renderPrimitive: primitive, rings });
-        }
-        break;
-      }
-    }
-  }
-
   return {
     height: Math.max(0, size.height),
-    primitives,
+    primitives: frame.primitives.flatMap((primitive) => projectPrimitive(primitive, project)),
     width: Math.max(0, size.width),
   };
 }
@@ -127,9 +74,56 @@ export function resolveMapScreenStrokeWidth(
   primitiveId: string,
   interaction: MapScreenInteractionState = {},
 ) {
-  const selected = interaction.selectedPrimitiveIds?.has(primitiveId);
-  const hovered = interaction.hoveredPrimitiveIds?.has(primitiveId);
-  return Math.max(0, base + (selected ? 1.5 : hovered ? 1 : 0));
+  return Math.max(
+    0,
+    base +
+      (interaction.selectedPrimitiveIds?.has(primitiveId)
+        ? 1.5
+        : interaction.hoveredPrimitiveIds?.has(primitiveId)
+          ? 1
+          : 0),
+  );
+}
+
+function projectPrimitive<TFeature>(
+  primitive: MapVectorRenderPrimitive<TFeature>,
+  project: MapScreenProject,
+): Array<MapScreenRenderPrimitive<TFeature>> {
+  switch (primitive.kind) {
+    case "circle": {
+      const center = project(primitive.center);
+      return isFinitePoint(center)
+        ? [{ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y }]
+        : [];
+    }
+    case "direction-marker": {
+      const anchor = project(primitive.anchor);
+      const previous = project(primitive.previous);
+      return isFinitePoint(anchor) && isFinitePoint(previous)
+        ? [
+            {
+              angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
+              kind: "direction-marker",
+              renderPrimitive: primitive,
+              x: anchor.x,
+              y: anchor.y,
+            },
+          ]
+        : [];
+    }
+    case "line": {
+      const points = projectCoordinates(primitive.coordinates, project);
+      return points && points.length >= 2
+        ? [{ kind: "line", points, renderPrimitive: primitive }]
+        : [];
+    }
+    case "polygon": {
+      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project));
+      return rings.every((ring): ring is MapScreenPoint[] => ring !== null && ring.length >= 3)
+        ? [{ kind: "polygon", renderPrimitive: primitive, rings }]
+        : [];
+    }
+  }
 }
 
 function projectCoordinates(
