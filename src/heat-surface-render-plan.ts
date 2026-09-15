@@ -28,7 +28,9 @@ export type HeatSurfaceViewport = {
   containerPointToLatLng(point: [number, number]): { lat: number; lng: number };
   getContainer(): { clientHeight: number; clientWidth: number };
   getZoom(): number;
-  latLngToContainerPoint(input: { lat: number; lng: number }): { x: number; y: number };
+  latLngToContainerPoint(
+    input: [number, number] | { lat: number; lng: number },
+  ): { x: number; y: number };
 };
 
 export type HeatSurfaceCacheMetadata = {
