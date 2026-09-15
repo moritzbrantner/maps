@@ -1,7 +1,3 @@
-"use client";
-
-import { createContext } from "react";
-
 import type {
   HeatFieldRenderMode,
   HeatLayerFeatureCollection,
@@ -48,11 +44,3 @@ export type MapsHeatLayerDescriptor = {
   layerId: string;
   showDataPoints: boolean;
 };
-
-export type MapsHeatLayerRegistration = {
-  layerKey: string;
-  publish(descriptor: MapsHeatLayerDescriptor | null): void;
-  requestRender(): void;
-};
-
-export const MapsHeatLayerRegistrationContext = createContext<MapsHeatLayerRegistration | null>(null);
