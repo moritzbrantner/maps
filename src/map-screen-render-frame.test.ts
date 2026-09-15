@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { createCanvasMapScene as createMapScreenRenderFrame } from "./canvas-map-renderer";
 import type { GeoJsonLayerFeature } from "./geojson-layer";
 import { createGeoJsonVectorRenderFrame } from "./map-render-frame";
-import { createMapScreenRenderFrame } from "./map-screen-render-frame";
 
 describe("MapScreenRenderFrame", () => {
   it("projects renderer-neutral primitives once while preserving semantic identity", () => {
