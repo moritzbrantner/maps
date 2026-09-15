@@ -1,8 +1,7 @@
 import type { MapRenderCircle } from "./map-render-frame";
-import {
-  resolveMapScreenStrokeWidth,
-  type MapScreenInteractionState,
-  type MapScreenRenderFrame,
+import type {
+  MapScreenInteractionState,
+  MapScreenRenderFrame,
 } from "./map-screen-render-frame";
 
 export type MapsWgpuColor = [red: number, green: number, blue: number, alpha: number];
@@ -51,7 +50,7 @@ export function createMapsWgpuApplicationFrame(
     const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
     const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
     const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
-    const strokeWidth = resolveMapScreenStrokeWidth(
+    const strokeWidth = resolveStrokeWidth(
       primitive.strokeWidth,
       primitive.primitiveId,
       interaction,
@@ -84,6 +83,22 @@ export function createMapsWgpuApplicationFrame(
     height: frame.height,
     width: frame.width,
   };
+}
+
+function resolveStrokeWidth(
+  base: number,
+  primitiveId: string,
+  interaction: MapScreenInteractionState,
+) {
+  return Math.max(
+    0,
+    base +
+      (interaction.selectedPrimitiveIds?.has(primitiveId)
+        ? 1.5
+        : interaction.hoveredPrimitiveIds?.has(primitiveId)
+          ? 1
+          : 0),
+  );
 }
 
 function parseSupportedCssColor(value: string, opacity: number): MapsWgpuColor | null {
