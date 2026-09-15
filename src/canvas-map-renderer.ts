@@ -7,7 +7,6 @@ import type {
 } from "./map-render-frame";
 import {
   createMapScreenRenderFrame,
-  resolveMapScreenStrokeWidth,
   type MapScreenCircle,
   type MapScreenDirectionMarker,
   type MapScreenInteractionState,
@@ -48,13 +47,8 @@ export function hitTestCanvasMapScene<TFeature = unknown>(
 ): CanvasMapScenePrimitive<TFeature> | null {
   for (let index = scene.primitives.length - 1; index >= 0; index -= 1) {
     const candidate = scene.primitives[index]!;
-    if (!candidate.renderPrimitive.interactive) continue;
-
-    if (hitPrimitive(candidate, point)) {
-      return candidate;
-    }
+    if (candidate.renderPrimitive.interactive && hitPrimitive(candidate, point)) return candidate;
   }
-
   return null;
 }
 
@@ -65,8 +59,25 @@ export function drawCanvasMapScene<TFeature = unknown>(
 ) {
   context.clearRect(0, 0, scene.width, scene.height);
 
-  for (const primitive of scene.primitives) {
-    drawPrimitive(context, primitive, options);
+  for (const scenePrimitive of scene.primitives) {
+    const primitive = scenePrimitive.renderPrimitive;
+    switch (scenePrimitive.kind) {
+      case "circle":
+        drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, options);
+        break;
+      case "direction-marker":
+        drawDirectionMarker(
+          context,
+          scenePrimitive,
+          primitive as MapRenderDirectionMarker<TFeature>,
+        );
+        break;
+      case "line":
+        drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, options);
+        break;
+      case "polygon":
+        drawPolygon(context, scenePrimitive, primitive as MapRenderPolygon<TFeature>, options);
+    }
   }
 }
 
@@ -75,38 +86,10 @@ export function drawCanvasMapLabels<TFeature = unknown>(
   scene: CanvasMapScene<TFeature>,
 ) {
   context.clearRect(0, 0, scene.width, scene.height);
-
   for (const scenePrimitive of scene.primitives) {
     if (scenePrimitive.kind !== "circle") continue;
-    const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<TFeature>;
-    if (!primitive.label) continue;
-    drawCircleLabel(context, scenePrimitive, primitive.label);
-  }
-}
-
-function drawPrimitive<TFeature>(
-  context: CanvasRenderingContext2D,
-  scenePrimitive: CanvasMapScenePrimitive<TFeature>,
-  options: CanvasMapDrawOptions,
-) {
-  const primitive = scenePrimitive.renderPrimitive;
-
-  switch (scenePrimitive.kind) {
-    case "circle":
-      drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, options);
-      return;
-    case "direction-marker":
-      drawDirectionMarker(
-        context,
-        scenePrimitive,
-        primitive as MapRenderDirectionMarker<TFeature>,
-      );
-      return;
-    case "line":
-      drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, options);
-      return;
-    case "polygon":
-      drawPolygon(context, scenePrimitive, primitive as MapRenderPolygon<TFeature>, options);
+    const label = (scenePrimitive.renderPrimitive as MapRenderCircle<TFeature>).label;
+    if (label) drawCircleLabel(context, scenePrimitive, label);
   }
 }
 
@@ -141,15 +124,8 @@ function drawCircle<TFeature>(
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill();
-  context.globalAlpha = primitive.strokeOpacity;
-  context.lineWidth = resolveCanvasStrokeWidth(primitive, options);
-  context.strokeStyle = primitive.strokeColor;
-  context.stroke();
-  context.globalAlpha = 1;
-
-  if (primitive.label) {
-    drawCircleLabel(context, scene, primitive.label);
-  }
+  stroke(context, primitive, options);
+  if (primitive.label) drawCircleLabel(context, scene, primitive.label);
 }
 
 function drawCircleLabel<TFeature>(
@@ -172,13 +148,9 @@ function drawLine<TFeature>(
   options: CanvasMapDrawOptions,
 ) {
   traceLine(context, scene.points, false);
-  context.globalAlpha = primitive.strokeOpacity;
   context.lineCap = "round";
   context.lineJoin = "round";
-  context.lineWidth = resolveCanvasStrokeWidth(primitive, options);
-  context.strokeStyle = primitive.strokeColor;
-  context.stroke();
-  context.globalAlpha = 1;
+  stroke(context, primitive, options);
 }
 
 function drawPolygon<TFeature>(
@@ -188,14 +160,20 @@ function drawPolygon<TFeature>(
   options: CanvasMapDrawOptions,
 ) {
   context.beginPath();
-  for (const ring of scene.rings) {
-    traceLine(context, ring, true, false);
-  }
+  for (const ring of scene.rings) traceLine(context, ring, true, false);
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill("evenodd");
-  context.globalAlpha = primitive.strokeOpacity;
   context.lineJoin = "round";
+  stroke(context, primitive, options);
+}
+
+function stroke(
+  context: CanvasRenderingContext2D,
+  primitive: MapRenderCircle | MapRenderLine | MapRenderPolygon,
+  options: CanvasMapDrawOptions,
+) {
+  context.globalAlpha = primitive.strokeOpacity;
   context.lineWidth = resolveCanvasStrokeWidth(primitive, options);
   context.strokeStyle = primitive.strokeColor;
   context.stroke();
@@ -206,11 +184,12 @@ function resolveCanvasStrokeWidth(
   primitive: MapRenderCircle | MapRenderLine | MapRenderPolygon,
   options: CanvasMapDrawOptions,
 ) {
-  if (options.selectedPrimitiveIds || options.hoveredPrimitiveIds) {
-    return resolveMapScreenStrokeWidth(primitive.strokeWidth, primitive.primitiveId, options);
-  }
-  const selected = options.selectedFeatureId === primitive.featureId;
-  const hovered = options.hoveredFeatureId === primitive.featureId;
+  const selected =
+    options.selectedPrimitiveIds?.has(primitive.primitiveId) ??
+    options.selectedFeatureId === primitive.featureId;
+  const hovered =
+    options.hoveredPrimitiveIds?.has(primitive.primitiveId) ??
+    options.hoveredFeatureId === primitive.featureId;
   return Math.max(0, primitive.strokeWidth + (selected ? 1.5 : hovered ? 1 : 0));
 }
 
@@ -254,7 +233,7 @@ function hitPrimitive<TFeature>(
       if (pointInRings(point, primitive.rings)) return true;
       const tolerance = Math.max(4, renderPrimitive.strokeWidth / 2 + 2);
       return primitive.rings.some(
-        (ring) => squaredDistanceToClosedPolyline(point, ring) <= tolerance * tolerance,
+        (ring) => squaredDistanceToPolyline(point, ring, true) <= tolerance * tolerance,
       );
     }
   }
@@ -263,34 +242,27 @@ function hitPrimitive<TFeature>(
 function pointInRings(point: MapScreenPoint, rings: readonly MapScreenPoint[][]) {
   let inside = false;
   for (const ring of rings) {
-    if (pointInRing(point, ring)) inside = !inside;
+    for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
+      const a = ring[current]!;
+      const b = ring[previous]!;
+      const crosses =
+        a.y > point.y !== b.y > point.y &&
+        point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+      if (crosses) inside = !inside;
+    }
   }
   return inside;
 }
 
-function pointInRing(point: MapScreenPoint, ring: readonly MapScreenPoint[]) {
-  let inside = false;
-  for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
-    const a = ring[current]!;
-    const b = ring[previous]!;
-    const crosses =
-      a.y > point.y !== b.y > point.y &&
-      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
-    if (crosses) inside = !inside;
-  }
-  return inside;
-}
-
-function squaredDistanceToClosedPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
+function squaredDistanceToPolyline(
+  point: MapScreenPoint,
+  points: readonly MapScreenPoint[],
+  closed = false,
+) {
   if (points.length < 2) return Number.POSITIVE_INFINITY;
-  return Math.min(
-    squaredDistanceToPolyline(point, points),
-    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!),
-  );
-}
-
-function squaredDistanceToPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
-  let minimum = Number.POSITIVE_INFINITY;
+  let minimum = closed
+    ? squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!)
+    : Number.POSITIVE_INFINITY;
   for (let index = 1; index < points.length; index += 1) {
     minimum = Math.min(minimum, squaredDistanceToSegment(point, points[index - 1]!, points[index]!));
   }
