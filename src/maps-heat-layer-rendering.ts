@@ -29,6 +29,7 @@ import {
   createHeatLayerInterpolatedSurfaceImage,
   type HeatLayerSurfaceImage,
 } from "./heat-surface";
+import type { GeoJsonMultiLineStringGeometry } from "./temporal-geojson-types";
 
 export type MapsHeatLayerViewport = {
   bounds: HeatSurfaceBounds;
@@ -406,7 +407,7 @@ function createContourPrimitives(descriptor: MapsHeatLayerDescriptor) {
   const lineWidth = Math.max(0.25, descriptor.fieldContourLineWidth ?? 1);
 
   collection.features.forEach((feature, featureIndex) => {
-    const geometry = feature.geometry;
+    const geometry = feature.geometry as GeoJsonMultiLineStringGeometry | null;
     if (geometry?.type !== "MultiLineString") return;
 
     geometry.coordinates.forEach((line, lineIndex) => {
