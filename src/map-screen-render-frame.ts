@@ -69,22 +69,6 @@ export function createMapScreenRenderFrame<TFeature = unknown>(
   };
 }
 
-export function resolveMapScreenStrokeWidth(
-  base: number,
-  primitiveId: string,
-  interaction: MapScreenInteractionState = {},
-) {
-  return Math.max(
-    0,
-    base +
-      (interaction.selectedPrimitiveIds?.has(primitiveId)
-        ? 1.5
-        : interaction.hoveredPrimitiveIds?.has(primitiveId)
-          ? 1
-          : 0),
-  );
-}
-
 function projectPrimitive<TFeature>(
   primitive: MapVectorRenderPrimitive<TFeature>,
   project: MapScreenProject,
