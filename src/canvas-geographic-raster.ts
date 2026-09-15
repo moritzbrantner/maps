@@ -55,7 +55,10 @@ export function drawCanvasGeographicRaster({
   }
 
   const rowLength = subdivisions + 1;
-  const vertices: Array<RasterVertex | null> = new Array(rowLength * rowLength);
+  const vertices: Array<RasterVertex | null> = Array.from(
+    { length: rowLength * rowLength },
+    () => null,
+  );
 
   for (let row = 0; row <= subdivisions; row += 1) {
     const v = row / subdivisions;
