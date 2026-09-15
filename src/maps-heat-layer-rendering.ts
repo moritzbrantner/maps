@@ -9,7 +9,6 @@ import {
 import type { HeatLayerFeature, HeatLayerFeatureCollection } from "./heat-layer-types";
 import { clamp } from "./heat-layer-utils";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
-import type { FlatMapAdapter } from "./maplibre-compat";
 import type {
   MapRenderCircle,
   MapRenderLine,
@@ -21,6 +20,7 @@ import {
   type HeatSurfaceBounds,
   type HeatSurfaceCacheMetadata,
   type HeatSurfaceRenderPlan,
+  type HeatSurfaceViewport,
 } from "./heat-surface-render-plan";
 import {
   createHeatLayerDataSurfaceDataUrl,
@@ -177,7 +177,7 @@ function prepareDensityLayerRender(
   viewport: MapsHeatLayerViewport,
   requestRender: () => void,
 ): MapsHeatLayerPreparedRender {
-  const map = createHeatSurfaceAdapter(viewport);
+  const map = createHeatSurfaceViewport(viewport);
   const queryBounds = getHeatLayerSurfaceQueryBounds({
     intensity: descriptor.heatmapIntensity,
     map,
@@ -460,9 +460,9 @@ function createDataPointPrimitives(
   });
 }
 
-function createHeatSurfaceAdapter(viewport: MapsHeatLayerViewport): FlatMapAdapter {
-  const adapter = {
-    containerPointToLatLng([x, y]: [number, number]) {
+function createHeatSurfaceViewport(viewport: MapsHeatLayerViewport): HeatSurfaceViewport {
+  return {
+    containerPointToLatLng([x, y]) {
       const coordinate = viewport.unproject(x, y);
       return coordinate
         ? { lat: coordinate[1], lng: coordinate[0] }
@@ -477,13 +477,8 @@ function createHeatSurfaceAdapter(viewport: MapsHeatLayerViewport): FlatMapAdapt
     getZoom() {
       return viewport.zoom;
     },
-    latLngToContainerPoint(input: { lat: number; lng: number }) {
+    latLngToContainerPoint(input) {
       return viewport.project([input.lng, input.lat]) ?? { x: Number.NaN, y: Number.NaN };
     },
   };
-
-  // The heat planner historically accepted FlatMapAdapter even though it only reads the
-  // projection/viewport methods above. The first-party runtime supplies only that narrow shape;
-  // no MapLibre object or MapLibre layer registration participates in this execution path.
-  return adapter as unknown as FlatMapAdapter;
 }
