@@ -4,18 +4,18 @@ import type {
   MapRenderLine,
   MapRenderPolygon,
   MapVectorRenderFrame,
+  MapVectorRenderPrimitive,
 } from "./map-render-frame";
-import {
-  createMapScreenRenderFrame,
-  type MapScreenCircle,
-  type MapScreenDirectionMarker,
-  type MapScreenInteractionState,
-  type MapScreenLine,
-  type MapScreenPoint as SharedMapScreenPoint,
-  type MapScreenPolygon,
-  type MapScreenProject,
-  type MapScreenRenderFrame,
-  type MapScreenRenderPrimitive,
+import type {
+  MapScreenCircle,
+  MapScreenDirectionMarker,
+  MapScreenInteractionState,
+  MapScreenLine,
+  MapScreenPoint as SharedMapScreenPoint,
+  MapScreenPolygon,
+  MapScreenProject,
+  MapScreenRenderFrame,
+  MapScreenRenderPrimitive,
 } from "./map-screen-render-frame";
 
 export type MapScreenPoint = SharedMapScreenPoint;
@@ -38,7 +38,11 @@ export function createCanvasMapScene<TFeature = unknown>(
   project: MapRenderProject,
   size: { height: number; width: number },
 ): CanvasMapScene<TFeature> {
-  return createMapScreenRenderFrame(frame, project, size);
+  return {
+    height: Math.max(0, size.height),
+    primitives: frame.primitives.flatMap((primitive) => projectPrimitive(primitive, project)),
+    width: Math.max(0, size.width),
+  };
 }
 
 export function hitTestCanvasMapScene<TFeature = unknown>(
@@ -47,8 +51,13 @@ export function hitTestCanvasMapScene<TFeature = unknown>(
 ): CanvasMapScenePrimitive<TFeature> | null {
   for (let index = scene.primitives.length - 1; index >= 0; index -= 1) {
     const candidate = scene.primitives[index]!;
-    if (candidate.renderPrimitive.interactive && hitPrimitive(candidate, point)) return candidate;
+    if (!candidate.renderPrimitive.interactive) continue;
+
+    if (hitPrimitive(candidate, point)) {
+      return candidate;
+    }
   }
+
   return null;
 }
 
@@ -59,25 +68,8 @@ export function drawCanvasMapScene<TFeature = unknown>(
 ) {
   context.clearRect(0, 0, scene.width, scene.height);
 
-  for (const scenePrimitive of scene.primitives) {
-    const primitive = scenePrimitive.renderPrimitive;
-    switch (scenePrimitive.kind) {
-      case "circle":
-        drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, options);
-        break;
-      case "direction-marker":
-        drawDirectionMarker(
-          context,
-          scenePrimitive,
-          primitive as MapRenderDirectionMarker<TFeature>,
-        );
-        break;
-      case "line":
-        drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, options);
-        break;
-      case "polygon":
-        drawPolygon(context, scenePrimitive, primitive as MapRenderPolygon<TFeature>, options);
-    }
+  for (const primitive of scene.primitives) {
+    drawPrimitive(context, primitive, options);
   }
 }
 
@@ -86,10 +78,114 @@ export function drawCanvasMapLabels<TFeature = unknown>(
   scene: CanvasMapScene<TFeature>,
 ) {
   context.clearRect(0, 0, scene.width, scene.height);
-  for (const scenePrimitive of scene.primitives) {
-    if (scenePrimitive.kind !== "circle") continue;
-    const label = (scenePrimitive.renderPrimitive as MapRenderCircle<TFeature>).label;
-    if (label) drawCircleLabel(context, scenePrimitive, label);
+  for (const primitive of scene.primitives) {
+    if (primitive.kind !== "circle") continue;
+    const label = (primitive.renderPrimitive as MapRenderCircle<TFeature>).label;
+    if (!label) continue;
+    context.globalAlpha = 1;
+    context.fillStyle = "#ffffff";
+    context.font = "600 12px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(label, primitive.x, primitive.y);
+  }
+}
+
+function projectPrimitive<TFeature>(
+  primitive: MapVectorRenderPrimitive<TFeature>,
+  project: MapRenderProject,
+): Array<CanvasMapScenePrimitive<TFeature>> {
+  switch (primitive.kind) {
+    case "circle": {
+      const center = project(primitive.center);
+      if (!isFinitePoint(center)) return [];
+      return [{ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y }];
+    }
+    case "direction-marker": {
+      const anchor = project(primitive.anchor);
+      const previous = project(primitive.previous);
+      if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return [];
+      return [
+        {
+          angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
+          kind: "direction-marker",
+          renderPrimitive: primitive,
+          x: anchor.x,
+          y: anchor.y,
+        },
+      ];
+    }
+    case "line": {
+      const points = projectCoordinates(primitive.coordinates, project);
+      if (!points || points.length < 2) return [];
+      return [{ kind: "line", points, renderPrimitive: primitive }];
+    }
+    case "polygon": {
+      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project));
+      if (rings.some((ring) => !ring || ring.length < 3)) return [];
+      return [
+        {
+          kind: "polygon",
+          renderPrimitive: primitive,
+          rings: rings as MapScreenPoint[][],
+        },
+      ];
+    }
+  }
+}
+
+function projectCoordinates(
+  coordinates: readonly [number, number][],
+  project: MapRenderProject,
+): MapScreenPoint[] | null {
+  const points: MapScreenPoint[] = [];
+  for (const coordinate of coordinates) {
+    const point = project([coordinate[0], coordinate[1]]);
+    if (!isFinitePoint(point)) return null;
+    points.push(point);
+  }
+  return points;
+}
+
+function isFinitePoint(point: MapScreenPoint | null): point is MapScreenPoint {
+  return point !== null && Number.isFinite(point.x) && Number.isFinite(point.y);
+}
+
+function drawPrimitive<TFeature>(
+  context: CanvasRenderingContext2D,
+  scenePrimitive: CanvasMapScenePrimitive<TFeature>,
+  options: CanvasMapDrawOptions,
+) {
+  const primitive = scenePrimitive.renderPrimitive;
+  const selected = options.selectedPrimitiveIds
+    ? options.selectedPrimitiveIds.has(primitive.primitiveId)
+    : options.selectedFeatureId === primitive.featureId;
+  const hovered = options.hoveredPrimitiveIds
+    ? options.hoveredPrimitiveIds.has(primitive.primitiveId)
+    : options.hoveredFeatureId === primitive.featureId;
+
+  switch (scenePrimitive.kind) {
+    case "circle":
+      drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, selected, hovered);
+      return;
+    case "direction-marker":
+      drawDirectionMarker(
+        context,
+        scenePrimitive,
+        primitive as MapRenderDirectionMarker<TFeature>,
+      );
+      return;
+    case "line":
+      drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, selected, hovered);
+      return;
+    case "polygon":
+      drawPolygon(
+        context,
+        scenePrimitive,
+        primitive as MapRenderPolygon<TFeature>,
+        selected,
+        hovered,
+      );
   }
 }
 
@@ -117,80 +213,66 @@ function drawCircle<TFeature>(
   context: CanvasRenderingContext2D,
   scene: CanvasCircleScenePrimitive<TFeature>,
   primitive: MapRenderCircle<TFeature>,
-  options: CanvasMapDrawOptions,
+  selected: boolean,
+  hovered: boolean,
 ) {
   context.beginPath();
   context.arc(scene.x, scene.y, primitive.radius, 0, Math.PI * 2);
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill();
-  stroke(context, primitive, options);
-  if (primitive.label) drawCircleLabel(context, scene, primitive.label);
-}
-
-function drawCircleLabel<TFeature>(
-  context: CanvasRenderingContext2D,
-  scene: CanvasCircleScenePrimitive<TFeature>,
-  label: string,
-) {
+  context.globalAlpha = primitive.strokeOpacity;
+  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  context.strokeStyle = primitive.strokeColor;
+  context.stroke();
   context.globalAlpha = 1;
-  context.fillStyle = "#ffffff";
-  context.font = "600 12px system-ui, sans-serif";
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(label, scene.x, scene.y);
+
+  if (primitive.label) {
+    context.fillStyle = "#ffffff";
+    context.font = "600 12px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(primitive.label, scene.x, scene.y);
+  }
 }
 
 function drawLine<TFeature>(
   context: CanvasRenderingContext2D,
   scene: CanvasLineScenePrimitive<TFeature>,
   primitive: MapRenderLine<TFeature>,
-  options: CanvasMapDrawOptions,
+  selected: boolean,
+  hovered: boolean,
 ) {
   traceLine(context, scene.points, false);
+  context.globalAlpha = primitive.strokeOpacity;
   context.lineCap = "round";
   context.lineJoin = "round";
-  stroke(context, primitive, options);
+  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  context.strokeStyle = primitive.strokeColor;
+  context.stroke();
+  context.globalAlpha = 1;
 }
 
 function drawPolygon<TFeature>(
   context: CanvasRenderingContext2D,
   scene: CanvasPolygonScenePrimitive<TFeature>,
   primitive: MapRenderPolygon<TFeature>,
-  options: CanvasMapDrawOptions,
+  selected: boolean,
+  hovered: boolean,
 ) {
   context.beginPath();
-  for (const ring of scene.rings) traceLine(context, ring, true, false);
+  for (const ring of scene.rings) {
+    traceLine(context, ring, true, false);
+  }
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill("evenodd");
-  context.lineJoin = "round";
-  stroke(context, primitive, options);
-}
-
-function stroke(
-  context: CanvasRenderingContext2D,
-  primitive: MapRenderCircle | MapRenderLine | MapRenderPolygon,
-  options: CanvasMapDrawOptions,
-) {
   context.globalAlpha = primitive.strokeOpacity;
-  context.lineWidth = resolveCanvasStrokeWidth(primitive, options);
+  context.lineJoin = "round";
+  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
   context.strokeStyle = primitive.strokeColor;
   context.stroke();
   context.globalAlpha = 1;
-}
-
-function resolveCanvasStrokeWidth(
-  primitive: MapRenderCircle | MapRenderLine | MapRenderPolygon,
-  options: CanvasMapDrawOptions,
-) {
-  const selected =
-    options.selectedPrimitiveIds?.has(primitive.primitiveId) ??
-    options.selectedFeatureId === primitive.featureId;
-  const hovered =
-    options.hoveredPrimitiveIds?.has(primitive.primitiveId) ??
-    options.hoveredFeatureId === primitive.featureId;
-  return Math.max(0, primitive.strokeWidth + (selected ? 1.5 : hovered ? 1 : 0));
 }
 
 function traceLine(
@@ -208,6 +290,10 @@ function traceLine(
     context.lineTo(point.x, point.y);
   }
   if (close) context.closePath();
+}
+
+function interactionStrokeWidth(base: number, selected: boolean, hovered: boolean) {
+  return Math.max(0, base + (selected ? 1.5 : hovered ? 1 : 0));
 }
 
 function hitPrimitive<TFeature>(
@@ -233,7 +319,7 @@ function hitPrimitive<TFeature>(
       if (pointInRings(point, primitive.rings)) return true;
       const tolerance = Math.max(4, renderPrimitive.strokeWidth / 2 + 2);
       return primitive.rings.some(
-        (ring) => squaredDistanceToPolyline(point, ring, true) <= tolerance * tolerance,
+        (ring) => squaredDistanceToClosedPolyline(point, ring) <= tolerance * tolerance,
       );
     }
   }
@@ -242,27 +328,34 @@ function hitPrimitive<TFeature>(
 function pointInRings(point: MapScreenPoint, rings: readonly MapScreenPoint[][]) {
   let inside = false;
   for (const ring of rings) {
-    for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
-      const a = ring[current]!;
-      const b = ring[previous]!;
-      const crosses =
-        a.y > point.y !== b.y > point.y &&
-        point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
-      if (crosses) inside = !inside;
-    }
+    if (pointInRing(point, ring)) inside = !inside;
   }
   return inside;
 }
 
-function squaredDistanceToPolyline(
-  point: MapScreenPoint,
-  points: readonly MapScreenPoint[],
-  closed = false,
-) {
+function pointInRing(point: MapScreenPoint, ring: readonly MapScreenPoint[]) {
+  let inside = false;
+  for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
+    const a = ring[current]!;
+    const b = ring[previous]!;
+    const crosses =
+      a.y > point.y !== b.y > point.y &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function squaredDistanceToClosedPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
   if (points.length < 2) return Number.POSITIVE_INFINITY;
-  let minimum = closed
-    ? squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!)
-    : Number.POSITIVE_INFINITY;
+  return Math.min(
+    squaredDistanceToPolyline(point, points),
+    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!),
+  );
+}
+
+function squaredDistanceToPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
+  let minimum = Number.POSITIVE_INFINITY;
   for (let index = 1; index < points.length; index += 1) {
     minimum = Math.min(minimum, squaredDistanceToSegment(point, points[index - 1]!, points[index]!));
   }
