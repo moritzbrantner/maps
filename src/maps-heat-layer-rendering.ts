@@ -478,7 +478,8 @@ function createHeatSurfaceViewport(viewport: MapsHeatLayerViewport): HeatSurface
       return viewport.zoom;
     },
     latLngToContainerPoint(input) {
-      return viewport.project([input.lng, input.lat]) ?? { x: Number.NaN, y: Number.NaN };
+      const [latitude, longitude] = Array.isArray(input) ? input : [input.lat, input.lng];
+      return viewport.project([longitude, latitude]) ?? { x: Number.NaN, y: Number.NaN };
     },
   };
 }
