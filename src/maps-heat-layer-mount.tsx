@@ -32,6 +32,8 @@ import {
 
 type AnyRecord = Record<string, unknown>;
 
+const DEFAULT_MAPS_HEAT_LAYER_RADIUS = { meters: DEFAULT_HEAT_LAYER_RADIUS_METERS } as const;
+
 type HeatLayerFieldArtifacts = {
   contourCollection: HeatFieldContourFeatureCollection | null;
   filterPoint: unknown;
@@ -79,7 +81,7 @@ export function MapsHeatLayerMount({
     heatmapMinZoomDeltaForRebuild = DEFAULT_HEAT_LAYER_MIN_ZOOM_DELTA_FOR_REBUILD,
     heatmapOpacity = 0.84,
     heatmapOverscanRatio = DEFAULT_HEAT_LAYER_OVERSCAN_RATIO,
-    heatmapRadius = { meters: DEFAULT_HEAT_LAYER_RADIUS_METERS },
+    heatmapRadius = DEFAULT_MAPS_HEAT_LAYER_RADIUS,
     heatmapRenderStrategy = "auto",
     heatmapSurfaceMode = "interpolated",
     interpolationEpsilonMeters,
