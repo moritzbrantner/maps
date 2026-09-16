@@ -16,16 +16,19 @@ export function createMapsHeatSurfaceViewport(
   viewport: MapsHeatLayerViewportGeometry,
 ): HeatSurfaceViewport {
   const referenceLongitude = getMapsHeatLayerReferenceLongitude(viewport);
+  const fallbackBounds = unwrapHeatLayerBounds(viewport.bounds, referenceLongitude);
 
   return {
     containerPointToLatLng([x, y]) {
-      const coordinate = viewport.unproject(x, y);
-      return coordinate
-        ? {
-            lat: coordinate[1],
-            lng: unwrapHeatLayerLongitude(coordinate[0], referenceLongitude),
-          }
-        : { lat: Number.NaN, lng: Number.NaN };
+      const coordinate = tryUnprojectHeatLayerCoordinate(viewport, x, y);
+      if (coordinate) {
+        return {
+          lat: coordinate[1],
+          lng: unwrapHeatLayerLongitude(coordinate[0], referenceLongitude),
+        };
+      }
+
+      return interpolateHeatLayerCoordinate(fallbackBounds, viewport, x, y);
     },
     getContainer() {
       return {
@@ -95,12 +98,40 @@ export function queryMapsHeatLayerFeatureCollection(
 }
 
 function getMapsHeatLayerReferenceLongitude(viewport: MapsHeatLayerViewportGeometry) {
-  const center = viewport.unproject(viewport.width / 2, viewport.height / 2);
-  if (center && Number.isFinite(center[0])) return center[0];
+  const center = tryUnprojectHeatLayerCoordinate(viewport, viewport.width / 2, viewport.height / 2);
+  if (center) return center[0];
 
   const [west, , east] = viewport.bounds;
   const longitudeSpan = east >= west ? east - west : east + 360 - west;
   return west + longitudeSpan / 2;
+}
+
+function tryUnprojectHeatLayerCoordinate(
+  viewport: MapsHeatLayerViewportGeometry,
+  x: number,
+  y: number,
+) {
+  try {
+    const coordinate = viewport.unproject(x, y);
+    return coordinate?.every(Number.isFinite) ? coordinate : null;
+  } catch {
+    return null;
+  }
+}
+
+function interpolateHeatLayerCoordinate(
+  [west, south, east, north]: HeatSurfaceBounds,
+  viewport: Pick<MapsHeatLayerViewportGeometry, "height" | "width">,
+  x: number,
+  y: number,
+) {
+  const horizontalProgress = viewport.width > 0 ? x / viewport.width : 0.5;
+  const verticalProgress = viewport.height > 0 ? y / viewport.height : 0.5;
+
+  return {
+    lat: clampHeatLayerLatitude(north - (north - south) * verticalProgress),
+    lng: west + (east - west) * horizontalProgress,
+  };
 }
 
 function unwrapHeatLayerBounds(
@@ -159,4 +190,8 @@ function unwrapHeatLayerLongitude(longitude: number, referenceLongitude: number)
 
   const delta = ((((longitude - referenceLongitude + 180) % 360) + 360) % 360) - 180;
   return referenceLongitude + delta;
+}
+
+function clampHeatLayerLatitude(latitude: number) {
+  return Math.min(90, Math.max(-90, latitude));
 }
