@@ -17,7 +17,6 @@ export type MapsWgpuApplicationPoint = {
 
 export type MapsWgpuApplicationCircle = {
   fillColor: MapsWgpuColor;
-  kind: "circle";
   radius: number;
   strokeColor: MapsWgpuColor;
   strokeWidth: number;
@@ -28,7 +27,6 @@ export type MapsWgpuApplicationCircle = {
 export type MapsWgpuApplicationDirectionMarker = {
   angle: number;
   color: MapsWgpuColor;
-  kind: "directionMarker";
   size: number;
   x: number;
   y: number;
@@ -36,15 +34,14 @@ export type MapsWgpuApplicationDirectionMarker = {
 
 export type MapsWgpuApplicationLine = {
   color: MapsWgpuColor;
-  kind: "line";
   points: MapsWgpuApplicationPoint[];
   strokeWidth: number;
 };
 
 export type MapsWgpuApplicationPrimitive =
-  | MapsWgpuApplicationCircle
-  | MapsWgpuApplicationDirectionMarker
-  | MapsWgpuApplicationLine;
+  | { data: MapsWgpuApplicationCircle; kind: "circle" }
+  | { data: MapsWgpuApplicationDirectionMarker; kind: "directionMarker" }
+  | { data: MapsWgpuApplicationLine; kind: "line" };
 
 export type MapsWgpuApplicationFrame = {
   height: number;
@@ -101,13 +98,15 @@ export function createMapsWgpuApplicationFrame(
         }
 
         primitives.push({
-          fillColor,
+          data: {
+            fillColor,
+            radius: primitive.radius,
+            strokeColor,
+            strokeWidth,
+            x: scenePrimitive.x,
+            y: scenePrimitive.y,
+          },
           kind: "circle",
-          radius: primitive.radius,
-          strokeColor,
-          strokeWidth,
-          x: scenePrimitive.x,
-          y: scenePrimitive.y,
         });
         break;
       }
@@ -126,12 +125,14 @@ export function createMapsWgpuApplicationFrame(
         }
 
         primitives.push({
-          angle: scenePrimitive.angle,
-          color,
+          data: {
+            angle: scenePrimitive.angle,
+            color,
+            size: primitive.size,
+            x: scenePrimitive.x,
+            y: scenePrimitive.y,
+          },
           kind: "directionMarker",
-          size: primitive.size,
-          x: scenePrimitive.x,
-          y: scenePrimitive.y,
         });
         break;
       }
@@ -155,7 +156,7 @@ export function createMapsWgpuApplicationFrame(
           return null;
         }
 
-        primitives.push({ color, kind: "line", points, strokeWidth });
+        primitives.push({ data: { color, points, strokeWidth }, kind: "line" });
         break;
       }
       case "polygon":
