@@ -41,7 +41,10 @@ export function createMapsHeatSurfaceViewport(
     },
     latLngToContainerPoint(input) {
       const [latitude, longitude] = Array.isArray(input) ? input : [input.lat, input.lng];
-      return viewport.project([longitude, latitude]) ?? { x: Number.NaN, y: Number.NaN };
+      return projectMapsHeatLayerCoordinate(viewport, [longitude, latitude]) ?? {
+        x: Number.NaN,
+        y: Number.NaN,
+      };
     },
   };
 }
@@ -53,6 +56,18 @@ export function getMapsHeatLayerViewportBounds(
     viewport.bounds,
     getMapsHeatLayerReferenceLongitude(viewport),
   );
+}
+
+export function projectMapsHeatLayerCoordinate(
+  viewport: MapsHeatLayerViewportGeometry,
+  coordinate: [longitude: number, latitude: number],
+) {
+  try {
+    const point = viewport.project(coordinate);
+    return point && Number.isFinite(point.x) && Number.isFinite(point.y) ? point : null;
+  } catch {
+    return null;
+  }
 }
 
 export function queryMapsHeatLayerFeatureCollection(
