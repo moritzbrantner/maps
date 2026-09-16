@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   canUseAsyncHeatLayerRender,
@@ -9,7 +9,6 @@ import {
   createHeatLayerNumberArrayKey,
   createHeatLayerSourceIndex,
   createHeatLayerValueFeatureCollection,
-  getHeatLayerFeatureCollectionInBounds,
   isHeatFieldContoursVisible,
   isHeatFieldRasterVisible,
 } from "./heat-layer-data";
@@ -21,23 +20,8 @@ import {
   defaultHeatLayerColorRamp,
   type HeatLayerProps,
 } from "./heat-layer-types";
-import {
-  clearHeatLayerContourLayers,
-  clearHeatLayerDataPointLayers,
-  createHeatLayerFlatRenderState,
-  getHeatLayerSurfaceQueryBounds,
-  getHeatLayerViewportBounds,
-  removeHeatLayerSurfaceLayer,
-  renderHeatLayerContourSurface,
-  renderHeatLayerDataPoints,
-  renderHeatLayerFieldSurface,
-  renderHeatLayerSurface,
-  resetHeatLayerFlatRenderState,
-  type HeatLayerFlatRenderState,
-} from "./heat-layer-rendering";
+import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
 import { prepareHeatLayerColorRamp } from "./heat-surface";
-import { MAP_LAYER_COMPONENT_KIND } from "./map-layer-component";
-import { MapSurfaceContext } from "./map-view";
 import { createScalarFieldGrid, type ScalarFieldGrid } from "./scalar-field";
 import {
   createHeatFieldContourFeatureCollection,
@@ -46,19 +30,9 @@ import {
   type HeatFieldImage,
 } from "./scalar-field-render";
 
-export { createHeatLayerDensityIndex } from "./heat-layer-data";
-export type {
-  HeatFieldRenderMode,
-  HeatLayerColorStop,
-  HeatLayerFeature,
-  HeatLayerFeatureCollection,
-  HeatLayerFeatureProperties,
-  HeatLayerProps,
-  HeatLayerRadius,
-  HeatLayerRenderStrategy,
-  HeatLayerSurfaceMode,
-  HeatLayerWeightAccessor,
-} from "./heat-layer-types";
+type AnyRecord = Record<string, unknown>;
+
+const DEFAULT_MAPS_HEAT_LAYER_RADIUS = { meters: DEFAULT_HEAT_LAYER_RADIUS_METERS } as const;
 
 type HeatLayerFieldArtifacts = {
   contourCollection: HeatFieldContourFeatureCollection | null;
@@ -69,68 +43,67 @@ type HeatLayerFieldArtifacts = {
   getWeight: unknown;
   image: HeatFieldImage | null;
   points: readonly unknown[];
-  renderKey: string;
 };
 
-export function HeatLayer<TProperties = Record<string, unknown>>({
-  domainBounds,
-  domainPaddingRatio,
-  fieldCellSizeMeters,
-  fieldContourColor,
-  fieldContourLevels,
-  fieldContourLineWidth,
-  fieldContourOpacity,
-  fieldContourValueFormat,
-  fieldAsyncRender = false,
-  fieldColorRamp,
-  fieldColumns,
-  fieldOpacity,
-  fieldRenderMode = "raster",
-  fieldRows,
-  fieldValueDomain,
-  filterPoint,
-  getValue,
-  getWeight,
-  heatmapAggregationMaxZoom,
-  heatmapAggregationMinZoom,
-  heatmapAggregationRadius = 56,
-  heatmapAsyncRender = canUseAsyncHeatLayerRender(),
-  heatmapColorRamp = defaultHeatLayerColorRamp,
-  heatmapIntensity = 1,
-  heatmapMaxRasterPixels = DEFAULT_HEAT_LAYER_MAX_RASTER_PIXELS,
-  heatmapMaxZoom = 16,
-  heatmapMinZoomDeltaForRebuild = DEFAULT_HEAT_LAYER_MIN_ZOOM_DELTA_FOR_REBUILD,
-  heatmapOpacity = 0.84,
-  heatmapOverscanRatio = DEFAULT_HEAT_LAYER_OVERSCAN_RATIO,
-  heatmapRadius = {
-    meters: DEFAULT_HEAT_LAYER_RADIUS_METERS,
-  },
-  heatmapRenderStrategy = "auto",
-  heatmapSurfaceMode = "interpolated",
-  interpolationEpsilonMeters,
-  interpolationExtrapolate,
-  interpolationK,
-  interpolationMaxDistanceMeters,
-  interpolationPower,
-  layerId,
-  maskGeoJson,
-  maxWeight,
-  points,
-  showDataPoints = false,
-  dataPointColor = "#0f172a",
-  dataPointOpacity = 0.94,
-  dataPointRadius = 4,
-  dataPointStrokeColor = "#ffffff",
-  dataPointStrokeWidth = 1.5,
-  dataPointValueFormat,
-  valueMetric,
-  weightMetric,
-}: HeatLayerProps<TProperties>) {
-  const surface = useContext(MapSurfaceContext);
-  const generatedLayerId = useId();
-  const resolvedLayerId = layerId ?? `heat-layer-${generatedLayerId}`;
+export function MapsHeatLayerMount({
+  layerKey,
+  props,
+  publish,
+}: {
+  layerKey: string;
+  props: HeatLayerProps<AnyRecord>;
+  publish: (layerKey: string, descriptor: MapsHeatLayerDescriptor | null) => void;
+}) {
+  const {
+    domainBounds,
+    domainPaddingRatio,
+    fieldCellSizeMeters,
+    fieldContourColor,
+    fieldContourLevels,
+    fieldContourLineWidth,
+    fieldContourOpacity,
+    fieldContourValueFormat,
+    fieldAsyncRender = false,
+    fieldColorRamp,
+    fieldColumns,
+    fieldOpacity,
+    fieldRenderMode = "raster",
+    fieldRows,
+    fieldValueDomain,
+    filterPoint,
+    getValue,
+    getWeight,
+    heatmapColorRamp = defaultHeatLayerColorRamp,
+    heatmapIntensity = 1,
+    heatmapAsyncRender = canUseAsyncHeatLayerRender(),
+    heatmapMaxRasterPixels = DEFAULT_HEAT_LAYER_MAX_RASTER_PIXELS,
+    heatmapMaxZoom = 16,
+    heatmapMinZoomDeltaForRebuild = DEFAULT_HEAT_LAYER_MIN_ZOOM_DELTA_FOR_REBUILD,
+    heatmapOpacity = 0.84,
+    heatmapOverscanRatio = DEFAULT_HEAT_LAYER_OVERSCAN_RATIO,
+    heatmapRadius = DEFAULT_MAPS_HEAT_LAYER_RADIUS,
+    heatmapRenderStrategy = "auto",
+    heatmapSurfaceMode = "interpolated",
+    interpolationEpsilonMeters,
+    interpolationExtrapolate,
+    interpolationK,
+    interpolationMaxDistanceMeters,
+    interpolationPower,
+    layerId = layerKey,
+    maskGeoJson,
+    maxWeight,
+    points,
+    showDataPoints = false,
+    dataPointColor = "#0f172a",
+    dataPointOpacity = 0.94,
+    dataPointRadius = 4,
+    dataPointStrokeColor = "#ffffff",
+    dataPointStrokeWidth = 1.5,
+    dataPointValueFormat,
+    valueMetric,
+    weightMetric,
+  } = props;
   const deferredPoints = useDeferredValue(points);
-  const flatRenderStateRef = useRef<HeatLayerFlatRenderState>(createHeatLayerFlatRenderState());
   const preparedHeatmapColorRamp = useMemo(
     () => prepareHeatLayerColorRamp(heatmapColorRamp),
     [heatmapColorRamp],
@@ -162,14 +135,6 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     interpolationPower ?? "",
     maskGeoJson ? "mask" : "",
     valueMetric ?? weightMetric ?? "",
-  ].join("|");
-  const fieldRenderInputKey = [
-    fieldColorRampKey,
-    fieldContourLevelsKey,
-    fieldContourValueFormat ? "format" : "",
-    fieldOpacity ?? heatmapOpacity,
-    fieldRenderMode,
-    fieldValueDomainKey,
   ].join("|");
   const shouldRenderFieldAsync = fieldAsyncRender && typeof setTimeout !== "undefined";
   const syncFieldGrid = useMemo(
@@ -264,9 +229,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
   }, [asyncFieldArtifacts]);
 
   useEffect(() => {
-    if (!shouldRenderFieldAsync || heatmapSurfaceMode !== "field") {
-      return;
-    }
+    if (!shouldRenderFieldAsync || heatmapSurfaceMode !== "field") return;
 
     const requestId = (asyncFieldRequestIdRef.current += 1);
     const timeout = setTimeout(() => {
@@ -311,9 +274,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
             })
           : null;
 
-      if (asyncFieldRequestIdRef.current !== requestId) {
-        return;
-      }
+      if (asyncFieldRequestIdRef.current !== requestId) return;
 
       setAsyncFieldArtifacts({
         contourCollection,
@@ -324,13 +285,10 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         getWeight,
         image,
         points: deferredPoints,
-        renderKey: fieldRenderInputKey,
       });
     }, 0);
 
-    return () => {
-      clearTimeout(timeout);
-    };
+    return () => clearTimeout(timeout);
   }, [
     deferredPoints,
     domainBoundsKey,
@@ -342,7 +300,6 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     fieldContourValueFormat,
     fieldGridInputKey,
     fieldOpacity,
-    fieldRenderInputKey,
     fieldRenderMode,
     fieldRows,
     fieldValueDomainKey,
@@ -361,6 +318,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     valueMetric,
     weightMetric,
   ]);
+
   const fieldDataPointCollection = useMemo(
     () =>
       heatmapSurfaceMode === "field" && showDataPoints
@@ -383,145 +341,40 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
       weightMetric,
     ],
   );
-  const renderVersion =
-    heatmapAggregationMaxZoom ?? heatmapAggregationMinZoom ?? heatmapAggregationRadius ?? null;
-  const surfaceDisplay = surface?.display;
-  const registerMapLibreLayer = surface?.registerMapLibreLayer;
 
   useEffect(() => {
-    const flatRenderState = flatRenderStateRef.current;
+    publish(layerKey, {
+      dataPointColor,
+      dataPointOpacity,
+      dataPointRadius,
+      dataPointStrokeColor,
+      dataPointStrokeWidth,
+      dataPointValueFormat,
+      fieldContourCollection,
+      fieldContourColor,
+      fieldContourLineWidth,
+      fieldContourOpacity: fieldContourOpacity ?? fieldOpacity ?? heatmapOpacity,
+      fieldDataPointCollection,
+      fieldImage,
+      fieldOpacity: fieldOpacity ?? heatmapOpacity,
+      fieldRenderMode,
+      heatIndex,
+      heatmapAsyncRender,
+      heatmapColorRamp: preparedHeatmapColorRamp,
+      heatmapIntensity,
+      heatmapMaxRasterPixels,
+      heatmapMaxZoom,
+      heatmapMinZoomDeltaForRebuild,
+      heatmapOpacity,
+      heatmapOverscanRatio,
+      heatmapRadius,
+      heatmapRenderStrategy,
+      heatmapSurfaceMode,
+      layerId,
+      showDataPoints,
+    });
 
-    return () => {
-      resetHeatLayerFlatRenderState(flatRenderState);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!registerMapLibreLayer || (surfaceDisplay !== "flat" && surfaceDisplay !== "globe")) {
-      return;
-    }
-
-    const flatRenderState = flatRenderStateRef.current;
-    const unregister = registerMapLibreLayer(
-      resolvedLayerId,
-      ({ isMeasuring, layer, flat, map }) => {
-        if (map.getZoom() > heatmapMaxZoom) {
-          clearHeatLayerDataPointLayers(layer, flatRenderState);
-          clearHeatLayerContourLayers(layer, flatRenderState);
-          removeHeatLayerSurfaceLayer(layer, flatRenderState);
-          return;
-        }
-
-        if (heatmapSurfaceMode === "field") {
-          if (isHeatFieldRasterVisible(fieldRenderMode)) {
-            renderHeatLayerFieldSurface({
-              image: fieldImage,
-              layer,
-              flat,
-              opacity: fieldOpacity ?? heatmapOpacity,
-              state: flatRenderState,
-            });
-          } else {
-            removeHeatLayerSurfaceLayer(layer, flatRenderState);
-          }
-
-          if (isHeatFieldContoursVisible(fieldRenderMode)) {
-            renderHeatLayerContourSurface({
-              collection: fieldContourCollection,
-              isMeasuring,
-              layer,
-              flat,
-              lineColor: fieldContourColor,
-              lineOpacity: fieldContourOpacity ?? fieldOpacity ?? heatmapOpacity,
-              lineWidth: fieldContourLineWidth,
-              state: flatRenderState,
-            });
-          } else {
-            clearHeatLayerContourLayers(layer, flatRenderState);
-          }
-
-          if (showDataPoints) {
-            renderHeatLayerDataPoints({
-              color: dataPointColor,
-              data: getHeatLayerFeatureCollectionInBounds(
-                fieldDataPointCollection ??
-                  heatIndex.getFeatureCollection(getHeatLayerViewportBounds(map)),
-                getHeatLayerViewportBounds(map),
-              ),
-              formatValue: dataPointValueFormat,
-              isMeasuring,
-              layer,
-              flat,
-              opacity: dataPointOpacity,
-              radius: dataPointRadius,
-              state: flatRenderState,
-              strokeColor: dataPointStrokeColor,
-              strokeWidth: dataPointStrokeWidth,
-            });
-          } else {
-            clearHeatLayerDataPointLayers(layer, flatRenderState);
-          }
-
-          return;
-        }
-
-        clearHeatLayerContourLayers(layer, flatRenderState);
-
-        const data = heatIndex.getFeatureCollection(
-          getHeatLayerSurfaceQueryBounds({
-            intensity: heatmapIntensity,
-            map,
-            maxRasterPixels: heatmapMaxRasterPixels,
-            minZoomDeltaForRebuild: heatmapMinZoomDeltaForRebuild,
-            overscanRatio: heatmapOverscanRatio,
-            radius: heatmapRadius,
-            state: flatRenderState,
-            strategy: heatmapRenderStrategy,
-          }),
-        );
-
-        renderHeatLayerSurface({
-          asyncRender: heatmapAsyncRender,
-          colorRamp: preparedHeatmapColorRamp,
-          data,
-          intensity: heatmapIntensity,
-          layer,
-          flat,
-          map,
-          maxRasterPixels: heatmapMaxRasterPixels,
-          minZoomDeltaForRebuild: heatmapMinZoomDeltaForRebuild,
-          mode: heatmapSurfaceMode,
-          opacity: heatmapOpacity,
-          overscanRatio: heatmapOverscanRatio,
-          radius: heatmapRadius,
-          state: flatRenderState,
-          strategy: heatmapRenderStrategy,
-        });
-
-        if (showDataPoints) {
-          renderHeatLayerDataPoints({
-            color: dataPointColor,
-            data: heatIndex.getFeatureCollection(getHeatLayerViewportBounds(map)),
-            formatValue: dataPointValueFormat,
-            isMeasuring,
-            layer,
-            flat,
-            opacity: dataPointOpacity,
-            radius: dataPointRadius,
-            state: flatRenderState,
-            strokeColor: dataPointStrokeColor,
-            strokeWidth: dataPointStrokeWidth,
-          });
-        } else {
-          clearHeatLayerDataPointLayers(layer, flatRenderState);
-        }
-      },
-      { preserveOnRender: true },
-    );
-
-    return () => {
-      unregister();
-    };
+    return () => publish(layerKey, null);
   }, [
     dataPointColor,
     dataPointOpacity,
@@ -537,8 +390,8 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     fieldImage,
     fieldOpacity,
     fieldRenderMode,
-    heatmapAsyncRender,
     heatIndex,
+    heatmapAsyncRender,
     heatmapIntensity,
     heatmapMaxRasterPixels,
     heatmapMaxZoom,
@@ -548,27 +401,12 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     heatmapRadius,
     heatmapRenderStrategy,
     heatmapSurfaceMode,
+    layerId,
+    layerKey,
     preparedHeatmapColorRamp,
-    renderVersion,
-    resolvedLayerId,
+    publish,
     showDataPoints,
-    shouldRenderFieldAsync,
-    registerMapLibreLayer,
-    surfaceDisplay,
   ]);
 
   return null;
-}
-
-Object.defineProperty(HeatLayer, MAP_LAYER_COMPONENT_KIND, { value: "heat" });
-
-export type HeatFieldLayerProps<TProperties = Record<string, unknown>> = Omit<
-  HeatLayerProps<TProperties>,
-  "heatmapSurfaceMode"
->;
-
-export function HeatFieldLayer<TProperties = Record<string, unknown>>(
-  props: HeatFieldLayerProps<TProperties>,
-) {
-  return <HeatLayer {...props} heatmapSurfaceMode="field" />;
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { toLatLng } from "./map-display";
-import type { FlatMapAdapter } from "./maplibre-compat";
 import {
   METERS_PER_DEGREE_AT_EQUATOR,
   type HeatLayerFeatureCollection,
@@ -24,6 +23,16 @@ export type HeatSurfaceBounds = [
   east: number,
   north: number,
 ];
+
+export type HeatSurfaceViewport = {
+  containerPointToLatLng(point: [number, number]): { lat: number; lng: number };
+  getContainer(): { clientHeight: number; clientWidth: number };
+  getVisibleBounds?(): HeatSurfaceBounds;
+  getZoom(): number;
+  latLngToContainerPoint(
+    input: [number, number] | { lat: number; lng: number },
+  ): { x: number; y: number };
+};
 
 export type HeatSurfaceCacheMetadata = {
   bounds: HeatSurfaceBounds;
@@ -76,7 +85,7 @@ export function createHeatSurfaceRenderPlan({
   data: HeatLayerFeatureCollection;
   height: number;
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   maxRasterPixels: number;
   minZoomDeltaForRebuild: number;
   mode: HeatLayerSurfaceMode;
@@ -129,7 +138,7 @@ export function getHeatLayerSurfaceQueryBounds({
   strategy,
 }: {
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   minZoomDeltaForRebuild: number;
   overscanRatio: number;
   radius: HeatLayerRadius;
@@ -171,7 +180,7 @@ function createViewportHeatSurfaceRenderPlan({
   data: HeatLayerFeatureCollection;
   height: number;
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   mode: HeatLayerSurfaceMode;
   radius: HeatLayerRadius;
   width: number;
@@ -271,7 +280,7 @@ function createStableHeatSurfaceRenderPlan({
   data: HeatLayerFeatureCollection;
   height: number;
   intensity: number;
-  map: FlatMapAdapter;
+  map: HeatSurfaceViewport;
   maxRasterPixels: number;
   minZoomDeltaForRebuild: number;
   mode: HeatLayerSurfaceMode;
@@ -500,7 +509,7 @@ function isMeterHeatLayerRadius(radius: HeatLayerRadius): radius is { meters: nu
 }
 
 function getHeatLayerStableCoverageBounds(
-  map: FlatMapAdapter,
+  map: HeatSurfaceViewport,
   radius: { meters: number },
   intensity: number,
   overscanRatio: number,
@@ -514,6 +523,10 @@ function getHeatLayerStableCoverageBounds(
     resolveHeatLayerProjectedRadius(radius, [center.lng, center.lat], map) *
       2.6 *
       Math.max(0, intensity);
+  const visibleBounds = map.getVisibleBounds?.();
+  if (visibleBounds) {
+    return expandHeatLayerBounds(visibleBounds, paddingPixels / width, paddingPixels / height);
+  }
   const northWest = map.containerPointToLatLng([-paddingPixels, -paddingPixels]);
   const southEast = map.containerPointToLatLng([width + paddingPixels, height + paddingPixels]);
 
@@ -527,9 +540,9 @@ function getHeatLayerStableCoverageBounds(
 
 function normalizeHeatLayerBounds(bounds: HeatSurfaceBounds): HeatSurfaceBounds {
   return [
-    clamp(bounds[0], -180, 180),
+    bounds[0],
     clamp(bounds[1], -90, 90),
-    clamp(bounds[2], -180, 180),
+    bounds[2],
     clamp(bounds[3], -90, 90),
   ];
 }
@@ -627,7 +640,7 @@ function getHeatLayerZoomBucket(zoom: number, minZoomDeltaForRebuild: number) {
 function resolveHeatLayerProjectedRadius(
   radius: HeatLayerRadius,
   coordinate: [longitude: number, latitude: number],
-  map: FlatMapAdapter,
+  map: HeatSurfaceViewport,
 ) {
   if (typeof radius === "object" && "meters" in radius) {
     return getProjectedMetersRadius(radius.meters, coordinate, (nextCoordinate) =>
@@ -647,7 +660,7 @@ function getHeatLayerDataInfluenceRadius(radius: HeatLayerRadius, intensity: num
 }
 
 function getHeatLayerPaddedBounds(
-  map: FlatMapAdapter,
+  map: HeatSurfaceViewport,
   radius: HeatLayerRadius,
   intensity: number,
 ): HeatSurfaceBounds {
@@ -658,15 +671,35 @@ function getHeatLayerPaddedBounds(
   const centerCoordinate: [number, number] = [center.lng, center.lat];
   const padding =
     resolveHeatLayerProjectedRadius(radius, centerCoordinate, map) * 2.6 * Math.max(0, intensity);
+  const visibleBounds = map.getVisibleBounds?.();
+  if (visibleBounds) {
+    return expandHeatLayerBounds(visibleBounds, padding / width, padding / height);
+  }
   const northWest = map.containerPointToLatLng([-padding, -padding]);
   const southEast = map.containerPointToLatLng([width + padding, height + padding]);
 
   return [
-    clamp(Math.min(northWest.lng, southEast.lng), -180, 180),
+    Math.min(northWest.lng, southEast.lng),
     clamp(Math.min(northWest.lat, southEast.lat), -90, 90),
-    clamp(Math.max(northWest.lng, southEast.lng), -180, 180),
+    Math.max(northWest.lng, southEast.lng),
     clamp(Math.max(northWest.lat, southEast.lat), -90, 90),
   ];
+}
+
+function expandHeatLayerBounds(
+  [west, south, east, north]: HeatSurfaceBounds,
+  horizontalRatio: number,
+  verticalRatio: number,
+): HeatSurfaceBounds {
+  const longitudePadding = (east - west) * Math.max(0, horizontalRatio);
+  const latitudePadding = (north - south) * Math.max(0, verticalRatio);
+
+  return normalizeHeatLayerBounds([
+    west - longitudePadding,
+    south - latitudePadding,
+    east + longitudePadding,
+    north + latitudePadding,
+  ]);
 }
 
 export function getProjectedMetersRadius(

@@ -3,13 +3,17 @@
 import {
   Children,
   Fragment,
+  Suspense,
   forwardRef,
   isValidElement,
+  lazy,
   startTransition,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 
@@ -23,7 +27,7 @@ import {
 import {
   createCanvasMapScene,
   drawCanvasMapLabels,
-  drawCanvasMapScene,
+  drawCanvasMapPrimitive,
   hitTestCanvasMapScene,
   type CanvasMapScene,
   type MapScreenPoint,
@@ -43,6 +47,12 @@ import {
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
 import { getGeometryCenter } from "./geojson-rendering";
+import { formatHeatLayerFeatureValue } from "./heat-layer-data";
+import type { HeatLayerFeature, HeatLayerProps } from "./heat-layer-types";
+import {
+  MAP_LAYER_COMPONENT_KIND,
+  type MapLayerComponent,
+} from "./map-layer-component";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import {
   createCircleVectorRenderFrame,
@@ -56,12 +66,23 @@ import {
 } from "./map-render-frame";
 import type { MapScreenInteractionState } from "./map-screen-render-frame";
 import type { MapSurfaceContextValue } from "./map-surface-context";
+import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
+import type {
+  MapsHeatLayerRenderState,
+  MapsHeatLayerViewport,
+  MapsHeatRasterRenderStep,
+} from "./maps-heat-layer-rendering";
 import { createPointClusterRenderFrame } from "./point-cluster-render-frame";
 import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
 
 export type MapsProjectCoordinate = (
   coordinates: [longitude: number, latitude: number],
 ) => { x: number; y: number } | null;
+
+export type MapsUnprojectCoordinate = (
+  x: number,
+  y: number,
+) => [longitude: number, latitude: number] | null;
 
 export type MapsOverlayPick = {
   featureId: string;
@@ -77,6 +98,13 @@ export type MapsOverlayLayersController = {
 };
 
 type AnyRecord = Record<string, unknown>;
+type MapsHeatLayerRuntime = Pick<
+  typeof import("./maps-heat-layer-rendering"),
+  | "createMapsHeatLayerRenderState"
+  | "drawMapsHeatRaster"
+  | "prepareMapsHeatLayerRender"
+  | "resetMapsHeatLayerRenderState"
+>;
 type MapsOverlayInteractionSurface = Pick<
   MapSurfaceContextValue,
   | "handleFeatureClick"
@@ -96,6 +124,7 @@ type MapsOverlayLayersProps = {
     interaction: MapScreenInteractionState,
   ) => boolean;
   surface: MapsOverlayInteractionSurface;
+  unproject: MapsUnprojectCoordinate;
 };
 
 type MapsFeatureInteractionOptions<TFeature> = MapFeatureInteractionProps<TFeature> & {
@@ -111,10 +140,21 @@ type MapsOverlayInteraction = {
   key: string;
 };
 
+type MapsOverlayRenderStep =
+  | {
+      kind: "primitive";
+      primitiveId: string;
+    }
+  | {
+      kind: "raster";
+      raster: MapsHeatRasterRenderStep;
+    };
+
 type MapsOverlaySnapshot = {
   frame: MapVectorRenderFrame<unknown>;
   hoveredPrimitiveIds: Set<string>;
   interactions: Map<string, MapsOverlayInteraction>;
+  renderSteps: MapsOverlayRenderStep[];
   selectedPrimitiveIds: Set<string>;
 };
 
@@ -140,6 +180,11 @@ type MapsOverlayEntry =
       props: GeoJsonLayerProps<AnyRecord>;
     }
   | {
+      kind: "heat";
+      props: HeatLayerProps<AnyRecord>;
+      runtimeKey: string;
+    }
+  | {
       kind: "point";
       prefix: string;
       props: PointLayerProps<AnyRecord>;
@@ -161,46 +206,116 @@ type InternalPick = {
   position: MapScreenPoint;
 };
 
+const LazyMapsHeatLayerMount = lazy(async () => {
+  const module = await import("./maps-heat-layer-mount");
+  return { default: module.MapsHeatLayerMount };
+});
+
 export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
   function MapsOverlayLayers(
-    { children, getViewport, project, renderApplicationFrame, surface },
+    { children, getViewport, project, renderApplicationFrame, surface, unproject },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<CanvasMapScene<unknown> | null>(null);
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
+    const applicationFrameVisibleRef = useRef(false);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
     const clusterRuntimesRef = useRef<Map<string, MapsClusterRuntime>>(new Map());
+    const heatDescriptorsRef = useRef<Map<string, MapsHeatLayerDescriptor>>(new Map());
+    const heatRuntimesRef = useRef<Map<string, MapsHeatLayerRenderState>>(new Map());
+    const [heatRevision, setHeatRevision] = useState(0);
     const entries = useMemo(() => collectOverlayEntries(children), [children]);
+    const hasHeatEntries = entries.some((entry) => entry.kind === "heat");
+    const [heatRuntime, setHeatRuntime] = useState<MapsHeatLayerRuntime | null>(null);
+    const [heatRuntimeError, setHeatRuntimeError] = useState<unknown>(null);
+    const heatRuntimeRef = useRef<MapsHeatLayerRuntime | null>(heatRuntime);
+    heatRuntimeRef.current = heatRuntime;
 
     useEffect(() => {
-      const previous = clusterRuntimesRef.current;
-      const next = new Map<string, MapsClusterRuntime>();
+      if (!hasHeatEntries || heatRuntime) return;
+
+      let active = true;
+      import("./maps-heat-layer-rendering").then(
+        (runtime) => {
+          if (active) setHeatRuntime(runtime);
+        },
+        (error: unknown) => {
+          if (active) setHeatRuntimeError(error);
+        },
+      );
+
+      return () => {
+        active = false;
+      };
+    }, [hasHeatEntries, heatRuntime]);
+
+    const requestHeatRender = useCallback(() => {
+      setHeatRevision((revision) => revision + 1);
+    }, []);
+
+    const publishHeatLayer = useCallback(
+      (layerKey: string, descriptor: MapsHeatLayerDescriptor | null) => {
+        if (descriptor) {
+          heatDescriptorsRef.current.set(layerKey, descriptor);
+        } else {
+          heatDescriptorsRef.current.delete(layerKey);
+        }
+        requestHeatRender();
+      },
+      [requestHeatRender],
+    );
+
+    useEffect(() => {
+      const previousClusters = clusterRuntimesRef.current;
+      const nextClusters = new Map<string, MapsClusterRuntime>();
+      const activeHeatKeys = new Set<string>();
 
       for (const entry of entries) {
-        if (entry.kind !== "cluster") continue;
-        const current = previous.get(entry.runtimeKey);
-        if (current && clusterRuntimeMatches(current, entry.props)) {
-          next.set(entry.runtimeKey, current);
-          continue;
+        if (entry.kind === "cluster") {
+          const current = previousClusters.get(entry.runtimeKey);
+          if (current && clusterRuntimeMatches(current, entry.props)) {
+            nextClusters.set(entry.runtimeKey, current);
+          } else {
+            current?.index.dispose();
+            nextClusters.set(entry.runtimeKey, createClusterRuntime(entry.props));
+          }
         }
 
-        current?.index.dispose();
-        next.set(entry.runtimeKey, createClusterRuntime(entry.props));
+        if (entry.kind === "heat") {
+          activeHeatKeys.add(entry.runtimeKey);
+          if (heatRuntime && !heatRuntimesRef.current.has(entry.runtimeKey)) {
+            heatRuntimesRef.current.set(
+              entry.runtimeKey,
+              heatRuntime.createMapsHeatLayerRenderState(),
+            );
+          }
+        }
       }
 
-      for (const [key, runtime] of previous) {
-        if (!next.has(key)) runtime.index.dispose();
+      for (const [key, runtime] of previousClusters) {
+        if (!nextClusters.has(key)) runtime.index.dispose();
       }
+      clusterRuntimesRef.current = nextClusters;
 
-      clusterRuntimesRef.current = next;
-    }, [entries]);
+      for (const [key, runtime] of heatRuntimesRef.current) {
+        if (activeHeatKeys.has(key)) continue;
+        heatRuntime?.resetMapsHeatLayerRenderState(runtime);
+        heatRuntimesRef.current.delete(key);
+        heatDescriptorsRef.current.delete(key);
+      }
+    }, [entries, heatRuntime]);
 
     useEffect(() => {
       return () => {
         for (const runtime of clusterRuntimesRef.current.values()) runtime.index.dispose();
         clusterRuntimesRef.current.clear();
+        for (const runtime of heatRuntimesRef.current.values()) {
+          heatRuntimeRef.current?.resetMapsHeatLayerRenderState(runtime);
+        }
+        heatRuntimesRef.current.clear();
+        heatDescriptorsRef.current.clear();
       };
     }, []);
 
@@ -283,18 +398,37 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       }
 
       const clearApplicationFrame = () => {
+        if (!applicationFrameVisibleRef.current) return;
         const scene = sceneRef.current;
-        if (!scene || !renderApplicationFrame) return;
-        renderApplicationFrame({ ...scene, primitives: [] }, {});
+        if (scene && renderApplicationFrame) {
+          renderApplicationFrame({ ...scene, primitives: [] }, {});
+        }
+        applicationFrameVisibleRef.current = false;
       };
 
       const draw = () => {
         const size = resizeCanvasBackingStore(canvas);
+        const viewportQuery = getViewport(size.width, size.height);
+        const heatViewport: MapsHeatLayerViewport | null = viewportQuery
+          ? {
+              bounds: viewportQuery.bounds,
+              height: size.height,
+              project,
+              unproject,
+              width: size.width,
+              zoom: viewportQuery.zoom,
+            }
+          : null;
         const snapshot = createOverlaySnapshot(
           entries,
           surface,
           clusterRuntimesRef.current,
-          getViewport(size.width, size.height),
+          viewportQuery,
+          heatDescriptorsRef.current,
+          heatRuntimesRef.current,
+          heatViewport,
+          heatRuntime,
+          requestHeatRender,
         );
         const scene = createCanvasMapScene(snapshot.frame, project, size);
         const interaction: MapScreenInteractionState = {
@@ -304,8 +438,18 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         sceneRef.current = scene;
         renderedSnapshotRef.current = snapshot;
         canvas.dataset.mapOverlayPrimitives = String(snapshot.frame.primitives.length);
+        canvas.dataset.mapOverlayHeatLayers = String(
+          snapshot.renderSteps.filter((step) => step.kind === "raster").length,
+        );
 
-        const renderedByWgpu = renderApplicationFrame?.(scene, interaction) ?? false;
+        const hasRaster = snapshot.renderSteps.some((step) => step.kind === "raster");
+        const renderedByWgpu =
+          !hasRaster && (renderApplicationFrame?.(scene, interaction) ?? false);
+        if (renderedByWgpu) {
+          applicationFrameVisibleRef.current = true;
+        } else {
+          clearApplicationFrame();
+        }
         canvas.dataset.mapOverlayBackend = renderedByWgpu ? "wgpu" : "canvas2d";
 
         const context = getCanvasContext(canvas);
@@ -315,8 +459,24 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
         if (renderedByWgpu) {
           drawCanvasMapLabels(context, scene);
-        } else {
-          drawCanvasMapScene(context, scene, interaction);
+          return;
+        }
+
+        context.clearRect(0, 0, scene.width, scene.height);
+        const screenPrimitives = new Map(
+          scene.primitives.map((primitive) => [primitive.renderPrimitive.primitiveId, primitive]),
+        );
+
+        for (const step of snapshot.renderSteps) {
+          if (step.kind === "raster") {
+            if (heatViewport) {
+              heatRuntime?.drawMapsHeatRaster(context, step.raster, heatViewport, ratio);
+            }
+            continue;
+          }
+
+          const primitive = screenPrimitives.get(step.primitiveId);
+          if (primitive) drawCanvasMapPrimitive(context, primitive, interaction);
         }
       };
 
@@ -329,7 +489,17 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         observer.disconnect();
         clearApplicationFrame();
       };
-    }, [entries, getViewport, project, renderApplicationFrame, surface]);
+    }, [
+      entries,
+      getViewport,
+      heatRevision,
+      heatRuntime,
+      project,
+      renderApplicationFrame,
+      requestHeatRender,
+      surface,
+      unproject,
+    ]);
 
     useEffect(() => {
       return () => {
@@ -340,24 +510,41 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       };
     }, []);
 
+    if (heatRuntimeError) throw heatRuntimeError;
+
     if (entries.length === 0) return null;
 
     return (
-      <canvas
-        aria-hidden="true"
-        data-map-overlay-backend="canvas2d"
-        data-map-overlay-primitives="0"
-        data-map-overlay-runtime="maps"
-        ref={canvasRef}
-        style={{
-          height: "100%",
-          inset: 0,
-          pointerEvents: "none",
-          position: "absolute",
-          width: "100%",
-          zIndex: 1,
-        }}
-      />
+      <>
+        <Suspense fallback={null}>
+          {entries.map((entry) =>
+            entry.kind === "heat" ? (
+              <LazyMapsHeatLayerMount
+                key={entry.runtimeKey}
+                layerKey={entry.runtimeKey}
+                props={entry.props}
+                publish={publishHeatLayer}
+              />
+            ) : null,
+          )}
+        </Suspense>
+        <canvas
+          aria-hidden="true"
+          data-map-overlay-backend="canvas2d"
+          data-map-overlay-heat-layers="0"
+          data-map-overlay-primitives="0"
+          data-map-overlay-runtime="maps"
+          ref={canvasRef}
+          style={{
+            height: "100%",
+            inset: 0,
+            pointerEvents: "none",
+            position: "absolute",
+            width: "100%",
+            zIndex: 1,
+          }}
+        />
+      </>
     );
   },
 );
@@ -417,10 +604,26 @@ function collectOverlayEntries(children: ReactNode, path = "root", entries: Maps
       return;
     }
 
+    if (isHeatLayerComponent(child.type)) {
+      entries.push({
+        kind: "heat",
+        props: child.props as HeatLayerProps<AnyRecord>,
+        runtimeKey: childPath,
+      });
+      return;
+    }
+
     throwUnsupportedMapsLayer();
   });
 
   return entries;
+}
+
+function isHeatLayerComponent(type: unknown) {
+  return (
+    (typeof type === "function" || (typeof type === "object" && type !== null)) &&
+    (type as MapLayerComponent)[MAP_LAYER_COMPONENT_KIND] === "heat"
+  );
 }
 
 function createOverlaySnapshot(
@@ -428,12 +631,18 @@ function createOverlaySnapshot(
   surface: MapsOverlayInteractionSurface,
   clusterRuntimes: ReadonlyMap<string, MapsClusterRuntime>,
   viewport: ViewportAggregationQuery | null,
+  heatDescriptors: ReadonlyMap<string, MapsHeatLayerDescriptor>,
+  heatRuntimes: ReadonlyMap<string, MapsHeatLayerRenderState>,
+  heatViewport: MapsHeatLayerViewport | null,
+  heatRuntime: MapsHeatLayerRuntime | null,
+  requestHeatRender: () => void,
 ): MapsOverlaySnapshot {
   const mutable: MutableMapsOverlaySnapshot = {
     frame: { kind: "vector", primitives: [] },
     hoveredPrimitiveIds: new Set(),
     interactions: new Map(),
     primitiveIds: new Set(),
+    renderSteps: [],
     selectedPrimitiveIds: new Set(),
   };
 
@@ -455,6 +664,55 @@ function createOverlaySnapshot(
       case "flow":
         appendFlowLayer(entry.props, surface, mutable, entry.prefix);
         break;
+      case "heat": {
+        const descriptor = heatDescriptors.get(entry.runtimeKey);
+        const runtime = heatRuntimes.get(entry.runtimeKey);
+        if (!descriptor || !runtime || !heatViewport || !heatRuntime) break;
+        const prepared = heatRuntime.prepareMapsHeatLayerRender({
+          descriptor,
+          requestRender: requestHeatRender,
+          state: runtime,
+          viewport: heatViewport,
+        });
+        if (prepared.raster) {
+          mutable.renderSteps.push({ kind: "raster", raster: prepared.raster });
+        }
+        for (const primitive of prepared.primitives) {
+          if (!primitive.interactive) {
+            appendPrimitive(mutable, primitive, null, false, false);
+            continue;
+          }
+
+          const feature = primitive.feature as HeatLayerFeature;
+          const resolveFeatureId = () => primitive.featureId;
+          const hovered = surface.isFeatureHovered(
+            feature,
+            entry.props.hoveredFeatureId,
+            resolveFeatureId,
+          );
+          const selected = surface.isFeatureSelected(
+            feature,
+            entry.props.selectedFeatureId,
+            resolveFeatureId,
+          );
+          const interaction = createFeatureInteraction(
+            `${entry.runtimeKey}|${primitive.featureId}`,
+            feature,
+            primitive.featureId,
+            feature.geometry.coordinates,
+            {
+              ...entry.props,
+              renderFeatureTooltip:
+                entry.props.renderFeatureTooltip ??
+                ((candidate) =>
+                  formatHeatLayerFeatureValue(candidate, entry.props.dataPointValueFormat)),
+            },
+            surface,
+          );
+          appendPrimitive(mutable, primitive, interaction, hovered, selected);
+        }
+        break;
+      }
     }
   }
 
@@ -462,6 +720,7 @@ function createOverlaySnapshot(
     frame: mutable.frame,
     hoveredPrimitiveIds: mutable.hoveredPrimitiveIds,
     interactions: mutable.interactions,
+    renderSteps: mutable.renderSteps,
     selectedPrimitiveIds: mutable.selectedPrimitiveIds,
   };
 }
@@ -675,8 +934,8 @@ function appendFlowLayer(
         strokeOpacity: 1,
         strokeWidth: 1.5,
       };
-      appendPrimitive(snapshot, fromEndpoint, null, false, false);
       appendPrimitive(snapshot, toEndpoint, null, false, false);
+      appendPrimitive(snapshot, fromEndpoint, null, false, false);
     }
   }
 }
@@ -694,6 +953,7 @@ function appendPrimitive<TFeature>(
 
   snapshot.primitiveIds.add(primitive.primitiveId);
   snapshot.frame.primitives.push(primitive as MapVectorRenderPrimitive<unknown>);
+  snapshot.renderSteps.push({ kind: "primitive", primitiveId: primitive.primitiveId });
   if (interaction) snapshot.interactions.set(primitive.primitiveId, interaction);
   if (hovered) snapshot.hoveredPrimitiveIds.add(primitive.primitiveId);
   if (selected) snapshot.selectedPrimitiveIds.add(primitive.primitiveId);
@@ -917,6 +1177,6 @@ function assertNoUnsupportedPointDrag(
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
-    'The direct-feature Maps runtime supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer through Maps-owned semantic adapters. Other map layer types remain explicitly MapLibre-backed.',
+    'The direct-feature Maps runtime supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer, plus HeatLayer, through Maps-owned semantic adapters. Other map layer types remain explicitly MapLibre-backed.',
   );
 }

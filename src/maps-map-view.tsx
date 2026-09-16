@@ -219,6 +219,20 @@ export function MapsMapView({
     ],
   );
 
+  const unprojectCoordinate = useCallback(
+    (x: number, y: number) => {
+      return runtimeControllerRef.current?.unproject(x, y) ?? null;
+    },
+    [
+      currentViewState.center[0],
+      currentViewState.center[1],
+      currentViewState.zoom,
+      currentViewState.bearing,
+      currentViewState.pitch,
+      isReady,
+    ],
+  );
+
   const renderApplicationFrame = useCallback(
     (frame: MapScreenRenderFrame<unknown>, interaction: MapScreenInteractionState) =>
       runtimeControllerRef.current?.renderApplicationFrame?.(frame, interaction) ?? false,
@@ -569,9 +583,6 @@ export function MapsMapView({
 
           const hit = overlayControllerRef.current?.pickAtClientPoint(event.clientX, event.clientY);
           featurePointerDownPrimitiveRef.current = hit?.primitiveId ?? null;
-          if (hit) {
-            event.stopPropagation();
-          }
         }}
         onPointerLeave={(event) => {
           overlayControllerRef.current?.clearHover();
@@ -635,6 +646,7 @@ export function MapsMapView({
           project={projectCoordinate}
           renderApplicationFrame={renderApplicationFrame}
           surface={context}
+          unproject={unprojectCoordinate}
         >
           {mapChildren.layers}
         </MapsOverlayLayers>

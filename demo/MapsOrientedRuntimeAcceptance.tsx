@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import {
+  HeatLayer,
   MapControls,
   MapView,
   PointLayer,
@@ -24,6 +25,37 @@ const ACCEPTANCE_POINTS = [
     label: "Berlin",
     latitude: 52.52,
     longitude: 13.405,
+  },
+] as const;
+
+const ACCEPTANCE_HEAT_POINTS = [
+  {
+    id: "heat-center",
+    label: "Center",
+    latitude: 52.52,
+    longitude: 13.405,
+    metrics: { demand: 8, temperature: 18 },
+  },
+  {
+    id: "heat-north-west",
+    label: "North west",
+    latitude: 52.7,
+    longitude: 13.05,
+    metrics: { demand: 4, temperature: 10 },
+  },
+  {
+    id: "heat-east",
+    label: "East",
+    latitude: 52.48,
+    longitude: 13.78,
+    metrics: { demand: 10, temperature: 24 },
+  },
+  {
+    id: "heat-south",
+    label: "South",
+    latitude: 52.22,
+    longitude: 13.38,
+    metrics: { demand: 6, temperature: 15 },
   },
 ] as const;
 
@@ -61,6 +93,28 @@ export function MapsOrientedRuntimeAcceptance() {
         onViewStateChange={setViewState}
         viewState={viewState}
       >
+        <HeatLayer
+          heatmapAsyncRender={false}
+          heatmapMaxRasterPixels={96_000}
+          heatmapRadius={{ meters: 70_000 }}
+          heatmapRenderStrategy="stable-raster"
+          heatmapSurfaceMode="interpolated"
+          layerId="maps-oriented-interpolated"
+          points={ACCEPTANCE_HEAT_POINTS}
+          showDataPoints
+          weightMetric="demand"
+        />
+        <HeatLayer
+          fieldAsyncRender={false}
+          fieldColumns={24}
+          fieldRenderMode="raster-contours"
+          fieldRows={24}
+          heatmapSurfaceMode="field"
+          layerId="maps-oriented-field"
+          points={ACCEPTANCE_HEAT_POINTS}
+          showDataPoints
+          valueMetric="temperature"
+        />
         <PointLayer
           onSelectedFeatureIdChange={setSelectedPointId}
           pointColor="#dc2626"

@@ -19,6 +19,13 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
     .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
     .toBeGreaterThan(0);
   await expect(overlay).toHaveCount(1);
+  await expect.poll(async () => overlay.getAttribute("data-map-overlay-backend")).toBe("canvas2d");
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-heat-layers")))
+    .toBe(2);
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-primitives")))
+    .toBeGreaterThan(8);
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
   await expect(viewState).toContainText("bearing 30.00000 | pitch 45.00000");
 
@@ -106,6 +113,10 @@ test("Maps-owned bearing and pitch stay aligned through browser interaction @smo
 
   await page.getByRole("button", { name: "Apply oriented state" }).click();
   await expect(viewState).toContainText("zoom 7.50000 | bearing 55.00000 | pitch 35.00000");
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-heat-layers")))
+    .toBe(2);
+  await expect.poll(async () => overlay.getAttribute("data-map-overlay-backend")).toBe("canvas2d");
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
 });
 
