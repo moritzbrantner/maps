@@ -1,16 +1,42 @@
 name: Full Browser Tests
 
 on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "demo/**"
+      - "e2e/**"
+      - "public/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "package.json"
+      - "bun.lock"
+      - "index.html"
+      - "playwright.config.*"
+      - "tsconfig*.json"
+      - "vite.config.*"
+      - ".github/workflows/browser.yml"
   push:
     branches:
       - main
     paths:
       - "src/**"
+      - "crates/**"
+      - "demo/**"
       - "e2e/**"
       - "public/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "package.json"
       - "bun.lock"
+      - "index.html"
       - "playwright.config.*"
+      - "tsconfig*.json"
       - "vite.config.*"
       - ".github/workflows/browser.yml"
   workflow_dispatch:
@@ -30,6 +56,18 @@ jobs:
       node_version: "24"
       bun_version: "1.3.14"
       bun_cache_dependency_path: bun.lock
+      install_command: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          expected_head="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --depth=1 origin "+refs/pull/${{ github.event.number }}/head:refs/remotes/origin/pr-head"
+          git checkout --detach refs/remotes/origin/pr-head
+          actual_head="$(git rev-parse HEAD)"
+          if [ "$actual_head" != "$expected_head" ]; then
+            echo "::error::Full Browser Tests checked out $actual_head instead of PR head $expected_head."
+            exit 1
+          fi
+        fi
+        bun install --frozen-lockfile
       pre_command: |
         bunx playwright install --with-deps chromium
         rustup toolchain install 1.98.1 --profile minimal --target wasm32-unknown-unknown
