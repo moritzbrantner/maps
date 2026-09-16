@@ -34,7 +34,7 @@ export type MapsWgpuApplicationDirectionMarker = {
 
 export type MapsWgpuApplicationLine = {
   color: MapsWgpuColor;
-  points: MapsWgpuApplicationPoint[];
+  points: readonly MapsWgpuApplicationPoint[];
   strokeWidth: number;
 };
 
@@ -54,9 +54,11 @@ export type MapsWgpuApplicationFrame = {
  *
  * Projection has already happened through the Maps-owned runtime. This transport only resolves
  * renderer-side colors and interaction stroke widths. The ordered primitive stream preserves the
- * Maps render order across circles, lines, and flow direction markers. Polygon frames still fail
- * closed to Canvas because the correctness backend owns even-odd polygon/hole behavior until the
- * GPU path can preserve it explicitly. Labels remain a thin Canvas annotation pass above wgpu.
+ * Maps render order across circles, lines, and flow direction markers. Projected line points are
+ * reused directly until the unavoidable WASM transport boundary rather than materialized again in
+ * TypeScript. Polygon frames still fail closed to Canvas because the correctness backend owns
+ * even-odd polygon/hole behavior until the GPU path can preserve it explicitly. Labels remain a
+ * thin Canvas annotation pass above wgpu.
  */
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
@@ -144,12 +146,12 @@ export function createMapsWgpuApplicationFrame(
           primitive.primitiveId,
           interaction,
         );
-        const points = copyFinitePoints(scenePrimitive.points);
+        const points = scenePrimitive.points;
 
         if (
           !color ||
-          !points ||
           points.length < 2 ||
+          !allFinitePoints(points) ||
           !hasNonDegenerateSegment(points) ||
           !Number.isFinite(strokeWidth)
         ) {
@@ -171,13 +173,8 @@ export function createMapsWgpuApplicationFrame(
   };
 }
 
-function copyFinitePoints(points: readonly MapsWgpuApplicationPoint[]) {
-  const copied: MapsWgpuApplicationPoint[] = [];
-  for (const point of points) {
-    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
-    copied.push({ x: point.x, y: point.y });
-  }
-  return copied;
+function allFinitePoints(points: readonly MapsWgpuApplicationPoint[]) {
+  return points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
 }
 
 function hasNonDegenerateSegment(points: readonly MapsWgpuApplicationPoint[]) {
