@@ -5,11 +5,10 @@
     "fast": ["format:check", "lint", "typecheck", "build", "test:unit"],
     "full": ["format:check", "lint", "typecheck", "build", "test:unit", "test:e2e", "package:check", "benchmark:smoke"]
   },
-  "requiredCapabilities": ["format:check", "lint", "typecheck", "build", "test:unit"],
+  "requiredCapabilities": ["format:check", "lint", "typecheck", "build", "test:unit", "benchmark:smoke"],
   "optionalCapabilities": [
     "test:e2e",
     "package:check",
-    "benchmark:smoke",
     "test:integration",
     "profile:runtime"
   ],
