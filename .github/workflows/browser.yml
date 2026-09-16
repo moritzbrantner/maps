@@ -4,11 +4,19 @@ on:
   pull_request:
     paths:
       - "src/**"
+      - "crates/**"
+      - "demo/**"
       - "e2e/**"
       - "public/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "package.json"
       - "bun.lock"
+      - "index.html"
       - "playwright.config.*"
+      - "tsconfig*.json"
       - "vite.config.*"
       - ".github/workflows/browser.yml"
   push:
@@ -16,11 +24,19 @@ on:
       - main
     paths:
       - "src/**"
+      - "crates/**"
+      - "demo/**"
       - "e2e/**"
       - "public/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "package.json"
       - "bun.lock"
+      - "index.html"
       - "playwright.config.*"
+      - "tsconfig*.json"
       - "vite.config.*"
       - ".github/workflows/browser.yml"
   workflow_dispatch:
