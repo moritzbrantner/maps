@@ -1,10 +1,19 @@
-import type { MapRenderCircle } from "./map-render-frame";
+import type {
+  MapRenderCircle,
+  MapRenderDirectionMarker,
+  MapRenderLine,
+} from "./map-render-frame";
 import type {
   MapScreenInteractionState,
   MapScreenRenderFrame,
 } from "./map-screen-render-frame";
 
 export type MapsWgpuColor = [red: number, green: number, blue: number, alpha: number];
+
+export type MapsWgpuApplicationPoint = {
+  x: number;
+  y: number;
+};
 
 export type MapsWgpuApplicationCircle = {
   fillColor: MapsWgpuColor;
@@ -15,19 +24,36 @@ export type MapsWgpuApplicationCircle = {
   y: number;
 };
 
+export type MapsWgpuApplicationDirectionMarker = {
+  angle: number;
+  color: MapsWgpuColor;
+  size: number;
+  x: number;
+  y: number;
+};
+
+export type MapsWgpuApplicationLine = {
+  color: MapsWgpuColor;
+  points: MapsWgpuApplicationPoint[];
+  strokeWidth: number;
+};
+
 export type MapsWgpuApplicationFrame = {
   circles: MapsWgpuApplicationCircle[];
+  directionMarkers: MapsWgpuApplicationDirectionMarker[];
   height: number;
+  lines: MapsWgpuApplicationLine[];
   width: number;
 };
 
 /**
- * Packs the currently supported first-party application geometry for the Rust/wgpu backend.
+ * Packs first-party application geometry for the existing Rust/wgpu backend.
  *
- * This first production consumer deliberately accepts only complete circle-only frames.
- * Labels stay on the Canvas overlay while wgpu owns the circle pixels. Mixed frames,
- * unsupported primitive kinds, unsupported CSS colors, or non-finite values fail closed to the
- * Canvas renderer instead of producing a visually weaker partial GPU result.
+ * Projection has already happened through the Maps-owned runtime. This transport only resolves
+ * renderer-side colors and interaction stroke widths. Circles, lines, and flow direction markers
+ * can share one GPU frame. Polygon frames still fail closed to Canvas because the correctness
+ * backend owns even-odd polygon/hole behavior until the GPU path can preserve it explicitly.
+ * Labels remain a thin Canvas annotation pass above wgpu geometry.
  */
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
@@ -43,46 +69,104 @@ export function createMapsWgpuApplicationFrame(
   }
 
   const circles: MapsWgpuApplicationCircle[] = [];
+  const directionMarkers: MapsWgpuApplicationDirectionMarker[] = [];
+  const lines: MapsWgpuApplicationLine[] = [];
 
   for (const scenePrimitive of frame.primitives) {
-    if (scenePrimitive.kind !== "circle") return null;
+    switch (scenePrimitive.kind) {
+      case "circle": {
+        const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
+        const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
+        const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
+        const strokeWidth = resolveStrokeWidth(
+          primitive.strokeWidth,
+          primitive.primitiveId,
+          interaction,
+        );
 
-    const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
-    const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
-    const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
-    const strokeWidth = resolveStrokeWidth(
-      primitive.strokeWidth,
-      primitive.primitiveId,
-      interaction,
-    );
+        if (
+          !fillColor ||
+          !strokeColor ||
+          !Number.isFinite(scenePrimitive.x) ||
+          !Number.isFinite(scenePrimitive.y) ||
+          !Number.isFinite(primitive.radius) ||
+          primitive.radius < 0 ||
+          !Number.isFinite(strokeWidth)
+        ) {
+          return null;
+        }
 
-    if (
-      !fillColor ||
-      !strokeColor ||
-      !Number.isFinite(scenePrimitive.x) ||
-      !Number.isFinite(scenePrimitive.y) ||
-      !Number.isFinite(primitive.radius) ||
-      primitive.radius < 0 ||
-      !Number.isFinite(strokeWidth)
-    ) {
-      return null;
+        circles.push({
+          fillColor,
+          radius: primitive.radius,
+          strokeColor,
+          strokeWidth,
+          x: scenePrimitive.x,
+          y: scenePrimitive.y,
+        });
+        break;
+      }
+      case "direction-marker": {
+        const primitive = scenePrimitive.renderPrimitive as MapRenderDirectionMarker<unknown>;
+        const color = parseSupportedCssColor(primitive.color, primitive.opacity);
+        if (
+          !color ||
+          !Number.isFinite(scenePrimitive.x) ||
+          !Number.isFinite(scenePrimitive.y) ||
+          !Number.isFinite(scenePrimitive.angle) ||
+          !Number.isFinite(primitive.size) ||
+          primitive.size < 0
+        ) {
+          return null;
+        }
+
+        directionMarkers.push({
+          angle: scenePrimitive.angle,
+          color,
+          size: primitive.size,
+          x: scenePrimitive.x,
+          y: scenePrimitive.y,
+        });
+        break;
+      }
+      case "line": {
+        const primitive = scenePrimitive.renderPrimitive as MapRenderLine<unknown>;
+        const color = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
+        const strokeWidth = resolveStrokeWidth(
+          primitive.strokeWidth,
+          primitive.primitiveId,
+          interaction,
+        );
+        const points = copyFinitePoints(scenePrimitive.points);
+
+        if (!color || !points || points.length < 2 || !Number.isFinite(strokeWidth)) {
+          return null;
+        }
+
+        lines.push({ color, points, strokeWidth });
+        break;
+      }
+      case "polygon":
+        return null;
     }
-
-    circles.push({
-      fillColor,
-      radius: primitive.radius,
-      strokeColor,
-      strokeWidth,
-      x: scenePrimitive.x,
-      y: scenePrimitive.y,
-    });
   }
 
   return {
     circles,
+    directionMarkers,
     height: frame.height,
+    lines,
     width: frame.width,
   };
+}
+
+function copyFinitePoints(points: readonly MapsWgpuApplicationPoint[]) {
+  const copied: MapsWgpuApplicationPoint[] = [];
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+    copied.push({ x: point.x, y: point.y });
+  }
+  return copied;
 }
 
 function resolveStrokeWidth(
