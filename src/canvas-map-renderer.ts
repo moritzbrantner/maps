@@ -105,13 +105,13 @@ function projectPrimitive<TFeature>(
 ): Array<CanvasMapScenePrimitive<TFeature>> {
   switch (primitive.kind) {
     case "circle": {
-      const center = project(primitive.center);
+      const center = projectPoint(project, primitive.center);
       if (!isFinitePoint(center)) return [];
       return [{ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y }];
     }
     case "direction-marker": {
-      const anchor = project(primitive.anchor);
-      const previous = project(primitive.previous);
+      const anchor = projectPoint(project, primitive.anchor);
+      const previous = projectPoint(project, primitive.previous);
       if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return [];
       return [
         {
@@ -148,11 +148,22 @@ function projectCoordinates(
 ): MapScreenPoint[] | null {
   const points: MapScreenPoint[] = [];
   for (const coordinate of coordinates) {
-    const point = project([coordinate[0], coordinate[1]]);
+    const point = projectPoint(project, [coordinate[0], coordinate[1]]);
     if (!isFinitePoint(point)) return null;
     points.push(point);
   }
   return points;
+}
+
+function projectPoint(
+  project: MapRenderProject,
+  coordinate: [longitude: number, latitude: number],
+): MapScreenPoint | null {
+  try {
+    return project(coordinate);
+  } catch {
+    return null;
+  }
 }
 
 function isFinitePoint(point: MapScreenPoint | null): point is MapScreenPoint {
