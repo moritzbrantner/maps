@@ -17,6 +17,7 @@ export type MapsWgpuApplicationPoint = {
 
 export type MapsWgpuApplicationCircle = {
   fillColor: MapsWgpuColor;
+  kind: "circle";
   radius: number;
   strokeColor: MapsWgpuColor;
   strokeWidth: number;
@@ -27,6 +28,7 @@ export type MapsWgpuApplicationCircle = {
 export type MapsWgpuApplicationDirectionMarker = {
   angle: number;
   color: MapsWgpuColor;
+  kind: "directionMarker";
   size: number;
   x: number;
   y: number;
@@ -34,15 +36,19 @@ export type MapsWgpuApplicationDirectionMarker = {
 
 export type MapsWgpuApplicationLine = {
   color: MapsWgpuColor;
+  kind: "line";
   points: MapsWgpuApplicationPoint[];
   strokeWidth: number;
 };
 
+export type MapsWgpuApplicationPrimitive =
+  | MapsWgpuApplicationCircle
+  | MapsWgpuApplicationDirectionMarker
+  | MapsWgpuApplicationLine;
+
 export type MapsWgpuApplicationFrame = {
-  circles: MapsWgpuApplicationCircle[];
-  directionMarkers: MapsWgpuApplicationDirectionMarker[];
   height: number;
-  lines: MapsWgpuApplicationLine[];
+  primitives: MapsWgpuApplicationPrimitive[];
   width: number;
 };
 
@@ -50,10 +56,10 @@ export type MapsWgpuApplicationFrame = {
  * Packs first-party application geometry for the existing Rust/wgpu backend.
  *
  * Projection has already happened through the Maps-owned runtime. This transport only resolves
- * renderer-side colors and interaction stroke widths. Circles, lines, and flow direction markers
- * can share one GPU frame. Polygon frames still fail closed to Canvas because the correctness
- * backend owns even-odd polygon/hole behavior until the GPU path can preserve it explicitly.
- * Labels remain a thin Canvas annotation pass above wgpu geometry.
+ * renderer-side colors and interaction stroke widths. The ordered primitive stream preserves the
+ * Maps render order across circles, lines, and flow direction markers. Polygon frames still fail
+ * closed to Canvas because the correctness backend owns even-odd polygon/hole behavior until the
+ * GPU path can preserve it explicitly. Labels remain a thin Canvas annotation pass above wgpu.
  */
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
@@ -68,9 +74,7 @@ export function createMapsWgpuApplicationFrame(
     return null;
   }
 
-  const circles: MapsWgpuApplicationCircle[] = [];
-  const directionMarkers: MapsWgpuApplicationDirectionMarker[] = [];
-  const lines: MapsWgpuApplicationLine[] = [];
+  const primitives: MapsWgpuApplicationPrimitive[] = [];
 
   for (const scenePrimitive of frame.primitives) {
     switch (scenePrimitive.kind) {
@@ -96,8 +100,9 @@ export function createMapsWgpuApplicationFrame(
           return null;
         }
 
-        circles.push({
+        primitives.push({
           fillColor,
+          kind: "circle",
           radius: primitive.radius,
           strokeColor,
           strokeWidth,
@@ -120,9 +125,10 @@ export function createMapsWgpuApplicationFrame(
           return null;
         }
 
-        directionMarkers.push({
+        primitives.push({
           angle: scenePrimitive.angle,
           color,
+          kind: "directionMarker",
           size: primitive.size,
           x: scenePrimitive.x,
           y: scenePrimitive.y,
@@ -139,11 +145,17 @@ export function createMapsWgpuApplicationFrame(
         );
         const points = copyFinitePoints(scenePrimitive.points);
 
-        if (!color || !points || points.length < 2 || !Number.isFinite(strokeWidth)) {
+        if (
+          !color ||
+          !points ||
+          points.length < 2 ||
+          !hasNonDegenerateSegment(points) ||
+          !Number.isFinite(strokeWidth)
+        ) {
           return null;
         }
 
-        lines.push({ color, points, strokeWidth });
+        primitives.push({ color, kind: "line", points, strokeWidth });
         break;
       }
       case "polygon":
@@ -152,10 +164,8 @@ export function createMapsWgpuApplicationFrame(
   }
 
   return {
-    circles,
-    directionMarkers,
     height: frame.height,
-    lines,
+    primitives,
     width: frame.width,
   };
 }
@@ -167,6 +177,15 @@ function copyFinitePoints(points: readonly MapsWgpuApplicationPoint[]) {
     copied.push({ x: point.x, y: point.y });
   }
   return copied;
+}
+
+function hasNonDegenerateSegment(points: readonly MapsWgpuApplicationPoint[]) {
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const point = points[index]!;
+    if (previous.x !== point.x || previous.y !== point.y) return true;
+  }
+  return false;
 }
 
 function resolveStrokeWidth(
