@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import type { HeatLayerFeatureCollection } from "./heat-layer-types";
+import { getHeatLayerSurfaceQueryBounds } from "./heat-surface-render-plan";
 import {
   createMapsHeatSurfaceViewport,
   getMapsHeatLayerViewportBounds,
@@ -20,7 +21,7 @@ describe("Maps heat-layer antimeridian bounds", () => {
     expect(heatViewport.containerPointToLatLng([200, 50]).lng).toBeCloseTo(190);
   });
 
-  test("falls back to continuous visible bounds when pitched camera padding cannot unproject", () => {
+  test("fails closed when an oriented camera cannot unproject a screen point", () => {
     const viewport = createCrossingViewport();
     const unproject = viewport.unproject;
     viewport.unproject = (x, y) => {
@@ -31,8 +32,14 @@ describe("Maps heat-layer antimeridian bounds", () => {
     };
     const heatViewport = createMapsHeatSurfaceViewport(viewport);
 
-    expect(heatViewport.containerPointToLatLng([-50, -25])).toEqual({ lat: 15, lng: 165 });
-    expect(heatViewport.containerPointToLatLng([250, 125])).toEqual({ lat: -15, lng: 195 });
+    expect(heatViewport.containerPointToLatLng([-50, -25])).toEqual({
+      lat: Number.NaN,
+      lng: Number.NaN,
+    });
+    expect(heatViewport.containerPointToLatLng([250, 125])).toEqual({
+      lat: Number.NaN,
+      lng: Number.NaN,
+    });
   });
 
   test("fails closed when an oriented camera cannot project a heat raster vertex", () => {
@@ -72,6 +79,40 @@ describe("Maps heat-layer antimeridian bounds", () => {
     expect(result.features.map((feature) => feature.properties.pointId)).toEqual(["east", "west"]);
     expect(result.features.map((feature) => feature.geometry.coordinates[0])).toEqual([179, 181]);
     expect(source.features[1]?.geometry.coordinates[0]).toBe(-179);
+  });
+
+  test("uses authoritative visible bounds when oriented overscan is outside the ground plane", () => {
+    const viewport: MapsHeatLayerViewportGeometry = {
+      bounds: [12, 51, 15, 54],
+      height: 100,
+      project([longitude, latitude]) {
+        return { x: (longitude - 12) * 100, y: (54 - latitude) * 50 };
+      },
+      unproject(x, y) {
+        if (x < 0 || x > 300 || y < 0 || y > 150) {
+          throw new Error("screen point does not intersect the oriented ground plane");
+        }
+        return [12 + x / 100, 54 - y / 50];
+      },
+      width: 300,
+      zoom: 7,
+    };
+
+    const bounds = getHeatLayerSurfaceQueryBounds({
+      intensity: 1,
+      map: createMapsHeatSurfaceViewport(viewport),
+      minZoomDeltaForRebuild: 0.25,
+      overscanRatio: 0.25,
+      radius: { meters: 70_000 },
+      strategy: "stable-raster",
+      surfaceCache: null,
+    });
+
+    expect(bounds.every(Number.isFinite)).toBe(true);
+    expect(bounds[0]).toBeLessThan(viewport.bounds[0]);
+    expect(bounds[1]).toBeLessThan(viewport.bounds[1]);
+    expect(bounds[2]).toBeGreaterThan(viewport.bounds[2]);
+    expect(bounds[3]).toBeGreaterThan(viewport.bounds[3]);
   });
 });
 

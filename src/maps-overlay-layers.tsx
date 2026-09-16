@@ -3,8 +3,10 @@
 import {
   Children,
   Fragment,
+  Suspense,
   forwardRef,
   isValidElement,
+  lazy,
   startTransition,
   useCallback,
   useEffect,
@@ -45,9 +47,12 @@ import {
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
 import { getGeometryCenter } from "./geojson-rendering";
-import { HeatLayer } from "./heat-layer";
 import { formatHeatLayerFeatureValue } from "./heat-layer-data";
 import type { HeatLayerFeature, HeatLayerProps } from "./heat-layer-types";
+import {
+  MAP_LAYER_COMPONENT_KIND,
+  type MapLayerComponent,
+} from "./map-layer-component";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import {
   createCircleVectorRenderFrame,
@@ -61,16 +66,11 @@ import {
 } from "./map-render-frame";
 import type { MapScreenInteractionState } from "./map-screen-render-frame";
 import type { MapSurfaceContextValue } from "./map-surface-context";
-import { MapsHeatLayerMount } from "./maps-heat-layer-mount";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
-import {
-  createMapsHeatLayerRenderState,
-  drawMapsHeatRaster,
-  prepareMapsHeatLayerRender,
-  resetMapsHeatLayerRenderState,
-  type MapsHeatLayerRenderState,
-  type MapsHeatLayerViewport,
-  type MapsHeatRasterRenderStep,
+import type {
+  MapsHeatLayerRenderState,
+  MapsHeatLayerViewport,
+  MapsHeatRasterRenderStep,
 } from "./maps-heat-layer-rendering";
 import { createPointClusterRenderFrame } from "./point-cluster-render-frame";
 import { PointLayer, createPointLayerFeatures, type PointLayerProps } from "./point-layer";
@@ -98,6 +98,13 @@ export type MapsOverlayLayersController = {
 };
 
 type AnyRecord = Record<string, unknown>;
+type MapsHeatLayerRuntime = Pick<
+  typeof import("./maps-heat-layer-rendering"),
+  | "createMapsHeatLayerRenderState"
+  | "drawMapsHeatRaster"
+  | "prepareMapsHeatLayerRender"
+  | "resetMapsHeatLayerRenderState"
+>;
 type MapsOverlayInteractionSurface = Pick<
   MapSurfaceContextValue,
   | "handleFeatureClick"
@@ -199,6 +206,11 @@ type InternalPick = {
   position: MapScreenPoint;
 };
 
+const LazyMapsHeatLayerMount = lazy(async () => {
+  const module = await import("./maps-heat-layer-mount");
+  return { default: module.MapsHeatLayerMount };
+});
+
 export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
   function MapsOverlayLayers(
     { children, getViewport, project, renderApplicationFrame, surface, unproject },
@@ -215,6 +227,29 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const heatRuntimesRef = useRef<Map<string, MapsHeatLayerRenderState>>(new Map());
     const [heatRevision, setHeatRevision] = useState(0);
     const entries = useMemo(() => collectOverlayEntries(children), [children]);
+    const hasHeatEntries = entries.some((entry) => entry.kind === "heat");
+    const [heatRuntime, setHeatRuntime] = useState<MapsHeatLayerRuntime | null>(null);
+    const [heatRuntimeError, setHeatRuntimeError] = useState<unknown>(null);
+    const heatRuntimeRef = useRef<MapsHeatLayerRuntime | null>(heatRuntime);
+    heatRuntimeRef.current = heatRuntime;
+
+    useEffect(() => {
+      if (!hasHeatEntries || heatRuntime) return;
+
+      let active = true;
+      import("./maps-heat-layer-rendering").then(
+        (runtime) => {
+          if (active) setHeatRuntime(runtime);
+        },
+        (error: unknown) => {
+          if (active) setHeatRuntimeError(error);
+        },
+      );
+
+      return () => {
+        active = false;
+      };
+    }, [hasHeatEntries, heatRuntime]);
 
     const requestHeatRender = useCallback(() => {
       setHeatRevision((revision) => revision + 1);
@@ -250,8 +285,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
         if (entry.kind === "heat") {
           activeHeatKeys.add(entry.runtimeKey);
-          if (!heatRuntimesRef.current.has(entry.runtimeKey)) {
-            heatRuntimesRef.current.set(entry.runtimeKey, createMapsHeatLayerRenderState());
+          if (heatRuntime && !heatRuntimesRef.current.has(entry.runtimeKey)) {
+            heatRuntimesRef.current.set(
+              entry.runtimeKey,
+              heatRuntime.createMapsHeatLayerRenderState(),
+            );
           }
         }
       }
@@ -263,18 +301,18 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
       for (const [key, runtime] of heatRuntimesRef.current) {
         if (activeHeatKeys.has(key)) continue;
-        resetMapsHeatLayerRenderState(runtime);
+        heatRuntime?.resetMapsHeatLayerRenderState(runtime);
         heatRuntimesRef.current.delete(key);
         heatDescriptorsRef.current.delete(key);
       }
-    }, [entries]);
+    }, [entries, heatRuntime]);
 
     useEffect(() => {
       return () => {
         for (const runtime of clusterRuntimesRef.current.values()) runtime.index.dispose();
         clusterRuntimesRef.current.clear();
         for (const runtime of heatRuntimesRef.current.values()) {
-          resetMapsHeatLayerRenderState(runtime);
+          heatRuntimeRef.current?.resetMapsHeatLayerRenderState(runtime);
         }
         heatRuntimesRef.current.clear();
         heatDescriptorsRef.current.clear();
@@ -389,6 +427,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           heatDescriptorsRef.current,
           heatRuntimesRef.current,
           heatViewport,
+          heatRuntime,
           requestHeatRender,
         );
         const scene = createCanvasMapScene(snapshot.frame, project, size);
@@ -430,7 +469,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
         for (const step of snapshot.renderSteps) {
           if (step.kind === "raster") {
-            if (heatViewport) drawMapsHeatRaster(context, step.raster, heatViewport, ratio);
+            if (heatViewport) {
+              heatRuntime?.drawMapsHeatRaster(context, step.raster, heatViewport, ratio);
+            }
             continue;
           }
 
@@ -452,6 +493,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       entries,
       getViewport,
       heatRevision,
+      heatRuntime,
       project,
       renderApplicationFrame,
       requestHeatRender,
@@ -468,20 +510,24 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       };
     }, []);
 
+    if (heatRuntimeError) throw heatRuntimeError;
+
     if (entries.length === 0) return null;
 
     return (
       <>
-        {entries.map((entry) =>
-          entry.kind === "heat" ? (
-            <MapsHeatLayerMount
-              key={entry.runtimeKey}
-              layerKey={entry.runtimeKey}
-              props={entry.props}
-              publish={publishHeatLayer}
-            />
-          ) : null,
-        )}
+        <Suspense fallback={null}>
+          {entries.map((entry) =>
+            entry.kind === "heat" ? (
+              <LazyMapsHeatLayerMount
+                key={entry.runtimeKey}
+                layerKey={entry.runtimeKey}
+                props={entry.props}
+                publish={publishHeatLayer}
+              />
+            ) : null,
+          )}
+        </Suspense>
         <canvas
           aria-hidden="true"
           data-map-overlay-backend="canvas2d"
@@ -558,7 +604,7 @@ function collectOverlayEntries(children: ReactNode, path = "root", entries: Maps
       return;
     }
 
-    if (child.type === HeatLayer) {
+    if (isHeatLayerComponent(child.type)) {
       entries.push({
         kind: "heat",
         props: child.props as HeatLayerProps<AnyRecord>,
@@ -573,6 +619,13 @@ function collectOverlayEntries(children: ReactNode, path = "root", entries: Maps
   return entries;
 }
 
+function isHeatLayerComponent(type: unknown) {
+  return (
+    (typeof type === "function" || (typeof type === "object" && type !== null)) &&
+    (type as MapLayerComponent)[MAP_LAYER_COMPONENT_KIND] === "heat"
+  );
+}
+
 function createOverlaySnapshot(
   entries: readonly MapsOverlayEntry[],
   surface: MapsOverlayInteractionSurface,
@@ -581,6 +634,7 @@ function createOverlaySnapshot(
   heatDescriptors: ReadonlyMap<string, MapsHeatLayerDescriptor>,
   heatRuntimes: ReadonlyMap<string, MapsHeatLayerRenderState>,
   heatViewport: MapsHeatLayerViewport | null,
+  heatRuntime: MapsHeatLayerRuntime | null,
   requestHeatRender: () => void,
 ): MapsOverlaySnapshot {
   const mutable: MutableMapsOverlaySnapshot = {
@@ -613,8 +667,8 @@ function createOverlaySnapshot(
       case "heat": {
         const descriptor = heatDescriptors.get(entry.runtimeKey);
         const runtime = heatRuntimes.get(entry.runtimeKey);
-        if (!descriptor || !runtime || !heatViewport) break;
-        const prepared = prepareMapsHeatLayerRender({
+        if (!descriptor || !runtime || !heatViewport || !heatRuntime) break;
+        const prepared = heatRuntime.prepareMapsHeatLayerRender({
           descriptor,
           requestRender: requestHeatRender,
           state: runtime,

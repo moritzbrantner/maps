@@ -16,7 +16,6 @@ export function createMapsHeatSurfaceViewport(
   viewport: MapsHeatLayerViewportGeometry,
 ): HeatSurfaceViewport {
   const referenceLongitude = getMapsHeatLayerReferenceLongitude(viewport);
-  const fallbackBounds = unwrapHeatLayerBounds(viewport.bounds, referenceLongitude);
 
   return {
     containerPointToLatLng([x, y]) {
@@ -28,13 +27,16 @@ export function createMapsHeatSurfaceViewport(
         };
       }
 
-      return interpolateHeatLayerCoordinate(fallbackBounds, viewport, x, y);
+      return { lat: Number.NaN, lng: Number.NaN };
     },
     getContainer() {
       return {
         clientHeight: viewport.height,
         clientWidth: viewport.width,
       };
+    },
+    getVisibleBounds() {
+      return getMapsHeatLayerViewportBounds(viewport);
     },
     getZoom() {
       return viewport.zoom;
@@ -134,21 +136,6 @@ function tryUnprojectHeatLayerCoordinate(
   }
 }
 
-function interpolateHeatLayerCoordinate(
-  [west, south, east, north]: HeatSurfaceBounds,
-  viewport: Pick<MapsHeatLayerViewportGeometry, "height" | "width">,
-  x: number,
-  y: number,
-) {
-  const horizontalProgress = viewport.width > 0 ? x / viewport.width : 0.5;
-  const verticalProgress = viewport.height > 0 ? y / viewport.height : 0.5;
-
-  return {
-    lat: clampHeatLayerLatitude(north - (north - south) * verticalProgress),
-    lng: west + (east - west) * horizontalProgress,
-  };
-}
-
 function unwrapHeatLayerBounds(
   [west, south, east, north]: HeatSurfaceBounds,
   referenceLongitude: number,
@@ -205,8 +192,4 @@ function unwrapHeatLayerLongitude(longitude: number, referenceLongitude: number)
 
   const delta = ((((longitude - referenceLongitude + 180) % 360) + 360) % 360) - 180;
   return referenceLongitude + delta;
-}
-
-function clampHeatLayerLatitude(latitude: number) {
-  return Math.min(90, Math.max(-90, latitude));
 }

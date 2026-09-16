@@ -27,6 +27,7 @@ export type HeatSurfaceBounds = [
 export type HeatSurfaceViewport = {
   containerPointToLatLng(point: [number, number]): { lat: number; lng: number };
   getContainer(): { clientHeight: number; clientWidth: number };
+  getVisibleBounds?(): HeatSurfaceBounds;
   getZoom(): number;
   latLngToContainerPoint(
     input: [number, number] | { lat: number; lng: number },
@@ -522,6 +523,10 @@ function getHeatLayerStableCoverageBounds(
     resolveHeatLayerProjectedRadius(radius, [center.lng, center.lat], map) *
       2.6 *
       Math.max(0, intensity);
+  const visibleBounds = map.getVisibleBounds?.();
+  if (visibleBounds) {
+    return expandHeatLayerBounds(visibleBounds, paddingPixels / width, paddingPixels / height);
+  }
   const northWest = map.containerPointToLatLng([-paddingPixels, -paddingPixels]);
   const southEast = map.containerPointToLatLng([width + paddingPixels, height + paddingPixels]);
 
@@ -666,6 +671,10 @@ function getHeatLayerPaddedBounds(
   const centerCoordinate: [number, number] = [center.lng, center.lat];
   const padding =
     resolveHeatLayerProjectedRadius(radius, centerCoordinate, map) * 2.6 * Math.max(0, intensity);
+  const visibleBounds = map.getVisibleBounds?.();
+  if (visibleBounds) {
+    return expandHeatLayerBounds(visibleBounds, padding / width, padding / height);
+  }
   const northWest = map.containerPointToLatLng([-padding, -padding]);
   const southEast = map.containerPointToLatLng([width + padding, height + padding]);
 
@@ -675,6 +684,22 @@ function getHeatLayerPaddedBounds(
     Math.max(northWest.lng, southEast.lng),
     clamp(Math.max(northWest.lat, southEast.lat), -90, 90),
   ];
+}
+
+function expandHeatLayerBounds(
+  [west, south, east, north]: HeatSurfaceBounds,
+  horizontalRatio: number,
+  verticalRatio: number,
+): HeatSurfaceBounds {
+  const longitudePadding = (east - west) * Math.max(0, horizontalRatio);
+  const latitudePadding = (north - south) * Math.max(0, verticalRatio);
+
+  return normalizeHeatLayerBounds([
+    west - longitudePadding,
+    south - latitudePadding,
+    east + longitudePadding,
+    north + latitudePadding,
+  ]);
 }
 
 export function getProjectedMetersRadius(

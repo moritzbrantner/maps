@@ -36,6 +36,7 @@ import {
   type HeatLayerFlatRenderState,
 } from "./heat-layer-rendering";
 import { prepareHeatLayerColorRamp } from "./heat-surface";
+import { MAP_LAYER_COMPONENT_KIND } from "./map-layer-component";
 import { MapSurfaceContext } from "./map-view";
 import { createScalarFieldGrid, type ScalarFieldGrid } from "./scalar-field";
 import {
@@ -558,6 +559,8 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
 
   return null;
 }
+
+Object.defineProperty(HeatLayer, MAP_LAYER_COMPONENT_KIND, { value: "heat" });
 
 export type HeatFieldLayerProps<TProperties = Record<string, unknown>> = Omit<
   HeatLayerProps<TProperties>,
