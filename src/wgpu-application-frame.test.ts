@@ -37,25 +37,25 @@ describe("wgpu application frame", () => {
         selectedPrimitiveIds: new Set(["circle-a"]),
       }),
     ).toEqual({
-      height: 480,
-      primitives: [
+      circles: [
         {
-          data: {
-            fillColor: [
-              0.033104766570885055,
-              0.13286832155381798,
-              0.31854677812509186,
-              0.5,
-            ],
-            radius: 7,
-            strokeColor: [1, 1, 1, 0.6000000000000001],
-            strokeWidth: 3.5,
-            x: 120,
-            y: 80,
-          },
-          kind: "circle",
+          fillColor: [
+            0.033104766570885055,
+            0.13286832155381798,
+            0.31854677812509186,
+            0.5,
+          ],
+          radius: 7,
+          strokeColor: [1, 1, 1, 0.6000000000000001],
+          strokeWidth: 3.5,
+          x: 120,
+          y: 80,
         },
       ],
+      directionMarkers: [],
+      height: 480,
+      lines: [],
+      order: [[0, 0]],
       width: 640,
     });
   });
@@ -132,41 +132,41 @@ describe("wgpu application frame", () => {
         hoveredPrimitiveIds: new Set(["line-a"]),
       }),
     ).toEqual({
+      circles: [
+        {
+          fillColor: [1, 1, 1, 1],
+          radius: 4,
+          strokeColor: [0, 0, 0, 1],
+          strokeWidth: 1,
+          x: 120,
+          y: 80,
+        },
+      ],
+      directionMarkers: [
+        {
+          angle: Math.PI / 2,
+          color: [1, 0, 0, 0.75],
+          size: 10,
+          x: 30,
+          y: 20,
+        },
+      ],
       height: 480,
-      primitives: [
+      lines: [
         {
-          data: {
-            fillColor: [1, 1, 1, 1],
-            radius: 4,
-            strokeColor: [0, 0, 0, 1],
-            strokeWidth: 1,
-            x: 120,
-            y: 80,
-          },
-          kind: "circle",
+          color: [0, 0, 0, 0.5],
+          points: [
+            { x: 10, y: 10 },
+            { x: 20, y: 20 },
+            { x: 30, y: 20 },
+          ],
+          strokeWidth: 3,
         },
-        {
-          data: {
-            color: [0, 0, 0, 0.5],
-            points: [
-              { x: 10, y: 10 },
-              { x: 20, y: 20 },
-              { x: 30, y: 20 },
-            ],
-            strokeWidth: 3,
-          },
-          kind: "line",
-        },
-        {
-          data: {
-            angle: Math.PI / 2,
-            color: [1, 0, 0, 0.75],
-            size: 10,
-            x: 30,
-            y: 20,
-          },
-          kind: "directionMarker",
-        },
+      ],
+      order: [
+        [0, 0],
+        [1, 0],
+        [2, 0],
       ],
       width: 640,
     });
