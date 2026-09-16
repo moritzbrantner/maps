@@ -37,7 +37,8 @@ describe("wgpu application frame", () => {
         selectedPrimitiveIds: new Set(["circle-a"]),
       }),
     ).toEqual({
-      circles: [
+      height: 480,
+      primitives: [
         {
           fillColor: [
             0.033104766570885055,
@@ -45,6 +46,7 @@ describe("wgpu application frame", () => {
             0.31854677812509186,
             0.5,
           ],
+          kind: "circle",
           radius: 7,
           strokeColor: [1, 1, 1, 0.6000000000000001],
           strokeWidth: 3.5,
@@ -52,14 +54,11 @@ describe("wgpu application frame", () => {
           y: 80,
         },
       ],
-      directionMarkers: [],
-      height: 480,
-      lines: [],
       width: 640,
     });
   });
 
-  test("packs circles, lines, and flow direction markers into one GPU frame", () => {
+  test("packs circles, lines, and flow direction markers in source render order", () => {
     const circle: MapRenderCircle = {
       center: [0, 0],
       feature: null,
@@ -131,35 +130,34 @@ describe("wgpu application frame", () => {
         hoveredPrimitiveIds: new Set(["line-a"]),
       }),
     ).toEqual({
-      circles: [
+      height: 480,
+      primitives: [
         {
           fillColor: [1, 1, 1, 1],
+          kind: "circle",
           radius: 4,
           strokeColor: [0, 0, 0, 1],
           strokeWidth: 1,
           x: 120,
           y: 80,
         },
-      ],
-      directionMarkers: [
-        {
-          angle: Math.PI / 2,
-          color: [1, 0, 0, 0.75],
-          size: 10,
-          x: 30,
-          y: 20,
-        },
-      ],
-      height: 480,
-      lines: [
         {
           color: [0, 0, 0, 0.5],
+          kind: "line",
           points: [
             { x: 10, y: 10 },
             { x: 20, y: 20 },
             { x: 30, y: 20 },
           ],
           strokeWidth: 3,
+        },
+        {
+          angle: Math.PI / 2,
+          color: [1, 0, 0, 0.75],
+          kind: "directionMarker",
+          size: 10,
+          x: 30,
+          y: 20,
         },
       ],
       width: 640,
@@ -201,6 +199,39 @@ describe("wgpu application frame", () => {
               { x: 10, y: 20 },
             ],
           ],
+        },
+      ],
+      width: 640,
+    };
+
+    expect(createMapsWgpuApplicationFrame(frame)).toBeNull();
+  });
+
+  test("fails closed for degenerate line geometry", () => {
+    const line: MapRenderLine = {
+      coordinates: [
+        [0, 0],
+        [0, 0],
+      ],
+      feature: null,
+      featureId: "line-a",
+      interactive: true,
+      kind: "line",
+      primitiveId: "line-a",
+      strokeColor: "#000000",
+      strokeOpacity: 1,
+      strokeWidth: 2,
+    };
+    const frame: MapScreenRenderFrame = {
+      height: 480,
+      primitives: [
+        {
+          kind: "line",
+          points: [
+            { x: 10, y: 10 },
+            { x: 10, y: 10 },
+          ],
+          renderPrimitive: line,
         },
       ],
       width: 640,
