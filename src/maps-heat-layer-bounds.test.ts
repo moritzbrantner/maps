@@ -19,6 +19,21 @@ describe("Maps heat-layer antimeridian bounds", () => {
     expect(heatViewport.containerPointToLatLng([200, 50]).lng).toBeCloseTo(190);
   });
 
+  test("falls back to continuous visible bounds when pitched camera padding cannot unproject", () => {
+    const viewport = createCrossingViewport();
+    const unproject = viewport.unproject;
+    viewport.unproject = (x, y) => {
+      if (x < 0 || x > viewport.width || y < 0 || y > viewport.height) {
+        throw new Error("unsupported pitched camera coordinate");
+      }
+      return unproject(x, y);
+    };
+    const heatViewport = createMapsHeatSurfaceViewport(viewport);
+
+    expect(heatViewport.containerPointToLatLng([-50, -25])).toEqual({ lat: 15, lng: 165 });
+    expect(heatViewport.containerPointToLatLng([250, 125])).toEqual({ lat: -15, lng: 195 });
+  });
+
   test("splits source queries canonically and shifts only returned render coordinates", () => {
     const source = createFeatureCollection([
       { id: "east", longitude: 179 },
