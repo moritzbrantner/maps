@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "suite": "maps/benchmark-budgets",
+  "description": "Representative map/geo processing contract. Existing p95 wall-clock budgets remain repository evidence, while future blocking protection should increasingly use deterministic work counters for topology, interpolation, grid and aggregation work.",
+  "scenarios": [
+    {
+      "id": "temporal-geojson-indexed-playback",
+      "kind": "common",
+      "description": "Indexed temporal playback over deterministic line and polygon tracks.",
+      "dimensions": {
+        "coordinates_per_track": 512,
+        "samples": 100,
+        "strategy": "resample"
+      },
+      "correctnessEvidence": [
+        "temporal GeoJSON unit/integration tests",
+        "indexed playback scenario completes"
+      ],
+      "metrics": [
+        {
+          "name": "p95_ms",
+          "unit": "ms",
+          "direction": "lower",
+          "signal": "wall-clock",
+          "blocking": false,
+          "budget": { "max": 25 },
+          "notes": "The existing verifier still enforces this historical shared-runner budget. The fleet contract treats it as advisory until a controlled runner or deterministic work proxy owns the blocking verdict."
+        }
+      ]
+    },
+    {
+      "id": "geojson-transition-topology-plan",
+      "kind": "journey",
+      "description": "Create and interpolate a topology-aware polygon transition plan.",
+      "dimensions": {
+        "coordinates": 256,
+        "samples": 500,
+        "algorithm": "topology-plan"
+      },
+      "correctnessEvidence": [
+        "GeoJSON transition tests",
+        "transition plan and interpolation complete"
+      ],
+      "metrics": [
+        {
+          "name": "p95_ms",
+          "unit": "ms",
+          "direction": "lower",
+          "signal": "wall-clock",
+          "blocking": false,
+          "budget": { "max": 100 },
+          "notes": "Historical local budget; blocking migration should use deterministic topology-plan work counts or controlled hardware."
+        }
+      ]
+    },
+    {
+      "id": "geojson-transition-complex-topology-plan",
+      "kind": "stress",
+      "description": "Multi-polygon topology matching with deterministic auto part matching.",
+      "dimensions": {
+        "coordinates_per_part": 256,
+        "source_parts": 2,
+        "target_parts": 3,
+        "samples": 1000,
+        "part_matching": "auto"
+      },
+      "correctnessEvidence": [
+        "complex transition tests",
+        "transition interpolation completes"
+      ],
+      "metrics": [
+        {
+          "name": "p95_ms",
+          "unit": "ms",
+          "direction": "lower",
+          "signal": "wall-clock",
+          "blocking": false,
+          "budget": { "max": 200 },
+          "notes": "Historical local budget; deterministic matching/candidate counters should become the blocking signal."
+        }
+      ]
+    },
+    {
+      "id": "scalar-field-grid",
+      "kind": "scaling",
+      "description": "Interpolate a 320x200 scalar field from deterministic temperature observations.",
+      "dimensions": {
+        "columns": 320,
+        "rows": 200,
+        "cells": 64000,
+        "points": 10,
+        "interpolation_k": 10
+      },
+      "correctnessEvidence": [
+        "scalar-field tests",
+        "grid construction completes"
+      ],
+      "metrics": [
+        {
+          "name": "p95_ms",
+          "unit": "ms",
+          "direction": "lower",
+          "signal": "wall-clock",
+          "blocking": false,
+          "budget": { "max": 300 },
+          "notes": "Historical local budget; future blocking evidence should count interpolation/cell work independently of runner speed."
+        }
+      ]
+    },
+    {
+      "id": "heat-map-density-index",
+      "kind": "scaling",
+      "description": "Build and query a density index for 10,000 deterministic map points.",
+      "dimensions": {
+        "points": 10000,
+        "zoom": 6,
+        "radius": 56,
+        "samples": 1000
+      },
+      "correctnessEvidence": [
+        "heat-map tests",
+        "density index query completes"
+      ],
+      "metrics": [
+        {
+          "name": "p95_ms",
+          "unit": "ms",
+          "direction": "lower",
+          "signal": "wall-clock",
+          "blocking": false,
+          "budget": { "max": 400 },
+          "notes": "Historical local budget; index-build/query work counters should become the portable blocking signal."
+        }
+      ]
+    }
+  ]
+}
