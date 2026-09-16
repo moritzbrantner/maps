@@ -11,6 +11,7 @@ import { clamp } from "./heat-layer-utils";
 import {
   createMapsHeatSurfaceViewport,
   getMapsHeatLayerViewportBounds,
+  projectMapsHeatLayerCoordinate,
   queryMapsHeatLayerFeatureCollection,
   type MapsHeatLayerViewportGeometry,
 } from "./maps-heat-layer-bounds";
@@ -137,7 +138,7 @@ export function drawMapsHeatRaster(
     devicePixelRatio,
     image: raster.image,
     opacity: raster.opacity,
-    project: viewport.project,
+    project: (coordinate) => projectMapsHeatLayerCoordinate(viewport, coordinate),
     verticalScale: raster.projection,
   });
 }
