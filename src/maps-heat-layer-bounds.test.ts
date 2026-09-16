@@ -4,6 +4,7 @@ import type { HeatLayerFeatureCollection } from "./heat-layer-types";
 import {
   createMapsHeatSurfaceViewport,
   getMapsHeatLayerViewportBounds,
+  projectMapsHeatLayerCoordinate,
   queryMapsHeatLayerFeatureCollection,
   type MapsHeatLayerViewportGeometry,
 } from "./maps-heat-layer-bounds";
@@ -32,6 +33,20 @@ describe("Maps heat-layer antimeridian bounds", () => {
 
     expect(heatViewport.containerPointToLatLng([-50, -25])).toEqual({ lat: 15, lng: 165 });
     expect(heatViewport.containerPointToLatLng([250, 125])).toEqual({ lat: -15, lng: 195 });
+  });
+
+  test("fails closed when an oriented camera cannot project a heat raster vertex", () => {
+    const viewport = createCrossingViewport();
+    viewport.project = () => {
+      throw new Error("unsupported pitched camera coordinate");
+    };
+    const heatViewport = createMapsHeatSurfaceViewport(viewport);
+
+    expect(projectMapsHeatLayerCoordinate(viewport, [180, 0])).toBeNull();
+    expect(heatViewport.latLngToContainerPoint([0, 180])).toEqual({
+      x: Number.NaN,
+      y: Number.NaN,
+    });
   });
 
   test("splits source queries canonically and shifts only returned render coordinates", () => {
