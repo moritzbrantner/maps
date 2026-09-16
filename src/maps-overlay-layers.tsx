@@ -46,7 +46,8 @@ import {
 } from "./geojson-layer";
 import { getGeometryCenter } from "./geojson-rendering";
 import { HeatLayer } from "./heat-layer";
-import type { HeatLayerProps } from "./heat-layer-types";
+import { formatHeatLayerFeatureValue } from "./heat-layer-data";
+import type { HeatLayerFeature, HeatLayerProps } from "./heat-layer-types";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import {
   createCircleVectorRenderFrame,
@@ -206,6 +207,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<CanvasMapScene<unknown> | null>(null);
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
+    const applicationFrameVisibleRef = useRef(false);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
     const clusterRuntimesRef = useRef<Map<string, MapsClusterRuntime>>(new Map());
@@ -358,9 +360,12 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       }
 
       const clearApplicationFrame = () => {
+        if (!applicationFrameVisibleRef.current) return;
         const scene = sceneRef.current;
-        if (!scene || !renderApplicationFrame) return;
-        renderApplicationFrame({ ...scene, primitives: [] }, {});
+        if (scene && renderApplicationFrame) {
+          renderApplicationFrame({ ...scene, primitives: [] }, {});
+        }
+        applicationFrameVisibleRef.current = false;
       };
 
       const draw = () => {
@@ -401,6 +406,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         const hasRaster = snapshot.renderSteps.some((step) => step.kind === "raster");
         const renderedByWgpu =
           !hasRaster && (renderApplicationFrame?.(scene, interaction) ?? false);
+        if (renderedByWgpu) {
+          applicationFrameVisibleRef.current = true;
+        } else {
+          clearApplicationFrame();
+        }
         canvas.dataset.mapOverlayBackend = renderedByWgpu ? "wgpu" : "canvas2d";
 
         const context = getCanvasContext(canvas);
@@ -614,7 +624,38 @@ function createOverlaySnapshot(
           mutable.renderSteps.push({ kind: "raster", raster: prepared.raster });
         }
         for (const primitive of prepared.primitives) {
-          appendPrimitive(mutable, primitive, null, false, false);
+          if (!primitive.interactive) {
+            appendPrimitive(mutable, primitive, null, false, false);
+            continue;
+          }
+
+          const feature = primitive.feature as HeatLayerFeature;
+          const resolveFeatureId = () => primitive.featureId;
+          const hovered = surface.isFeatureHovered(
+            feature,
+            entry.props.hoveredFeatureId,
+            resolveFeatureId,
+          );
+          const selected = surface.isFeatureSelected(
+            feature,
+            entry.props.selectedFeatureId,
+            resolveFeatureId,
+          );
+          const interaction = createFeatureInteraction(
+            `${entry.runtimeKey}|${primitive.featureId}`,
+            feature,
+            primitive.featureId,
+            feature.geometry.coordinates,
+            {
+              ...entry.props,
+              renderFeatureTooltip:
+                entry.props.renderFeatureTooltip ??
+                ((candidate) =>
+                  formatHeatLayerFeatureValue(candidate, entry.props.dataPointValueFormat)),
+            },
+            surface,
+          );
+          appendPrimitive(mutable, primitive, interaction, hovered, selected);
         }
         break;
       }
@@ -839,8 +880,8 @@ function appendFlowLayer(
         strokeOpacity: 1,
         strokeWidth: 1.5,
       };
-      appendPrimitive(snapshot, fromEndpoint, null, false, false);
       appendPrimitive(snapshot, toEndpoint, null, false, false);
+      appendPrimitive(snapshot, fromEndpoint, null, false, false);
     }
   }
 }
