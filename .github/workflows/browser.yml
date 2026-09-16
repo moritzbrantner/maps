@@ -73,3 +73,72 @@ jobs:
       upload_artifacts_on: failure
     secrets:
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+
+  refresh-reviewed-baselines:
+    name: Refresh reviewed browser baselines
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/full-browser-validation-boundary'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: read
+    env:
+      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+      NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+      HEAD_REF: ${{ github.head_ref }}
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Prepare first-party browser runtime
+        run: |
+          bunx playwright install --with-deps chromium
+          rustup toolchain install 1.98.1 --profile minimal --target wasm32-unknown-unknown
+          rustup default 1.98.1
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          bun run build:wasm
+          rm -rf public/wasm
+          mkdir -p public/wasm
+          cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
+      - name: Refresh only reviewed stale baselines
+        run: >-
+          bunx playwright test e2e/maps-demo.spec.ts --project=chromium --update-snapshots
+          --grep "Composed view visual baseline|History view visual baseline|Timeline view keeps a stable viewport"
+      - name: Verify baseline scope and commit
+        run: |
+          expected=$(printf '%s\n' \
+            'e2e/__screenshots__/maps-demo.spec.ts/composed-desktop.png' \
+            'e2e/__screenshots__/maps-demo.spec.ts/history-desktop.png' \
+            'e2e/__screenshots__/maps-demo.spec.ts/timeline-desktop.png')
+          actual=$(git diff --name-only -- e2e/__screenshots__/maps-demo.spec.ts | sort)
+          expected=$(printf '%s\n' "$expected" | sort)
+          if [ "$actual" != "$expected" ]; then
+            printf 'Unexpected baseline diff.\nExpected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          unexpected=$(git diff --name-only | grep -v -F -x -f <(printf '%s\n' "$expected") || true)
+          if [ -n "$unexpected" ]; then
+            printf 'Unexpected non-baseline changes:\n%s\n' "$unexpected"
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            e2e/__screenshots__/maps-demo.spec.ts/composed-desktop.png \
+            e2e/__screenshots__/maps-demo.spec.ts/history-desktop.png \
+            e2e/__screenshots__/maps-demo.spec.ts/timeline-desktop.png
+          git commit -m 'test: refresh reviewed browser baselines'
+          git push origin "HEAD:${HEAD_REF}"
