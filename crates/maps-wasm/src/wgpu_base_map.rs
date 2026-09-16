@@ -14,6 +14,9 @@ const VERTEX_SIZE: u64 = 16;
 const APPLICATION_VERTEX_SIZE: u64 = 24;
 const VERTICES_PER_TILE: u32 = 4;
 const CIRCLE_SEGMENTS: usize = 24;
+const LINE_CAP_SEGMENTS: usize = 12;
+const MAX_LINE_MITER_SCALE: f64 = 4.0;
+const GEOMETRY_EPSILON: f64 = 1.0e-9;
 
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
@@ -102,9 +105,17 @@ struct WgpuRasterTileId {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WgpuApplicationFrame {
-    circles: Vec<WgpuApplicationCircle>,
     height: f64,
+    primitives: Vec<WgpuApplicationPrimitive>,
     width: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
+enum WgpuApplicationPrimitive {
+    Circle(WgpuApplicationCircle),
+    DirectionMarker(WgpuApplicationDirectionMarker),
+    Line(WgpuApplicationLine),
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +127,30 @@ struct WgpuApplicationCircle {
     stroke_width: f64,
     x: f64,
     y: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WgpuApplicationDirectionMarker {
+    angle: f64,
+    color: [f32; 4],
+    size: f64,
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct WgpuApplicationPoint {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WgpuApplicationLine {
+    color: [f32; 4],
+    points: Vec<WgpuApplicationPoint>,
+    stroke_width: f64,
 }
 
 struct TileTexture {
@@ -357,7 +392,7 @@ impl MapsWgpuBaseMapRenderer {
             },
         };
         let application_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Maps application circle pipeline"),
+            label: Some("Maps application geometry pipeline"),
             layout: Some(&application_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &application_shader,
@@ -726,8 +761,18 @@ fn append_application_vertices(
         return Err(JsValue::from_str("invalid wgpu application frame extent"));
     }
 
-    for circle in &frame.circles {
-        append_application_circle(output, frame.width, frame.height, circle)?;
+    for primitive in &frame.primitives {
+        match primitive {
+            WgpuApplicationPrimitive::Circle(circle) => {
+                append_application_circle(output, frame.width, frame.height, circle)?;
+            }
+            WgpuApplicationPrimitive::DirectionMarker(marker) => {
+                append_application_direction_marker(output, frame.width, frame.height, marker)?;
+            }
+            WgpuApplicationPrimitive::Line(line) => {
+                append_application_line(output, frame.width, frame.height, line)?;
+            }
+        }
     }
     Ok(())
 }
@@ -783,6 +828,215 @@ fn append_application_circle(
         }
     }
 
+    Ok(())
+}
+
+fn append_application_direction_marker(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    marker: &WgpuApplicationDirectionMarker,
+) -> Result<(), JsValue> {
+    if [marker.x, marker.y, marker.angle, marker.size]
+        .into_iter()
+        .any(|value| !value.is_finite())
+        || marker.size < 0.0
+        || !valid_color(marker.color)
+    {
+        return Err(JsValue::from_str(
+            "invalid wgpu application direction marker",
+        ));
+    }
+
+    let local_points = [
+        (marker.size * 0.38, 0.0),
+        (marker.size * -0.62, marker.size * -0.42),
+        (marker.size * -0.62, marker.size * 0.42),
+    ];
+    let sine = marker.angle.sin();
+    let cosine = marker.angle.cos();
+    for (local_x, local_y) in local_points {
+        let x = marker.x + local_x * cosine - local_y * sine;
+        let y = marker.y + local_x * sine + local_y * cosine;
+        append_application_vertex(output, width, height, x, y, marker.color)?;
+    }
+    Ok(())
+}
+
+fn append_application_line(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    line: &WgpuApplicationLine,
+) -> Result<(), JsValue> {
+    if !line.stroke_width.is_finite()
+        || line.stroke_width < 0.0
+        || !valid_color(line.color)
+        || line
+            .points
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+    {
+        return Err(JsValue::from_str("invalid wgpu application line"));
+    }
+    if line.stroke_width == 0.0 {
+        return Ok(());
+    }
+
+    let points = deduplicate_line_points(&line.points);
+    if points.len() < 2 {
+        return Err(JsValue::from_str(
+            "wgpu application line has no non-degenerate segment",
+        ));
+    }
+
+    let half_width = line.stroke_width / 2.0;
+    let directions = points
+        .windows(2)
+        .map(|segment| unit_direction(segment[0], segment[1]))
+        .collect::<Result<Vec<_>, _>>()?;
+    let normals = directions
+        .iter()
+        .map(|direction| (-direction.1, direction.0))
+        .collect::<Vec<_>>();
+    let offsets = line_offsets(&normals, half_width);
+
+    for index in 0..points.len() - 1 {
+        let start = points[index];
+        let end = points[index + 1];
+        let start_offset = offsets[index];
+        let end_offset = offsets[index + 1];
+        let start_left = (start.x + start_offset.0, start.y + start_offset.1);
+        let start_right = (start.x - start_offset.0, start.y - start_offset.1);
+        let end_left = (end.x + end_offset.0, end.y + end_offset.1);
+        let end_right = (end.x - end_offset.0, end.y - end_offset.1);
+
+        for point in [
+            start_left,
+            start_right,
+            end_left,
+            start_right,
+            end_right,
+            end_left,
+        ] {
+            append_application_vertex(output, width, height, point.0, point.1, line.color)?;
+        }
+    }
+
+    let first = points[0];
+    let first_direction = directions[0];
+    append_round_line_cap(
+        output,
+        width,
+        height,
+        first,
+        (-first_direction.0).atan2(-first_direction.1),
+        half_width,
+        line.color,
+    )?;
+    let last = *points.last().expect("line has at least two points");
+    let last_direction = *directions.last().expect("line has at least one direction");
+    append_round_line_cap(
+        output,
+        width,
+        height,
+        last,
+        last_direction.0.atan2(last_direction.1),
+        half_width,
+        line.color,
+    )?;
+
+    Ok(())
+}
+
+fn deduplicate_line_points(points: &[WgpuApplicationPoint]) -> Vec<WgpuApplicationPoint> {
+    let mut result = Vec::with_capacity(points.len());
+    for point in points {
+        let keep = result.last().is_none_or(|previous: &WgpuApplicationPoint| {
+            let dx = point.x - previous.x;
+            let dy = point.y - previous.y;
+            dx.hypot(dy) > GEOMETRY_EPSILON
+        });
+        if keep {
+            result.push(*point);
+        }
+    }
+    result
+}
+
+fn unit_direction(
+    start: WgpuApplicationPoint,
+    end: WgpuApplicationPoint,
+) -> Result<(f64, f64), JsValue> {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let length = dx.hypot(dy);
+    if !length.is_finite() || length <= GEOMETRY_EPSILON {
+        return Err(JsValue::from_str("invalid wgpu application line segment"));
+    }
+    Ok((dx / length, dy / length))
+}
+
+fn line_offsets(normals: &[(f64, f64)], half_width: f64) -> Vec<(f64, f64)> {
+    let point_count = normals.len() + 1;
+    let mut offsets = Vec::with_capacity(point_count);
+    for index in 0..point_count {
+        if index == 0 {
+            offsets.push((normals[0].0 * half_width, normals[0].1 * half_width));
+            continue;
+        }
+        if index == point_count - 1 {
+            let normal = normals[normals.len() - 1];
+            offsets.push((normal.0 * half_width, normal.1 * half_width));
+            continue;
+        }
+
+        let previous = normals[index - 1];
+        let next = normals[index];
+        let sum = (previous.0 + next.0, previous.1 + next.1);
+        let sum_length = sum.0.hypot(sum.1);
+        if sum_length <= GEOMETRY_EPSILON {
+            offsets.push((next.0 * half_width, next.1 * half_width));
+            continue;
+        }
+
+        let miter = (sum.0 / sum_length, sum.1 / sum_length);
+        let denominator = miter.0 * next.0 + miter.1 * next.1;
+        if denominator.abs() <= GEOMETRY_EPSILON {
+            offsets.push((next.0 * half_width, next.1 * half_width));
+            continue;
+        }
+
+        let scale = (half_width / denominator).clamp(
+            -half_width * MAX_LINE_MITER_SCALE,
+            half_width * MAX_LINE_MITER_SCALE,
+        );
+        offsets.push((miter.0 * scale, miter.1 * scale));
+    }
+    offsets
+}
+
+fn append_round_line_cap(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    center: WgpuApplicationPoint,
+    outward_angle: f64,
+    radius: f64,
+    color: [f32; 4],
+) -> Result<(), JsValue> {
+    let start_angle = outward_angle - std::f64::consts::FRAC_PI_2;
+    for segment in 0..LINE_CAP_SEGMENTS {
+        let fraction_a = segment as f64 / LINE_CAP_SEGMENTS as f64;
+        let fraction_b = (segment + 1) as f64 / LINE_CAP_SEGMENTS as f64;
+        let angle_a = start_angle + std::f64::consts::PI * fraction_a;
+        let angle_b = start_angle + std::f64::consts::PI * fraction_b;
+        let a = point_on_circle(center.x, center.y, radius, angle_a);
+        let b = point_on_circle(center.x, center.y, radius, angle_b);
+        append_application_vertex(output, width, height, center.x, center.y, color)?;
+        append_application_vertex(output, width, height, a.0, a.1, color)?;
+        append_application_vertex(output, width, height, b.0, b.1, color)?;
+    }
     Ok(())
 }
 
