@@ -131,8 +131,7 @@ test("selection interaction targets points, flows, and rendered GeoJSON", async 
   await expect.poll(() => getSelectedPointId(page)).toBe("berlin");
   await expect(page.locator(".mb-maps__feature-popup")).toContainText("Berlin");
 
-  const box = await mapBox(page);
-  await page.mouse.click(box.x + box.width * 0.92, box.y + box.height * 0.88);
+  await clickMapRatio(page, { x: 0.92, y: 0.88 });
   await expect(page.locator(".mb-maps__feature-popup")).toHaveCount(0);
 
   await openView(page, "Flows");
@@ -442,6 +441,32 @@ async function mapBox(page: Page) {
   return box!;
 }
 
+async function ensureMapPointInViewport(page: Page, point: { x: number; y: number }) {
+  const box = await mapBox(page);
+  const viewport = page.viewportSize();
+
+  if (!viewport) {
+    return;
+  }
+
+  const absoluteY = box.y + point.y;
+  const margin = 32;
+
+  if (absoluteY >= margin && absoluteY <= viewport.height - margin) {
+    return;
+  }
+
+  await page.evaluate(
+    async ({ scrollDeltaY }) => {
+      window.scrollBy(0, scrollDeltaY);
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    },
+    { scrollDeltaY: absoluteY - viewport.height / 2 },
+  );
+}
+
 async function projectFeature(page: Page, coordinate: [number, number]) {
   const point = await page.evaluate((value) => {
     const projected = (
@@ -456,6 +481,7 @@ async function projectFeature(page: Page, coordinate: [number, number]) {
   }, coordinate);
 
   expect(point).not.toBeNull();
+  await ensureMapPointInViewport(page, point!);
 
   const box = await mapBox(page);
 
@@ -532,6 +558,15 @@ async function clickFeatureCoordinate(
   await page.mouse.click(point.x, point.y);
 }
 
+async function clickMapRatio(page: Page, ratio: { x: number; y: number }) {
+  let box = await mapBox(page);
+  const localPoint = { x: box.width * ratio.x, y: box.height * ratio.y };
+
+  await ensureMapPointInViewport(page, localPoint);
+  box = await mapBox(page);
+  await page.mouse.click(box.x + localPoint.x, box.y + localPoint.y);
+}
+
 async function dragMap(
   page: Page,
   fromRatio: { x: number; y: number },
@@ -582,10 +617,8 @@ async function shiftDragBoxZoom(page: Page) {
 }
 
 async function clickMapRatios(page: Page, ratios: Array<{ x: number; y: number }>) {
-  const box = await mapBox(page);
-
   for (const ratio of ratios) {
-    await page.mouse.click(box.x + box.width * ratio.x, box.y + box.height * ratio.y);
+    await clickMapRatio(page, ratio);
   }
 }
 
