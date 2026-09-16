@@ -583,9 +583,6 @@ export function MapsMapView({
 
           const hit = overlayControllerRef.current?.pickAtClientPoint(event.clientX, event.clientY);
           featurePointerDownPrimitiveRef.current = hit?.primitiveId ?? null;
-          if (hit) {
-            event.stopPropagation();
-          }
         }}
         onPointerLeave={(event) => {
           overlayControllerRef.current?.clearHover();
