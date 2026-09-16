@@ -18,6 +18,9 @@ const LINE_CAP_SEGMENTS: usize = 12;
 const MAX_LINE_MITER_SCALE: f64 = 4.0;
 const GEOMETRY_EPSILON: f64 = 1.0e-9;
 const GEOMETRY_EPSILON_SQUARED: f64 = GEOMETRY_EPSILON * GEOMETRY_EPSILON;
+const APPLICATION_CIRCLE: u32 = 0;
+const APPLICATION_LINE: u32 = 1;
+const APPLICATION_DIRECTION_MARKER: u32 = 2;
 
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
@@ -106,17 +109,12 @@ struct WgpuRasterTileId {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WgpuApplicationFrame {
+    circles: Vec<WgpuApplicationCircle>,
+    direction_markers: Vec<WgpuApplicationDirectionMarker>,
     height: f64,
-    primitives: Vec<WgpuApplicationPrimitive>,
+    lines: Vec<WgpuApplicationLine>,
+    order: Vec<[u32; 2]>,
     width: f64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
-enum WgpuApplicationPrimitive {
-    Circle(WgpuApplicationCircle),
-    DirectionMarker(WgpuApplicationDirectionMarker),
-    Line(WgpuApplicationLine),
 }
 
 #[derive(Debug, Deserialize)]
@@ -762,17 +760,36 @@ fn append_application_vertices(
         return Err(JsValue::from_str("invalid wgpu application frame extent"));
     }
 
-    for primitive in &frame.primitives {
-        match primitive {
-            WgpuApplicationPrimitive::Circle(circle) => {
-                append_application_circle(output, frame.width, frame.height, circle)?;
-            }
-            WgpuApplicationPrimitive::DirectionMarker(marker) => {
-                append_application_direction_marker(output, frame.width, frame.height, marker)?;
-            }
-            WgpuApplicationPrimitive::Line(line) => {
-                append_application_line(output, frame.width, frame.height, line)?;
-            }
+    for [kind, index] in &frame.order {
+        let index = *index as usize;
+        match *kind {
+            APPLICATION_CIRCLE => append_application_circle(
+                output,
+                frame.width,
+                frame.height,
+                frame
+                    .circles
+                    .get(index)
+                    .ok_or_else(|| JsValue::from_str("invalid wgpu circle order index"))?,
+            )?,
+            APPLICATION_LINE => append_application_line(
+                output,
+                frame.width,
+                frame.height,
+                frame
+                    .lines
+                    .get(index)
+                    .ok_or_else(|| JsValue::from_str("invalid wgpu line order index"))?,
+            )?,
+            APPLICATION_DIRECTION_MARKER => append_application_direction_marker(
+                output,
+                frame.width,
+                frame.height,
+                frame.direction_markers.get(index).ok_or_else(|| {
+                    JsValue::from_str("invalid wgpu direction marker order index")
+                })?,
+            )?,
+            _ => return Err(JsValue::from_str("invalid wgpu application order kind")),
         }
     }
     Ok(())
