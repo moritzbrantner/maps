@@ -38,14 +38,24 @@ export type MapsWgpuApplicationLine = {
   strokeWidth: number;
 };
 
-export type MapsWgpuApplicationPrimitive =
-  | { data: MapsWgpuApplicationCircle; kind: "circle" }
-  | { data: MapsWgpuApplicationDirectionMarker; kind: "directionMarker" }
-  | { data: MapsWgpuApplicationLine; kind: "line" };
+export const MAPS_WGPU_APPLICATION_CIRCLE = 0;
+export const MAPS_WGPU_APPLICATION_LINE = 1;
+export const MAPS_WGPU_APPLICATION_DIRECTION_MARKER = 2;
+
+export type MapsWgpuApplicationOrderEntry = [
+  kind:
+    | typeof MAPS_WGPU_APPLICATION_CIRCLE
+    | typeof MAPS_WGPU_APPLICATION_LINE
+    | typeof MAPS_WGPU_APPLICATION_DIRECTION_MARKER,
+  index: number,
+];
 
 export type MapsWgpuApplicationFrame = {
+  circles: MapsWgpuApplicationCircle[];
+  directionMarkers: MapsWgpuApplicationDirectionMarker[];
   height: number;
-  primitives: MapsWgpuApplicationPrimitive[];
+  lines: MapsWgpuApplicationLine[];
+  order: MapsWgpuApplicationOrderEntry[];
   width: number;
 };
 
@@ -53,12 +63,12 @@ export type MapsWgpuApplicationFrame = {
  * Packs first-party application geometry for the existing Rust/wgpu backend.
  *
  * Projection has already happened through the Maps-owned runtime. This transport only resolves
- * renderer-side colors and interaction stroke widths. The ordered primitive stream preserves the
- * Maps render order across circles, lines, and flow direction markers. Projected line points are
- * reused directly until the unavoidable WASM transport boundary rather than materialized again in
- * TypeScript. Polygon frames still fail closed to Canvas because the correctness backend owns
- * even-odd polygon/hole behavior until the GPU path can preserve it explicitly. Labels remain a
- * thin Canvas annotation pass above wgpu.
+ * renderer-side colors and interaction stroke widths. Per-kind arrays keep WASM deserialization
+ * simple and compact; `order` preserves the exact Maps render order across circles, lines, and flow
+ * direction markers. Projected line points are reused directly until the unavoidable WASM boundary.
+ * Polygon frames still fail closed to Canvas because the correctness backend owns even-odd
+ * polygon/hole behavior until the GPU path can preserve it explicitly. Labels remain a thin Canvas
+ * annotation pass above wgpu geometry.
  */
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
@@ -73,7 +83,10 @@ export function createMapsWgpuApplicationFrame(
     return null;
   }
 
-  const primitives: MapsWgpuApplicationPrimitive[] = [];
+  const circles: MapsWgpuApplicationCircle[] = [];
+  const directionMarkers: MapsWgpuApplicationDirectionMarker[] = [];
+  const lines: MapsWgpuApplicationLine[] = [];
+  const order: MapsWgpuApplicationOrderEntry[] = [];
 
   for (const scenePrimitive of frame.primitives) {
     switch (scenePrimitive.kind) {
@@ -99,16 +112,14 @@ export function createMapsWgpuApplicationFrame(
           return null;
         }
 
-        primitives.push({
-          data: {
-            fillColor,
-            radius: primitive.radius,
-            strokeColor,
-            strokeWidth,
-            x: scenePrimitive.x,
-            y: scenePrimitive.y,
-          },
-          kind: "circle",
+        order.push([MAPS_WGPU_APPLICATION_CIRCLE, circles.length]);
+        circles.push({
+          fillColor,
+          radius: primitive.radius,
+          strokeColor,
+          strokeWidth,
+          x: scenePrimitive.x,
+          y: scenePrimitive.y,
         });
         break;
       }
@@ -126,15 +137,13 @@ export function createMapsWgpuApplicationFrame(
           return null;
         }
 
-        primitives.push({
-          data: {
-            angle: scenePrimitive.angle,
-            color,
-            size: primitive.size,
-            x: scenePrimitive.x,
-            y: scenePrimitive.y,
-          },
-          kind: "directionMarker",
+        order.push([MAPS_WGPU_APPLICATION_DIRECTION_MARKER, directionMarkers.length]);
+        directionMarkers.push({
+          angle: scenePrimitive.angle,
+          color,
+          size: primitive.size,
+          x: scenePrimitive.x,
+          y: scenePrimitive.y,
         });
         break;
       }
@@ -158,7 +167,8 @@ export function createMapsWgpuApplicationFrame(
           return null;
         }
 
-        primitives.push({ data: { color, points, strokeWidth }, kind: "line" });
+        order.push([MAPS_WGPU_APPLICATION_LINE, lines.length]);
+        lines.push({ color, points, strokeWidth });
         break;
       }
       case "polygon":
@@ -167,8 +177,11 @@ export function createMapsWgpuApplicationFrame(
   }
 
   return {
+    circles,
+    directionMarkers,
     height: frame.height,
-    primitives,
+    lines,
+    order,
     width: frame.width,
   };
 }
