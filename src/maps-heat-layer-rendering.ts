@@ -8,6 +8,12 @@ import {
 } from "./heat-layer-data";
 import type { HeatLayerFeature, HeatLayerFeatureCollection } from "./heat-layer-types";
 import { clamp } from "./heat-layer-utils";
+import {
+  createMapsHeatSurfaceViewport,
+  getMapsHeatLayerViewportBounds,
+  queryMapsHeatLayerFeatureCollection,
+  type MapsHeatLayerViewportGeometry,
+} from "./maps-heat-layer-bounds";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
 import type {
   MapRenderCircle,
@@ -20,7 +26,6 @@ import {
   type HeatSurfaceBounds,
   type HeatSurfaceCacheMetadata,
   type HeatSurfaceRenderPlan,
-  type HeatSurfaceViewport,
 } from "./heat-surface-render-plan";
 import {
   createHeatLayerDataSurfaceDataUrl,
@@ -31,14 +36,7 @@ import {
 } from "./heat-surface";
 import type { GeoJsonMultiLineStringGeometry } from "./temporal-geojson-types";
 
-export type MapsHeatLayerViewport = {
-  bounds: HeatSurfaceBounds;
-  height: number;
-  project(coordinate: [longitude: number, latitude: number]): { x: number; y: number } | null;
-  unproject(x: number, y: number): [longitude: number, latitude: number] | null;
-  width: number;
-  zoom: number;
-};
+export type MapsHeatLayerViewport = MapsHeatLayerViewportGeometry;
 
 export type MapsHeatRasterRenderStep = {
   bounds: HeatSurfaceBounds;
@@ -161,10 +159,17 @@ function prepareFieldLayerRender(
   }
 
   if (descriptor.showDataPoints) {
-    const data = getHeatLayerFeatureCollectionInBounds(
-      descriptor.fieldDataPointCollection ?? descriptor.heatIndex.getFeatureCollection(viewport.bounds),
-      viewport.bounds,
-    );
+    const viewportBounds = getMapsHeatLayerViewportBounds(viewport);
+    const fieldDataPointCollection = descriptor.fieldDataPointCollection;
+    const data = fieldDataPointCollection
+      ? queryMapsHeatLayerFeatureCollection(
+          (bounds) => getHeatLayerFeatureCollectionInBounds(fieldDataPointCollection, bounds),
+          viewportBounds,
+        )
+      : queryMapsHeatLayerFeatureCollection(
+          (bounds) => descriptor.heatIndex.getFeatureCollection(bounds),
+          viewportBounds,
+        );
     primitives.push(...createDataPointPrimitives(descriptor, data));
   }
 
@@ -177,7 +182,7 @@ function prepareDensityLayerRender(
   viewport: MapsHeatLayerViewport,
   requestRender: () => void,
 ): MapsHeatLayerPreparedRender {
-  const map = createHeatSurfaceViewport(viewport);
+  const map = createMapsHeatSurfaceViewport(viewport);
   const queryBounds = getHeatLayerSurfaceQueryBounds({
     intensity: descriptor.heatmapIntensity,
     map,
@@ -187,7 +192,10 @@ function prepareDensityLayerRender(
     strategy: descriptor.heatmapRenderStrategy,
     surfaceCache: state.surface.metadata,
   });
-  const data = descriptor.heatIndex.getFeatureCollection(queryBounds);
+  const data = queryMapsHeatLayerFeatureCollection(
+    (bounds) => descriptor.heatIndex.getFeatureCollection(bounds),
+    queryBounds,
+  );
   const plan = createHeatSurfaceRenderPlan({
     colorRamp: descriptor.heatmapColorRamp,
     data,
@@ -213,7 +221,10 @@ function prepareDensityLayerRender(
   const primitives = descriptor.showDataPoints
     ? createDataPointPrimitives(
         descriptor,
-        descriptor.heatIndex.getFeatureCollection(viewport.bounds),
+        queryMapsHeatLayerFeatureCollection(
+          (bounds) => descriptor.heatIndex.getFeatureCollection(bounds),
+          getMapsHeatLayerViewportBounds(viewport),
+        ),
       )
     : [];
 
@@ -447,7 +458,7 @@ function createDataPointPrimitives(
       featureId,
       fillColor: descriptor.dataPointColor,
       fillOpacity: clamp(descriptor.dataPointOpacity, 0, 1),
-      interactive: false,
+      interactive: true,
       kind: "circle",
       label: null,
       primitiveId: `${descriptor.layerId}:data:${featureId}`,
@@ -458,28 +469,4 @@ function createDataPointPrimitives(
     };
     return primitive as MapVectorRenderPrimitive<unknown>;
   });
-}
-
-function createHeatSurfaceViewport(viewport: MapsHeatLayerViewport): HeatSurfaceViewport {
-  return {
-    containerPointToLatLng([x, y]) {
-      const coordinate = viewport.unproject(x, y);
-      return coordinate
-        ? { lat: coordinate[1], lng: coordinate[0] }
-        : { lat: Number.NaN, lng: Number.NaN };
-    },
-    getContainer() {
-      return {
-        clientHeight: viewport.height,
-        clientWidth: viewport.width,
-      };
-    },
-    getZoom() {
-      return viewport.zoom;
-    },
-    latLngToContainerPoint(input) {
-      const [latitude, longitude] = Array.isArray(input) ? input : [input.lat, input.lng];
-      return viewport.project([longitude, latitude]) ?? { x: Number.NaN, y: Number.NaN };
-    },
-  };
 }
