@@ -69,8 +69,16 @@ export function drawCanvasMapScene<TFeature = unknown>(
   context.clearRect(0, 0, scene.width, scene.height);
 
   for (const primitive of scene.primitives) {
-    drawPrimitive(context, primitive, options);
+    drawCanvasMapPrimitive(context, primitive, options);
   }
+}
+
+export function drawCanvasMapPrimitive<TFeature = unknown>(
+  context: CanvasRenderingContext2D,
+  primitive: CanvasMapScenePrimitive<TFeature>,
+  options: CanvasMapDrawOptions = {},
+) {
+  drawPrimitive(context, primitive, options);
 }
 
 export function drawCanvasMapLabels<TFeature = unknown>(
