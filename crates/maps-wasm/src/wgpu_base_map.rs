@@ -17,6 +17,7 @@ const CIRCLE_SEGMENTS: usize = 24;
 const LINE_CAP_SEGMENTS: usize = 12;
 const MAX_LINE_MITER_SCALE: f64 = 4.0;
 const GEOMETRY_EPSILON: f64 = 1.0e-9;
+const GEOMETRY_EPSILON_SQUARED: f64 = GEOMETRY_EPSILON * GEOMETRY_EPSILON;
 
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
@@ -930,7 +931,7 @@ fn append_application_line(
         width,
         height,
         first,
-        (-first_direction.1).atan2(-first_direction.0),
+        (-first_direction.0, -first_direction.1),
         half_width,
         line.color,
     )?;
@@ -941,7 +942,7 @@ fn append_application_line(
         width,
         height,
         last,
-        last_direction.1.atan2(last_direction.0),
+        last_direction,
         half_width,
         line.color,
     )?;
@@ -955,7 +956,7 @@ fn deduplicate_line_points(points: &[WgpuApplicationPoint]) -> Vec<WgpuApplicati
         let keep = result.last().is_none_or(|previous: &WgpuApplicationPoint| {
             let dx = point.x - previous.x;
             let dy = point.y - previous.y;
-            dx.hypot(dy) > GEOMETRY_EPSILON
+            dx * dx + dy * dy > GEOMETRY_EPSILON_SQUARED
         });
         if keep {
             result.push(*point);
@@ -970,11 +971,12 @@ fn unit_direction(
 ) -> Result<(f64, f64), JsValue> {
     let dx = end.x - start.x;
     let dy = end.y - start.y;
-    let length = dx.hypot(dy);
-    if !length.is_finite() || length <= GEOMETRY_EPSILON {
+    let length_squared = dx * dx + dy * dy;
+    if !length_squared.is_finite() || length_squared <= GEOMETRY_EPSILON_SQUARED {
         return Err(JsValue::from_str("invalid wgpu application line segment"));
     }
-    Ok((dx / length, dy / length))
+    let inverse_length = length_squared.sqrt().recip();
+    Ok((dx * inverse_length, dy * inverse_length))
 }
 
 fn line_offsets(normals: &[(f64, f64)], half_width: f64) -> Vec<(f64, f64)> {
@@ -994,13 +996,14 @@ fn line_offsets(normals: &[(f64, f64)], half_width: f64) -> Vec<(f64, f64)> {
         let previous = normals[index - 1];
         let next = normals[index];
         let sum = (previous.0 + next.0, previous.1 + next.1);
-        let sum_length = sum.0.hypot(sum.1);
-        if sum_length <= GEOMETRY_EPSILON {
+        let sum_length_squared = sum.0 * sum.0 + sum.1 * sum.1;
+        if sum_length_squared <= GEOMETRY_EPSILON_SQUARED {
             offsets.push((next.0 * half_width, next.1 * half_width));
             continue;
         }
 
-        let miter = (sum.0 / sum_length, sum.1 / sum_length);
+        let inverse_sum_length = sum_length_squared.sqrt().recip();
+        let miter = (sum.0 * inverse_sum_length, sum.1 * inverse_sum_length);
         let denominator = miter.0 * next.0 + miter.1 * next.1;
         if denominator.abs() <= GEOMETRY_EPSILON {
             offsets.push((next.0 * half_width, next.1 * half_width));
@@ -1021,23 +1024,38 @@ fn append_round_line_cap(
     width: f64,
     height: f64,
     center: WgpuApplicationPoint,
-    outward_angle: f64,
+    outward: (f64, f64),
     radius: f64,
     color: [f32; 4],
 ) -> Result<(), JsValue> {
-    let start_angle = outward_angle - std::f64::consts::FRAC_PI_2;
+    let normal = (-outward.1, outward.0);
     for segment in 0..LINE_CAP_SEGMENTS {
         let fraction_a = segment as f64 / LINE_CAP_SEGMENTS as f64;
         let fraction_b = (segment + 1) as f64 / LINE_CAP_SEGMENTS as f64;
-        let angle_a = start_angle + std::f64::consts::PI * fraction_a;
-        let angle_b = start_angle + std::f64::consts::PI * fraction_b;
-        let a = point_on_circle(center.x, center.y, radius, angle_a);
-        let b = point_on_circle(center.x, center.y, radius, angle_b);
+        let angle_a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * fraction_a;
+        let angle_b = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * fraction_b;
+        let a = point_on_oriented_circle(center, outward, normal, radius, angle_a);
+        let b = point_on_oriented_circle(center, outward, normal, radius, angle_b);
         append_application_vertex(output, width, height, center.x, center.y, color)?;
         append_application_vertex(output, width, height, a.0, a.1, color)?;
         append_application_vertex(output, width, height, b.0, b.1, color)?;
     }
     Ok(())
+}
+
+fn point_on_oriented_circle(
+    center: WgpuApplicationPoint,
+    outward: (f64, f64),
+    normal: (f64, f64),
+    radius: f64,
+    angle: f64,
+) -> (f64, f64) {
+    let along = angle.cos() * radius;
+    let across = angle.sin() * radius;
+    (
+        center.x + outward.0 * along + normal.0 * across,
+        center.y + outward.1 * along + normal.1 * across,
+    )
 }
 
 fn append_application_vertex(
