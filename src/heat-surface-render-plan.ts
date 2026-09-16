@@ -535,9 +535,9 @@ function getHeatLayerStableCoverageBounds(
 
 function normalizeHeatLayerBounds(bounds: HeatSurfaceBounds): HeatSurfaceBounds {
   return [
-    clamp(bounds[0], -180, 180),
+    bounds[0],
     clamp(bounds[1], -90, 90),
-    clamp(bounds[2], -180, 180),
+    bounds[2],
     clamp(bounds[3], -90, 90),
   ];
 }
@@ -670,9 +670,9 @@ function getHeatLayerPaddedBounds(
   const southEast = map.containerPointToLatLng([width + padding, height + padding]);
 
   return [
-    clamp(Math.min(northWest.lng, southEast.lng), -180, 180),
+    Math.min(northWest.lng, southEast.lng),
     clamp(Math.min(northWest.lat, southEast.lat), -90, 90),
-    clamp(Math.max(northWest.lng, southEast.lng), -180, 180),
+    Math.max(northWest.lng, southEast.lng),
     clamp(Math.max(northWest.lat, southEast.lat), -90, 90),
   ];
 }
