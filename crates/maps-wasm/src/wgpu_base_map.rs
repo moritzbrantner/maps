@@ -930,7 +930,7 @@ fn append_application_line(
         width,
         height,
         first,
-        (-first_direction.0).atan2(-first_direction.1),
+        (-first_direction.1).atan2(-first_direction.0),
         half_width,
         line.color,
     )?;
@@ -941,7 +941,7 @@ fn append_application_line(
         width,
         height,
         last,
-        last_direction.0.atan2(last_direction.1),
+        last_direction.1.atan2(last_direction.0),
         half_width,
         line.color,
     )?;
