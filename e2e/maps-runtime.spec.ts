@@ -91,15 +91,53 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
 
   const zoomedViewState = await viewState.textContent();
   const zoomedPointPosition = await overlayPointPosition(page);
+  const cdp = await page.context().newCDPSession(page);
+  const dragStart = {
+    x: box!.x + box!.width * 0.8,
+    y: box!.y + box!.height * 0.75,
+  };
+  const dragEnd = { x: dragStart.x + 96, y: dragStart.y + 36 };
+  const dragTimestamp =
+    (await page.evaluate(() => performance.timeOrigin + performance.now() - 200)) / 1000;
 
   // Start well outside the application overlays so the Milestone B gesture host,
-  // not the feature-picking boundary, owns this pointer sequence.
-  await page.mouse.move(box!.x + box!.width * 0.8, box!.y + box!.height * 0.75);
-  await page.mouse.down();
-  await page.mouse.move(box!.x + box!.width * 0.8 + 96, box!.y + box!.height * 0.75 + 36, {
-    steps: 4,
+  // not the feature-picking boundary, owns this pointer sequence. Give Chromium explicit
+  // 16 ms input timestamps so the velocity tracker sees deterministic positive sample gaps
+  // inside its 80 ms acceptance window, independent of CI scheduling latency.
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: dragStart.x,
+    y: dragStart.y,
+    timestamp: dragTimestamp,
   });
-  await page.mouse.up();
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: dragStart.x,
+    y: dragStart.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+    timestamp: dragTimestamp + 0.016,
+  });
+  for (let step = 1; step <= 4; step += 1) {
+    await cdp.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: dragStart.x + ((dragEnd.x - dragStart.x) * step) / 4,
+      y: dragStart.y + ((dragEnd.y - dragStart.y) * step) / 4,
+      button: "left",
+      buttons: 1,
+      timestamp: dragTimestamp + 0.016 * (step + 1),
+    });
+  }
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: dragEnd.x,
+    y: dragEnd.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+    timestamp: dragTimestamp + 0.096,
+  });
   const releasedViewState = await viewState.textContent();
 
   await expect.poll(async () => viewState.textContent()).not.toBe(zoomedViewState);
@@ -113,7 +151,6 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
 
   const draggedViewState = parseViewState(settledViewState);
   const draggedPointPosition = await overlayPointPosition(page);
-  const cdp = await page.context().newCDPSession(page);
   const touchCenter = {
     x: box!.x + box!.width * 0.5,
     y: box!.y + box!.height * 0.5,
