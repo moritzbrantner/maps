@@ -17,3 +17,22 @@ test("hosted Pages artifact reaches Rust authority without browser errors", asyn
 
   expect(pageErrors).toEqual([]);
 });
+
+test("hosted evidence page fails closed with actionable missing runtime diagnostics", async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.goto("/maps/evidence/");
+
+  await expect(page.getByRole("heading", { name: "Evidence" })).toBeVisible();
+  const runtimeRow = page
+    .getByRole("row")
+    .filter({ hasText: "Runtime and Moonlight evidence" });
+  await expect(runtimeRow).toContainText("source-unavailable", { timeout: 45_000 });
+  await expect(runtimeRow).toContainText("Unavailable");
+  await expect(page.getByText(/evidence sources need attention/)).toBeVisible();
+
+  expect(pageErrors).toEqual([]);
+});
