@@ -15,11 +15,9 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         launchOptions: {
           args: [
-            "--disable-vulkan-surface",
-            "--enable-features=Vulkan",
             "--enable-unsafe-swiftshader",
             "--enable-unsafe-webgpu",
-            "--use-angle=swiftshader",
+            "--use-gl=swiftshader",
           ],
         },
         viewport: { height: 1000, width: 1440 },
@@ -32,11 +30,9 @@ export default defineConfig({
         ...devices["Pixel 5"],
         launchOptions: {
           args: [
-            "--disable-vulkan-surface",
-            "--enable-features=Vulkan",
             "--enable-unsafe-swiftshader",
             "--enable-unsafe-webgpu",
-            "--use-angle=swiftshader",
+            "--use-gl=swiftshader",
           ],
         },
         viewport: { height: 844, width: 390 },
