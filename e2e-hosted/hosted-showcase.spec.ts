@@ -31,7 +31,10 @@ test("hosted evidence page fails closed with actionable missing runtime diagnost
     .getByRole("row")
     .filter({ hasText: "Runtime and Moonlight evidence" });
   await expect(runtimeRow).toContainText("source-unavailable", { timeout: 45_000 });
-  await expect(runtimeRow).toContainText("Unavailable");
+  await expect(runtimeRow).toContainText("unavailable");
+  await expect(runtimeRow).toContainText(
+    "Evidence source returned non-JSON content (text/html).",
+  );
   await expect(page.getByText(/evidence sources need attention/)).toBeVisible();
 
   expect(pageErrors).toEqual([]);
