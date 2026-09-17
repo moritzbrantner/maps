@@ -51,6 +51,7 @@ run("wasm-opt", [
   "--converge",
   "--enable-bulk-memory",
   "--enable-nontrapping-float-to-int",
+  "--dae",
   "-o",
   optimizedWasmOutput,
 ]);
