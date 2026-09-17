@@ -165,6 +165,7 @@ pub struct MapsWgpuBaseMapRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     surface_view_format: wgpu::TextureFormat,
+    surface_clear_alpha: f64,
     device_lost: Arc<AtomicBool>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -215,15 +216,17 @@ impl MapsWgpuBaseMapRenderer {
         let mut config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| JsValue::from_str("wgpu surface has no compatible configuration"))?;
-        if !capabilities
+        if capabilities
             .alpha_modes
             .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
         {
-            return Err(JsValue::from_str(
-                "wgpu surface does not support premultiplied-alpha compositing",
-            ));
+            config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         }
-        config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
+        let surface_clear_alpha = if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
+            1.0
+        } else {
+            0.0
+        };
         config.present_mode = wgpu::PresentMode::AutoVsync;
         let surface_view_format = config.format.add_srgb_suffix();
         if surface_view_format != config.format {
@@ -427,6 +430,7 @@ impl MapsWgpuBaseMapRenderer {
             queue,
             config,
             surface_view_format,
+            surface_clear_alpha,
             device_lost,
             camera_buffer,
             camera_bind_group,
@@ -618,7 +622,7 @@ impl MapsWgpuBaseMapRenderer {
                     r: 0.0,
                     g: 0.0,
                     b: 0.0,
-                    a: 0.0,
+                    a: self.surface_clear_alpha,
                 }),
                 store: wgpu::StoreOp::Store,
             },
