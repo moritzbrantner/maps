@@ -257,7 +257,10 @@ export function MapsCanvasFlatRuntime({
           renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
           packApplicationFrame = (await import("./wgpu-application-frame"))
             .createMapsWgpuApplicationFrame;
-        } catch {
+          delete canvas.dataset.mapBaseRendererError;
+        } catch (error) {
+          canvas.dataset.mapBaseRendererError =
+            error instanceof Error ? error.message : String(error);
           renderer?.dispose();
           renderer = null;
           packApplicationFrame = null;

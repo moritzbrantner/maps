@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,8 @@ const wasmInput = path.join(
   "maps_wasm.wasm",
 );
 const outDir = path.join(rootDir, "dist", "wasm");
+const wasmOutput = path.join(outDir, "maps_wasm_bg.wasm");
+const optimizedWasmOutput = path.join(outDir, "maps_wasm_bg.optimized.wasm");
 
 run("cargo", [
   "build",
@@ -42,6 +44,18 @@ run("wasm-bindgen", [
   "--remove-name-section",
   "--remove-producers-section",
 ]);
+
+run("wasm-opt", [
+  wasmOutput,
+  "-O1",
+  "--converge",
+  "--enable-bulk-memory",
+  "--enable-nontrapping-float-to-int",
+  "--dae",
+  "-o",
+  optimizedWasmOutput,
+]);
+renameSync(optimizedWasmOutput, wasmOutput);
 
 console.log(`Built Maps WASM package artifact in ${path.relative(rootDir, outDir)}.`);
 

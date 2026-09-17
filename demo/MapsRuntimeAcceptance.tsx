@@ -34,7 +34,11 @@ const ACCEPTANCE_FLOWS = [
   },
 ] as const;
 
-export function MapsRuntimeAcceptance() {
+export type MapsRuntimeAcceptanceProps = {
+  includePolygon?: boolean;
+};
+
+export function MapsRuntimeAcceptance({ includePolygon = true }: MapsRuntimeAcceptanceProps = {}) {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [clusterSelectedId, setClusterSelectedId] = useState<string | null>(null);
@@ -120,41 +124,43 @@ export function MapsRuntimeAcceptance() {
           showDirection
           showEndpoints
         />
-        <GeoJsonLayer
-          featureCollection={{
-            features: [
-              {
-                geometry: {
-                  coordinates: [
-                    [
-                      [13.1, 52.35],
-                      [13.72, 52.35],
-                      [13.72, 52.7],
-                      [13.1, 52.7],
-                      [13.1, 52.35],
+        {includePolygon ? (
+          <GeoJsonLayer
+            featureCollection={{
+              features: [
+                {
+                  geometry: {
+                    coordinates: [
+                      [
+                        [13.1, 52.35],
+                        [13.72, 52.35],
+                        [13.72, 52.7],
+                        [13.1, 52.7],
+                        [13.1, 52.35],
+                      ],
                     ],
-                  ],
-                  type: "Polygon",
+                    type: "Polygon",
+                  },
+                  id: "acceptance-zone",
+                  properties: {},
+                  type: "Feature",
                 },
-                id: "acceptance-zone",
-                properties: {},
-                type: "Feature",
-              },
-            ],
-            type: "FeatureCollection",
-          }}
-          onSelectedFeatureIdChange={(featureId, context) => {
-            setZoneSelectedId(featureId);
-            setLastInteraction(`geojson:${context.source}:${featureId ?? "none"}`);
-          }}
-          polygonFillColor="#2563eb"
-          polygonFillOpacity={0.12}
-          polygonStrokeColor="#2563eb"
-          renderFeaturePopup={(feature) => (
-            <span data-testid="maps-runtime-feature-popup">GeoJSON {feature.id}</span>
-          )}
-          selectedFeatureId={zoneSelectedId}
-        />
+              ],
+              type: "FeatureCollection",
+            }}
+            onSelectedFeatureIdChange={(featureId, context) => {
+              setZoneSelectedId(featureId);
+              setLastInteraction(`geojson:${context.source}:${featureId ?? "none"}`);
+            }}
+            polygonFillColor="#2563eb"
+            polygonFillOpacity={0.12}
+            polygonStrokeColor="#2563eb"
+            renderFeaturePopup={(feature) => (
+              <span data-testid="maps-runtime-feature-popup">GeoJSON {feature.id}</span>
+            )}
+            selectedFeatureId={zoneSelectedId}
+          />
+        ) : null}
         <PointLayer
           hoveredFeatureId={pointHoveredId}
           onFeatureContextMenu={(feature) => {
