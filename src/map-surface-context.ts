@@ -17,6 +17,7 @@ import type {
   MapFeatureContextMenuContext,
   MapFeatureInteractionChange,
 } from "./map-interaction";
+import type { MapsRasterTileId } from "./flat-runtime-wasm";
 
 export type MapLibreLayerRender = (context: {
   flat: FlatLayerFactory;
@@ -98,6 +99,7 @@ export type MapSurfaceContextValue = {
   ) => boolean;
   isMeasuring: boolean;
   interactionMode: MapInteractionMode;
+  getVisibleTiles?: () => readonly MapsRasterTileId[];
   flatMap: FlatMapAdapter | null;
   maplibre: typeof import("maplibre-gl") | null;
   maplibreMap: MapLibreMap | null;
