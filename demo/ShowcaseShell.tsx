@@ -48,7 +48,8 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
             <span>Map engine</span>
             <strong>Rust/WASM + wgpu</strong>
             <small>
-              First-party camera, raster base map, and application geometry. MapLibre is reference-only.
+              First-party camera, raster base map, and application geometry. MapLibre is
+              reference-only.
             </small>
           </article>
           <article className="maps-showcase__runtime-card">
