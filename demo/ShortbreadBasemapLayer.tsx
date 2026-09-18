@@ -183,9 +183,7 @@ function normalizeShortbreadTiles(tiles: readonly MapsRasterTileId[]) {
 
   for (const tile of tiles) {
     const normalized =
-      tile.z <= SHORTBREAD_MAX_ZOOM
-        ? tile
-        : ancestorTile(tile, SHORTBREAD_MAX_ZOOM);
+      tile.z <= SHORTBREAD_MAX_ZOOM ? tile : ancestorTile(tile, SHORTBREAD_MAX_ZOOM);
     unique.set(normalized.key, normalized);
   }
 
