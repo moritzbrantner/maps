@@ -1,18 +1,27 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { NativeSelect } from "@moritzbrantner/ui";
 import {
   ClusterLayer,
+  GeoJsonLayer,
   MapView,
   type AggregatedMapFeature,
   type MapPoint,
+  type MapSurfaceController,
   type MapViewState,
   type RasterMapStyle,
 } from "@moritzbrantner/maps";
+import type { MapsCanvasFlatRuntimeController } from "../src/canvas-flat-runtime";
 import { demoMapStyle } from "./data/map-style";
-import { ShortbreadBasemapLayer } from "./ShortbreadBasemapLayer";
+import {
+  getShortbreadBasemapStyle,
+  useShortbreadBasemap,
+} from "./ShortbreadBasemapLayer";
 
 type RendererBackend = "maps" | "maplibre";
+
+type MapsDemoController = MapSurfaceController &
+  Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles">;
 
 type ComparisonPointProperties = {
   demand: number;
@@ -29,7 +38,18 @@ export function RendererComparison() {
   const [backend, setBackend] = useState<RendererBackend>("maps");
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(initialViewState);
+  const [mapsController, setMapsController] = useState<MapsDemoController | null>(null);
   const points = useMemo(() => createComparisonPoints(), []);
+  const visibleTiles =
+    backend === "maps" ? (mapsController?.getVisibleTiles() ?? []) : [];
+  const basemap = useShortbreadBasemap(visibleTiles);
+  const handleControllerReady = useCallback((controller: MapSurfaceController | null) => {
+    setMapsController(
+      controller && "getVisibleTiles" in controller
+        ? (controller as MapsDemoController)
+        : null,
+    );
+  }, []);
   const layerProps = {
     getFeatureId: getComparisonFeatureId,
     onFeatureSelect: (feature: AggregatedMapFeature<ComparisonPointProperties> | null) =>
@@ -77,15 +97,33 @@ export function RendererComparison() {
           flatRuntime={backend === "maps" ? "maps" : undefined}
           mapLabel="Renderer parity map"
           mapStyle={backend === "maps" ? firstPartyMapStyle : demoMapStyle}
+          onMapControllerReady={handleControllerReady}
           onViewStateChange={setViewState}
           style={{ minHeight: 430 }}
           viewState={viewState}
         >
-          {backend === "maps" ? <ShortbreadBasemapLayer /> : null}
+          {backend === "maps" && basemap.enabled ? (
+            <GeoJsonLayer
+              featureCollection={basemap.featureCollection}
+              getFeatureStyle={(feature) =>
+                getShortbreadBasemapStyle(feature.properties.kind)
+              }
+              isFeatureInteractive={() => false}
+              layerId="shortbread-basemap"
+            />
+          ) : null}
           <ClusterLayer {...layerProps} />
         </MapView>
       </div>
 
+      <span
+        aria-hidden="true"
+        data-shortbread-error={basemap.error ?? undefined}
+        data-shortbread-feature-count={basemap.featureCollection.features.length}
+        data-shortbread-state={basemap.state}
+        data-shortbread-tile-count={basemap.tileCount}
+        hidden
+      />
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
         <span>
           Backend:{" "}
