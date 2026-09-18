@@ -13,6 +13,8 @@ import {
 
 const SHORTBREAD_TILE_URL = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt";
 const SHORTBREAD_MAX_ZOOM = 14;
+const SHORTBREAD_CACHE_CAPACITY = 64;
+const SHORTBREAD_LOAD_CONCURRENCY = 8;
 const SHORTBREAD_ACCEPT =
   "application/vnd.mapbox-vector-tile,application/x-protobuf,application/octet-stream;q=0.9,*/*;q=0.1";
 
@@ -59,13 +61,18 @@ export function ShortbreadBasemapLayer() {
       }
     }
 
+    pruneShortbreadCache(cacheRef.current, visibleKeys);
+
     let started = false;
+    let availableSlots = Math.max(0, SHORTBREAD_LOAD_CONCURRENCY - inflightRef.current.size);
     for (const tile of visibleTiles) {
+      if (availableSlots === 0) break;
       if (cacheRef.current.has(tile.key) || inflightRef.current.has(tile.key)) {
         continue;
       }
 
       started = true;
+      availableSlots -= 1;
       const controller = new AbortController();
       inflightRef.current.set(tile.key, controller);
 
@@ -90,7 +97,7 @@ export function ShortbreadBasemapLayer() {
     if (started) {
       setTileState({ status: "loading", error: null });
     }
-  }, [enabled, visibleTileKey]);
+  }, [cacheVersion, enabled, visibleTileKey]);
 
   useEffect(
     () => () => {
@@ -187,6 +194,18 @@ function normalizeShortbreadTiles(tiles: readonly MapsRasterTileId[]) {
   }
 
   return [...unique.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function pruneShortbreadCache(
+  cache: Map<string, ShortbreadBasemapLine[]>,
+  visibleKeys: ReadonlySet<string>,
+) {
+  while (cache.size > SHORTBREAD_CACHE_CAPACITY) {
+    const candidate =
+      [...cache.keys()].find((key) => !visibleKeys.has(key)) ?? cache.keys().next().value;
+    if (candidate === undefined) return;
+    cache.delete(candidate);
+  }
 }
 
 function ancestorTile(tile: MapsRasterTileId, z: number): MapsRasterTileId {
