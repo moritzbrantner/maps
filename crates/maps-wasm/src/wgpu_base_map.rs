@@ -21,6 +21,9 @@ const GEOMETRY_EPSILON_SQUARED: f64 = GEOMETRY_EPSILON * GEOMETRY_EPSILON;
 const APPLICATION_CIRCLE: u32 = 0;
 const APPLICATION_LINE: u32 = 1;
 const APPLICATION_DIRECTION_MARKER: u32 = 2;
+const MAP_BACKGROUND_RED: f64 = 249.0 / 255.0;
+const MAP_BACKGROUND_GREEN: f64 = 244.0 / 255.0;
+const MAP_BACKGROUND_BLUE: f64 = 238.0 / 255.0;
 
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
@@ -619,9 +622,9 @@ impl MapsWgpuBaseMapRenderer {
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
+                    r: MAP_BACKGROUND_RED,
+                    g: MAP_BACKGROUND_GREEN,
+                    b: MAP_BACKGROUND_BLUE,
                     a: self.surface_clear_alpha,
                 }),
                 store: wgpu::StoreOp::Store,
