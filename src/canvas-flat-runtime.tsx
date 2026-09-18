@@ -62,6 +62,7 @@ type MapsWgpuApplicationFrameFactory = (
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   getVisibleBounds(): MapBounds;
+  getVisibleTiles(): MapsRasterTileId[];
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   renderApplicationFrame(
     frame: MapScreenRenderFrame<unknown>,
@@ -254,19 +255,17 @@ export function MapsCanvasFlatRuntime({
 
       let renderer: MapsWgpuBaseMapRenderer | null = null;
       let packApplicationFrame: MapsWgpuApplicationFrameFactory | null = null;
-      if (currentSource) {
-        try {
-          renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
-          packApplicationFrame = (await import("./wgpu-application-frame"))
-            .createMapsWgpuApplicationFrame;
-          delete canvas.dataset.mapBaseRendererError;
-        } catch (error) {
-          canvas.dataset.mapBaseRendererError =
-            error instanceof Error ? error.message : String(error);
-          renderer?.dispose();
-          renderer = null;
-          packApplicationFrame = null;
-        }
+      try {
+        renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
+        packApplicationFrame = (await import("./wgpu-application-frame"))
+          .createMapsWgpuApplicationFrame;
+        delete canvas.dataset.mapBaseRendererError;
+      } catch (error) {
+        canvas.dataset.mapBaseRendererError =
+          error instanceof Error ? error.message : String(error);
+        renderer?.dispose();
+        renderer = null;
+        packApplicationFrame = null;
       }
 
       if (cancelled) {
@@ -327,6 +326,9 @@ export function MapsCanvasFlatRuntime({
         getVisibleBounds() {
           const bounds = runtime.frame().visibleBounds;
           return [bounds.west, bounds.south, bounds.east, bounds.north];
+        },
+        getVisibleTiles() {
+          return frameSynchronizer.getVisibleTiles();
         },
         project(coordinates) {
           const [x, y] = runtime.project(coordinates[0], coordinates[1]);
@@ -754,6 +756,14 @@ function createFrameSynchronizer({
       cancelDeviceLossMonitor();
       lastFrame = null;
       applicationFrame = null;
+    },
+    getVisibleTiles() {
+      const frame = lastFrame ?? runtime.frame();
+      const unique = new Map<string, MapsRasterTileId>();
+      for (const placement of frame.placements) {
+        unique.set(placement.tile.key, placement.tile);
+      }
+      return [...unique.values()];
     },
     setApplicationFrame,
     syncFrame,
