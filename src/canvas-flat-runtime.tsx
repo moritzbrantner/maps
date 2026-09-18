@@ -42,6 +42,7 @@ const DEFAULT_SOURCE_MAX_ZOOM = 19;
 const MAX_MAP_ZOOM = 22;
 const DEVICE_LOSS_POLL_MS = 250;
 const CANVAS_PROJECTIVE_SUBDIVISIONS = 8;
+const MAP_BACKGROUND = "#f9f4ee";
 const RASTER_TILE_ACCEPT =
   "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 
@@ -818,7 +819,8 @@ function drawCanvasFrame(
 
   const ratio = Math.max(1, window.devicePixelRatio || 1);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.clearRect(0, 0, frame.camera.width, frame.camera.height);
+  context.fillStyle = MAP_BACKGROUND;
+  context.fillRect(0, 0, frame.camera.width, frame.camera.height);
 
   const viewport = { height: frame.camera.height, width: frame.camera.width };
   const subdivisions = frame.camera.pitch === 0 ? 1 : CANVAS_PROJECTIVE_SUBDIVISIONS;
