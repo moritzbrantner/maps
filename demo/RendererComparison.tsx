@@ -10,6 +10,7 @@ import {
   type RasterMapStyle,
 } from "@moritzbrantner/maps";
 import { demoMapStyle } from "./data/map-style";
+import { ShortbreadBasemapLayer } from "./ShortbreadBasemapLayer";
 
 type RendererBackend = "maps" | "maplibre";
 
@@ -19,17 +20,10 @@ type ComparisonPointProperties = {
 };
 
 const initialViewState: MapViewState = { center: [10.3, 50.4], zoom: 4.4 };
-const e2eRasterTile =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-const firstPartyMapStyle: RasterMapStyle | undefined =
-  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
-    ? {
-        maxZoom: 19,
-        minZoom: 0,
-        tileSize: 256,
-        tiles: e2eRasterTile,
-      }
-    : undefined;
+const firstPartyMapStyle: RasterMapStyle = {
+  attribution: "© OpenStreetMap contributors",
+  tiles: false,
+};
 
 export function RendererComparison() {
   const [backend, setBackend] = useState<RendererBackend>("maps");
@@ -59,9 +53,9 @@ export function RendererComparison() {
             First-party Maps engine
           </h2>
           <p className="mb-0 mt-2 text-sm leading-6 text-muted-foreground">
-            This is the Maps-owned runtime: our Rust/WASM camera and map semantics drive our wgpu
-            renderer for the raster base map and application geometry. MapLibre remains available
-            only as a reference path for parity checks during the migration.
+            This is the Maps-owned runtime: our Rust/WASM camera and tile cover drive our wgpu
+            renderer. OpenStreetMap Shortbread vector tiles are decoded by Maps and turned into our
+            own render geometry; MapLibre remains only as a reference path.
           </p>
         </div>
         <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
@@ -87,6 +81,7 @@ export function RendererComparison() {
           style={{ minHeight: 430 }}
           viewState={viewState}
         >
+          {backend === "maps" ? <ShortbreadBasemapLayer /> : null}
           <ClusterLayer {...layerProps} />
         </MapView>
       </div>
@@ -96,6 +91,12 @@ export function RendererComparison() {
           Backend:{" "}
           <strong className="text-foreground">
             {backend === "maps" ? "Maps engine" : "MapLibre reference"}
+          </strong>
+        </span>
+        <span>
+          Basemap:{" "}
+          <strong className="text-foreground">
+            {backend === "maps" ? "Shortbread vector / Maps renderer" : "MapLibre reference"}
           </strong>
         </span>
         <span>
