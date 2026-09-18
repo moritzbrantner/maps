@@ -8,10 +8,9 @@ import {
   type MapPoint,
   type MapViewState,
 } from "@moritzbrantner/maps";
-import { CanvasPointClusterLayer } from "../src/canvas-point-cluster-layer";
 import { demoMapStyle } from "./data/map-style";
 
-type RendererBackend = "maps" | "maplibre" | "canvas2d";
+type RendererBackend = "maps" | "maplibre";
 
 type ComparisonPointProperties = {
   demand: number;
@@ -45,25 +44,23 @@ export function RendererComparison() {
             Renderer boundary
           </p>
           <h2 className="mb-0 mt-1 text-xl font-semibold tracking-tight md:text-2xl">
-            Same Maps frame, different pixels
+            First-party Maps engine
           </h2>
           <p className="mb-0 mt-2 text-sm leading-6 text-muted-foreground">
-            Switch between the first-party Maps engine and the two reference paths without changing
-            the viewport, selection, clustering, or expansion semantics. The Maps engine owns the
-            camera, raster base map, and application geometry; it uses WebGPU when available and
-            falls back to Canvas2D deterministically.
+            This is the Maps-owned runtime: our Rust/WASM camera and map semantics drive our wgpu
+            renderer for the raster base map and application geometry. MapLibre remains available
+            only as a reference path for parity checks during the migration.
           </p>
         </div>
         <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
-          <span>Render path</span>
+          <span>Engine</span>
           <NativeSelect
-            aria-label="Renderer path"
+            aria-label="Map engine"
             value={backend}
             onChange={(event) => setBackend(event.target.value as RendererBackend)}
           >
             <option value="maps">Maps engine (first-party)</option>
-            <option value="maplibre">MapLibre layer</option>
-            <option value="canvas2d">Canvas2D reference layer</option>
+            <option value="maplibre">MapLibre (reference)</option>
           </NativeSelect>
         </label>
       </div>
@@ -78,11 +75,7 @@ export function RendererComparison() {
           style={{ minHeight: 430 }}
           viewState={viewState}
         >
-          {backend === "canvas2d" ? (
-            <CanvasPointClusterLayer {...layerProps} />
-          ) : (
-            <ClusterLayer {...layerProps} />
-          )}
+          <ClusterLayer {...layerProps} />
         </MapView>
       </div>
 
@@ -90,7 +83,7 @@ export function RendererComparison() {
         <span>
           Backend:{" "}
           <strong className="text-foreground">
-            {backend === "maps" ? "Maps engine" : backend === "canvas2d" ? "Canvas2D" : "MapLibre"}
+            {backend === "maps" ? "Maps engine" : "MapLibre reference"}
           </strong>
         </span>
         <span>
