@@ -13,6 +13,7 @@ const VISIBLE_RASTER_TILE = Buffer.from(
 );
 
 test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ page }) => {
+  await forceCanvasOverlayRuntime(page);
   await installCanvasOverlayTrace(page);
   await page.goto("/?acceptance=maps-runtime");
 
@@ -238,6 +239,7 @@ test("first-party raster loader requests image tiles and renders them @smoke", a
 });
 
 test("ClusterLayer uses Rust aggregation and shared Canvas picking @smoke", async ({ page }) => {
+  await forceCanvasOverlayRuntime(page);
   await installCanvasOverlayTrace(page);
   await page.goto("/?acceptance=maps-runtime");
 
@@ -266,6 +268,15 @@ test("ClusterLayer uses Rust aggregation and shared Canvas picking @smoke", asyn
     .toBeGreaterThan(initialZoom);
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
 });
+
+async function forceCanvasOverlayRuntime(page: Page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "gpu", {
+      configurable: true,
+      get: () => undefined,
+    });
+  });
+}
 
 async function installCanvasOverlayTrace(page: Page) {
   await page.addInitScript(() => {
