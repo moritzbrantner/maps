@@ -42,6 +42,8 @@ const DEFAULT_SOURCE_MAX_ZOOM = 19;
 const MAX_MAP_ZOOM = 22;
 const DEVICE_LOSS_POLL_MS = 250;
 const CANVAS_PROJECTIVE_SUBDIVISIONS = 8;
+const RASTER_TILE_ACCEPT =
+  "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 
 type MapsCanvasFitBoundsOptions = MapFitBoundsOptions & {
   reason?: MapViewStateChangeReason;
@@ -721,6 +723,7 @@ function createFrameSynchronizer({
           }
 
           images.set(tile.key, image);
+          delete canvas.dataset.mapBaseTileError;
           const currentRenderer = renderer();
           if (currentRenderer) {
             try {
@@ -736,6 +739,7 @@ function createFrameSynchronizer({
           loads.delete(tile.key);
           if (abort.signal.aborted) return;
           runtime.markFailed(tile);
+          canvas.dataset.mapBaseTileError = error instanceof Error ? error.message : String(error);
           onError(error);
         });
     }
@@ -773,7 +777,12 @@ function frameViewState(frame: MapsFlatRasterFrame): MapViewState {
 }
 
 async function loadRasterTile(url: string, signal: AbortSignal) {
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, {
+    headers: {
+      Accept: RASTER_TILE_ACCEPT,
+    },
+    signal,
+  });
   if (!response.ok) {
     throw new Error(`raster tile request failed with HTTP ${response.status}: ${url}`);
   }
