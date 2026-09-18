@@ -517,6 +517,7 @@ export function MapsMapView({
       getFeatureId,
       handleBackgroundClick,
       hovered,
+      isReady,
       setSurfaceViewState,
     ],
   );
