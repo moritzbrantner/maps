@@ -120,6 +120,60 @@ test("Pages first-party engine decodes Shortbread vector tiles into wgpu linewor
   }
 });
 
+test("Pages Shortbread basemap renders through the Canvas fallback @smoke", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "gpu", {
+      configurable: true,
+      get: () => undefined,
+    });
+  });
+
+  const fixture = createShortbreadStreetFixture();
+  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
+    await route.fulfill({
+      body: fixture,
+      contentType: "application/vnd.mapbox-vector-tile",
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      },
+      status: 200,
+    });
+  });
+
+  await page.goto("/?e2e=1&vectorTiles=fixture");
+
+  const comparison = page.getByTestId("renderer-comparison");
+  const map = comparison.getByLabel("Renderer parity map");
+  const baseCanvas = map.locator('canvas[data-flat-runtime="maps"]');
+  const fallbackCanvas = map.locator('canvas[data-map-base-fallback="canvas2d"]');
+  const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+  const basemap = comparison.locator("[data-shortbread-state]");
+
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await expect(baseCanvas).toHaveAttribute("data-map-base-renderer", "canvas2d");
+  await expect(fallbackCanvas).toBeVisible();
+  await expect(basemap).toHaveAttribute("data-shortbread-state", "ready");
+  await expect
+    .poll(async () => Number(await basemap.getAttribute("data-shortbread-feature-count")))
+    .toBeGreaterThan(0);
+  await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-primitives")))
+    .toBeGreaterThan(1);
+
+  const backgroundPixel = await fallbackCanvas.evaluate((canvas) => {
+    const element = canvas as HTMLCanvasElement;
+    const context = element.getContext("2d");
+    if (!context) return null;
+    const x = Math.max(0, Math.floor(element.width / 2));
+    const y = Math.max(0, Math.floor(element.height / 2));
+    return Array.from(context.getImageData(x, y, 1, 1).data);
+  });
+  expect(backgroundPixel).toEqual([249, 244, 238, 255]);
+
+  await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+});
+
 function createShortbreadStreetFixture() {
   const geometry = Buffer.concat([
     varint((1 << 3) | 1),
