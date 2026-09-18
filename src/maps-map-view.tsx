@@ -493,7 +493,6 @@ export function MapsMapView({
       },
       isMeasuring: false,
       interactionMode: "none",
-      getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
       flatMap: null,
       maplibre: null,
       maplibreMap: null,
@@ -519,7 +518,6 @@ export function MapsMapView({
       getFeatureId,
       handleBackgroundClick,
       hovered,
-      isReady,
       setSurfaceViewState,
     ],
   );

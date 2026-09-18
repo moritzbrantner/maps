@@ -40,8 +40,7 @@ export function RendererComparison() {
   const [viewState, setViewState] = useState<MapViewState>(initialViewState);
   const [mapsController, setMapsController] = useState<MapsDemoController | null>(null);
   const points = useMemo(() => createComparisonPoints(), []);
-  const visibleTiles =
-    backend === "maps" ? (mapsController?.getVisibleTiles() ?? []) : [];
+  const visibleTiles = backend === "maps" ? (mapsController?.getVisibleTiles() ?? []) : [];
   const basemap = useShortbreadBasemap(visibleTiles);
   const handleControllerReady = useCallback((controller: MapSurfaceController | null) => {
     setMapsController(
