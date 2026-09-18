@@ -11,7 +11,7 @@ import {
 import { CanvasPointClusterLayer } from "../src/canvas-point-cluster-layer";
 import { demoMapStyle } from "./data/map-style";
 
-type RendererBackend = "maplibre" | "canvas2d";
+type RendererBackend = "maps" | "maplibre" | "canvas2d";
 
 type ComparisonPointProperties = {
   demand: number;
@@ -21,7 +21,7 @@ type ComparisonPointProperties = {
 const initialViewState: MapViewState = { center: [10.3, 50.4], zoom: 4.4 };
 
 export function RendererComparison() {
-  const [backend, setBackend] = useState<RendererBackend>("maplibre");
+  const [backend, setBackend] = useState<RendererBackend>("maps");
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(initialViewState);
   const points = useMemo(() => createComparisonPoints(), []);
@@ -48,20 +48,22 @@ export function RendererComparison() {
             Same Maps frame, different pixels
           </h2>
           <p className="mb-0 mt-2 text-sm leading-6 text-muted-foreground">
-            Switch the point/cluster data layer without changing the viewport, selection,
-            clustering, or expansion semantics. MapLibre still supplies the camera and basemap;
-            Canvas2D is a deliberately small reference renderer over the Maps-owned frame.
+            Switch between the first-party Maps engine and the two reference paths without changing
+            the viewport, selection, clustering, or expansion semantics. The Maps engine owns the
+            camera, raster base map, and application geometry; it uses WebGPU when available and
+            falls back to Canvas2D deterministically.
           </p>
         </div>
         <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
-          <span>Data renderer</span>
+          <span>Render path</span>
           <NativeSelect
-            aria-label="Point cluster renderer"
+            aria-label="Renderer path"
             value={backend}
             onChange={(event) => setBackend(event.target.value as RendererBackend)}
           >
+            <option value="maps">Maps engine (first-party)</option>
             <option value="maplibre">MapLibre layer</option>
-            <option value="canvas2d">Canvas2D layer</option>
+            <option value="canvas2d">Canvas2D reference layer</option>
           </NativeSelect>
         </label>
       </div>
@@ -69,6 +71,7 @@ export function RendererComparison() {
       <div className="overflow-hidden rounded-2xl border border-border bg-muted">
         <MapView
           fitToData={false}
+          flatRuntime={backend === "maps" ? "maps" : undefined}
           mapLabel="Renderer parity map"
           mapStyle={demoMapStyle}
           onViewStateChange={setViewState}
@@ -87,7 +90,7 @@ export function RendererComparison() {
         <span>
           Backend:{" "}
           <strong className="text-foreground">
-            {backend === "canvas2d" ? "Canvas2D" : "MapLibre"}
+            {backend === "maps" ? "Maps engine" : backend === "canvas2d" ? "Canvas2D" : "MapLibre"}
           </strong>
         </span>
         <span>
