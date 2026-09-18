@@ -21,6 +21,9 @@ const GEOMETRY_EPSILON_SQUARED: f64 = GEOMETRY_EPSILON * GEOMETRY_EPSILON;
 const APPLICATION_CIRCLE: u32 = 0;
 const APPLICATION_LINE: u32 = 1;
 const APPLICATION_DIRECTION_MARKER: u32 = 2;
+const MAP_BACKGROUND_RED: f64 = 249.0 / 255.0;
+const MAP_BACKGROUND_GREEN: f64 = 244.0 / 255.0;
+const MAP_BACKGROUND_BLUE: f64 = 238.0 / 255.0;
 
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
@@ -218,15 +221,19 @@ impl MapsWgpuBaseMapRenderer {
             .ok_or_else(|| JsValue::from_str("wgpu surface has no compatible configuration"))?;
         if capabilities
             .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::Opaque)
+        {
+            config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
+        } else if capabilities
+            .alpha_modes
             .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
         {
             config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         }
-        let surface_clear_alpha = if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
-            1.0
-        } else {
-            0.0
-        };
+        // The base-map surface owns its cartographic background. Keep it opaque even when
+        // the browser only offers a compositing-capable alpha mode so vector-only frames do
+        // not expose an implementation-defined black canvas behind application geometry.
+        let surface_clear_alpha = 1.0;
         config.present_mode = wgpu::PresentMode::AutoVsync;
         let surface_view_format = config.format.add_srgb_suffix();
         if surface_view_format != config.format {
@@ -619,9 +626,9 @@ impl MapsWgpuBaseMapRenderer {
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
+                    r: MAP_BACKGROUND_RED,
+                    g: MAP_BACKGROUND_GREEN,
+                    b: MAP_BACKGROUND_BLUE,
                     a: self.surface_clear_alpha,
                 }),
                 store: wgpu::StoreOp::Store,

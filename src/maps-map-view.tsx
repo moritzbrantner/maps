@@ -298,7 +298,8 @@ export function MapsMapView({
       return;
     }
 
-    const controller: MapSurfaceController = {
+    const controller: MapSurfaceController &
+      Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles"> = {
       display: "flat",
       fitToData: fitToDataNow,
       fitBounds: (bounds, options) => {
@@ -312,6 +313,7 @@ export function MapsMapView({
       },
       flyTo: flyToNow,
       getViewState: () => currentViewState,
+      getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
       setViewState: setSurfaceViewState,
     };
 
@@ -533,7 +535,13 @@ export function MapsMapView({
   }
 
   const rootClassName = joinClassNames("mb-maps", className);
-  const attribution = tileSource?.options.attribution;
+  const attribution =
+    tileSource?.options.attribution ??
+    (typeof resolvedMapStyle !== "string" &&
+    "attribution" in resolvedMapStyle &&
+    typeof resolvedMapStyle.attribution === "string"
+      ? resolvedMapStyle.attribution
+      : undefined);
   const fallbackCursor = typeof style?.cursor === "string" ? style.cursor : "";
 
   return (

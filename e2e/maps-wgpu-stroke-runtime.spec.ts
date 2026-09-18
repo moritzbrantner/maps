@@ -63,3 +63,164 @@ test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path 
     await browser.close();
   }
 });
+
+test("Pages first-party engine decodes Shortbread vector tiles into wgpu linework @smoke", async ({
+  baseURL,
+}) => {
+  const browser = await chromium.launch({ args: WEBGPU_SWIFTSHADER_ARGS });
+  const page = await browser.newPage();
+  const acceptedHeaders: string[] = [];
+  const fixture = createShortbreadStreetFixture();
+
+  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
+    const headers = await route.request().allHeaders();
+    acceptedHeaders.push(headers.accept ?? "");
+    await route.fulfill({
+      body: fixture,
+      contentType: "application/vnd.mapbox-vector-tile",
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      },
+      status: 200,
+    });
+  });
+
+  try {
+    const url = new URL(
+      "/?e2e=1&vectorTiles=fixture",
+      baseURL ?? "http://127.0.0.1:5181",
+    );
+    await page.goto(url.toString());
+
+    const comparison = page.getByTestId("renderer-comparison");
+    const map = comparison.getByLabel("Renderer parity map");
+    const baseCanvas = map.locator('canvas[data-flat-runtime="maps"]');
+    const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+    const basemap = comparison.locator("[data-shortbread-state]");
+
+    await expect(map).toHaveAttribute("data-map-ready", "true");
+    await expect(baseCanvas).toHaveAttribute("data-map-base-renderer", "wgpu");
+    await expect(basemap).toHaveAttribute("data-shortbread-state", "ready");
+    await expect
+      .poll(async () => Number(await basemap.getAttribute("data-shortbread-feature-count")))
+      .toBeGreaterThan(0);
+    await expect(overlay).toHaveAttribute("data-map-overlay-backend", "wgpu");
+    await expect
+      .poll(async () => Number(await overlay.getAttribute("data-map-overlay-primitives")))
+      .toBeGreaterThan(1);
+    await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+    expect(acceptedHeaders.length).toBeGreaterThan(0);
+    expect(
+      acceptedHeaders.every((header) =>
+        header.includes("application/vnd.mapbox-vector-tile"),
+      ),
+    ).toBe(true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Pages Shortbread basemap renders through the Canvas fallback @smoke", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "gpu", {
+      configurable: true,
+      get: () => undefined,
+    });
+  });
+
+  const fixture = createShortbreadStreetFixture();
+  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
+    await route.fulfill({
+      body: fixture,
+      contentType: "application/vnd.mapbox-vector-tile",
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      },
+      status: 200,
+    });
+  });
+
+  await page.goto("/?e2e=1&vectorTiles=fixture");
+
+  const comparison = page.getByTestId("renderer-comparison");
+  const map = comparison.getByLabel("Renderer parity map");
+  const baseCanvas = map.locator('canvas[data-flat-runtime="maps"]');
+  const fallbackCanvas = map.locator('canvas[data-map-base-fallback="canvas2d"]');
+  const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+  const basemap = comparison.locator("[data-shortbread-state]");
+
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await expect(baseCanvas).toHaveAttribute("data-map-base-renderer", "canvas2d");
+  await expect(fallbackCanvas).toBeVisible();
+  await expect(basemap).toHaveAttribute("data-shortbread-state", "ready");
+  await expect
+    .poll(async () => Number(await basemap.getAttribute("data-shortbread-feature-count")))
+    .toBeGreaterThan(0);
+  await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-primitives")))
+    .toBeGreaterThan(1);
+
+  const backgroundPixel = await fallbackCanvas.evaluate((canvas) => {
+    const element = canvas as HTMLCanvasElement;
+    const context = element.getContext("2d");
+    if (!context) return null;
+    const x = Math.max(0, Math.floor(element.width / 2));
+    const y = Math.max(0, Math.floor(element.height / 2));
+    return Array.from(context.getImageData(x, y, 1, 1).data);
+  });
+  expect(backgroundPixel).toEqual([249, 244, 238, 255]);
+
+  await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+});
+
+function createShortbreadStreetFixture() {
+  const geometry = Buffer.concat([
+    varint((1 << 3) | 1),
+    varint(zigzag(0)),
+    varint(zigzag(0)),
+    varint((2 << 3) | 2),
+    varint(zigzag(4096)),
+    varint(zigzag(4096)),
+    varint(zigzag(-2048)),
+    varint(zigzag(0)),
+  ]);
+
+  const feature = Buffer.concat([
+    protobufVarint(3, 2),
+    protobufBytes(4, geometry),
+  ]);
+  const layer = Buffer.concat([
+    protobufBytes(1, Buffer.from("streets")),
+    protobufBytes(2, feature),
+    protobufVarint(5, 4096),
+    protobufVarint(15, 2),
+  ]);
+
+  return protobufBytes(3, layer);
+}
+
+function protobufVarint(field: number, value: number) {
+  return Buffer.concat([varint(field << 3), varint(value)]);
+}
+
+function protobufBytes(field: number, value: Buffer) {
+  return Buffer.concat([varint((field << 3) | 2), varint(value.length), value]);
+}
+
+function zigzag(value: number) {
+  return ((value << 1) ^ (value >> 31)) >>> 0;
+}
+
+function varint(value: number) {
+  const bytes: number[] = [];
+  let remaining = value >>> 0;
+  do {
+    let byte = remaining & 0x7f;
+    remaining >>>= 7;
+    if (remaining !== 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (remaining !== 0);
+  return Buffer.from(bytes);
+}
+

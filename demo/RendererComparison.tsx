@@ -1,17 +1,24 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { NativeSelect } from "@moritzbrantner/ui";
 import {
   ClusterLayer,
+  GeoJsonLayer,
   MapView,
   type AggregatedMapFeature,
   type MapPoint,
+  type MapSurfaceController,
   type MapViewState,
   type RasterMapStyle,
 } from "@moritzbrantner/maps";
+import type { MapsCanvasFlatRuntimeController } from "../src/canvas-flat-runtime";
 import { demoMapStyle } from "./data/map-style";
+import { getShortbreadBasemapStyle, useShortbreadBasemap } from "./ShortbreadBasemapLayer";
 
 type RendererBackend = "maps" | "maplibre";
+
+type MapsDemoController = MapSurfaceController &
+  Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles">;
 
 type ComparisonPointProperties = {
   demand: number;
@@ -19,23 +26,24 @@ type ComparisonPointProperties = {
 };
 
 const initialViewState: MapViewState = { center: [10.3, 50.4], zoom: 4.4 };
-const e2eRasterTile =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-const firstPartyMapStyle: RasterMapStyle | undefined =
-  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
-    ? {
-        maxZoom: 19,
-        minZoom: 0,
-        tileSize: 256,
-        tiles: e2eRasterTile,
-      }
-    : undefined;
+const firstPartyMapStyle: RasterMapStyle = {
+  attribution: "© OpenStreetMap contributors",
+  tiles: false,
+};
 
 export function RendererComparison() {
   const [backend, setBackend] = useState<RendererBackend>("maps");
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(initialViewState);
+  const [mapsController, setMapsController] = useState<MapsDemoController | null>(null);
   const points = useMemo(() => createComparisonPoints(), []);
+  const visibleTiles = backend === "maps" ? (mapsController?.getVisibleTiles() ?? []) : [];
+  const basemap = useShortbreadBasemap(visibleTiles);
+  const handleControllerReady = useCallback((controller: MapSurfaceController | null) => {
+    setMapsController(
+      controller && "getVisibleTiles" in controller ? (controller as MapsDemoController) : null,
+    );
+  }, []);
   const layerProps = {
     getFeatureId: getComparisonFeatureId,
     onFeatureSelect: (feature: AggregatedMapFeature<ComparisonPointProperties> | null) =>
@@ -59,9 +67,9 @@ export function RendererComparison() {
             First-party Maps engine
           </h2>
           <p className="mb-0 mt-2 text-sm leading-6 text-muted-foreground">
-            This is the Maps-owned runtime: our Rust/WASM camera and map semantics drive our wgpu
-            renderer for the raster base map and application geometry. MapLibre remains available
-            only as a reference path for parity checks during the migration.
+            This is the Maps-owned runtime: our Rust/WASM camera and tile cover drive our wgpu
+            renderer. OpenStreetMap Shortbread vector tiles are decoded by Maps and turned into our
+            own render geometry; MapLibre remains only as a reference path.
           </p>
         </div>
         <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
@@ -83,19 +91,42 @@ export function RendererComparison() {
           flatRuntime={backend === "maps" ? "maps" : undefined}
           mapLabel="Renderer parity map"
           mapStyle={backend === "maps" ? firstPartyMapStyle : demoMapStyle}
+          onMapControllerReady={handleControllerReady}
           onViewStateChange={setViewState}
           style={{ minHeight: 430 }}
           viewState={viewState}
         >
+          {backend === "maps" && basemap.enabled ? (
+            <GeoJsonLayer
+              featureCollection={basemap.featureCollection}
+              getFeatureStyle={(feature) => getShortbreadBasemapStyle(feature.properties.kind)}
+              isFeatureInteractive={() => false}
+              layerId="shortbread-basemap"
+            />
+          ) : null}
           <ClusterLayer {...layerProps} />
         </MapView>
       </div>
 
+      <span
+        aria-hidden="true"
+        data-shortbread-error={basemap.error ?? undefined}
+        data-shortbread-feature-count={basemap.featureCollection.features.length}
+        data-shortbread-state={basemap.state}
+        data-shortbread-tile-count={basemap.tileCount}
+        hidden
+      />
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
         <span>
           Backend:{" "}
           <strong className="text-foreground">
             {backend === "maps" ? "Maps engine" : "MapLibre reference"}
+          </strong>
+        </span>
+        <span>
+          Basemap:{" "}
+          <strong className="text-foreground">
+            {backend === "maps" ? "Shortbread vector / Maps renderer" : "MapLibre reference"}
           </strong>
         </span>
         <span>

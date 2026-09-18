@@ -10,6 +10,7 @@ mod engine;
 mod flat_runtime;
 mod matrix_camera;
 mod scenario;
+mod vector_tile;
 
 use std::collections::BTreeMap;
 
@@ -34,6 +35,9 @@ pub use scenario::{
     CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
     EngineScenarioObservation, ProjectionObservation, ViewportObservation,
     VisibleBoundsObservation, execute_engine_scenario, execute_engine_scenario_json,
+};
+pub use vector_tile::{
+    VectorBasemapLine, VectorBasemapLineKind, VectorTileError, decode_shortbread_basemap_lines,
 };
 
 /// Numeric metrics attached to native map points.

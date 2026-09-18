@@ -42,6 +42,7 @@ const DEFAULT_SOURCE_MAX_ZOOM = 19;
 const MAX_MAP_ZOOM = 22;
 const DEVICE_LOSS_POLL_MS = 250;
 const CANVAS_PROJECTIVE_SUBDIVISIONS = 8;
+const MAP_BACKGROUND = "#f9f4ee";
 const RASTER_TILE_ACCEPT =
   "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 
@@ -62,6 +63,7 @@ type MapsWgpuApplicationFrameFactory = (
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   getVisibleBounds(): MapBounds;
+  getVisibleTiles(): MapsRasterTileId[];
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   renderApplicationFrame(
     frame: MapScreenRenderFrame<unknown>,
@@ -254,19 +256,17 @@ export function MapsCanvasFlatRuntime({
 
       let renderer: MapsWgpuBaseMapRenderer | null = null;
       let packApplicationFrame: MapsWgpuApplicationFrameFactory | null = null;
-      if (currentSource) {
-        try {
-          renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
-          packApplicationFrame = (await import("./wgpu-application-frame"))
-            .createMapsWgpuApplicationFrame;
-          delete canvas.dataset.mapBaseRendererError;
-        } catch (error) {
-          canvas.dataset.mapBaseRendererError =
-            error instanceof Error ? error.message : String(error);
-          renderer?.dispose();
-          renderer = null;
-          packApplicationFrame = null;
-        }
+      try {
+        renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
+        packApplicationFrame = (await import("./wgpu-application-frame"))
+          .createMapsWgpuApplicationFrame;
+        delete canvas.dataset.mapBaseRendererError;
+      } catch (error) {
+        canvas.dataset.mapBaseRendererError =
+          error instanceof Error ? error.message : String(error);
+        renderer?.dispose();
+        renderer = null;
+        packApplicationFrame = null;
       }
 
       if (cancelled) {
@@ -327,6 +327,9 @@ export function MapsCanvasFlatRuntime({
         getVisibleBounds() {
           const bounds = runtime.frame().visibleBounds;
           return [bounds.west, bounds.south, bounds.east, bounds.north];
+        },
+        getVisibleTiles() {
+          return frameSynchronizer.getVisibleTiles();
         },
         project(coordinates) {
           const [x, y] = runtime.project(coordinates[0], coordinates[1]);
@@ -755,6 +758,14 @@ function createFrameSynchronizer({
       lastFrame = null;
       applicationFrame = null;
     },
+    getVisibleTiles() {
+      const frame = lastFrame ?? runtime.frame();
+      const unique = new Map<string, MapsRasterTileId>();
+      for (const placement of frame.placements) {
+        unique.set(placement.tile.key, placement.tile);
+      }
+      return [...unique.values()];
+    },
     setApplicationFrame,
     syncFrame,
   };
@@ -808,7 +819,8 @@ function drawCanvasFrame(
 
   const ratio = Math.max(1, window.devicePixelRatio || 1);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.clearRect(0, 0, frame.camera.width, frame.camera.height);
+  context.fillStyle = MAP_BACKGROUND;
+  context.fillRect(0, 0, frame.camera.width, frame.camera.height);
 
   const viewport = { height: frame.camera.height, width: frame.camera.width };
   const subdivisions = frame.camera.pitch === 0 ? 1 : CANVAS_PROJECTIVE_SUBDIVISIONS;
