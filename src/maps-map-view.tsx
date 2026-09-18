@@ -491,6 +491,7 @@ export function MapsMapView({
       },
       isMeasuring: false,
       interactionMode: "none",
+      getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
       flatMap: null,
       maplibre: null,
       maplibreMap: null,
