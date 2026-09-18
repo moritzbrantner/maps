@@ -44,9 +44,7 @@ export function RendererComparison() {
   const basemap = useShortbreadBasemap(visibleTiles);
   const handleControllerReady = useCallback((controller: MapSurfaceController | null) => {
     setMapsController(
-      controller && "getVisibleTiles" in controller
-        ? (controller as MapsDemoController)
-        : null,
+      controller && "getVisibleTiles" in controller ? (controller as MapsDemoController) : null,
     );
   }, []);
   const layerProps = {
@@ -104,9 +102,7 @@ export function RendererComparison() {
           {backend === "maps" && basemap.enabled ? (
             <GeoJsonLayer
               featureCollection={basemap.featureCollection}
-              getFeatureStyle={(feature) =>
-                getShortbreadBasemapStyle(feature.properties.kind)
-              }
+              getFeatureStyle={(feature) => getShortbreadBasemapStyle(feature.properties.kind)}
               isFeatureInteractive={() => false}
               layerId="shortbread-basemap"
             />
