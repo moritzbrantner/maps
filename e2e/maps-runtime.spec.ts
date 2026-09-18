@@ -7,6 +7,11 @@ type OverlayTrace = {
   polygonBounds: { maxX: number; maxY: number; minX: number; minY: number } | null;
 };
 
+const VISIBLE_RASTER_TILE = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGMM2FLxnwEPYMInOXwUAACRIgKL3I8IIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ page }) => {
   await installCanvasOverlayTrace(page);
   await page.goto("/?acceptance=maps-runtime");
@@ -200,6 +205,36 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   );
 
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+});
+
+test("first-party raster loader requests image tiles and renders them @smoke", async ({ page }) => {
+  const acceptedHeaders: string[] = [];
+
+  await page.route("https://tiles.example.test/**", async (route) => {
+    const headers = await route.request().allHeaders();
+    acceptedHeaders.push(headers.accept ?? "");
+    await route.fulfill({
+      body: VISIBLE_RASTER_TILE,
+      contentType: "image/png",
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      },
+      status: 200,
+    });
+  });
+
+  await page.goto("/?acceptance=maps-runtime-raster-fetch");
+
+  const map = page.getByLabel("Maps Rust runtime acceptance");
+  const canvas = map.locator('canvas[data-flat-runtime="maps"]');
+
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await expect
+    .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
+    .toBeGreaterThan(0);
+  expect(acceptedHeaders.length).toBeGreaterThan(0);
+  expect(acceptedHeaders.every((header) => header.includes("image/"))).toBe(true);
+  await expect(canvas).not.toHaveAttribute("data-map-base-tile-error", /.+/);
 });
 
 test("ClusterLayer uses Rust aggregation and shared Canvas picking @smoke", async ({ page }) => {
