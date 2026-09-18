@@ -7,6 +7,7 @@ import {
   type AggregatedMapFeature,
   type MapPoint,
   type MapViewState,
+  type RasterMapStyle,
 } from "@moritzbrantner/maps";
 import { demoMapStyle } from "./data/map-style";
 
@@ -18,6 +19,17 @@ type ComparisonPointProperties = {
 };
 
 const initialViewState: MapViewState = { center: [10.3, 50.4], zoom: 4.4 };
+const e2eRasterTile =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const firstPartyMapStyle: RasterMapStyle | undefined =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
+    ? {
+        maxZoom: 19,
+        minZoom: 0,
+        tileSize: 256,
+        tiles: e2eRasterTile,
+      }
+    : undefined;
 
 export function RendererComparison() {
   const [backend, setBackend] = useState<RendererBackend>("maps");
@@ -70,7 +82,7 @@ export function RendererComparison() {
           fitToData={false}
           flatRuntime={backend === "maps" ? "maps" : undefined}
           mapLabel="Renderer parity map"
-          mapStyle={demoMapStyle}
+          mapStyle={backend === "maps" ? firstPartyMapStyle : demoMapStyle}
           onViewStateChange={setViewState}
           style={{ minHeight: 430 }}
           viewState={viewState}
