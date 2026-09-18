@@ -11,8 +11,7 @@ import {
   type ShortbreadBasemapLineKind,
 } from "../src/vector-tile-wasm";
 
-const SHORTBREAD_TILE_URL =
-  "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt";
+const SHORTBREAD_TILE_URL = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt";
 const SHORTBREAD_MAX_ZOOM = 14;
 const SHORTBREAD_ACCEPT =
   "application/vnd.mapbox-vector-tile,application/x-protobuf,application/octet-stream;q=0.9,*/*;q=0.1";
