@@ -221,15 +221,19 @@ impl MapsWgpuBaseMapRenderer {
             .ok_or_else(|| JsValue::from_str("wgpu surface has no compatible configuration"))?;
         if capabilities
             .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::Opaque)
+        {
+            config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
+        } else if capabilities
+            .alpha_modes
             .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
         {
             config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         }
-        let surface_clear_alpha = if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
-            1.0
-        } else {
-            0.0
-        };
+        // The base-map surface owns its cartographic background. Keep it opaque even when
+        // the browser only offers a compositing-capable alpha mode so vector-only frames do
+        // not expose an implementation-defined black canvas behind application geometry.
+        let surface_clear_alpha = 1.0;
         config.present_mode = wgpu::PresentMode::AutoVsync;
         let surface_view_format = config.format.add_srgb_suffix();
         if surface_view_format != config.format {
