@@ -298,7 +298,8 @@ export function MapsMapView({
       return;
     }
 
-    const controller: MapSurfaceController = {
+    const controller: MapSurfaceController &
+      Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles"> = {
       display: "flat",
       fitToData: fitToDataNow,
       fitBounds: (bounds, options) => {
@@ -312,6 +313,7 @@ export function MapsMapView({
       },
       flyTo: flyToNow,
       getViewState: () => currentViewState,
+      getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
       setViewState: setSurfaceViewState,
     };
 
