@@ -534,7 +534,13 @@ export function MapsMapView({
   }
 
   const rootClassName = joinClassNames("mb-maps", className);
-  const attribution = tileSource?.options.attribution;
+  const attribution =
+    tileSource?.options.attribution ??
+    (typeof resolvedMapStyle !== "string" &&
+    "attribution" in resolvedMapStyle &&
+    typeof resolvedMapStyle.attribution === "string"
+      ? resolvedMapStyle.attribution
+      : undefined);
   const fallbackCursor = typeof style?.cursor === "string" ? style.cursor : "";
 
   return (
