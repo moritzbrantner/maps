@@ -14,8 +14,8 @@ mod wgpu_base_map;
 use std::collections::BTreeMap;
 
 use maps_core::{
-    AggregatedMapFeature, IndexedMapPoint, MapPoint, TileId,
-    PointAggregationIndex as CorePointAggregationIndex, PointAggregationOptions,
+    AggregatedMapFeature, IndexedMapPoint, MapPoint,
+    PointAggregationIndex as CorePointAggregationIndex, PointAggregationOptions, TileId,
     ViewportAggregation, ViewportAggregationQuery, decode_shortbread_basemap_lines,
     get_bounds_from_points, normalize_map_points,
 };
