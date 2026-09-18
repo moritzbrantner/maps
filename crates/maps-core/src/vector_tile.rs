@@ -162,8 +162,7 @@ fn decode_feature(
         }
     }
 
-    let accepts_geometry =
-        geometry_type == 2 || (accepts_polygon && geometry_type == 3);
+    let accepts_geometry = geometry_type == 2 || (accepts_polygon && geometry_type == 3);
     if !accepts_geometry || geometry.is_empty() {
         return Ok(());
     }
@@ -311,8 +310,8 @@ impl<'a> ProtoCursor<'a> {
     }
 
     fn read_length_delimited(&mut self) -> Result<&'a [u8], VectorTileError> {
-        let length = usize::try_from(self.read_varint()?)
-            .map_err(|_| VectorTileError::InvalidProtobuf)?;
+        let length =
+            usize::try_from(self.read_varint()?).map_err(|_| VectorTileError::InvalidProtobuf)?;
         let end = self
             .index
             .checked_add(length)
@@ -418,8 +417,7 @@ mod tests {
             zigzag(4096),
         ];
         let bytes = tiny_line_tile("streets", 2, &geometry);
-        let lines =
-            decode_shortbread_basemap_lines(&bytes, TileId::new(1, 1, 0).unwrap()).unwrap();
+        let lines = decode_shortbread_basemap_lines(&bytes, TileId::new(1, 1, 0).unwrap()).unwrap();
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].kind, VectorBasemapLineKind::Street);
@@ -444,8 +442,7 @@ mod tests {
             (1 << 3) | MVT_CLOSE_PATH,
         ];
         let bytes = tiny_line_tile("ocean", 3, &geometry);
-        let lines =
-            decode_shortbread_basemap_lines(&bytes, TileId::new(1, 0, 0).unwrap()).unwrap();
+        let lines = decode_shortbread_basemap_lines(&bytes, TileId::new(1, 0, 0).unwrap()).unwrap();
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].kind, VectorBasemapLineKind::Coast);
@@ -455,8 +452,7 @@ mod tests {
     #[test]
     fn ignores_unowned_shortbread_layers() {
         let bytes = tiny_line_tile("labels", 2, &[(1 << 3) | MVT_MOVE_TO, 0, 0]);
-        let lines =
-            decode_shortbread_basemap_lines(&bytes, TileId::new(0, 0, 0).unwrap()).unwrap();
+        let lines = decode_shortbread_basemap_lines(&bytes, TileId::new(0, 0, 0).unwrap()).unwrap();
         assert!(lines.is_empty());
     }
 }
