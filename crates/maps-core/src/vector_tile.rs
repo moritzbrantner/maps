@@ -119,6 +119,7 @@ fn shortbread_line_layer(name: &str) -> Option<(VectorBasemapLineKind, bool)> {
     match name {
         "ocean" => Some((VectorBasemapLineKind::Coast, true)),
         "water_lines" => Some((VectorBasemapLineKind::Water, false)),
+        "water_polygons" => Some((VectorBasemapLineKind::Water, true)),
         "streets" => Some((VectorBasemapLineKind::Street, false)),
         "boundaries" => Some((VectorBasemapLineKind::Boundary, false)),
         _ => None,
