@@ -22,8 +22,9 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
           <h1>Map building blocks, end to end.</h1>
           <p>
             Clustering, scalar fields, flows, timelines, globe display, GeoJSON operations, and
-            editing in one live workbench. Maps owns the domain logic; Rust/WASM now owns supported
-            point aggregation while browser renderers remain replaceable pixel backends.
+            editing in one live workbench. Maps owns the map semantics and camera; Rust/WASM drives
+            the first-party runtime and wgpu rendering path instead of delegating the product map to
+            MapLibre.
           </p>
           <nav className="maps-showcase__project-links" aria-label="Project evidence">
             <a href={`${pagesBase}stats/`}>Stats</a>
@@ -44,10 +45,11 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
             <small>{runtimeStatus.detail}</small>
           </article>
           <article className="maps-showcase__runtime-card">
-            <span>Renderers</span>
-            <strong>MapLibre + Canvas2D</strong>
+            <span>Map engine</span>
+            <strong>Rust/WASM + wgpu</strong>
             <small>
-              Shared Maps semantics; camera/basemap stay MapLibre-owned in this horizon.
+              First-party camera, raster base map, and application geometry. MapLibre is
+              reference-only.
             </small>
           </article>
           <article className="maps-showcase__runtime-card">

@@ -12,7 +12,7 @@ test("hosted Pages artifact reaches Rust authority without browser errors", asyn
     "authoritative",
     { timeout: 30_000 },
   );
-  await expect(page.getByText("MapLibre + Canvas2D", { exact: true })).toBeVisible();
+  await expect(page.getByText("Rust/WASM + wgpu", { exact: true })).toBeVisible();
   await expect(page.locator(".mb-maps").first()).toBeVisible();
 
   expect(pageErrors).toEqual([]);

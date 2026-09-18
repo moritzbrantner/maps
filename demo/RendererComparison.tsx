@@ -7,11 +7,11 @@ import {
   type AggregatedMapFeature,
   type MapPoint,
   type MapViewState,
+  type RasterMapStyle,
 } from "@moritzbrantner/maps";
-import { CanvasPointClusterLayer } from "../src/canvas-point-cluster-layer";
 import { demoMapStyle } from "./data/map-style";
 
-type RendererBackend = "maplibre" | "canvas2d";
+type RendererBackend = "maps" | "maplibre";
 
 type ComparisonPointProperties = {
   demand: number;
@@ -19,9 +19,20 @@ type ComparisonPointProperties = {
 };
 
 const initialViewState: MapViewState = { center: [10.3, 50.4], zoom: 4.4 };
+const e2eRasterTile =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const firstPartyMapStyle: RasterMapStyle | undefined =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
+    ? {
+        maxZoom: 19,
+        minZoom: 0,
+        tileSize: 256,
+        tiles: e2eRasterTile,
+      }
+    : undefined;
 
 export function RendererComparison() {
-  const [backend, setBackend] = useState<RendererBackend>("maplibre");
+  const [backend, setBackend] = useState<RendererBackend>("maps");
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(initialViewState);
   const points = useMemo(() => createComparisonPoints(), []);
@@ -45,23 +56,23 @@ export function RendererComparison() {
             Renderer boundary
           </p>
           <h2 className="mb-0 mt-1 text-xl font-semibold tracking-tight md:text-2xl">
-            Same Maps frame, different pixels
+            First-party Maps engine
           </h2>
           <p className="mb-0 mt-2 text-sm leading-6 text-muted-foreground">
-            Switch the point/cluster data layer without changing the viewport, selection,
-            clustering, or expansion semantics. MapLibre still supplies the camera and basemap;
-            Canvas2D is a deliberately small reference renderer over the Maps-owned frame.
+            This is the Maps-owned runtime: our Rust/WASM camera and map semantics drive our wgpu
+            renderer for the raster base map and application geometry. MapLibre remains available
+            only as a reference path for parity checks during the migration.
           </p>
         </div>
         <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
-          <span>Data renderer</span>
+          <span>Engine</span>
           <NativeSelect
-            aria-label="Point cluster renderer"
+            aria-label="Map engine"
             value={backend}
             onChange={(event) => setBackend(event.target.value as RendererBackend)}
           >
-            <option value="maplibre">MapLibre layer</option>
-            <option value="canvas2d">Canvas2D layer</option>
+            <option value="maps">Maps engine (first-party)</option>
+            <option value="maplibre">MapLibre (reference)</option>
           </NativeSelect>
         </label>
       </div>
@@ -69,17 +80,14 @@ export function RendererComparison() {
       <div className="overflow-hidden rounded-2xl border border-border bg-muted">
         <MapView
           fitToData={false}
+          flatRuntime={backend === "maps" ? "maps" : undefined}
           mapLabel="Renderer parity map"
-          mapStyle={demoMapStyle}
+          mapStyle={backend === "maps" ? firstPartyMapStyle : demoMapStyle}
           onViewStateChange={setViewState}
           style={{ minHeight: 430 }}
           viewState={viewState}
         >
-          {backend === "canvas2d" ? (
-            <CanvasPointClusterLayer {...layerProps} />
-          ) : (
-            <ClusterLayer {...layerProps} />
-          )}
+          <ClusterLayer {...layerProps} />
         </MapView>
       </div>
 
@@ -87,7 +95,7 @@ export function RendererComparison() {
         <span>
           Backend:{" "}
           <strong className="text-foreground">
-            {backend === "canvas2d" ? "Canvas2D" : "MapLibre"}
+            {backend === "maps" ? "Maps engine" : "MapLibre reference"}
           </strong>
         </span>
         <span>
