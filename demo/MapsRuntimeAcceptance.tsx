@@ -36,9 +36,13 @@ const ACCEPTANCE_FLOWS = [
 
 export type MapsRuntimeAcceptanceProps = {
   includePolygon?: boolean;
+  rasterTileUrl?: string;
 };
 
-export function MapsRuntimeAcceptance({ includePolygon = true }: MapsRuntimeAcceptanceProps = {}) {
+export function MapsRuntimeAcceptance({
+  includePolygon = true,
+  rasterTileUrl,
+}: MapsRuntimeAcceptanceProps = {}) {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [clusterSelectedId, setClusterSelectedId] = useState<string | null>(null);
@@ -66,7 +70,7 @@ export function MapsRuntimeAcceptance({ includePolygon = true }: MapsRuntimeAcce
           maxZoom: 19,
           minZoom: 0,
           tileSize: 256,
-          tiles: ACCEPTANCE_RASTER_TILE,
+          tiles: rasterTileUrl ?? ACCEPTANCE_RASTER_TILE,
         }}
         maxBounds={[-25, 34, 35, 66]}
         onMapControllerReady={setController}
