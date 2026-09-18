@@ -1,9 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
-
-import { GeoJsonLayer } from "@moritzbrantner/maps";
-import { MapSurfaceContext } from "../src/map-view";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MapsRasterTileId } from "../src/flat-runtime-wasm";
 import {
   decodeShortbreadBasemapLines,
@@ -27,8 +24,7 @@ type TileState =
   | { status: "ready"; error: null }
   | { status: "error"; error: string };
 
-export function ShortbreadBasemapLayer() {
-  const surface = useContext(MapSurfaceContext);
+export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileId[]) {
   const enabled = useMemo(shouldEnableShortbreadBasemap, []);
   const cacheRef = useRef(new Map<string, ShortbreadBasemapLine[]>());
   const inflightRef = useRef(new Map<string, AbortController>());
@@ -36,15 +32,8 @@ export function ShortbreadBasemapLayer() {
   const [tileState, setTileState] = useState<TileState>({ status: "idle", error: null });
 
   const visibleTiles = useMemo(
-    () => normalizeShortbreadTiles(surface?.getVisibleTiles?.() ?? []),
-    [
-      surface,
-      surface?.viewState.center[0],
-      surface?.viewState.center[1],
-      surface?.viewState.zoom,
-      surface?.viewState.bearing,
-      surface?.viewState.pitch,
-    ],
+    () => normalizeShortbreadTiles(visibleTilesInput),
+    [visibleTilesInput],
   );
   const visibleTileKey = visibleTiles.map((tile) => tile.key).join("|");
 
@@ -132,28 +121,17 @@ export function ShortbreadBasemapLayer() {
     };
   }, [cacheVersion, visibleTileKey]);
 
-  if (!enabled) {
-    return null;
-  }
+  return {
+    enabled,
+    error: tileState.error,
+    featureCollection,
+    state: tileState.status,
+    tileCount: visibleTiles.length,
+  };
+}
 
-  return (
-    <>
-      <span
-        aria-hidden="true"
-        data-shortbread-error={tileState.error ?? undefined}
-        data-shortbread-feature-count={featureCollection.features.length}
-        data-shortbread-state={tileState.status}
-        data-shortbread-tile-count={visibleTiles.length}
-        hidden
-      />
-      <GeoJsonLayer<ShortbreadFeatureProperties>
-        featureCollection={featureCollection}
-        getFeatureStyle={(feature) => shortbreadStyle(feature.properties.kind)}
-        isFeatureInteractive={() => false}
-        layerId="shortbread-basemap"
-      />
-    </>
-  );
+export function getShortbreadBasemapStyle(kind: ShortbreadBasemapLineKind) {
+  return shortbreadStyle(kind);
 }
 
 async function loadShortbreadTile(tile: MapsRasterTileId, signal: AbortSignal) {
