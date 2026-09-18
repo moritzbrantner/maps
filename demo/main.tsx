@@ -37,6 +37,10 @@ async function bootstrap() {
     content = <MapsRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-wgpu-strokes") {
     content = <MapsRuntimeAcceptance includePolygon={false} />;
+  } else if (acceptanceMode === "maps-runtime-raster-fetch") {
+    content = (
+      <MapsRuntimeAcceptance rasterTileUrl="https://tiles.example.test/{z}/{x}/{y}.png" />
+    );
   } else if (acceptanceMode === "maps-runtime-oriented") {
     content = <MapsOrientedRuntimeAcceptance />;
   }
