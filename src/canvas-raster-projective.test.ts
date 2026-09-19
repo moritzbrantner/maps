@@ -10,6 +10,8 @@ import {
 } from "./canvas-raster-projective";
 
 const IDENTITY_CAMERA: MapsRasterRenderCamera = {
+  viewportHeight: 100,
+  viewportWidth: 200,
   viewProjection: [
     1, 0, 0, 0,
     0, 1, 0, 0,
