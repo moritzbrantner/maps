@@ -54,7 +54,7 @@ const allowlist = [
     path: "src/scalar-field.ts",
     ruleId: "function-constructor",
     text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
-    rationale: "Optional viz-engine dynamic import avoids bundling optional runtime modules.",
+    rationale: "Optional runtime-module dynamic import avoids bundling optional integrations into the core entry.",
   },
   {
     path: "src/kernels/wasm-kernels.ts",
