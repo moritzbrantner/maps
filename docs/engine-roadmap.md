@@ -81,7 +81,7 @@ Deliverables:
 - `runtime-profiler` scenarios that capture immutable reference/candidate evidence.
 - Moonlight evaluation of semantic and performance evidence through neutral `agent.evidence/v1` / `agent.evaluation-result/v1` boundaries.
 - Exact-head CI that reuses the exact validated build/evidence artifacts instead of recomputing them downstream.
-- An explicit foundation seam check for work that touches generic math/camera, spatial structures, renderer lifecycle, assets or cross-project data/frame contracts.
+- An explicit foundation seam check for work that touches genuinely 3D math/camera, generic spatial structures, assets/evidence infrastructure, or a proposed new cross-project renderer contract.
 
 Exit criterion: one named Maps scenario can be executed against an immutable reference and candidate, profiled with strictly comparable evidence, and evaluated by Moonlight without bespoke one-off glue.
 

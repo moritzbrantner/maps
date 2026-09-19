@@ -10,7 +10,7 @@ ADR 0006 makes `maps` a first-party Rust/WASM map engine. "First-party" means Ma
 
 The repository already consumes `moenarch-geo-core` for generic geo primitives and uses `runtime-profiler`, Moonlight, and `coding-tooling` at explicit evidence boundaries. The wider workspace also has 3D foundations in `3d-lab` (`three-d-core`, `three-d-animation`, `three-d-camera`, and `three-d-spatial`), asset generation/provenance in `asset-tooling`, and a Rust/WASM 2D rendering decision lab in `viz-engine`.
 
-The next camera/rendering work creates a material risk of repeating the earlier minimal-project pattern: implementing enough local matrix, camera, spatial, or renderer infrastructure to make the Maps slice work, then later having to migrate it onto the shared foundations.
+The next camera/rendering work has two opposite risks: duplicating genuinely generic 3D/spatial foundations inside Maps, or forcing Maps-specific 2D rendering into a shared lab/foundation merely because some machinery looks reusable. This ADR draws that seam explicitly.
 
 ## Decision
 
@@ -69,7 +69,7 @@ Before implementing a new Maps subsystem, explicitly classify the work:
 4. **Maps-specific renderer/backend detail** — keep it local, but do not let it acquire semantic authority.
 5. **Speculative reuse only** — keep it local until a real second consumer exists; do not create a generic framework for hypothetical reuse.
 
-The seam check is especially required before adding camera/matrix math, generic spatial structures, renderer lifecycle abstractions, asset pipelines, or new cross-project data/frame contracts.
+The seam check is especially required before adding genuinely 3D camera/matrix math, generic spatial structures, asset pipelines, or a proposed new cross-project renderer contract. Maps-specific 2D renderer lifecycle and render planning may remain local when they carry map-specific leverage.
 
 ## Consequences
 
