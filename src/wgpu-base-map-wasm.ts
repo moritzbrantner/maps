@@ -10,6 +10,7 @@ import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
+  evictShortbreadTile(key: string): void;
   evictTile(key: string): void;
   isDeviceLost(): boolean;
   render(
@@ -18,10 +19,12 @@ export type MapsWgpuBaseMapRenderer = {
     applicationFrame?: MapsWgpuApplicationFrame | null,
   ): number;
   resize(width: number, height: number): void;
+  uploadShortbreadTile(key: string, bytes: Uint8Array): number;
   uploadTile(key: string, image: ImageBitmap): void;
 };
 
 type MapsWgpuBaseMapWasmRenderer = {
+  evictShortbreadTile(key: string): void;
   evictTile(key: string): void;
   free?: () => void;
   isDeviceLost(): boolean;
@@ -31,6 +34,7 @@ type MapsWgpuBaseMapWasmRenderer = {
     applicationFrame: MapsWgpuApplicationFrame | null,
   ): number;
   resize(width: number, height: number): void;
+  uploadShortbreadTile(key: string, bytes: Uint8Array): number;
   uploadTile(key: string, image: ImageBitmap): void;
 };
 
@@ -64,6 +68,12 @@ export async function loadMapsWgpuBaseMapRenderer(
         canvas.style.opacity = "0";
         renderer.free?.();
       },
+      evictShortbreadTile(key) {
+        runRendererOperation(canvas, () => {
+          assertLive(disposed);
+          renderer.evictShortbreadTile(key);
+        });
+      },
       evictTile(key) {
         runRendererOperation(canvas, () => {
           assertLive(disposed);
@@ -86,6 +96,12 @@ export async function loadMapsWgpuBaseMapRenderer(
         runRendererOperation(canvas, () => {
           assertLive(disposed);
           renderer.resize(width, height);
+        });
+      },
+      uploadShortbreadTile(key, bytes) {
+        return runRendererOperation(canvas, () => {
+          assertLive(disposed);
+          return renderer.uploadShortbreadTile(key, bytes);
         });
       },
       uploadTile(key, image) {
