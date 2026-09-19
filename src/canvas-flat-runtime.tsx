@@ -61,7 +61,7 @@ type MapsWgpuApplicationFrameFactory = (
 ) => MapsWgpuApplicationFrame | null;
 
 export type MapsCanvasFlatRuntimeController = {
-  evictShortbreadTile(key: string): void;
+  evictShortbreadTile(tile: MapsRasterTileId): void;
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   getVisibleBounds(): MapBounds;
   getVisibleTiles(): MapsRasterTileId[];
@@ -319,8 +319,8 @@ export function MapsCanvasFlatRuntime({
       emitViewStateRef.current = emitViewState;
 
       const controller: MapsCanvasFlatRuntimeController = {
-        evictShortbreadTile(key) {
-          frameSynchronizer.evictShortbreadTile(key);
+        evictShortbreadTile(tile) {
+          frameSynchronizer.evictShortbreadTile(tile);
         },
         fitBounds(bounds, options = {}) {
           cancelKineticPan();
@@ -672,11 +672,11 @@ function createFrameSynchronizer({
     canvas.dataset.mapBaseTiles = String(drawCanvasFrame(fallbackCanvas, images, frame));
   }
 
-  function evictShortbreadTile(key: string) {
+  function evictShortbreadTile(tile: MapsRasterTileId) {
     const currentRenderer = renderer();
     if (!currentRenderer) return;
     try {
-      currentRenderer.evictShortbreadTile(key);
+      currentRenderer.evictShortbreadTile(tile);
       renderFrame(lastFrame ?? runtime.frame());
     } catch {
       failRenderer();
@@ -688,7 +688,7 @@ function createFrameSynchronizer({
     if (!currentRenderer) return null;
 
     try {
-      const segmentCount = currentRenderer.uploadShortbreadTile(tile.key, new Uint8Array(bytes));
+      const segmentCount = currentRenderer.uploadShortbreadTile(tile, new Uint8Array(bytes));
       delete canvas.dataset.mapBaseVectorTileError;
       renderFrame(lastFrame ?? runtime.frame());
       return segmentCount;
