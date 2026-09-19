@@ -4,7 +4,7 @@ This document is the authoritative long-term roadmap for evolving `@moritzbrantn
 
 The target is not "MapLibre rewritten in Rust". The target is a Maps-owned geographic engine with deterministic Rust semantics, a thin browser host, and replaceable Canvas2D/WebGPU pixel backends. The project should first reach Leaflet-class independence, then incrementally pursue MapLibre-class vector-map and cartography capabilities.
 
-"First-party" describes semantic ownership, not implementation isolation. Maps should own map behavior while composing existing lower-level workspace foundations for generic geo, assets, evidence and genuinely 3D primitives. For 2D rendering, `viz-engine` supplies experiments and evidence rather than runtime authority. ADR 0007 defines that boundary.
+"First-party" describes semantic ownership, not implementation isolation. Maps should own map behavior while composing existing lower-level workspace foundations for generic geo, assets, evidence and genuinely 3D primitives. For 2D rendering, `2d-lab` supplies experiments and evidence rather than runtime authority. ADR 0007 defines that boundary.
 
 ## Target architecture
 
@@ -49,7 +49,7 @@ typed Maps render frames
     +--> wgpu/WebGPU production backend
 ```
 
-The arrow to shared foundations is not an authority transfer. Maps converts between map-domain state and generic primitives through narrow adapters; longitude/latitude/zoom/bearing/pitch, projection behavior, tile semantics, style/cartography behavior and map interaction identity remain Maps-owned. `viz-engine` is intentionally outside this runtime dependency chain: it is a 2D rendering lab whose findings may inform Maps-owned backend choices.
+The arrow to shared foundations is not an authority transfer. Maps converts between map-domain state and generic primitives through narrow adapters; longitude/latitude/zoom/bearing/pitch, projection behavior, tile semantics, style/cartography behavior and map interaction identity remain Maps-owned. `2d-lab` is intentionally outside this runtime dependency chain: it is a 2D rendering lab whose findings may inform Maps-owned backend choices.
 
 ## Foundation authority map
 
@@ -61,7 +61,7 @@ Before adding a local subsystem, check the existing workspace authorities first.
 | Genuinely 3D vectors, transforms, view/projection camera math | `3d-lab` Rust foundations when compatible | Use only after Maps converts geographic state into a safe local render frame; ordinary flat-map camera/projection remains Maps-owned |
 | Generic 3D/spatial interoperability | `3d-lab` spatial contracts | Define map-specific anchoring/overlay semantics and never move GIS truth into the 3D layer |
 | Generated/static assets and provenance | `asset-tooling` | Define map/cartographic asset requirements and consume reproducible outputs |
-| 2D renderer/backend experiments and performance evidence | `viz-engine` as a lab, not a runtime authority | Consume findings through Maps-owned adapters/implementations; do not adopt the lab display list or workload model as the Maps scene/render contract |
+| 2D renderer/backend experiments and performance evidence | `2d-lab` as a lab, not a runtime authority | Consume findings through Maps-owned adapters/implementations; do not adopt the lab display list or workload model as the Maps scene/render contract |
 | Runtime evidence | `runtime-profiler` | Own representative Maps scenarios |
 | Evidence verdict policy | Moonlight | Supply map-specific comparable evidence, not duplicate threshold logic |
 | Deterministic capability/conformance discovery | `coding-tooling` | Declare Maps capabilities and consume the shared checks |
@@ -230,4 +230,4 @@ A scenario identity must remain stable enough to compare baseline/candidate evid
 18. Keep fallback boundaries explicit and testable (SSR/no-WASM/no-WebGPU/device loss) instead of sprinkling best-effort fallback throughout semantic code.
 19. Delete superseded implementations and stale benchmark harnesses after their replacement is proven; convergence is part of the milestone, not optional cleanup.
 20. Do not create a new shared abstraction for hypothetical reuse. Extraction requires a concrete second consumer and a contract that removes duplicated correctness logic rather than only boilerplate.
-21. Treat `viz-engine` as a 2D rendering evidence lab. Products consume findings by default; a shared production 2D renderer requires a separate promotion decision and must not make the lab workload/display-list model authoritative.
+21. Treat `2d-lab` as a 2D rendering evidence lab. Products consume findings by default; a shared production 2D renderer requires a separate promotion decision and must not make the lab workload/display-list model authoritative.

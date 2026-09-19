@@ -28,7 +28,7 @@ verifyMissingImports("core", [
   "three",
   "@moritzbrantner/ui",
   "@moritzbrantner/timeline-editor",
-  "@moritzbrantner/viz-engine",
+  "2d-lab",
 ]);
 verifyMissingImports("flat", [
   "three",
