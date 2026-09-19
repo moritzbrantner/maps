@@ -73,6 +73,8 @@ describe("Canvas raster canonical camera consumption", () => {
 
   test("subdivides a perspective tile deterministically", () => {
     const camera: MapsRasterRenderCamera = {
+      viewportHeight: 100,
+      viewportWidth: 200,
       viewProjection: [
         1, 0, 0, 0,
         0, 1, 0, 0.25,
@@ -98,6 +100,8 @@ describe("Canvas raster canonical camera consumption", () => {
 
   test("fails closed for geometry behind the homogeneous camera", () => {
     const behindCamera: MapsRasterRenderCamera = {
+      viewportHeight: 100,
+      viewportWidth: 200,
       viewProjection: [
         1, 0, 0, 0,
         0, 1, 0, 0,
