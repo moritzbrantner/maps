@@ -271,11 +271,7 @@ fn decode_zigzag(value: u32) -> i32 {
     ((value >> 1) as i32) ^ -((value & 1) as i32)
 }
 
-fn tile_coordinate_to_local(
-    extent: u32,
-    x: i32,
-    y: i32,
-) -> Result<[f64; 2], VectorTileError> {
+fn tile_coordinate_to_local(extent: u32, x: i32, y: i32) -> Result<[f64; 2], VectorTileError> {
     let extent = f64::from(extent);
     let coordinate = [f64::from(x) / extent, f64::from(y) / extent];
     if coordinate.into_iter().any(|value| !value.is_finite()) {
@@ -284,10 +280,7 @@ fn tile_coordinate_to_local(
     Ok(coordinate)
 }
 
-fn tile_local_to_lon_lat(
-    tile: TileId,
-    coordinate: [f64; 2],
-) -> Result<[f64; 2], VectorTileError> {
+fn tile_local_to_lon_lat(tile: TileId, coordinate: [f64; 2]) -> Result<[f64; 2], VectorTileError> {
     let dimension = 2.0_f64.powi(i32::from(tile.z));
     let world_x = (f64::from(tile.x) + coordinate[0]) / dimension;
     let world_y = (f64::from(tile.y) + coordinate[1]) / dimension;
