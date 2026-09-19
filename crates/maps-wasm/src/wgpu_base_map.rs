@@ -733,8 +733,8 @@ impl MapsWgpuBaseMapRenderer {
         y: u32,
         bytes: Vec<u8>,
     ) -> Result<usize, JsValue> {
-        let tile = TileId::new(z, x, y)
-            .ok_or_else(|| JsValue::from_str("invalid Shortbread tile id"))?;
+        let tile =
+            TileId::new(z, x, y).ok_or_else(|| JsValue::from_str("invalid Shortbread tile id"))?;
         let paths = decode_shortbread_basemap_tile_paths(&bytes)
             .map_err(|error| js_error("could not decode Shortbread vector tile", error))?;
         let mut vertices = Vec::new();
@@ -823,11 +823,8 @@ impl MapsWgpuBaseMapRenderer {
             self.vector_placement_capacity = capacity;
         }
         if !vector_placements.is_empty() {
-            self.queue.write_buffer(
-                &self.vector_placement_buffer,
-                0,
-                &vector_placements,
-            );
+            self.queue
+                .write_buffer(&self.vector_placement_buffer, 0, &vector_placements);
         }
 
         let mut vertices = Vec::new();
@@ -1083,12 +1080,8 @@ fn collect_vector_tile_draws(
             let ancestor = if shift == 0 {
                 canonical
             } else {
-                TileId::new(
-                    ancestor_z,
-                    canonical.x >> shift,
-                    canonical.y >> shift,
-                )
-                .ok_or_else(|| JsValue::from_str("invalid Shortbread ancestor tile id"))?
+                TileId::new(ancestor_z, canonical.x >> shift, canonical.y >> shift)
+                    .ok_or_else(|| JsValue::from_str("invalid Shortbread ancestor tile id"))?
             };
             let vector_id = VectorTileId::from(ancestor);
             if !vector_tiles.contains_key(&vector_id) {
@@ -1112,10 +1105,8 @@ fn collect_vector_tile_draws(
                 .ok_or_else(|| JsValue::from_str("invalid Shortbread child y offset"))?;
             draws.push(VectorTileDraw {
                 tile: vector_id,
-                local_west: placement.local_west
-                    - child_offset_x as f64 * placement.local_size,
-                local_north: placement.local_north
-                    + child_offset_y as f64 * placement.local_size,
+                local_west: placement.local_west - child_offset_x as f64 * placement.local_size,
+                local_north: placement.local_north + child_offset_y as f64 * placement.local_size,
                 local_size: placement.local_size * scale,
             });
             break;
@@ -1190,10 +1181,7 @@ fn append_vector_tile_segment(
 ) -> Result<bool, JsValue> {
     let start = [start[0] as f32, start[1] as f32];
     let end = [end[0] as f32, end[1] as f32];
-    if start
-        .into_iter()
-        .chain(end)
-        .any(|value| !value.is_finite())
+    if start.into_iter().chain(end).any(|value| !value.is_finite())
         || !width.is_finite()
         || width <= 0.0
         || !valid_color(color)
