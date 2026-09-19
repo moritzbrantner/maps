@@ -5,13 +5,16 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use maps_core::{VectorBasemapLineKind, decode_shortbread_basemap_tile_paths};
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, ImageBitmap};
 
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
-const CAMERA_UNIFORM_SIZE: u64 = 64;
+const CAMERA_UNIFORM_SIZE: u64 = 80;
 const VERTEX_SIZE: u64 = 16;
+const VECTOR_TILE_VERTEX_SIZE: u64 = 48;
+const VECTOR_PLACEMENT_SIZE: u64 = 16;
 const APPLICATION_VERTEX_SIZE: u64 = 24;
 const VERTICES_PER_TILE: u32 = 4;
 const CIRCLE_SEGMENTS: usize = 24;
@@ -29,6 +32,8 @@ const MAP_BACKGROUND_BLUE: f64 = 238.0 / 255.0;
 const BASE_MAP_SHADER: &str = r#"
 struct BaseCamera {
   view_projection: mat4x4<f32>,
+  viewport: vec2<f32>,
+  _padding: vec2<f32>,
 };
 
 @group(0) @binding(0)
@@ -65,6 +70,71 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+const VECTOR_TILE_SHADER: &str = r#"
+struct BaseCamera {
+  view_projection: mat4x4<f32>,
+  viewport: vec2<f32>,
+  _padding: vec2<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> camera: BaseCamera;
+
+struct VertexInput {
+  @location(0) start: vec2<f32>,
+  @location(1) end: vec2<f32>,
+  @location(2) corner: vec2<f32>,
+  @location(3) width: f32,
+  @location(4) color: vec4<f32>,
+  @location(5) placement: vec3<f32>,
+};
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  let start_world = vec2<f32>(
+    input.placement.x + input.start.x * input.placement.z,
+    input.placement.y - input.start.y * input.placement.z,
+  );
+  let end_world = vec2<f32>(
+    input.placement.x + input.end.x * input.placement.z,
+    input.placement.y - input.end.y * input.placement.z,
+  );
+  let start_clip = camera.view_projection * vec4<f32>(start_world, 0.0, 1.0);
+  let end_clip = camera.view_projection * vec4<f32>(end_world, 0.0, 1.0);
+  let start_ndc = start_clip.xy / start_clip.w;
+  let end_ndc = end_clip.xy / end_clip.w;
+  let direction_px = (end_ndc - start_ndc) * camera.viewport * 0.5;
+  let direction_length = max(length(direction_px), 0.0001);
+  let tangent = direction_px / direction_length;
+  let normal = vec2<f32>(-tangent.y, tangent.x);
+  let offset_ndc = normal * vec2<f32>(
+    input.width / camera.viewport.x,
+    input.width / camera.viewport.y,
+  ) * input.corner.y;
+  let base_clip = mix(start_clip, end_clip, input.corner.x);
+  let base_ndc = base_clip.xy / base_clip.w;
+
+  var output: VertexOutput;
+  output.position = vec4<f32>(
+    (base_ndc + offset_ndc) * base_clip.w,
+    base_clip.z,
+    base_clip.w,
+  );
+  output.color = input.color;
+  return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  return vec4<f32>(input.color.rgb * input.color.a, input.color.a);
+}
+"#;
+
 const APPLICATION_SHADER: &str = r#"
 struct VertexInput {
   @location(0) position: vec2<f32>,
@@ -94,6 +164,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 #[serde(rename_all = "camelCase")]
 struct WgpuRasterRenderCamera {
     view_projection: [f32; 16],
+    viewport_width: f32,
+    viewport_height: f32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +234,12 @@ struct TileTexture {
     bind_group: wgpu::BindGroup,
 }
 
+struct VectorTileGeometry {
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
+    segment_count: usize,
+}
+
 #[wasm_bindgen]
 pub struct MapsWgpuBaseMapRenderer {
     surface: wgpu::Surface<'static>,
@@ -178,10 +256,14 @@ pub struct MapsWgpuBaseMapRenderer {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: u64,
+    vector_pipeline: wgpu::RenderPipeline,
+    vector_placement_buffer: wgpu::Buffer,
+    vector_placement_capacity: u64,
     application_pipeline: wgpu::RenderPipeline,
     application_vertex_buffer: wgpu::Buffer,
     application_vertex_capacity: u64,
     tiles: HashMap<String, TileTexture>,
+    vector_tiles: HashMap<String, VectorTileGeometry>,
 }
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
@@ -362,6 +444,91 @@ impl MapsWgpuBaseMapRenderer {
         });
         let vertex_buffer = create_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
+        let vector_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Maps Shortbread vector tile shader"),
+            source: wgpu::ShaderSource::Wgsl(VECTOR_TILE_SHADER.into()),
+        });
+        let vector_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Maps Shortbread vector tile pipeline layout"),
+                bind_group_layouts: &[Some(&camera_bind_group_layout)],
+                immediate_size: 0,
+            });
+        let vector_attributes = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 8,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 16,
+                shader_location: 2,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 24,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 32,
+                shader_location: 4,
+            },
+        ];
+        let vector_placement_attributes = [wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: 0,
+            shader_location: 5,
+        }];
+        let vector_vertex_buffers = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: VECTOR_TILE_VERTEX_SIZE,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &vector_attributes,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: VECTOR_PLACEMENT_SIZE,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &vector_placement_attributes,
+            }),
+        ];
+        let vector_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Maps Shortbread vector tile pipeline"),
+            layout: Some(&vector_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vector_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &vector_vertex_buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &vector_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_view_format,
+                    blend: Some(premultiplied_blend_state()),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let vector_placement_buffer =
+            create_vector_placement_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
+
         let application_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Maps application screen-space shader"),
             source: wgpu::ShaderSource::Wgsl(APPLICATION_SHADER.into()),
@@ -389,18 +556,6 @@ impl MapsWgpuBaseMapRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &application_attributes,
         })];
-        let premultiplied_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
         let application_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Maps application geometry pipeline"),
             layout: Some(&application_pipeline_layout),
@@ -422,7 +577,7 @@ impl MapsWgpuBaseMapRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_view_format,
-                    blend: Some(premultiplied_blend),
+                    blend: Some(premultiplied_blend_state()),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -447,10 +602,14 @@ impl MapsWgpuBaseMapRenderer {
             pipeline,
             vertex_buffer,
             vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
+            vector_pipeline,
+            vector_placement_buffer,
+            vector_placement_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             application_pipeline,
             application_vertex_buffer,
             application_vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             tiles: HashMap::new(),
+            vector_tiles: HashMap::new(),
         })
     }
 
@@ -538,6 +697,58 @@ impl MapsWgpuBaseMapRenderer {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = uploadShortbreadTile)]
+    pub fn upload_shortbread_tile(
+        &mut self,
+        key: String,
+        bytes: Vec<u8>,
+    ) -> Result<usize, JsValue> {
+        if key.is_empty() {
+            return Err(JsValue::from_str("Shortbread tile key must not be empty"));
+        }
+
+        let paths = decode_shortbread_basemap_tile_paths(&bytes)
+            .map_err(|error| js_error("could not decode Shortbread vector tile", error))?;
+        let mut vertices = Vec::new();
+        let mut segment_count = 0_usize;
+        for path in &paths {
+            let style = shortbread_line_style(path.kind);
+            for segment in path.coordinates.windows(2) {
+                if append_vector_tile_segment(
+                    &mut vertices,
+                    segment[0],
+                    segment[1],
+                    style.width,
+                    style.color,
+                )? {
+                    segment_count += 1;
+                }
+            }
+        }
+
+        let required = (vertices.len() as u64).max(4);
+        let vertex_buffer = create_vector_tile_buffer(&self.device, required);
+        if !vertices.is_empty() {
+            self.queue.write_buffer(&vertex_buffer, 0, &vertices);
+        }
+        let vertex_count = u32::try_from(vertices.len() as u64 / VECTOR_TILE_VERTEX_SIZE)
+            .map_err(|_| JsValue::from_str("Shortbread vector tile has too many vertices"))?;
+        self.vector_tiles.insert(
+            key,
+            VectorTileGeometry {
+                vertex_buffer,
+                vertex_count,
+                segment_count,
+            },
+        );
+        Ok(segment_count)
+    }
+
+    #[wasm_bindgen(js_name = evictShortbreadTile)]
+    pub fn evict_shortbread_tile(&mut self, key: &str) {
+        self.vector_tiles.remove(key);
+    }
+
     #[wasm_bindgen(js_name = evictTile)]
     pub fn evict_tile(&mut self, key: &str) {
         self.tiles.remove(key);
@@ -560,10 +771,35 @@ impl MapsWgpuBaseMapRenderer {
             .view_projection
             .into_iter()
             .any(|value| !value.is_finite())
+            || !render_camera.viewport_width.is_finite()
+            || !render_camera.viewport_height.is_finite()
+            || render_camera.viewport_width <= 0.0
+            || render_camera.viewport_height <= 0.0
         {
             return Err(JsValue::from_str(
-                "wgpu raster render camera contains non-finite matrix values",
+                "wgpu raster render camera contains invalid values",
             ));
+        }
+
+        let mut vector_placements =
+            Vec::with_capacity(placements.len() * VECTOR_PLACEMENT_SIZE as usize);
+        for placement in &placements {
+            append_vector_placement(&mut vector_placements, placement)?;
+        }
+        let vector_placement_required = vector_placements.len() as u64;
+        if vector_placement_required > self.vector_placement_capacity {
+            let capacity = vector_placement_required
+                .next_power_of_two()
+                .max(INITIAL_VERTEX_BUFFER_SIZE);
+            self.vector_placement_buffer = create_vector_placement_buffer(&self.device, capacity);
+            self.vector_placement_capacity = capacity;
+        }
+        if !vector_placements.is_empty() {
+            self.queue.write_buffer(
+                &self.vector_placement_buffer,
+                0,
+                &vector_placements,
+            );
         }
 
         let mut vertices = Vec::with_capacity(placements.len() * 4 * VERTEX_SIZE as usize);
@@ -583,7 +819,11 @@ impl MapsWgpuBaseMapRenderer {
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            &camera_uniform_bytes(render_camera.view_projection),
+            &camera_uniform_bytes(
+                render_camera.view_projection,
+                render_camera.viewport_width,
+                render_camera.viewport_height,
+            ),
         );
 
         let mut application_vertices = Vec::new();
@@ -659,6 +899,27 @@ impl MapsWgpuBaseMapRenderer {
                 drawn_tiles += 1;
             }
 
+            if !self.vector_tiles.is_empty() {
+                pass.set_pipeline(&self.vector_pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(1, self.vector_placement_buffer.slice(..));
+
+                for (index, placement) in placements.iter().enumerate() {
+                    let Some(tile) = self.vector_tiles.get(&placement.tile.key) else {
+                        continue;
+                    };
+                    if tile.vertex_count == 0 {
+                        continue;
+                    }
+                    pass.set_vertex_buffer(0, tile.vertex_buffer.slice(..));
+                    let instance = index as u32;
+                    pass.draw(0..tile.vertex_count, instance..instance + 1);
+                    if !self.tiles.contains_key(&placement.tile.key) {
+                        drawn_tiles += 1;
+                    }
+                }
+            }
+
             if application_vertex_count > 0 {
                 pass.set_pipeline(&self.application_pipeline);
                 pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
@@ -712,6 +973,24 @@ fn create_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
     })
 }
 
+fn create_vector_placement_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Maps vector tile placement instances"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn create_vector_tile_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Maps cached Shortbread vector tile geometry"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn create_application_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Maps application screen-space vertices"),
@@ -758,6 +1037,118 @@ fn append_tile_vertices(
         }
     }
     Ok(())
+}
+
+fn append_vector_placement(
+    output: &mut Vec<u8>,
+    placement: &WgpuRasterTilePlacement,
+) -> Result<(), JsValue> {
+    let values = [
+        placement.local_west,
+        placement.local_north,
+        placement.local_size,
+    ];
+    if values.iter().any(|value| !value.is_finite()) || placement.local_size <= 0.0 {
+        return Err(JsValue::from_str("invalid vector tile local placement"));
+    }
+
+    for value in [
+        placement.local_west as f32,
+        placement.local_north as f32,
+        placement.local_size as f32,
+        0.0,
+    ] {
+        if !value.is_finite() {
+            return Err(JsValue::from_str(
+                "vector tile local placement is not representable as f32",
+            ));
+        }
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ShortbreadLineStyle {
+    width: f32,
+    color: [f32; 4],
+}
+
+fn shortbread_line_style(kind: VectorBasemapLineKind) -> ShortbreadLineStyle {
+    match kind {
+        VectorBasemapLineKind::Coast => ShortbreadLineStyle {
+            width: 1.5,
+            color: [79.0 / 255.0, 147.0 / 255.0, 184.0 / 255.0, 0.95],
+        },
+        VectorBasemapLineKind::Water => ShortbreadLineStyle {
+            width: 1.2,
+            color: [107.0 / 255.0, 169.0 / 255.0, 201.0 / 255.0, 0.9],
+        },
+        VectorBasemapLineKind::Boundary => ShortbreadLineStyle {
+            width: 1.0,
+            color: [178.0 / 255.0, 113.0 / 255.0, 136.0 / 255.0, 0.75],
+        },
+        VectorBasemapLineKind::Street => ShortbreadLineStyle {
+            width: 0.9,
+            color: [154.0 / 255.0, 140.0 / 255.0, 125.0 / 255.0, 0.72],
+        },
+    }
+}
+
+fn append_vector_tile_segment(
+    output: &mut Vec<u8>,
+    start: [f64; 2],
+    end: [f64; 2],
+    width: f32,
+    color: [f32; 4],
+) -> Result<bool, JsValue> {
+    let start = [start[0] as f32, start[1] as f32];
+    let end = [end[0] as f32, end[1] as f32];
+    if start
+        .into_iter()
+        .chain(end)
+        .any(|value| !value.is_finite())
+        || !width.is_finite()
+        || width <= 0.0
+        || !valid_color(color)
+    {
+        return Err(JsValue::from_str("invalid Shortbread vector tile segment"));
+    }
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    if dx * dx + dy * dy <= f32::EPSILON {
+        return Ok(false);
+    }
+
+    for corner in [
+        [0.0, -1.0],
+        [0.0, 1.0],
+        [1.0, -1.0],
+        [1.0, -1.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+    ] {
+        append_vector_tile_vertex(output, start, end, corner, width, color);
+    }
+    Ok(true)
+}
+
+fn append_vector_tile_vertex(
+    output: &mut Vec<u8>,
+    start: [f32; 2],
+    end: [f32; 2],
+    corner: [f32; 2],
+    width: f32,
+    color: [f32; 4],
+) {
+    for value in start.into_iter().chain(end).chain(corner) {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    output.extend_from_slice(&width.to_le_bytes());
+    output.extend_from_slice(&0.0_f32.to_le_bytes());
+    for value in color {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
 }
 
 fn append_application_vertices(
@@ -1128,12 +1519,33 @@ fn valid_color(color: [f32; 4]) -> bool {
         .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
 }
 
-fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
-    let mut bytes = [0; 64];
+fn premultiplied_blend_state() -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
+}
+
+fn camera_uniform_bytes(
+    view_projection: [f32; 16],
+    viewport_width: f32,
+    viewport_height: f32,
+) -> [u8; 80] {
+    let mut bytes = [0; 80];
     for (index, value) in view_projection.into_iter().enumerate() {
         let offset = index * 4;
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
+    bytes[64..68].copy_from_slice(&viewport_width.to_le_bytes());
+    bytes[68..72].copy_from_slice(&viewport_height.to_le_bytes());
     bytes
 }
 
