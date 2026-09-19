@@ -237,7 +237,6 @@ struct TileTexture {
 struct VectorTileGeometry {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
-    segment_count: usize,
 }
 
 #[wasm_bindgen]
@@ -738,7 +737,6 @@ impl MapsWgpuBaseMapRenderer {
             VectorTileGeometry {
                 vertex_buffer,
                 vertex_count,
-                segment_count,
             },
         );
         Ok(segment_count)
