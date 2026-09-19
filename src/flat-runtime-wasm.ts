@@ -32,6 +32,8 @@ export type MapsRasterRenderCamera = {
     number,
     number,
   ];
+  viewportWidth: number;
+  viewportHeight: number;
 };
 
 export type MapsRasterTilePlacement = {
