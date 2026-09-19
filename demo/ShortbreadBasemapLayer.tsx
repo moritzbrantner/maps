@@ -279,10 +279,7 @@ function ancestorTile(tile: MapsRasterTileId, z: number): MapsRasterTileId {
 }
 
 function countLineSegments(lines: readonly ShortbreadBasemapLine[]) {
-  return lines.reduce(
-    (sum, line) => sum + Math.max(0, line.coordinates.length - 1),
-    0,
-  );
+  return lines.reduce((sum, line) => sum + Math.max(0, line.coordinates.length - 1), 0);
 }
 
 function shortbreadStyle(kind: ShortbreadBasemapLineKind) {
