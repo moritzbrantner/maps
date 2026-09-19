@@ -61,6 +61,10 @@ export function useShortbreadBasemap(
   const visibleTileKey = visibleTiles.map((tile) => tile.key).join("|");
 
   useEffect(() => {
+    for (const active of inflightRef.current.values()) {
+      active.abort();
+    }
+    inflightRef.current.clear();
     cacheRef.current.clear();
     setCacheVersion((version) => version + 1);
 
