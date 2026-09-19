@@ -1,11 +1,11 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
-use maps_core::{VectorBasemapLineKind, decode_shortbread_basemap_tile_paths};
+use maps_core::{TileId, VectorBasemapLineKind, decode_shortbread_basemap_tile_paths};
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, ImageBitmap};
@@ -172,6 +172,7 @@ struct WgpuRasterRenderCamera {
 #[serde(rename_all = "camelCase")]
 struct WgpuRasterTilePlacement {
     tile: WgpuRasterTileId,
+    world_copy: i32,
     local_west: f64,
     local_north: f64,
     local_size: f64,
@@ -180,6 +181,34 @@ struct WgpuRasterTilePlacement {
 #[derive(Debug, Deserialize)]
 struct WgpuRasterTileId {
     key: String,
+    z: u8,
+    x: u32,
+    y: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct VectorTileId {
+    z: u8,
+    x: u32,
+    y: u32,
+}
+
+impl From<TileId> for VectorTileId {
+    fn from(tile: TileId) -> Self {
+        Self {
+            z: tile.z,
+            x: tile.x,
+            y: tile.y,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VectorTileDraw {
+    tile: VectorTileId,
+    local_west: f64,
+    local_north: f64,
+    local_size: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,7 +291,7 @@ pub struct MapsWgpuBaseMapRenderer {
     application_vertex_buffer: wgpu::Buffer,
     application_vertex_capacity: u64,
     tiles: HashMap<String, TileTexture>,
-    vector_tiles: HashMap<String, VectorTileGeometry>,
+    vector_tiles: HashMap<VectorTileId, VectorTileGeometry>,
 }
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
@@ -699,13 +728,13 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = uploadShortbreadTile)]
     pub fn upload_shortbread_tile(
         &mut self,
-        key: String,
+        z: u8,
+        x: u32,
+        y: u32,
         bytes: Vec<u8>,
     ) -> Result<usize, JsValue> {
-        if key.is_empty() {
-            return Err(JsValue::from_str("Shortbread tile key must not be empty"));
-        }
-
+        let tile = TileId::new(z, x, y)
+            .ok_or_else(|| JsValue::from_str("invalid Shortbread tile id"))?;
         let paths = decode_shortbread_basemap_tile_paths(&bytes)
             .map_err(|error| js_error("could not decode Shortbread vector tile", error))?;
         let mut vertices = Vec::new();
@@ -733,7 +762,7 @@ impl MapsWgpuBaseMapRenderer {
         let vertex_count = u32::try_from(vertices.len() as u64 / VECTOR_TILE_VERTEX_SIZE)
             .map_err(|_| JsValue::from_str("Shortbread vector tile has too many vertices"))?;
         self.vector_tiles.insert(
-            key,
+            tile.into(),
             VectorTileGeometry {
                 vertex_buffer,
                 vertex_count,
@@ -743,8 +772,8 @@ impl MapsWgpuBaseMapRenderer {
     }
 
     #[wasm_bindgen(js_name = evictShortbreadTile)]
-    pub fn evict_shortbread_tile(&mut self, key: &str) {
-        self.vector_tiles.remove(key);
+    pub fn evict_shortbread_tile(&mut self, z: u8, x: u32, y: u32) {
+        self.vector_tiles.remove(&VectorTileId { z, x, y });
     }
 
     #[wasm_bindgen(js_name = evictTile)]
@@ -779,10 +808,11 @@ impl MapsWgpuBaseMapRenderer {
             ));
         }
 
+        let vector_draws = collect_vector_tile_draws(&placements, &self.vector_tiles)?;
         let mut vector_placements =
-            Vec::with_capacity(placements.len() * VECTOR_PLACEMENT_SIZE as usize);
-        for placement in &placements {
-            append_vector_placement(&mut vector_placements, placement)?;
+            Vec::with_capacity(vector_draws.len() * VECTOR_PLACEMENT_SIZE as usize);
+        for draw in &vector_draws {
+            append_vector_placement(&mut vector_placements, draw)?;
         }
         let vector_placement_required = vector_placements.len() as u64;
         if vector_placement_required > self.vector_placement_capacity {
@@ -902,8 +932,8 @@ impl MapsWgpuBaseMapRenderer {
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_vertex_buffer(1, self.vector_placement_buffer.slice(..));
 
-                for (index, placement) in placements.iter().enumerate() {
-                    let Some(tile) = self.vector_tiles.get(&placement.tile.key) else {
+                for (index, draw) in vector_draws.iter().enumerate() {
+                    let Some(tile) = self.vector_tiles.get(&draw.tile) else {
                         continue;
                     };
                     if tile.vertex_count == 0 {
@@ -912,9 +942,7 @@ impl MapsWgpuBaseMapRenderer {
                     pass.set_vertex_buffer(0, tile.vertex_buffer.slice(..));
                     let instance = index as u32;
                     pass.draw(0..tile.vertex_count, instance..instance + 1);
-                    if !self.tiles.contains_key(&placement.tile.key) {
-                        drawn_tiles += 1;
-                    }
+                    drawn_tiles += 1;
                 }
             }
 
@@ -1037,9 +1065,64 @@ fn append_tile_vertices(
     Ok(())
 }
 
+fn collect_vector_tile_draws(
+    placements: &[WgpuRasterTilePlacement],
+    vector_tiles: &HashMap<VectorTileId, VectorTileGeometry>,
+) -> Result<Vec<VectorTileDraw>, JsValue> {
+    let mut seen = HashSet::new();
+    let mut draws = Vec::new();
+
+    for placement in placements {
+        let canonical = TileId::new(placement.tile.z, placement.tile.x, placement.tile.y)
+            .ok_or_else(|| JsValue::from_str("invalid visible tile id"))?;
+        for ancestor_z in (0..=canonical.z).rev() {
+            let shift = canonical.z - ancestor_z;
+            let ancestor = if shift == 0 {
+                canonical
+            } else {
+                TileId::new(
+                    ancestor_z,
+                    canonical.x >> shift,
+                    canonical.y >> shift,
+                )
+                .ok_or_else(|| JsValue::from_str("invalid Shortbread ancestor tile id"))?
+            };
+            let vector_id = VectorTileId::from(ancestor);
+            if !vector_tiles.contains_key(&vector_id) {
+                continue;
+            }
+            if !seen.insert((vector_id, placement.world_copy)) {
+                break;
+            }
+
+            let scale = 2.0_f64.powi(i32::from(shift));
+            let span = 1_u64 << shift;
+            let ancestor_x = u64::from(ancestor.x) * span;
+            let ancestor_y = u64::from(ancestor.y) * span;
+            let child_offset_x = u64::from(canonical.x)
+                .checked_sub(ancestor_x)
+                .ok_or_else(|| JsValue::from_str("invalid Shortbread child x offset"))?;
+            let child_offset_y = u64::from(canonical.y)
+                .checked_sub(ancestor_y)
+                .ok_or_else(|| JsValue::from_str("invalid Shortbread child y offset"))?;
+            draws.push(VectorTileDraw {
+                tile: vector_id,
+                local_west: placement.local_west
+                    - child_offset_x as f64 * placement.local_size,
+                local_north: placement.local_north
+                    + child_offset_y as f64 * placement.local_size,
+                local_size: placement.local_size * scale,
+            });
+            break;
+        }
+    }
+
+    Ok(draws)
+}
+
 fn append_vector_placement(
     output: &mut Vec<u8>,
-    placement: &WgpuRasterTilePlacement,
+    placement: &VectorTileDraw,
 ) -> Result<(), JsValue> {
     let values = [
         placement.local_west,
