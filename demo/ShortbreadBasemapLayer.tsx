@@ -161,9 +161,7 @@ export function useShortbreadBasemap(
       visibleTiles
         .map((tile) => [tile, cacheRef.current.get(tile.key)] as const)
         .filter(
-          (
-            entry,
-          ): entry is readonly [MapsRasterTileId, CachedShortbreadTile] =>
+          (entry): entry is readonly [MapsRasterTileId, CachedShortbreadTile] =>
             entry[1] !== undefined,
         ),
     [cacheVersion, visibleTileKey],
@@ -281,7 +279,10 @@ function ancestorTile(tile: MapsRasterTileId, z: number): MapsRasterTileId {
 }
 
 function countLineSegments(lines: readonly ShortbreadBasemapLine[]) {
-  return lines.reduce((sum, line) => sum + Math.max(0, line.coordinates.length - 1), 0);
+  return lines.reduce(
+    (sum, line) => sum + Math.max(0, line.coordinates.length - 1),
+    0,
+  );
 }
 
 function shortbreadStyle(kind: ShortbreadBasemapLineKind) {
