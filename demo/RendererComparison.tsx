@@ -18,7 +18,10 @@ import { getShortbreadBasemapStyle, useShortbreadBasemap } from "./ShortbreadBas
 type RendererBackend = "maps" | "maplibre";
 
 type MapsDemoController = MapSurfaceController &
-  Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles">;
+  Pick<
+    MapsCanvasFlatRuntimeController,
+    "evictShortbreadTile" | "getVisibleTiles" | "uploadShortbreadTile"
+  >;
 
 type ComparisonPointProperties = {
   demand: number;
@@ -38,7 +41,7 @@ export function RendererComparison() {
   const [mapsController, setMapsController] = useState<MapsDemoController | null>(null);
   const points = useMemo(() => createComparisonPoints(), []);
   const visibleTiles = backend === "maps" ? (mapsController?.getVisibleTiles() ?? []) : [];
-  const basemap = useShortbreadBasemap(visibleTiles);
+  const basemap = useShortbreadBasemap(visibleTiles, mapsController);
   const handleControllerReady = useCallback((controller: MapSurfaceController | null) => {
     setMapsController(
       controller && "getVisibleTiles" in controller ? (controller as MapsDemoController) : null,
@@ -96,7 +99,9 @@ export function RendererComparison() {
           style={{ minHeight: 430 }}
           viewState={viewState}
         >
-          {backend === "maps" && basemap.enabled ? (
+          {backend === "maps" &&
+          basemap.enabled &&
+          basemap.renderPath === "geojson-fallback" ? (
             <GeoJsonLayer
               featureCollection={basemap.featureCollection}
               getFeatureStyle={(feature) => getShortbreadBasemapStyle(feature.properties.kind)}
@@ -112,6 +117,8 @@ export function RendererComparison() {
         aria-hidden="true"
         data-shortbread-error={basemap.error ?? undefined}
         data-shortbread-feature-count={basemap.featureCollection.features.length}
+        data-shortbread-render-path={basemap.renderPath}
+        data-shortbread-segment-count={basemap.segmentCount}
         data-shortbread-state={basemap.state}
         data-shortbread-tile-count={basemap.tileCount}
         hidden
@@ -126,7 +133,9 @@ export function RendererComparison() {
         <span>
           Basemap:{" "}
           <strong className="text-foreground">
-            {backend === "maps" ? "Shortbread vector / Maps renderer" : "MapLibre reference"}
+            {backend === "maps"
+              ? "Shortbread MVT / cached Maps GPU geometry"
+              : "MapLibre reference"}
           </strong>
         </span>
         <span>
