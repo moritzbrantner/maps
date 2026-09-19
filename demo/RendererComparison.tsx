@@ -13,7 +13,10 @@ import {
 } from "@moritzbrantner/maps";
 import type { MapsCanvasFlatRuntimeController } from "../src/canvas-flat-runtime";
 import { demoMapStyle } from "./data/map-style";
-import { getShortbreadBasemapStyle, useShortbreadBasemap } from "./ShortbreadBasemapLayer";
+import {
+  getShortbreadBasemapStyle,
+  useShortbreadBasemap,
+} from "./ShortbreadBasemapLayer";
 
 type RendererBackend = "maps" | "maplibre";
 
