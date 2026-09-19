@@ -830,9 +830,12 @@ impl MapsWgpuBaseMapRenderer {
             );
         }
 
-        let mut vertices = Vec::with_capacity(placements.len() * 4 * VERTEX_SIZE as usize);
-        for placement in &placements {
-            append_tile_vertices(&mut vertices, placement)?;
+        let mut vertices = Vec::new();
+        if !self.tiles.is_empty() {
+            vertices.reserve(placements.len() * 4 * VERTEX_SIZE as usize);
+            for placement in &placements {
+                append_tile_vertices(&mut vertices, placement)?;
+            }
         }
 
         let required = vertices.len() as u64;
@@ -1096,7 +1099,9 @@ fn collect_vector_tile_draws(
             }
 
             let scale = 2.0_f64.powi(i32::from(shift));
-            let span = 1_u64 << shift;
+            let span = 1_u64
+                .checked_shl(u32::from(shift))
+                .ok_or_else(|| JsValue::from_str("Shortbread ancestor zoom delta is too large"))?;
             let ancestor_x = u64::from(ancestor.x) * span;
             let ancestor_y = u64::from(ancestor.y) * span;
             let child_offset_x = u64::from(canonical.x)
