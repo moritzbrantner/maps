@@ -91,6 +91,8 @@ impl FlatRasterRuntimeLimits {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterRenderCamera {
     pub view_projection: [f32; 16],
+    pub viewport_width: f32,
+    pub viewport_height: f32,
 }
 
 /// One placement of a canonical XYZ tile.
@@ -522,6 +524,8 @@ impl FlatRasterRuntime {
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         let render_camera = RasterRenderCamera {
             view_projection: local_render_frame.view_projection_elements(),
+            viewport_width: self.camera.viewport.width as f32,
+            viewport_height: self.camera.viewport.height as f32,
         };
         let placements =
             visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;

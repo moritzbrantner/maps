@@ -61,6 +61,7 @@ type MapsWgpuApplicationFrameFactory = (
 ) => MapsWgpuApplicationFrame | null;
 
 export type MapsCanvasFlatRuntimeController = {
+  evictShortbreadTile(tile: MapsRasterTileId): void;
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   getVisibleBounds(): MapBounds;
   getVisibleTiles(): MapsRasterTileId[];
@@ -70,6 +71,7 @@ export type MapsCanvasFlatRuntimeController = {
     interaction?: MapScreenInteractionState,
   ): boolean;
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
+  uploadShortbreadTile(tile: MapsRasterTileId, bytes: ArrayBuffer): number | null;
   unproject(x: number, y: number): [longitude: number, latitude: number];
 };
 
@@ -317,6 +319,9 @@ export function MapsCanvasFlatRuntime({
       emitViewStateRef.current = emitViewState;
 
       const controller: MapsCanvasFlatRuntimeController = {
+        evictShortbreadTile(tile) {
+          frameSynchronizer.evictShortbreadTile(tile);
+        },
         fitBounds(bounds, options = {}) {
           cancelKineticPan();
           const effectiveMaxZoom =
@@ -342,6 +347,9 @@ export function MapsCanvasFlatRuntime({
           cancelKineticPan();
           runtime.setViewState(next);
           emitViewState(syncFrame(), reason);
+        },
+        uploadShortbreadTile(tile, bytes) {
+          return frameSynchronizer.uploadShortbreadTile(tile, bytes);
         },
         unproject(x, y) {
           return runtime.unproject(x, y);
@@ -664,6 +672,34 @@ function createFrameSynchronizer({
     canvas.dataset.mapBaseTiles = String(drawCanvasFrame(fallbackCanvas, images, frame));
   }
 
+  function evictShortbreadTile(tile: MapsRasterTileId) {
+    const currentRenderer = renderer();
+    if (!currentRenderer) return;
+    try {
+      currentRenderer.evictShortbreadTile(tile);
+      renderFrame(lastFrame ?? runtime.frame());
+    } catch {
+      failRenderer();
+    }
+  }
+
+  function uploadShortbreadTile(tile: MapsRasterTileId, bytes: ArrayBuffer) {
+    const currentRenderer = renderer();
+    if (!currentRenderer) return null;
+
+    try {
+      const segmentCount = currentRenderer.uploadShortbreadTile(tile, new Uint8Array(bytes));
+      delete canvas.dataset.mapBaseVectorTileError;
+      renderFrame(lastFrame ?? runtime.frame());
+      return segmentCount;
+    } catch (error) {
+      canvas.dataset.mapBaseVectorTileError =
+        error instanceof Error ? error.message : String(error);
+      failRenderer();
+      return null;
+    }
+  }
+
   function setApplicationFrame(
     frame: MapScreenRenderFrame<unknown>,
     interaction: MapScreenInteractionState,
@@ -758,6 +794,7 @@ function createFrameSynchronizer({
       lastFrame = null;
       applicationFrame = null;
     },
+    evictShortbreadTile,
     getVisibleTiles() {
       const frame = lastFrame ?? runtime.frame();
       const unique = new Map<string, MapsRasterTileId>();
@@ -768,6 +805,7 @@ function createFrameSynchronizer({
     },
     setApplicationFrame,
     syncFrame,
+    uploadShortbreadTile,
   };
 }
 

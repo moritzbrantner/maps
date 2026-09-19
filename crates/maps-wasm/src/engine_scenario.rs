@@ -105,6 +105,8 @@ impl From<RasterTilePlacement> for WasmRasterTilePlacement {
 #[serde(rename_all = "camelCase")]
 struct WasmRasterRenderCamera {
     view_projection: [f32; 16],
+    viewport_width: f32,
+    viewport_height: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -342,6 +344,8 @@ fn wasm_frame_plan(camera: MapCamera, plan: RasterFramePlan) -> WasmRasterFrameP
         },
         render_camera: WasmRasterRenderCamera {
             view_projection: plan.render_camera.view_projection,
+            viewport_width: plan.render_camera.viewport_width,
+            viewport_height: plan.render_camera.viewport_height,
         },
         visible_bounds: WasmVisibleBounds {
             west: plan.visible_bounds.west,

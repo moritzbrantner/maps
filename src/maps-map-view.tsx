@@ -299,8 +299,14 @@ export function MapsMapView({
     }
 
     const controller: MapSurfaceController &
-      Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles"> = {
+      Pick<
+        MapsCanvasFlatRuntimeController,
+        "evictShortbreadTile" | "getVisibleTiles" | "uploadShortbreadTile"
+      > = {
       display: "flat",
+      evictShortbreadTile: (tile) => {
+        runtimeControllerRef.current?.evictShortbreadTile(tile);
+      },
       fitToData: fitToDataNow,
       fitBounds: (bounds, options) => {
         fitBoundsNow(bounds, options);
@@ -315,6 +321,8 @@ export function MapsMapView({
       getViewState: () => currentViewState,
       getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
       setViewState: setSurfaceViewState,
+      uploadShortbreadTile: (tile, bytes) =>
+        runtimeControllerRef.current?.uploadShortbreadTile(tile, bytes) ?? null,
     };
 
     onMapControllerReady(controller);

@@ -101,8 +101,13 @@ test("Pages first-party engine decodes Shortbread vector tiles into wgpu linewor
     await expect(map).toHaveAttribute("data-map-ready", "true");
     await expect(baseCanvas).toHaveAttribute("data-map-base-renderer", "wgpu");
     await expect(basemap).toHaveAttribute("data-shortbread-state", "ready");
+    await expect(basemap).toHaveAttribute("data-shortbread-render-path", "wgpu-tile");
+    await expect(basemap).toHaveAttribute("data-shortbread-feature-count", "0");
     await expect
-      .poll(async () => Number(await basemap.getAttribute("data-shortbread-feature-count")))
+      .poll(async () => Number(await basemap.getAttribute("data-shortbread-segment-count")))
+      .toBeGreaterThan(0);
+    await expect
+      .poll(async () => Number(await baseCanvas.getAttribute("data-map-base-tiles")))
       .toBeGreaterThan(0);
     await expect(overlay).toHaveAttribute("data-map-overlay-backend", "wgpu");
     await expect
@@ -153,8 +158,12 @@ test("Pages Shortbread basemap renders through the Canvas fallback @smoke", asyn
   await expect(baseCanvas).toHaveAttribute("data-map-base-renderer", "canvas2d");
   await expect(fallbackCanvas).toBeVisible();
   await expect(basemap).toHaveAttribute("data-shortbread-state", "ready");
+  await expect(basemap).toHaveAttribute("data-shortbread-render-path", "geojson-fallback");
   await expect
     .poll(async () => Number(await basemap.getAttribute("data-shortbread-feature-count")))
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => Number(await basemap.getAttribute("data-shortbread-segment-count")))
     .toBeGreaterThan(0);
   await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
   await expect

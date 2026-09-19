@@ -5,15 +5,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Milestone D adds Maps-owned MVT decoding to the packaged WASM runtime. Keep the
-// new baseline explicit and tight rather than disabling package-size validation.
+// Cached Shortbread wgpu tile buffers add a Maps-owned vector pipeline while reusing
+// the existing Maps-core MVT decoder. Keep the new baseline explicit and tight rather
+// than disabling package-size validation.
 const budgets = {
-  compressedSize: 381_000,
+  compressedSize: 386_000,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_557_000,
-  wasmRuntimeSize: 480_000,
+  unpackedSize: 1_573_000,
+  wasmRuntimeSize: 494_000,
 };
 
 const pack = spawnSync(

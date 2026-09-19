@@ -1,7 +1,8 @@
 //! Minimal Maps-owned Mapbox Vector Tile decoding for the first Shortbread basemap slice.
 //!
 //! This module intentionally owns only the wire/geometry subset required to turn selected
-//! Shortbread linework into geographic coordinates. Styling and pixels remain separate concerns.
+//! Shortbread linework into tile-local or geographic coordinates. Styling and pixels remain
+//! separate concerns.
 
 use core::fmt;
 
@@ -29,6 +30,16 @@ pub struct VectorBasemapLine {
     pub coordinates: Vec<[f64; 2]>,
 }
 
+/// One decoded basemap path in normalized tile-local coordinates.
+///
+/// Coordinates use the MVT tile convention: x grows rightward and y grows downward.
+/// Values may extend outside `0..=1` when source geometry intentionally crosses a tile edge.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorBasemapTilePath {
+    pub kind: VectorBasemapLineKind,
+    pub coordinates: Vec<[f64; 2]>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VectorTileError {
     InvalidProtobuf,
@@ -48,35 +59,56 @@ impl fmt::Display for VectorTileError {
 
 impl std::error::Error for VectorTileError {}
 
-/// Decodes the first Maps-owned Shortbread basemap line vocabulary.
+/// Decodes the first Maps-owned Shortbread basemap line vocabulary to normalized tile-local paths.
 ///
-/// The first visible slice intentionally keeps the style vocabulary narrow:
-/// coast outlines from `ocean`, waterways, streets and administrative boundaries.
-/// Polygon filling and the broader style-spec pipeline follow on the same source contract.
-pub fn decode_shortbread_basemap_lines(
+/// This is the renderer-facing form: it preserves MVT tile locality so GPU geometry can be cached
+/// independently of the current camera/local render frame.
+pub fn decode_shortbread_basemap_tile_paths(
     bytes: &[u8],
-    tile: TileId,
-) -> Result<Vec<VectorBasemapLine>, VectorTileError> {
+) -> Result<Vec<VectorBasemapTilePath>, VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
-    let mut lines = Vec::new();
+    let mut paths = Vec::new();
 
     while !cursor.is_finished() {
         let (field, wire_type) = cursor.read_key()?;
         if field == 3 && wire_type == 2 {
             let layer = cursor.read_length_delimited()?;
-            decode_layer(layer, tile, &mut lines)?;
+            decode_layer(layer, &mut paths)?;
         } else {
             cursor.skip(wire_type)?;
         }
     }
 
-    Ok(lines)
+    Ok(paths)
+}
+
+/// Decodes the first Maps-owned Shortbread basemap line vocabulary to geographic coordinates.
+///
+/// The geographic form remains available for data/compatibility consumers. Renderer code should
+/// prefer `decode_shortbread_basemap_tile_paths` so camera changes do not require re-decoding.
+pub fn decode_shortbread_basemap_lines(
+    bytes: &[u8],
+    tile: TileId,
+) -> Result<Vec<VectorBasemapLine>, VectorTileError> {
+    decode_shortbread_basemap_tile_paths(bytes)?
+        .into_iter()
+        .map(|path| {
+            let coordinates = path
+                .coordinates
+                .into_iter()
+                .map(|coordinate| tile_local_to_lon_lat(tile, coordinate))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(VectorBasemapLine {
+                kind: path.kind,
+                coordinates,
+            })
+        })
+        .collect()
 }
 
 fn decode_layer(
     bytes: &[u8],
-    tile: TileId,
-    output: &mut Vec<VectorBasemapLine>,
+    output: &mut Vec<VectorBasemapTilePath>,
 ) -> Result<(), VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut name: Option<&str> = None;
@@ -109,7 +141,7 @@ fn decode_layer(
     };
 
     for feature in features {
-        decode_feature(feature, tile, extent, kind, accepts_polygon, output)?;
+        decode_feature(feature, extent, kind, accepts_polygon, output)?;
     }
 
     Ok(())
@@ -128,11 +160,10 @@ fn shortbread_line_layer(name: &str) -> Option<(VectorBasemapLineKind, bool)> {
 
 fn decode_feature(
     bytes: &[u8],
-    tile: TileId,
     extent: u32,
     kind: VectorBasemapLineKind,
     accepts_polygon: bool,
-    output: &mut Vec<VectorBasemapLine>,
+    output: &mut Vec<VectorBasemapTilePath>,
 ) -> Result<(), VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut geometry_type = 0_u32;
@@ -173,9 +204,9 @@ fn decode_feature(
         }
         let coordinates = path
             .into_iter()
-            .map(|[x, y]| tile_coordinate_to_lon_lat(tile, extent, x, y))
+            .map(|[x, y]| tile_coordinate_to_local(extent, x, y))
             .collect::<Result<Vec<_>, _>>()?;
-        output.push(VectorBasemapLine { kind, coordinates });
+        output.push(VectorBasemapTilePath { kind, coordinates });
     }
 
     Ok(())
@@ -240,16 +271,19 @@ fn decode_zigzag(value: u32) -> i32 {
     ((value >> 1) as i32) ^ -((value & 1) as i32)
 }
 
-fn tile_coordinate_to_lon_lat(
-    tile: TileId,
-    extent: u32,
-    x: i32,
-    y: i32,
-) -> Result<[f64; 2], VectorTileError> {
-    let dimension = 2.0_f64.powi(i32::from(tile.z));
+fn tile_coordinate_to_local(extent: u32, x: i32, y: i32) -> Result<[f64; 2], VectorTileError> {
     let extent = f64::from(extent);
-    let world_x = (f64::from(tile.x) + f64::from(x) / extent) / dimension;
-    let world_y = (f64::from(tile.y) + f64::from(y) / extent) / dimension;
+    let coordinate = [f64::from(x) / extent, f64::from(y) / extent];
+    if coordinate.into_iter().any(|value| !value.is_finite()) {
+        return Err(VectorTileError::InvalidGeometry);
+    }
+    Ok(coordinate)
+}
+
+fn tile_local_to_lon_lat(tile: TileId, coordinate: [f64; 2]) -> Result<[f64; 2], VectorTileError> {
+    let dimension = 2.0_f64.powi(i32::from(tile.z));
+    let world_x = (f64::from(tile.x) + coordinate[0]) / dimension;
+    let world_y = (f64::from(tile.y) + coordinate[1]) / dimension;
     if !world_x.is_finite() || !world_y.is_finite() {
         return Err(VectorTileError::InvalidGeometry);
     }
@@ -404,6 +438,24 @@ mod tests {
         layer.extend(field_varint(15, 2));
 
         field_bytes(3, &layer)
+    }
+
+    #[test]
+    fn decodes_shortbread_street_line_to_tile_local_coordinates() {
+        let geometry = [
+            (1 << 3) | MVT_MOVE_TO,
+            zigzag(0),
+            zigzag(0),
+            (1 << 3) | MVT_LINE_TO,
+            zigzag(4096),
+            zigzag(4096),
+        ];
+        let bytes = tiny_line_tile("streets", 2, &geometry);
+        let paths = decode_shortbread_basemap_tile_paths(&bytes).unwrap();
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].kind, VectorBasemapLineKind::Street);
+        assert_eq!(paths[0].coordinates, vec![[0.0, 0.0], [1.0, 1.0]]);
     }
 
     #[test]
