@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{
     Arc,
@@ -920,21 +921,22 @@ fn append_application_line(
     }
 
     let half_width = line.stroke_width / 2.0;
-    let directions = points
-        .windows(2)
-        .map(|segment| unit_direction(segment[0], segment[1]))
-        .collect::<Result<Vec<_>, _>>()?;
-    let normals = directions
-        .iter()
-        .map(|direction| (-direction.1, direction.0))
-        .collect::<Vec<_>>();
-    let offsets = line_offsets(&normals, half_width);
+    let first_direction = unit_direction(points[0], points[1])?;
+    let mut current_direction = first_direction;
+    let mut start_offset = line_endpoint_offset(current_direction, half_width);
 
     for index in 0..points.len() - 1 {
         let start = points[index];
         let end = points[index + 1];
-        let start_offset = offsets[index];
-        let end_offset = offsets[index + 1];
+        let next_direction = if index + 2 < points.len() {
+            Some(unit_direction(points[index + 1], points[index + 2])?)
+        } else {
+            None
+        };
+        let end_offset = next_direction.map_or_else(
+            || line_endpoint_offset(current_direction, half_width),
+            |next| line_join_offset(current_direction, next, half_width),
+        );
         let start_left = (start.x + start_offset.0, start.y + start_offset.1);
         let start_right = (start.x - start_offset.0, start.y - start_offset.1);
         let end_left = (end.x + end_offset.0, end.y + end_offset.1);
@@ -950,10 +952,14 @@ fn append_application_line(
         ] {
             append_application_vertex(output, width, height, point.0, point.1, line.color)?;
         }
+
+        start_offset = end_offset;
+        if let Some(next) = next_direction {
+            current_direction = next;
+        }
     }
 
     let first = points[0];
-    let first_direction = directions[0];
     append_round_line_cap(
         output,
         width,
@@ -964,13 +970,12 @@ fn append_application_line(
         line.color,
     )?;
     let last = *points.last().expect("line has at least two points");
-    let last_direction = *directions.last().expect("line has at least one direction");
     append_round_line_cap(
         output,
         width,
         height,
         last,
-        last_direction,
+        current_direction,
         half_width,
         line.color,
     )?;
@@ -978,7 +983,16 @@ fn append_application_line(
     Ok(())
 }
 
-fn deduplicate_line_points(points: &[WgpuApplicationPoint]) -> Vec<WgpuApplicationPoint> {
+fn deduplicate_line_points(points: &[WgpuApplicationPoint]) -> Cow<'_, [WgpuApplicationPoint]> {
+    let already_unique = points.windows(2).all(|segment| {
+        let dx = segment[1].x - segment[0].x;
+        let dy = segment[1].y - segment[0].y;
+        dx * dx + dy * dy > GEOMETRY_EPSILON_SQUARED
+    });
+    if already_unique {
+        return Cow::Borrowed(points);
+    }
+
     let mut result = Vec::with_capacity(points.len());
     for point in points {
         let keep = result.last().is_none_or(|previous: &WgpuApplicationPoint| {
@@ -990,7 +1004,7 @@ fn deduplicate_line_points(points: &[WgpuApplicationPoint]) -> Vec<WgpuApplicati
             result.push(*point);
         }
     }
-    result
+    Cow::Owned(result)
 }
 
 fn unit_direction(
@@ -1007,44 +1021,35 @@ fn unit_direction(
     Ok((dx * inverse_length, dy * inverse_length))
 }
 
-fn line_offsets(normals: &[(f64, f64)], half_width: f64) -> Vec<(f64, f64)> {
-    let point_count = normals.len() + 1;
-    let mut offsets = Vec::with_capacity(point_count);
-    for index in 0..point_count {
-        if index == 0 {
-            offsets.push((normals[0].0 * half_width, normals[0].1 * half_width));
-            continue;
-        }
-        if index == point_count - 1 {
-            let normal = normals[normals.len() - 1];
-            offsets.push((normal.0 * half_width, normal.1 * half_width));
-            continue;
-        }
+fn line_endpoint_offset(direction: (f64, f64), half_width: f64) -> (f64, f64) {
+    (-direction.1 * half_width, direction.0 * half_width)
+}
 
-        let previous = normals[index - 1];
-        let next = normals[index];
-        let sum = (previous.0 + next.0, previous.1 + next.1);
-        let sum_length_squared = sum.0 * sum.0 + sum.1 * sum.1;
-        if sum_length_squared <= GEOMETRY_EPSILON_SQUARED {
-            offsets.push((next.0 * half_width, next.1 * half_width));
-            continue;
-        }
-
-        let inverse_sum_length = sum_length_squared.sqrt().recip();
-        let miter = (sum.0 * inverse_sum_length, sum.1 * inverse_sum_length);
-        let denominator = miter.0 * next.0 + miter.1 * next.1;
-        if denominator.abs() <= GEOMETRY_EPSILON {
-            offsets.push((next.0 * half_width, next.1 * half_width));
-            continue;
-        }
-
-        let scale = (half_width / denominator).clamp(
-            -half_width * MAX_LINE_MITER_SCALE,
-            half_width * MAX_LINE_MITER_SCALE,
-        );
-        offsets.push((miter.0 * scale, miter.1 * scale));
+fn line_join_offset(
+    previous_direction: (f64, f64),
+    next_direction: (f64, f64),
+    half_width: f64,
+) -> (f64, f64) {
+    let previous = (-previous_direction.1, previous_direction.0);
+    let next = (-next_direction.1, next_direction.0);
+    let sum = (previous.0 + next.0, previous.1 + next.1);
+    let sum_length_squared = sum.0 * sum.0 + sum.1 * sum.1;
+    if sum_length_squared <= GEOMETRY_EPSILON_SQUARED {
+        return (next.0 * half_width, next.1 * half_width);
     }
-    offsets
+
+    let inverse_sum_length = sum_length_squared.sqrt().recip();
+    let miter = (sum.0 * inverse_sum_length, sum.1 * inverse_sum_length);
+    let denominator = miter.0 * next.0 + miter.1 * next.1;
+    if denominator.abs() <= GEOMETRY_EPSILON {
+        return (next.0 * half_width, next.1 * half_width);
+    }
+
+    let scale = (half_width / denominator).clamp(
+        -half_width * MAX_LINE_MITER_SCALE,
+        half_width * MAX_LINE_MITER_SCALE,
+    );
+    (miter.0 * scale, miter.1 * scale)
 }
 
 fn append_round_line_cap(
