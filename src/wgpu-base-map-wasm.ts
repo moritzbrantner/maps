@@ -4,13 +4,14 @@ import {
 } from "./aggregation-wasm";
 import type {
   MapsRasterRenderCamera,
+  MapsRasterTileId,
   MapsRasterTilePlacement,
 } from "./flat-runtime-wasm";
 import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
-  evictShortbreadTile(key: string): void;
+  evictShortbreadTile(tile: MapsRasterTileId): void;
   evictTile(key: string): void;
   isDeviceLost(): boolean;
   render(
@@ -19,12 +20,12 @@ export type MapsWgpuBaseMapRenderer = {
     applicationFrame?: MapsWgpuApplicationFrame | null,
   ): number;
   resize(width: number, height: number): void;
-  uploadShortbreadTile(key: string, bytes: Uint8Array): number;
+  uploadShortbreadTile(tile: MapsRasterTileId, bytes: Uint8Array): number;
   uploadTile(key: string, image: ImageBitmap): void;
 };
 
 type MapsWgpuBaseMapWasmRenderer = {
-  evictShortbreadTile(key: string): void;
+  evictShortbreadTile(z: number, x: number, y: number): void;
   evictTile(key: string): void;
   free?: () => void;
   isDeviceLost(): boolean;
@@ -34,7 +35,7 @@ type MapsWgpuBaseMapWasmRenderer = {
     applicationFrame: MapsWgpuApplicationFrame | null,
   ): number;
   resize(width: number, height: number): void;
-  uploadShortbreadTile(key: string, bytes: Uint8Array): number;
+  uploadShortbreadTile(z: number, x: number, y: number, bytes: Uint8Array): number;
   uploadTile(key: string, image: ImageBitmap): void;
 };
 
@@ -68,10 +69,10 @@ export async function loadMapsWgpuBaseMapRenderer(
         canvas.style.opacity = "0";
         renderer.free?.();
       },
-      evictShortbreadTile(key) {
+      evictShortbreadTile(tile) {
         runRendererOperation(canvas, () => {
           assertLive(disposed);
-          renderer.evictShortbreadTile(key);
+          renderer.evictShortbreadTile(tile.z, tile.x, tile.y);
         });
       },
       evictTile(key) {
@@ -98,10 +99,10 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.resize(width, height);
         });
       },
-      uploadShortbreadTile(key, bytes) {
+      uploadShortbreadTile(tile, bytes) {
         return runRendererOperation(canvas, () => {
           assertLive(disposed);
-          return renderer.uploadShortbreadTile(key, bytes);
+          return renderer.uploadShortbreadTile(tile.z, tile.x, tile.y, bytes);
         });
       },
       uploadTile(key, image) {
