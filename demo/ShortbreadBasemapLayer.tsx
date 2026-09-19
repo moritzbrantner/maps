@@ -60,6 +60,13 @@ export function useShortbreadBasemap(
   );
   const visibleTileKey = visibleTiles.map((tile) => tile.key).join("|");
   const controllerAvailable = controller !== null;
+  const lifecycleControllerRef = useRef<ShortbreadController | null>(null);
+
+  useEffect(() => {
+    if (controller) {
+      lifecycleControllerRef.current = controller;
+    }
+  }, [controller]);
 
   useEffect(() => {
     for (const active of inflightRef.current.values()) {
@@ -71,7 +78,7 @@ export function useShortbreadBasemap(
 
     return () => {
       for (const cached of cacheRef.current.values()) {
-        controller?.evictShortbreadTile(cached.tile);
+        lifecycleControllerRef.current?.evictShortbreadTile(cached.tile);
       }
       cacheRef.current.clear();
     };
