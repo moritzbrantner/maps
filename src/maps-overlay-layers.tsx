@@ -43,6 +43,7 @@ import {
 import {
   GeoJsonLayer,
   createGeoJsonLayerFeatures,
+  type GeoJsonLayerFeature,
   type GeoJsonLayerProps,
   type GeoJsonLayerStyle,
 } from "./geojson-layer";
@@ -190,6 +191,11 @@ type MapsOverlayEntry =
       props: PointLayerProps<AnyRecord>;
     };
 
+type MapsGeoJsonRuntime = {
+  featureCollection: GeoJsonLayerProps<AnyRecord>["featureCollection"];
+  features: GeoJsonLayerFeature<AnyRecord>[];
+};
+
 type MapsClusterRuntime = {
   clusterRadius: ClusterLayerProps<AnyRecord>["clusterRadius"];
   filterPoint: ClusterLayerProps<AnyRecord>["filterPoint"];
@@ -223,6 +229,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
     const clusterRuntimesRef = useRef<Map<string, MapsClusterRuntime>>(new Map());
+    const geoJsonRuntimesRef = useRef<Map<string, MapsGeoJsonRuntime>>(new Map());
     const heatDescriptorsRef = useRef<Map<string, MapsHeatLayerDescriptor>>(new Map());
     const heatRuntimesRef = useRef<Map<string, MapsHeatLayerRenderState>>(new Map());
     const [heatRevision, setHeatRevision] = useState(0);
@@ -311,6 +318,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       return () => {
         for (const runtime of clusterRuntimesRef.current.values()) runtime.index.dispose();
         clusterRuntimesRef.current.clear();
+        geoJsonRuntimesRef.current.clear();
         for (const runtime of heatRuntimesRef.current.values()) {
           heatRuntimeRef.current?.resetMapsHeatLayerRenderState(runtime);
         }
@@ -423,6 +431,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           entries,
           surface,
           clusterRuntimesRef.current,
+          geoJsonRuntimesRef.current,
           viewportQuery,
           heatDescriptorsRef.current,
           heatRuntimesRef.current,
@@ -630,6 +639,7 @@ function createOverlaySnapshot(
   entries: readonly MapsOverlayEntry[],
   surface: MapsOverlayInteractionSurface,
   clusterRuntimes: ReadonlyMap<string, MapsClusterRuntime>,
+  geoJsonRuntimes: Map<string, MapsGeoJsonRuntime>,
   viewport: ViewportAggregationQuery | null,
   heatDescriptors: ReadonlyMap<string, MapsHeatLayerDescriptor>,
   heatRuntimes: ReadonlyMap<string, MapsHeatLayerRenderState>,
@@ -637,6 +647,14 @@ function createOverlaySnapshot(
   heatRuntime: MapsHeatLayerRuntime | null,
   requestHeatRender: () => void,
 ): MapsOverlaySnapshot {
+  const activeGeoJsonPrefixes = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind === "geojson") activeGeoJsonPrefixes.add(entry.prefix);
+  }
+  for (const prefix of geoJsonRuntimes.keys()) {
+    if (!activeGeoJsonPrefixes.has(prefix)) geoJsonRuntimes.delete(prefix);
+  }
+
   const mutable: MutableMapsOverlaySnapshot = {
     frame: { kind: "vector", primitives: [] },
     hoveredPrimitiveIds: new Set(),
@@ -652,7 +670,7 @@ function createOverlaySnapshot(
         appendPointLayer(entry.props, surface, mutable, entry.prefix);
         break;
       case "geojson":
-        appendGeoJsonLayer(entry.props, surface, mutable, entry.prefix);
+        appendGeoJsonLayer(entry.props, surface, mutable, entry.prefix, geoJsonRuntimes);
         break;
       case "cluster": {
         const runtime = clusterRuntimes.get(entry.runtimeKey);
@@ -764,8 +782,9 @@ function appendGeoJsonLayer(
   surface: MapsOverlayInteractionSurface,
   snapshot: MutableMapsOverlaySnapshot,
   prefix: string,
+  runtimes: Map<string, MapsGeoJsonRuntime>,
 ) {
-  const features = createGeoJsonLayerFeatures(props.featureCollection);
+  const features = resolveGeoJsonLayerFeatures(props, prefix, runtimes);
   const frame = createGeoJsonVectorRenderFrame(features, {
     getFeatureId: props.getFeatureId,
     getFeatureStyle: props.getFeatureStyle,
@@ -802,6 +821,22 @@ function appendGeoJsonLayer(
 
     appendPrimitive(snapshot, primitive, interaction, hovered, selected);
   }
+}
+
+function resolveGeoJsonLayerFeatures(
+  props: GeoJsonLayerProps<AnyRecord>,
+  prefix: string,
+  runtimes: Map<string, MapsGeoJsonRuntime>,
+) {
+  const current = runtimes.get(prefix);
+  if (current?.featureCollection === props.featureCollection) return current.features;
+
+  const features = createGeoJsonLayerFeatures(props.featureCollection);
+  runtimes.set(prefix, {
+    featureCollection: props.featureCollection,
+    features,
+  });
+  return features;
 }
 
 function appendClusterLayer(
