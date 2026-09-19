@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { MapsCanvasFlatRuntimeController } from "../src/canvas-flat-runtime";
 import type { MapsRasterTileId } from "../src/flat-runtime-wasm";
 import {
   decodeShortbreadBasemapLines,
@@ -19,14 +20,34 @@ type ShortbreadFeatureProperties = {
   kind: ShortbreadBasemapLineKind;
 };
 
+type ShortbreadController = Pick<
+  MapsCanvasFlatRuntimeController,
+  "evictShortbreadTile" | "uploadShortbreadTile"
+>;
+
+type CachedShortbreadTile =
+  | {
+      lines: null;
+      renderPath: "wgpu-tile";
+      segmentCount: number;
+    }
+  | {
+      lines: ShortbreadBasemapLine[];
+      renderPath: "geojson-fallback";
+      segmentCount: number;
+    };
+
 type TileState =
   | { status: "idle" | "loading"; error: null }
   | { status: "ready"; error: null }
   | { status: "error"; error: string };
 
-export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileId[]) {
+export function useShortbreadBasemap(
+  visibleTilesInput: readonly MapsRasterTileId[],
+  controller: ShortbreadController | null,
+) {
   const enabled = useMemo(shouldEnableShortbreadBasemap, []);
-  const cacheRef = useRef(new Map<string, ShortbreadBasemapLine[]>());
+  const cacheRef = useRef(new Map<string, CachedShortbreadTile>());
   const inflightRef = useRef(new Map<string, AbortController>());
   const [cacheVersion, setCacheVersion] = useState(0);
   const [tileState, setTileState] = useState<TileState>({ status: "idle", error: null });
@@ -38,19 +59,31 @@ export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileI
   const visibleTileKey = visibleTiles.map((tile) => tile.key).join("|");
 
   useEffect(() => {
-    if (!enabled || visibleTiles.length === 0) {
+    cacheRef.current.clear();
+    setCacheVersion((version) => version + 1);
+
+    return () => {
+      for (const key of cacheRef.current.keys()) {
+        controller?.evictShortbreadTile(key);
+      }
+      cacheRef.current.clear();
+    };
+  }, [controller]);
+
+  useEffect(() => {
+    if (!enabled || visibleTiles.length === 0 || !controller) {
       return;
     }
 
     const visibleKeys = new Set(visibleTiles.map((tile) => tile.key));
-    for (const [key, controller] of inflightRef.current) {
+    for (const [key, active] of inflightRef.current) {
       if (!visibleKeys.has(key)) {
-        controller.abort();
+        active.abort();
         inflightRef.current.delete(key);
       }
     }
 
-    pruneShortbreadCache(cacheRef.current, visibleKeys);
+    pruneShortbreadCache(cacheRef.current, visibleKeys, controller);
 
     let started = false;
     let availableSlots = Math.max(0, SHORTBREAD_LOAD_CONCURRENCY - inflightRef.current.size);
@@ -62,20 +95,37 @@ export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileI
 
       started = true;
       availableSlots -= 1;
-      const controller = new AbortController();
-      inflightRef.current.set(tile.key, controller);
+      const abort = new AbortController();
+      inflightRef.current.set(tile.key, abort);
 
-      void loadShortbreadTile(tile, controller.signal)
-        .then((lines) => {
+      void loadShortbreadTile(tile, abort.signal)
+        .then(async (bytes) => {
           inflightRef.current.delete(tile.key);
-          if (controller.signal.aborted) return;
-          cacheRef.current.set(tile.key, lines);
+          if (abort.signal.aborted) return;
+
+          const gpuSegmentCount = controller.uploadShortbreadTile(tile, bytes);
+          if (gpuSegmentCount !== null) {
+            cacheRef.current.set(tile.key, {
+              lines: null,
+              renderPath: "wgpu-tile",
+              segmentCount: gpuSegmentCount,
+            });
+          } else {
+            const lines = await decodeShortbreadBasemapLines(bytes, tile);
+            if (abort.signal.aborted) return;
+            cacheRef.current.set(tile.key, {
+              lines,
+              renderPath: "geojson-fallback",
+              segmentCount: countLineSegments(lines),
+            });
+          }
+
           setCacheVersion((version) => version + 1);
           setTileState({ status: "ready", error: null });
         })
         .catch((error) => {
           inflightRef.current.delete(tile.key);
-          if (controller.signal.aborted) return;
+          if (abort.signal.aborted) return;
           setTileState({
             status: "error",
             error: error instanceof Error ? error.message : String(error),
@@ -86,23 +136,36 @@ export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileI
     if (started) {
       setTileState({ status: "loading", error: null });
     }
-  }, [cacheVersion, enabled, visibleTileKey]);
+  }, [cacheVersion, controller, enabled, visibleTileKey]);
 
   useEffect(
     () => () => {
-      for (const controller of inflightRef.current.values()) {
-        controller.abort();
+      for (const active of inflightRef.current.values()) {
+        active.abort();
       }
       inflightRef.current.clear();
     },
     [],
   );
 
+  const visibleCacheEntries = useMemo(
+    () =>
+      visibleTiles
+        .map((tile) => [tile, cacheRef.current.get(tile.key)] as const)
+        .filter(
+          (
+            entry,
+          ): entry is readonly [MapsRasterTileId, CachedShortbreadTile] =>
+            entry[1] !== undefined,
+        ),
+    [cacheVersion, visibleTileKey],
+  );
+
   const featureCollection = useMemo(() => {
     const features = [];
-    for (const tile of visibleTiles) {
-      const lines = cacheRef.current.get(tile.key) ?? [];
-      for (const [index, line] of lines.entries()) {
+    for (const [tile, cached] of visibleCacheEntries) {
+      if (!cached.lines) continue;
+      for (const [index, line] of cached.lines.entries()) {
         features.push({
           geometry: {
             coordinates: line.coordinates,
@@ -119,12 +182,26 @@ export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileI
       features,
       type: "FeatureCollection" as const,
     };
-  }, [cacheVersion, visibleTileKey]);
+  }, [visibleCacheEntries]);
+
+  const segmentCount = visibleCacheEntries.reduce(
+    (sum, [, cached]) => sum + cached.segmentCount,
+    0,
+  );
+  const renderPath = visibleCacheEntries.some(
+    ([, cached]) => cached.renderPath === "geojson-fallback",
+  )
+    ? "geojson-fallback"
+    : visibleCacheEntries.length > 0
+      ? "wgpu-tile"
+      : "pending";
 
   return {
     enabled,
     error: tileState.error,
     featureCollection,
+    renderPath,
+    segmentCount,
     state: tileState.status,
     tileCount: visibleTiles.length,
   };
@@ -152,8 +229,7 @@ async function loadShortbreadTile(tile: MapsRasterTileId, signal: AbortSignal) {
   if (bytes.byteLength === 0) {
     throw new Error(`Shortbread vector tile response was empty: ${tile.key}`);
   }
-
-  return decodeShortbreadBasemapLines(bytes, tile);
+  return bytes;
 }
 
 function buildShortbreadUrl(tile: MapsRasterTileId) {
@@ -175,14 +251,16 @@ function normalizeShortbreadTiles(tiles: readonly MapsRasterTileId[]) {
 }
 
 function pruneShortbreadCache(
-  cache: Map<string, ShortbreadBasemapLine[]>,
+  cache: Map<string, CachedShortbreadTile>,
   visibleKeys: ReadonlySet<string>,
+  controller: ShortbreadController,
 ) {
   while (cache.size > SHORTBREAD_CACHE_CAPACITY) {
     const candidate =
       [...cache.keys()].find((key) => !visibleKeys.has(key)) ?? cache.keys().next().value;
     if (candidate === undefined) return;
     cache.delete(candidate);
+    controller.evictShortbreadTile(candidate);
   }
 }
 
@@ -191,6 +269,10 @@ function ancestorTile(tile: MapsRasterTileId, z: number): MapsRasterTileId {
   const x = Math.floor(tile.x / scale);
   const y = Math.floor(tile.y / scale);
   return { key: `${z}/${x}/${y}`, x, y, z };
+}
+
+function countLineSegments(lines: readonly ShortbreadBasemapLine[]) {
+  return lines.reduce((sum, line) => sum + Math.max(0, line.coordinates.length - 1), 0);
 }
 
 function shortbreadStyle(kind: ShortbreadBasemapLineKind) {
