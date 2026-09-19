@@ -30,11 +30,13 @@ type CachedShortbreadTile =
       lines: null;
       renderPath: "wgpu-tile";
       segmentCount: number;
+      tile: MapsRasterTileId;
     }
   | {
       lines: ShortbreadBasemapLine[];
       renderPath: "geojson-fallback";
       segmentCount: number;
+      tile: MapsRasterTileId;
     };
 
 type TileState =
@@ -63,8 +65,8 @@ export function useShortbreadBasemap(
     setCacheVersion((version) => version + 1);
 
     return () => {
-      for (const key of cacheRef.current.keys()) {
-        controller?.evictShortbreadTile(key);
+      for (const cached of cacheRef.current.values()) {
+        controller?.evictShortbreadTile(cached.tile);
       }
       cacheRef.current.clear();
     };
@@ -109,6 +111,7 @@ export function useShortbreadBasemap(
               lines: null,
               renderPath: "wgpu-tile",
               segmentCount: gpuSegmentCount,
+              tile,
             });
           } else {
             const lines = await decodeShortbreadBasemapLines(bytes, tile);
@@ -117,6 +120,7 @@ export function useShortbreadBasemap(
               lines,
               renderPath: "geojson-fallback",
               segmentCount: countLineSegments(lines),
+              tile,
             });
           }
 
@@ -259,8 +263,9 @@ function pruneShortbreadCache(
     const candidate =
       [...cache.keys()].find((key) => !visibleKeys.has(key)) ?? cache.keys().next().value;
     if (candidate === undefined) return;
+    const cached = cache.get(candidate);
     cache.delete(candidate);
-    controller.evictShortbreadTile(candidate);
+    if (cached) controller.evictShortbreadTile(cached.tile);
   }
 }
 
