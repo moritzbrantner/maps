@@ -13,10 +13,7 @@ import {
 } from "@moritzbrantner/maps";
 import type { MapsCanvasFlatRuntimeController } from "../src/canvas-flat-runtime";
 import { demoMapStyle } from "./data/map-style";
-import {
-  getShortbreadBasemapStyle,
-  useShortbreadBasemap,
-} from "./ShortbreadBasemapLayer";
+import { getShortbreadBasemapStyle, useShortbreadBasemap } from "./ShortbreadBasemapLayer";
 
 type RendererBackend = "maps" | "maplibre";
 
@@ -102,9 +99,7 @@ export function RendererComparison() {
           style={{ minHeight: 430 }}
           viewState={viewState}
         >
-          {backend === "maps" &&
-          basemap.enabled &&
-          basemap.renderPath === "geojson-fallback" ? (
+          {backend === "maps" && basemap.enabled && basemap.renderPath === "geojson-fallback" ? (
             <GeoJsonLayer
               featureCollection={basemap.featureCollection}
               getFeatureStyle={(feature) => getShortbreadBasemapStyle(feature.properties.kind)}
