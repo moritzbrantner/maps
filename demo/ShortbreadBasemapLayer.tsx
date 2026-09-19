@@ -59,6 +59,7 @@ export function useShortbreadBasemap(
     [visibleTilesInput],
   );
   const visibleTileKey = visibleTiles.map((tile) => tile.key).join("|");
+  const controllerAvailable = controller !== null;
 
   useEffect(() => {
     for (const active of inflightRef.current.values()) {
@@ -74,7 +75,7 @@ export function useShortbreadBasemap(
       }
       cacheRef.current.clear();
     };
-  }, [controller]);
+  }, [controllerAvailable]);
 
   useEffect(() => {
     if (!enabled || visibleTiles.length === 0 || !controller) {
