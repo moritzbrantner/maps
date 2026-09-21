@@ -1,7 +1,7 @@
-//! Minimal Maps-owned Mapbox Vector Tile decoding for the first Shortbread basemap slice.
+//! Maps-owned Mapbox Vector Tile decoding for the Shortbread basemap.
 //!
 //! This module intentionally owns only the wire/geometry subset required to turn selected
-//! Shortbread linework into geographic coordinates. Styling and pixels remain separate concerns.
+//! Shortbread geometry into geographic coordinates. Styling and pixels remain separate concerns.
 
 use core::fmt;
 
@@ -29,6 +29,31 @@ pub struct VectorBasemapLine {
     pub coordinates: Vec<[f64; 2]>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VectorBasemapPolygonKind {
+    Ocean,
+    Water,
+    Land,
+    Site,
+    Building,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VectorBasemapPolygon {
+    pub kind: VectorBasemapPolygonKind,
+    pub source_kind: Option<String>,
+    /// One exterior ring followed by its interior rings, all explicitly closed.
+    pub rings: Vec<Vec<[f64; 2]>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct VectorBasemapTile {
+    pub lines: Vec<VectorBasemapLine>,
+    pub polygons: Vec<VectorBasemapPolygon>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VectorTileError {
     InvalidProtobuf,
@@ -41,47 +66,53 @@ impl fmt::Display for VectorTileError {
         match self {
             Self::InvalidProtobuf => write!(formatter, "invalid MVT protobuf payload"),
             Self::InvalidGeometry => write!(formatter, "invalid MVT geometry command stream"),
-            Self::InvalidUtf8 => write!(formatter, "invalid UTF-8 in MVT layer name"),
+            Self::InvalidUtf8 => write!(formatter, "invalid UTF-8 in MVT text"),
         }
     }
 }
 
 impl std::error::Error for VectorTileError {}
 
-/// Decodes the first Maps-owned Shortbread basemap line vocabulary.
-///
-/// The first visible slice intentionally keeps the style vocabulary narrow:
-/// coast outlines from `ocean`, waterways, streets and administrative boundaries.
-/// Polygon filling and the broader style-spec pipeline follow on the same source contract.
+/// Compatibility view of the Shortbread decoder for line-only consumers.
 pub fn decode_shortbread_basemap_lines(
     bytes: &[u8],
     tile: TileId,
 ) -> Result<Vec<VectorBasemapLine>, VectorTileError> {
+    Ok(decode_shortbread_basemap(bytes, tile)?.lines)
+}
+
+/// Decodes Shortbread linework and filled polygons, grouping MVT interior rings
+/// with their preceding exterior ring before geographic coordinate conversion.
+pub fn decode_shortbread_basemap(
+    bytes: &[u8],
+    tile: TileId,
+) -> Result<VectorBasemapTile, VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
-    let mut lines = Vec::new();
+    let mut output = VectorBasemapTile::default();
 
     while !cursor.is_finished() {
         let (field, wire_type) = cursor.read_key()?;
         if field == 3 && wire_type == 2 {
             let layer = cursor.read_length_delimited()?;
-            decode_layer(layer, tile, &mut lines)?;
+            decode_layer(layer, tile, &mut output)?;
         } else {
             cursor.skip(wire_type)?;
         }
     }
 
-    Ok(lines)
+    Ok(output)
 }
 
 fn decode_layer(
     bytes: &[u8],
     tile: TileId,
-    output: &mut Vec<VectorBasemapLine>,
+    output: &mut VectorBasemapTile,
 ) -> Result<(), VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut name: Option<&str> = None;
     let mut extent = DEFAULT_EXTENT;
     let mut features = Vec::new();
+    let mut properties = LayerProperties::default();
 
     while !cursor.is_finished() {
         let (field, wire_type) = cursor.read_key()?;
@@ -93,6 +124,13 @@ fn decode_layer(
                 );
             }
             (2, 2) => features.push(cursor.read_length_delimited()?),
+            (3, 2) => properties.keys.push(
+                core::str::from_utf8(cursor.read_length_delimited()?)
+                    .map_err(|_| VectorTileError::InvalidUtf8)?,
+            ),
+            (4, 2) => properties
+                .values
+                .push(decode_string_value(cursor.read_length_delimited()?)?),
             (5, 0) => {
                 extent = u32::try_from(cursor.read_varint()?)
                     .map_err(|_| VectorTileError::InvalidProtobuf)?;
@@ -104,15 +142,83 @@ fn decode_layer(
         }
     }
 
-    let Some((kind, accepts_polygon)) = name.and_then(shortbread_line_layer) else {
+    let line_layer = name.and_then(shortbread_line_layer);
+    let polygon_kind = name.and_then(shortbread_polygon_layer);
+    if line_layer.is_none() && polygon_kind.is_none() {
         return Ok(());
-    };
+    }
 
     for feature in features {
-        decode_feature(feature, tile, extent, kind, accepts_polygon, output)?;
+        decode_feature(
+            feature,
+            tile,
+            extent,
+            line_layer,
+            polygon_kind,
+            &properties,
+            output,
+        )?;
     }
 
     Ok(())
+}
+
+#[derive(Default)]
+struct LayerProperties<'a> {
+    keys: Vec<&'a str>,
+    values: Vec<Option<&'a str>>,
+}
+
+impl LayerProperties<'_> {
+    fn source_kind(&self, tags: &[u32]) -> Result<Option<String>, VectorTileError> {
+        let (pairs, remainder) = tags.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(VectorTileError::InvalidProtobuf);
+        }
+        let mut source_kind = None;
+        for pair in pairs {
+            let key = self
+                .keys
+                .get(pair[0] as usize)
+                .ok_or(VectorTileError::InvalidProtobuf)?;
+            let value = self
+                .values
+                .get(pair[1] as usize)
+                .ok_or(VectorTileError::InvalidProtobuf)?;
+            if *key == "kind" {
+                source_kind = value.map(str::to_owned);
+            }
+        }
+        Ok(source_kind)
+    }
+}
+
+fn decode_string_value(bytes: &[u8]) -> Result<Option<&str>, VectorTileError> {
+    let mut cursor = ProtoCursor::new(bytes);
+    let mut value = None;
+    while !cursor.is_finished() {
+        let (field, wire_type) = cursor.read_key()?;
+        if field == 1 && wire_type == 2 {
+            value = Some(
+                core::str::from_utf8(cursor.read_length_delimited()?)
+                    .map_err(|_| VectorTileError::InvalidUtf8)?,
+            );
+        } else {
+            cursor.skip(wire_type)?;
+        }
+    }
+    Ok(value)
+}
+
+fn shortbread_polygon_layer(name: &str) -> Option<VectorBasemapPolygonKind> {
+    match name {
+        "ocean" => Some(VectorBasemapPolygonKind::Ocean),
+        "water_polygons" => Some(VectorBasemapPolygonKind::Water),
+        "land" => Some(VectorBasemapPolygonKind::Land),
+        "sites" => Some(VectorBasemapPolygonKind::Site),
+        "buildings" => Some(VectorBasemapPolygonKind::Building),
+        _ => None,
+    }
 }
 
 fn shortbread_line_layer(name: &str) -> Option<(VectorBasemapLineKind, bool)> {
@@ -130,13 +236,15 @@ fn decode_feature(
     bytes: &[u8],
     tile: TileId,
     extent: u32,
-    kind: VectorBasemapLineKind,
-    accepts_polygon: bool,
-    output: &mut Vec<VectorBasemapLine>,
+    line_layer: Option<(VectorBasemapLineKind, bool)>,
+    polygon_kind: Option<VectorBasemapPolygonKind>,
+    properties: &LayerProperties<'_>,
+    output: &mut VectorBasemapTile,
 ) -> Result<(), VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut geometry_type = 0_u32;
     let mut geometry = Vec::new();
+    let mut tags = Vec::new();
 
     while !cursor.is_finished() {
         let (field, wire_type) = cursor.read_key()?;
@@ -145,38 +253,85 @@ fn decode_feature(
                 geometry_type = u32::try_from(cursor.read_varint()?)
                     .map_err(|_| VectorTileError::InvalidProtobuf)?;
             }
-            (4, 2) => {
+            (2 | 4, 2) => {
+                let target = if field == 2 { &mut tags } else { &mut geometry };
                 let mut packed = ProtoCursor::new(cursor.read_length_delimited()?);
                 while !packed.is_finished() {
-                    geometry.push(
+                    target.push(
                         u32::try_from(packed.read_varint()?)
                             .map_err(|_| VectorTileError::InvalidProtobuf)?,
                     );
                 }
             }
-            (4, 0) => geometry.push(
-                u32::try_from(cursor.read_varint()?)
-                    .map_err(|_| VectorTileError::InvalidProtobuf)?,
-            ),
+            (2 | 4, 0) => {
+                let target = if field == 2 { &mut tags } else { &mut geometry };
+                target.push(
+                    u32::try_from(cursor.read_varint()?)
+                        .map_err(|_| VectorTileError::InvalidProtobuf)?,
+                );
+            }
             _ => cursor.skip(wire_type)?,
         }
     }
 
-    let accepts_geometry = geometry_type == 2 || (accepts_polygon && geometry_type == 3);
-    if !accepts_geometry || geometry.is_empty() {
+    let accepts_geometry = (geometry_type == 2 && line_layer.is_some())
+        || (geometry_type == 3 && polygon_kind.is_some());
+    if !accepts_geometry {
         return Ok(());
     }
+    if geometry.is_empty() {
+        return Err(VectorTileError::InvalidGeometry);
+    }
 
-    for path in decode_geometry_paths(&geometry, geometry_type == 3)? {
+    let source_kind = properties.source_kind(&tags)?;
+    let paths = decode_geometry_paths(&geometry, geometry_type == 3)?;
+    let mut polygons: Vec<VectorBasemapPolygon> = Vec::new();
+    for path in paths {
         if path.len() < 2 {
             continue;
         }
         let coordinates = path
-            .into_iter()
-            .map(|[x, y]| tile_coordinate_to_lon_lat(tile, extent, x, y))
+            .iter()
+            .map(|[x, y]| tile_coordinate_to_lon_lat(tile, extent, *x, *y))
             .collect::<Result<Vec<_>, _>>()?;
-        output.push(VectorBasemapLine { kind, coordinates });
+        if let Some((kind, accepts_polygon)) = line_layer
+            && (geometry_type == 2 || accepts_polygon)
+        {
+            output.lines.push(VectorBasemapLine {
+                kind,
+                coordinates: coordinates.clone(),
+            });
+        }
+        if let Some(kind) = polygon_kind
+            && geometry_type == 3
+        {
+            // MVT uses screen coordinates: positive signed area is an exterior.
+            // i128 keeps products and sums exact even for large buffered coordinates.
+            let area: i128 = path
+                .windows(2)
+                .map(|pair| {
+                    i128::from(pair[0][0]) * i128::from(pair[1][1])
+                        - i128::from(pair[1][0]) * i128::from(pair[0][1])
+                })
+                .sum();
+            if area > 0 {
+                polygons.push(VectorBasemapPolygon {
+                    kind,
+                    source_kind: source_kind.clone(),
+                    rings: vec![coordinates],
+                });
+            } else if area < 0 {
+                polygons
+                    .last_mut()
+                    .ok_or(VectorTileError::InvalidGeometry)?
+                    .rings
+                    .push(coordinates);
+            } else {
+                return Err(VectorTileError::InvalidGeometry);
+            }
+        }
     }
+    output.polygons.extend(polygons);
 
     Ok(())
 }
@@ -201,6 +356,12 @@ fn decode_geometry_paths(
 
         match id {
             MVT_MOVE_TO | MVT_LINE_TO => {
+                if close_polygons
+                    && ((id == MVT_MOVE_TO && (count != 1 || !current.is_empty()))
+                        || (id == MVT_LINE_TO && (count < 2 || current.len() != 1)))
+                {
+                    return Err(VectorTileError::InvalidGeometry);
+                }
                 if id == MVT_MOVE_TO && !current.is_empty() {
                     paths.push(core::mem::take(&mut current));
                 }
@@ -221,8 +382,14 @@ fn decode_geometry_paths(
                 }
             }
             MVT_CLOSE_PATH => {
-                if close_polygons && !current.is_empty() && current.first() != current.last() {
-                    current.push(current[0]);
+                if close_polygons {
+                    if count != 1 || current.len() < 3 {
+                        return Err(VectorTileError::InvalidGeometry);
+                    }
+                    if current.first() != current.last() {
+                        current.push(current[0]);
+                    }
+                    paths.push(core::mem::take(&mut current));
                 }
             }
             _ => return Err(VectorTileError::InvalidGeometry),
@@ -230,6 +397,9 @@ fn decode_geometry_paths(
     }
 
     if !current.is_empty() {
+        if close_polygons {
+            return Err(VectorTileError::InvalidGeometry);
+        }
         paths.push(current);
     }
 
@@ -388,22 +558,149 @@ mod tests {
     }
 
     fn tiny_line_tile(layer_name: &str, geometry_type: u32, geometry: &[u32]) -> Vec<u8> {
+        tiny_tagged_tile(layer_name, geometry_type, geometry, &[])
+    }
+
+    fn tiny_tagged_tile(
+        layer_name: &str,
+        geometry_type: u32,
+        geometry: &[u32],
+        properties: &[(&str, &str)],
+    ) -> Vec<u8> {
         let mut packed_geometry = Vec::new();
         for value in geometry {
             packed_geometry.extend(varint(u64::from(*value)));
         }
 
         let mut feature = Vec::new();
+        let tags = (0..properties.len())
+            .flat_map(|index| [index as u64, index as u64])
+            .flat_map(varint)
+            .collect::<Vec<_>>();
+        feature.extend(field_bytes(2, &tags));
         feature.extend(field_varint(3, u64::from(geometry_type)));
         feature.extend(field_bytes(4, &packed_geometry));
 
         let mut layer = Vec::new();
         layer.extend(field_bytes(1, layer_name.as_bytes()));
         layer.extend(field_bytes(2, &feature));
+        for (key, value) in properties {
+            layer.extend(field_bytes(3, key.as_bytes()));
+            layer.extend(field_bytes(4, &field_bytes(1, value.as_bytes())));
+        }
         layer.extend(field_varint(5, 4096));
         layer.extend(field_varint(15, 2));
 
         field_bytes(3, &layer)
+    }
+
+    #[test]
+    fn preserves_shortbread_kind_for_land_and_water_styling() {
+        let geometry = polygon_commands(&[&[[0, 0], [4096, 0], [4096, 4096], [0, 4096]]]);
+        for (layer, source_kind) in [("land", "forest"), ("water_polygons", "glacier")] {
+            let bytes = tiny_tagged_tile(
+                layer,
+                3,
+                &geometry,
+                &[("name", "fixture"), ("kind", source_kind)],
+            );
+            let tile = decode_shortbread_basemap(&bytes, TileId::new(1, 1, 0).unwrap()).unwrap();
+            assert_eq!(tile.polygons[0].source_kind.as_deref(), Some(source_kind));
+        }
+    }
+
+    #[test]
+    fn decodes_water_polygon_with_its_island_hole() {
+        let geometry = polygon_commands(&[
+            &[[0, 0], [4096, 0], [4096, 4096], [0, 4096]],
+            &[[1024, 1024], [1024, 3072], [3072, 3072], [3072, 1024]],
+        ]);
+        let bytes = tiny_line_tile("water_polygons", 3, &geometry);
+        let tile = decode_shortbread_basemap(&bytes, TileId::new(1, 1, 0).unwrap()).unwrap();
+
+        assert_eq!(tile.polygons.len(), 1);
+        let polygon = &tile.polygons[0];
+        assert_eq!(polygon.kind, VectorBasemapPolygonKind::Water);
+        assert_eq!(polygon.rings.len(), 2);
+        for ring in &polygon.rings {
+            assert_eq!(ring.len(), 5);
+            assert_eq!(ring.first(), ring.last());
+        }
+        assert_eq!(polygon.rings[0][0][0], 0.0);
+        assert_eq!(polygon.rings[0][1][0], 180.0);
+        assert_eq!(polygon.rings[1][0][0], 45.0);
+        assert_eq!(tile.lines.len(), 2);
+    }
+
+    fn polygon_commands(rings: &[&[[i32; 2]]]) -> Vec<u32> {
+        let mut cursor = [0, 0];
+        let mut commands = Vec::new();
+        for ring in rings {
+            for (index, point) in ring.iter().enumerate() {
+                if index == 0 {
+                    commands.push((1 << 3) | MVT_MOVE_TO);
+                } else if index == 1 {
+                    commands.push(((ring.len() as u32 - 1) << 3) | MVT_LINE_TO);
+                }
+                commands.push(zigzag(point[0] - cursor[0]));
+                commands.push(zigzag(point[1] - cursor[1]));
+                cursor = *point;
+            }
+            commands.push((1 << 3) | MVT_CLOSE_PATH);
+        }
+        commands
+    }
+
+    #[test]
+    fn rejects_incomplete_and_malformed_polygon_command_sequences() {
+        let valid = polygon_commands(&[&[[0, 0], [4096, 0], [4096, 4096], [0, 4096]]]);
+        let mut repeated_close = valid.clone();
+        repeated_close.push(15);
+        let mut invalid_close_count = valid.clone();
+        *invalid_close_count.last_mut().unwrap() = (2 << 3) | MVT_CLOSE_PATH;
+        let malformed = [
+            valid[..valid.len() - 1].to_vec(),
+            repeated_close,
+            invalid_close_count,
+            vec![15],
+            vec![9, 0, 0, 15],
+            vec![10, 0, 0, 15],
+            polygon_commands(&[&[[0, 0], [1024, 1024], [2048, 2048]]]),
+            polygon_commands(&[&[[1024, 1024], [1024, 3072], [3072, 3072], [3072, 1024]]]),
+        ];
+
+        for geometry in malformed {
+            let bytes = tiny_line_tile("water_polygons", 3, &geometry);
+            assert_eq!(
+                decode_shortbread_basemap(&bytes, TileId::new(1, 1, 0).unwrap()),
+                Err(VectorTileError::InvalidGeometry),
+                "must reject malformed polygon {geometry:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn groups_multiple_exteriors_and_their_holes_in_each_supported_polygon_layer() {
+        let geometry = polygon_commands(&[
+            &[[0, 0], [1024, 0], [1024, 1024], [0, 1024]],
+            &[[256, 256], [256, 768], [768, 768], [768, 256]],
+            &[[2048, 2048], [4096, 2048], [4096, 4096], [2048, 4096]],
+        ]);
+        for (layer, kind) in [
+            ("ocean", VectorBasemapPolygonKind::Ocean),
+            ("water_polygons", VectorBasemapPolygonKind::Water),
+            ("land", VectorBasemapPolygonKind::Land),
+            ("sites", VectorBasemapPolygonKind::Site),
+            ("buildings", VectorBasemapPolygonKind::Building),
+        ] {
+            let bytes = tiny_line_tile(layer, 3, &geometry);
+            let tile = decode_shortbread_basemap(&bytes, TileId::new(1, 1, 0).unwrap()).unwrap();
+            assert_eq!(tile.polygons.len(), 2);
+            assert_eq!(tile.polygons[0].kind, kind);
+            assert_eq!(tile.polygons[0].rings.len(), 2);
+            assert_eq!(tile.polygons[1].rings.len(), 1);
+            assert_eq!(tile.polygons[1].rings[0][0][0], 90.0);
+        }
     }
 
     #[test]

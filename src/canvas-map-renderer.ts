@@ -286,11 +286,15 @@ function drawPolygon<TFeature>(
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill("evenodd");
-  context.globalAlpha = primitive.strokeOpacity;
-  context.lineJoin = "round";
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
-  context.strokeStyle = primitive.strokeColor;
-  context.stroke();
+  const strokeWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  // Canvas ignores lineWidth = 0 and would reuse the previous shape's width.
+  if (strokeWidth > 0) {
+    context.globalAlpha = primitive.strokeOpacity;
+    context.lineJoin = "round";
+    context.lineWidth = strokeWidth;
+    context.strokeStyle = primitive.strokeColor;
+    context.stroke();
+  }
   context.globalAlpha = 1;
 }
 

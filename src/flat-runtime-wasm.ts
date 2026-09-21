@@ -105,6 +105,7 @@ export type MapsFlatRasterRuntimeConfig = {
 export type MapsFlatRasterRuntime = {
   dispose(): void;
   fitBounds(bounds: MapBounds, padding: number, maxZoom: number): void;
+  /** Advances scheduling; dispatch the returned work and retain the frame for reads/redraws. */
   frame(): MapsFlatRasterFrame;
   markFailed(tile: MapsRasterTileId): void;
   markLoaded(tile: MapsRasterTileId): void;

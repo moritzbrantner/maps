@@ -73,6 +73,15 @@ Runtime phases:
 - decode/upload where applicable;
 - warm-cache revisit.
 
+Raster failure and cancellation regressions additionally run through the public
+Rust runtime in `crates/maps-core/tests/raster_tile_lifecycle.rs` and the real
+Rust/WASM Map View in `e2e/maps-runtime.spec.ts`. A failed tile releases its load
+slot and is suppressed while continuously visible; leaving and revisiting the
+cover makes it eligible again. Failed tiles are never marked ready. The browser
+must ignore late callbacks from superseded requests without removing replacement
+loads, and cancelled completions must not populate the runtime cache. These are
+correctness checks, not runtime-performance evidence.
+
 ### `dense-points-100k-v1`
 
 Purpose: measure the already-authoritative Rust point index together with render preparation and interaction.
@@ -127,6 +136,25 @@ Runtime phases:
 ### `vector-city-style-v1`
 
 Purpose: become the primary MapLibre reference scenario for Milestones D/E.
+
+The current Shortbread foundation ([#138](https://github.com/moritzbrantner/maps/issues/138))
+decodes ocean, water, land, site and building polygons in Rust, preserving interior rings,
+multiple exterior rings and the source `kind` property. Ring grouping follows the
+[MVT 2.1 polygon contract](https://github.com/mapbox/vector-tile-spec/blob/master/2.1/README.md);
+layer classification follows the [Shortbread schema](https://shortbread-tiles.org/schema/1.0/).
+The comparison demo paints these fills before linework and application features using its
+fixed palette. Polygon frames use the existing Canvas fallback; line-only frames retain
+their wgpu path. This is not yet a general style evaluator or GPU polygon pipeline.
+
+Focused evidence lives in the Rust vector-tile tests and
+`e2e/maps-wgpu-stroke-runtime.spec.ts`: deterministic MVT bytes exercise forest beneath
+water, island holes, source classification, paint order and visible application points.
+Malformed polygon command streams are rejected. These checks do not yet make this named
+scenario executable or establish full MapLibre cartographic/performance parity.
+
+The same browser suite verifies that Canvas base and overlay surfaces redraw after
+`contextrestored`, and that a polygon with zero stroke width paints only its fill. Restoration
+uses the retained frame/data and does not advance the tile request scheduler.
 
 Fixture:
 

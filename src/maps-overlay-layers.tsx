@@ -480,13 +480,16 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         }
       };
 
+      // A restored Canvas context has an empty backing store, even when neither
+      // the camera nor the layer data changed while it was unavailable.
+      canvas.addEventListener("contextrestored", draw);
       draw();
 
-      if (typeof ResizeObserver === "undefined") return clearApplicationFrame;
-      const observer = new ResizeObserver(draw);
-      observer.observe(canvas);
+      const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(draw);
+      observer?.observe(canvas);
       return () => {
-        observer.disconnect();
+        canvas.removeEventListener("contextrestored", draw);
+        observer?.disconnect();
         clearApplicationFrame();
       };
     }, [

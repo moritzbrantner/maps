@@ -67,9 +67,9 @@ export function RendererComparison() {
             First-party Maps engine
           </h2>
           <p className="mb-0 mt-2 text-sm leading-6 text-muted-foreground">
-            This is the Maps-owned runtime: our Rust/WASM camera and tile cover drive our wgpu
-            renderer. OpenStreetMap Shortbread vector tiles are decoded by Maps and turned into our
-            own render geometry; MapLibre remains only as a reference path.
+            Maps decodes OpenStreetMap Shortbread vector tiles into water, land, buildings, and
+            roads, with application features drawn above the basemap. Compare our first-party engine
+            with the MapLibre reference using the same camera and data.
           </p>
         </div>
         <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
@@ -99,7 +99,9 @@ export function RendererComparison() {
           {backend === "maps" && basemap.enabled ? (
             <GeoJsonLayer
               featureCollection={basemap.featureCollection}
-              getFeatureStyle={(feature) => getShortbreadBasemapStyle(feature.properties.kind)}
+              getFeatureStyle={(feature) =>
+                getShortbreadBasemapStyle(feature.properties.kind, feature.properties.sourceKind)
+              }
               isFeatureInteractive={() => false}
               layerId="shortbread-basemap"
             />

@@ -5,15 +5,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Milestone D adds Maps-owned MVT decoding to the packaged WASM runtime. Keep the
-// new baseline explicit and tight rather than disabling package-size validation.
+// Milestone D includes filled Shortbread polygons, ring validation and source kinds
+// (#138). Measured: 486,433-byte WASM, 382,013-byte compressed package and
+// 1,562,484 bytes unpacked. Keep a small margin for artifact metadata variation.
 const budgets = {
-  compressedSize: 381_000,
+  compressedSize: 384_000,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_557_000,
-  wasmRuntimeSize: 480_000,
+  unpackedSize: 1_566_000,
+  wasmRuntimeSize: 488_000,
 };
 
 const pack = spawnSync(

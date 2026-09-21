@@ -162,6 +162,7 @@ pub struct FlatRasterRuntime {
     source: RasterSourceSpec,
     limits: FlatRasterRuntimeLimits,
     pending: BTreeSet<TileId>,
+    failed: BTreeSet<TileId>,
     ready_lru: VecDeque<TileId>,
 }
 
@@ -186,6 +187,7 @@ impl FlatRasterRuntime {
             source,
             limits,
             pending: BTreeSet::new(),
+            failed: BTreeSet::new(),
             ready_lru: VecDeque::new(),
         })
     }
@@ -503,17 +505,24 @@ impl FlatRasterRuntime {
     }
 
     /// Marks a browser-fetched tile ready and updates deterministic recency.
+    /// Completions for cancelled or already completed requests are ignored.
     pub fn mark_loaded(&mut self, tile: TileId) {
-        self.pending.remove(&tile);
-        touch_ready(&mut self.ready_lru, tile);
+        if self.pending.remove(&tile) {
+            touch_ready(&mut self.ready_lru, tile);
+        }
     }
 
-    /// Marks a browser fetch failed/aborted. Failed tiles remain eligible for a
-    /// later deterministic request when visible again.
+    /// Marks an active browser fetch failed. Suppress automatic retries while
+    /// the tile remains visible so failures cannot starve the rest of the cover.
+    /// A tile becomes eligible again after leaving and reentering the cover.
     pub fn mark_failed(&mut self, tile: TileId) {
-        self.pending.remove(&tile);
+        if self.pending.remove(&tile) {
+            self.failed.insert(tile);
+        }
     }
 
+    /// Advances scheduling and returns work the host must dispatch exactly once.
+    /// Retain the returned plan for redraws and queries; this is not a read-only snapshot.
     pub fn frame_plan(&mut self) -> Result<RasterFramePlan, FlatRasterRuntimeError> {
         validate_camera(self.camera)?;
         let local_render_frame = self
@@ -540,6 +549,7 @@ impl FlatRasterRuntime {
         for tile in &cancellations {
             self.pending.remove(tile);
         }
+        self.failed.retain(|tile| visible_tiles.contains(tile));
 
         let evictions = self.prune_cache(&visible_tiles);
         let available_slots = self
@@ -549,7 +559,11 @@ impl FlatRasterRuntime {
         let mut request_candidates = visible_tiles
             .iter()
             .copied()
-            .filter(|tile| !self.pending.contains(tile) && !self.ready_lru.contains(tile))
+            .filter(|tile| {
+                !self.pending.contains(tile)
+                    && !self.failed.contains(tile)
+                    && !self.ready_lru.contains(tile)
+            })
             .collect::<Vec<_>>();
         let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;

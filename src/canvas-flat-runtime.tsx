@@ -221,6 +221,28 @@ export function MapsCanvasFlatRuntime({
     let cancelled = false;
     let resizeObserver: ResizeObserver | null = null;
     let disposeFrameSynchronizer: (() => void) | null = null;
+    const wheelCanvas = canvasRef.current;
+
+    function handleWheel(event: WheelEvent) {
+      event.preventDefault();
+      cancelKineticPan();
+      velocityTrackerRef.current.clear();
+      const runtime = runtimeRef.current;
+      const syncFrame = syncFrameRef.current;
+      if (!runtime || !syncFrame || !wheelCanvas) return;
+      const position = pointerPosition(wheelCanvas, event.clientX, event.clientY);
+      const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+
+      try {
+        runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
+        emitViewStateRef.current?.(syncFrame(), "zoom");
+      } catch (error) {
+        onErrorRef.current?.(error);
+      }
+    }
+
+    // React's delegated wheel listener is passive, so it cannot stop page scrolling.
+    wheelCanvas?.addEventListener("wheel", handleWheel, { passive: false });
 
     async function initialize() {
       const canvas = canvasRef.current;
@@ -325,7 +347,7 @@ export function MapsCanvasFlatRuntime({
           emitViewState(syncFrame(), options.reason ?? "fit-bounds");
         },
         getVisibleBounds() {
-          const bounds = runtime.frame().visibleBounds;
+          const bounds = frameSynchronizer.getVisibleBounds();
           return [bounds.west, bounds.south, bounds.east, bounds.north];
         },
         getVisibleTiles() {
@@ -374,6 +396,7 @@ export function MapsCanvasFlatRuntime({
 
     return () => {
       cancelled = true;
+      wheelCanvas?.removeEventListener("wheel", handleWheel);
       resizeObserver?.disconnect();
       disposeFrameSynchronizer?.();
       cancelKineticPan();
@@ -519,23 +542,6 @@ export function MapsCanvasFlatRuntime({
           velocityTrackerRef.current.clear();
           cancelKineticPan();
         }}
-        onWheel={(event) => {
-          event.preventDefault();
-          cancelKineticPan();
-          velocityTrackerRef.current.clear();
-          const runtime = runtimeRef.current;
-          const syncFrame = syncFrameRef.current;
-          if (!runtime || !syncFrame) return;
-          const position = pointerPosition(event.currentTarget, event.clientX, event.clientY);
-          const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
-
-          try {
-            runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
-            emitViewStateRef.current?.(syncFrame(), "zoom");
-          } catch (error) {
-            onErrorRef.current?.(error);
-          }
-        }}
       />
       <canvas
         aria-hidden="true"
@@ -610,7 +616,7 @@ function createFrameSynchronizer({
         // Treat an unreadable renderer state as renderer failure below.
       }
 
-      const retainedFrame = lastFrame ?? runtime.frame();
+      const retainedFrame = lastFrame ?? syncFrame();
       failRenderer();
       canvas.dataset.mapBaseTiles = String(
         drawCanvasFrame(fallbackCanvas, images, retainedFrame),
@@ -622,7 +628,7 @@ function createFrameSynchronizer({
     if (disposed || rendererRetryFrame !== null) return;
     rendererRetryFrame = requestAnimationFrame(() => {
       rendererRetryFrame = null;
-      if (!disposed) renderFrame(runtime.frame());
+      if (!disposed && lastFrame) renderFrame(lastFrame);
     });
   }
 
@@ -633,6 +639,11 @@ function createFrameSynchronizer({
   }
 
   startDeviceLossMonitor();
+  fallbackCanvas.addEventListener("contextrestored", restoreCanvasFrame);
+
+  function restoreCanvasFrame() {
+    if (lastFrame) renderFrame(lastFrame);
+  }
 
   function renderFrame(frame: MapsFlatRasterFrame) {
     if (disposed) return;
@@ -676,7 +687,8 @@ function createFrameSynchronizer({
 
     const next = packApplicationFrame(frame, interaction);
     applicationFrame = next;
-    renderFrame(lastFrame ?? runtime.frame());
+    if (lastFrame) renderFrame(lastFrame);
+    else syncFrame();
     return next !== null && renderer() !== null;
   }
 
@@ -715,15 +727,18 @@ function createFrameSynchronizer({
     for (const tile of frame.requests) {
       if (loads.has(tile.key) || images.has(tile.key)) continue;
       const abort = new AbortController();
-      loads.set(tile.key, { abort, tile });
+      const load = { abort, tile };
+      loads.set(tile.key, load);
 
       loadRasterTile(buildRasterTileUrl(currentSource.url, tile), abort.signal)
         .then((image) => {
-          loads.delete(tile.key);
-          if (abort.signal.aborted) {
+          // A cancelled fetch/decode may finish after this tile has been
+          // requested again, or after the Map View has changed its source.
+          if (disposed || abort.signal.aborted || loads.get(tile.key) !== load) {
             image.close();
             return;
           }
+          loads.delete(tile.key);
 
           images.set(tile.key, image);
           delete canvas.dataset.mapBaseTileError;
@@ -737,13 +752,16 @@ function createFrameSynchronizer({
           }
           runtime.markLoaded(tile);
           syncFrame();
-        })
-        .catch((error) => {
+        }, (error) => {
+          if (disposed || abort.signal.aborted || loads.get(tile.key) !== load) return;
           loads.delete(tile.key);
-          if (abort.signal.aborted) return;
           runtime.markFailed(tile);
           canvas.dataset.mapBaseTileError = error instanceof Error ? error.message : String(error);
-          onError(error);
+          syncFrame();
+          throw error;
+        })
+        .catch((error) => {
+          if (!disposed) onError(error);
         });
     }
 
@@ -753,13 +771,17 @@ function createFrameSynchronizer({
   return {
     dispose() {
       disposed = true;
+      fallbackCanvas.removeEventListener("contextrestored", restoreCanvasFrame);
       cancelRendererRetry();
       cancelDeviceLossMonitor();
       lastFrame = null;
       applicationFrame = null;
     },
+    getVisibleBounds() {
+      return (lastFrame ?? syncFrame()).visibleBounds;
+    },
     getVisibleTiles() {
-      const frame = lastFrame ?? runtime.frame();
+      const frame = lastFrame ?? syncFrame();
       const unique = new Map<string, MapsRasterTileId>();
       for (const placement of frame.placements) {
         unique.set(placement.tile.key, placement.tile);
