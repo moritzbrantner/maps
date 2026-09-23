@@ -524,10 +524,16 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         }
 
         context.clearRect(0, 0, scene.width, scene.height);
+        if (!hasRaster) {
+          for (const primitive of scene.primitives) {
+            drawCanvasMapPrimitive(context, primitive, interaction);
+          }
+          return;
+        }
+
         const screenPrimitives = new Map(
           scene.primitives.map((primitive) => [primitive.renderPrimitive.primitiveId, primitive]),
         );
-
         for (const step of snapshot.renderSteps) {
           if (step.kind === "raster") {
             if (heatViewport) {
