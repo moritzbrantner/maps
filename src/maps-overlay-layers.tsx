@@ -292,12 +292,15 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     useLayoutEffect(() => {
       const geoJsonRuntimes = geoJsonRuntimesRef.current;
       const activeGeoJsonPrefixes = new Set<string>();
+      const activeNativePrefixes = new Set<string>();
       for (const entry of entries) {
         if (entry.kind === "geojson") activeGeoJsonPrefixes.add(entry.prefix);
+        if (entry.kind === "point" || entry.kind === "flow") activeNativePrefixes.add(entry.prefix);
       }
       for (const prefix of geoJsonRuntimes.keys()) {
         if (!activeGeoJsonPrefixes.has(prefix)) geoJsonRuntimes.delete(prefix);
       }
+      nativeRuntime.retain(activeNativePrefixes);
 
       const previousClusters = clusterRuntimesRef.current;
       const nextClusters = new Map<string, MapsClusterRuntime>();
