@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 7ddeab6d2f8b2c886e3fe91520dfad7c8eee8043
+          ref: f6a7e10fb6a66c51c455ba9c5f5487f4b57360e8
           persist-credentials: false
       - name: Record candidate and fetch the negative-test baseline
         run: |
