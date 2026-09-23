@@ -84,11 +84,11 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
       body: JSON.stringify(await page.evaluate(() => window.mapsCameraProbe.samples), null, 2),
       contentType: "application/json",
     });
-    // Inspect composited pixels: a WebGPU canvas readback can be empty after
-    // presentation even while its retained compositor image is visible.
+    // Check map-local compositor pixels after GPU work settles. Page heading
+    // text alone can satisfy the color predicate, so exclude all page chrome.
     let verifiedScreenshot: Buffer | undefined;
     await expect.poll(async () => {
-      const screenshot = await page.screenshot();
+      const screenshot = await map.screenshot();
       verifiedScreenshot = screenshot;
       return page.evaluate(async (base64) => {
         const image = new Image();
