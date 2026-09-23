@@ -30,30 +30,36 @@ jobs:
           name: build-artifact-1b67fda8f10f-9124783074ab-35853859543-1
           path: .
       - run: bunx playwright install --with-deps chromium
-      - name: Observe exceptions without changing results
+      - name: Observe device failures and dimensions
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('e2e/fixtures/native-map-probe.ts')
-          s=p.read_text().replace('const result = originalRender.call(this, tiles, camera, frame);', '''let result: number;
-          try { result = originalRender.call(this, tiles, camera, frame); }
-          catch(error) { console.error('RENDER_EXCEPTION', String(error)); throw error; }''')
-          p.write_text(s)
           p=Path('e2e/maps-runtime-performance.spec.ts')
           s=p.read_text().replace('async function wheelBurst', '''test.beforeEach(async ({page}) => {
             page.on('console', m => { if(m.type() === 'error') console.log(m.text()); });
             page.on('pageerror', e => console.log('PAGE_ERROR', String(e)));
-          });
-          test.afterEach(async ({page}, info) => {
-            await info.attach('final-canvas-state',{body:JSON.stringify(await page.locator('canvas').evaluateAll(els => els.map(el => ({html:el.outerHTML,opacity:getComputedStyle(el).opacity,visibility:getComputedStyle(el).visibility}))),null,2),contentType:'application/json'});
+            await page.addInitScript(() => {
+              const proto = (window as any).GPUAdapter?.prototype;
+              if (!proto) return;
+              const request = proto.requestDevice;
+              proto.requestDevice = async function (...args: any[]) {
+                const device = await request.apply(this, args);
+                device.addEventListener('uncapturederror', (e: any) => console.error('GPU_VALIDATION', e.error.message));
+                device.lost.then((info: any) => console.error('GPU_LOST', info.reason, info.message));
+                return device;
+              };
+            });
           });
           async function wheelBurst''')
           p.write_text(s)
+          p=Path('src/wgpu-base-map-wasm.ts')
+          s=p.read_text().replace('    canvas.style.opacity = "0";\n    throw error;', '    canvas.style.opacity = "0";\n    console.error("WRAPPER_ERROR", String(error));\n    throw error;')
+          p.write_text(s)
           PY
-      - name: Observe native geometry and presentation
+      - name: Observe GPU errors at native workload density
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/retained-runtime/report
-        run: bun run test:browser --project=chromium e2e/maps-runtime-performance.spec.ts --output=evidence/retained-runtime/results > evidence/retained-runtime/browser.log 2>&1
+        run: bun run test:browser --project=chromium e2e/maps-runtime-performance.spec.ts --grep 'controlled camera and hover on wgpu|host without React on wgpu' --output=evidence/retained-runtime/results > evidence/retained-runtime/browser.log 2>&1
       - if: always()
         uses: actions/upload-artifact@v4
         with:
