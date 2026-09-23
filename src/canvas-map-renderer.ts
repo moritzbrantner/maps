@@ -45,6 +45,50 @@ export function createCanvasMapScene<TFeature = unknown>(
   };
 }
 
+/**
+ * Internal projector for immutable Maps-owned render primitives. A new camera
+ * callback or viewport size invalidates screen coordinates, not source geometry.
+ * Weak keys do not retain primitives belonging to removed/replaced layers.
+ */
+export function createCanvasMapSceneProjector<TFeature = unknown>() {
+  let previousProject: MapRenderProject | undefined;
+  let previousWidth: number | undefined;
+  let previousHeight: number | undefined;
+  let projected = new WeakMap<
+    MapVectorRenderPrimitive<TFeature>,
+    Array<CanvasMapScenePrimitive<TFeature>>
+  >();
+
+  return (
+    frame: MapVectorRenderFrame<TFeature>,
+    project: MapRenderProject,
+    size: { height: number; width: number },
+  ): CanvasMapScene<TFeature> => {
+    if (
+      previousProject !== project ||
+      previousWidth !== size.width ||
+      previousHeight !== size.height
+    ) {
+      projected = new WeakMap();
+      previousProject = project;
+      previousWidth = size.width;
+      previousHeight = size.height;
+    }
+    return {
+      height: Math.max(0, size.height),
+      primitives: frame.primitives.flatMap((primitive) => {
+        let result = projected.get(primitive);
+        if (!result) {
+          result = projectPrimitive(primitive, project);
+          projected.set(primitive, result);
+        }
+        return result;
+      }),
+      width: Math.max(0, size.width),
+    };
+  };
+}
+
 export function hitTestCanvasMapScene<TFeature = unknown>(
   scene: CanvasMapScene<TFeature>,
   point: MapScreenPoint,
@@ -185,14 +229,16 @@ function drawPrimitive<TFeature>(
 
   switch (scenePrimitive.kind) {
     case "circle":
-      drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, selected, hovered);
-      return;
-    case "direction-marker":
-      drawDirectionMarker(
+      drawCircle(
         context,
         scenePrimitive,
-        primitive as MapRenderDirectionMarker<TFeature>,
+        primitive as MapRenderCircle<TFeature>,
+        selected,
+        hovered,
       );
+      return;
+    case "direction-marker":
+      drawDirectionMarker(context, scenePrimitive, primitive as MapRenderDirectionMarker<TFeature>);
       return;
     case "line":
       drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, selected, hovered);
@@ -286,11 +332,15 @@ function drawPolygon<TFeature>(
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill("evenodd");
-  context.globalAlpha = primitive.strokeOpacity;
-  context.lineJoin = "round";
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
-  context.strokeStyle = primitive.strokeColor;
-  context.stroke();
+  const strokeWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  // Canvas ignores lineWidth = 0 and would reuse the previous shape's width.
+  if (strokeWidth > 0) {
+    context.globalAlpha = primitive.strokeOpacity;
+    context.lineJoin = "round";
+    context.lineWidth = strokeWidth;
+    context.strokeStyle = primitive.strokeColor;
+    context.stroke();
+  }
   context.globalAlpha = 1;
 }
 
@@ -322,7 +372,9 @@ function hitPrimitive<TFeature>(
   switch (primitive.kind) {
     case "circle": {
       const radius = Math.max(8, (primitive.renderPrimitive as MapRenderCircle<TFeature>).radius);
-      return squaredDistance(point, { x: primitive.x, y: primitive.y }) <= radius * radius;
+      const dx = point.x - primitive.x;
+      const dy = point.y - primitive.y;
+      return dx * dx + dy * dy <= radius * radius;
     }
     case "direction-marker":
       return false;
@@ -331,14 +383,14 @@ function hitPrimitive<TFeature>(
         4,
         (primitive.renderPrimitive as MapRenderLine<TFeature>).strokeWidth / 2 + 2,
       );
-      return squaredDistanceToPolyline(point, primitive.points) <= tolerance * tolerance;
+      return isWithinPolylineTolerance(point, primitive.points, tolerance * tolerance);
     }
     case "polygon": {
       const renderPrimitive = primitive.renderPrimitive as MapRenderPolygon<TFeature>;
       if (pointInRings(point, primitive.rings)) return true;
       const tolerance = Math.max(4, renderPrimitive.strokeWidth / 2 + 2);
-      return primitive.rings.some(
-        (ring) => squaredDistanceToClosedPolyline(point, ring) <= tolerance * tolerance,
+      return primitive.rings.some((ring) =>
+        isWithinPolylineTolerance(point, ring, tolerance * tolerance, true),
       );
     }
   }
@@ -365,23 +417,31 @@ function pointInRing(point: MapScreenPoint, ring: readonly MapScreenPoint[]) {
   return inside;
 }
 
-function squaredDistanceToClosedPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
-  if (points.length < 2) return Number.POSITIVE_INFINITY;
-  return Math.min(
-    squaredDistanceToPolyline(point, points),
-    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!),
+/** Picking needs any matching segment, not the minimum distance over the whole path. */
+function isWithinPolylineTolerance(
+  point: MapScreenPoint,
+  points: readonly MapScreenPoint[],
+  squaredTolerance: number,
+  closed = false,
+) {
+  for (let index = 1; index < points.length; index += 1) {
+    if (squaredDistanceToSegment(point, points[index - 1]!, points[index]!) <= squaredTolerance) {
+      return true;
+    }
+  }
+  // Canvas closes polygon rings even when the source does not repeat the first point.
+  return (
+    closed &&
+    points.length >= 2 &&
+    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!) <= squaredTolerance
   );
 }
 
-function squaredDistanceToPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
-  let minimum = Number.POSITIVE_INFINITY;
-  for (let index = 1; index < points.length; index += 1) {
-    minimum = Math.min(minimum, squaredDistanceToSegment(point, points[index - 1]!, points[index]!));
-  }
-  return minimum;
-}
-
-function squaredDistanceToSegment(point: MapScreenPoint, start: MapScreenPoint, end: MapScreenPoint) {
+function squaredDistanceToSegment(
+  point: MapScreenPoint,
+  start: MapScreenPoint,
+  end: MapScreenPoint,
+) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   if (dx === 0 && dy === 0) return squaredDistance(point, start);
@@ -389,7 +449,10 @@ function squaredDistanceToSegment(point: MapScreenPoint, start: MapScreenPoint, 
     0,
     Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)),
   );
-  return squaredDistance(point, { x: start.x + t * dx, y: start.y + t * dy });
+  // Preserve the distance arithmetic without allocating a closest-point object per segment.
+  const offsetX = point.x - (start.x + t * dx);
+  const offsetY = point.y - (start.y + t * dy);
+  return offsetX * offsetX + offsetY * offsetY;
 }
 
 function squaredDistance(left: MapScreenPoint, right: MapScreenPoint) {

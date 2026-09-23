@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { FeatureCollection, LineString, Polygon } from "geojson";
 import type { MapsRasterTileId } from "../src/flat-runtime-wasm";
+import type { GeoJsonLayerStyle } from "../src/geojson-layer";
 import {
-  decodeShortbreadBasemapLines,
-  type ShortbreadBasemapLine,
+  decodeShortbreadBasemap,
   type ShortbreadBasemapLineKind,
+  type ShortbreadBasemapPolygonKind,
+  type ShortbreadBasemapTile,
 } from "../src/vector-tile-wasm";
 
 const SHORTBREAD_TILE_URL = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt";
@@ -16,8 +19,18 @@ const SHORTBREAD_ACCEPT =
   "application/vnd.mapbox-vector-tile,application/x-protobuf,application/octet-stream;q=0.9,*/*;q=0.1";
 
 type ShortbreadFeatureProperties = {
-  kind: ShortbreadBasemapLineKind;
+  kind: ShortbreadBasemapLineKind | ShortbreadBasemapPolygonKind;
+  sourceKind: string | null;
 };
+
+// Style order spans all visible tiles, independent of protobuf layer order.
+const POLYGON_PAINT_ORDER: readonly ShortbreadBasemapPolygonKind[] = [
+  "ocean",
+  "land",
+  "site",
+  "water",
+  "building",
+];
 
 type TileState =
   | { status: "idle" | "loading"; error: null }
@@ -26,7 +39,7 @@ type TileState =
 
 export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileId[]) {
   const enabled = useMemo(shouldEnableShortbreadBasemap, []);
-  const cacheRef = useRef(new Map<string, ShortbreadBasemapLine[]>());
+  const cacheRef = useRef(new Map<string, ShortbreadBasemapTile>());
   const inflightRef = useRef(new Map<string, AbortController>());
   const [cacheVersion, setCacheVersion] = useState(0);
   const [tileState, setTileState] = useState<TileState>({ status: "idle", error: null });
@@ -66,10 +79,10 @@ export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileI
       inflightRef.current.set(tile.key, controller);
 
       void loadShortbreadTile(tile, controller.signal)
-        .then((lines) => {
+        .then((basemapTile) => {
           inflightRef.current.delete(tile.key);
           if (controller.signal.aborted) return;
-          cacheRef.current.set(tile.key, lines);
+          cacheRef.current.set(tile.key, basemapTile);
           setCacheVersion((version) => version + 1);
           setTileState({ status: "ready", error: null });
         })
@@ -99,17 +112,34 @@ export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileI
   );
 
   const featureCollection = useMemo(() => {
-    const features = [];
+    const features: FeatureCollection<
+      Polygon | LineString,
+      ShortbreadFeatureProperties
+    >["features"] = [];
+    for (const kind of POLYGON_PAINT_ORDER) {
+      for (const tile of visibleTiles) {
+        const polygons = cacheRef.current.get(tile.key)?.polygons ?? [];
+        for (const [index, polygon] of polygons.entries()) {
+          if (polygon.kind !== kind) continue;
+          features.push({
+            geometry: { coordinates: polygon.rings, type: "Polygon" },
+            id: `${tile.key}:polygon:${index}`,
+            properties: { kind, sourceKind: polygon.sourceKind },
+            type: "Feature",
+          });
+        }
+      }
+    }
     for (const tile of visibleTiles) {
-      const lines = cacheRef.current.get(tile.key) ?? [];
+      const lines = cacheRef.current.get(tile.key)?.lines ?? [];
       for (const [index, line] of lines.entries()) {
         features.push({
           geometry: {
             coordinates: line.coordinates,
             type: "LineString" as const,
           },
-          id: `${tile.key}:${line.kind}:${index}`,
-          properties: { kind: line.kind },
+          id: `${tile.key}:line:${index}`,
+          properties: { kind: line.kind, sourceKind: null },
           type: "Feature" as const,
         });
       }
@@ -130,8 +160,33 @@ export function useShortbreadBasemap(visibleTilesInput: readonly MapsRasterTileI
   };
 }
 
-export function getShortbreadBasemapStyle(kind: ShortbreadBasemapLineKind) {
-  return shortbreadStyle(kind);
+export function getShortbreadBasemapStyle(
+  kind: ShortbreadFeatureProperties["kind"],
+  sourceKind: string | null = null,
+): GeoJsonLayerStyle {
+  switch (kind) {
+    case "ocean":
+      return polygonStyle("#a8cce0");
+    case "land":
+      return polygonStyle(sourceKind === "forest" ? "#c4d8b4" : "#dce4cc");
+    case "site":
+      return polygonStyle("#e4dccf");
+    case "building":
+      return { ...polygonStyle("#d8c8b8"), polygonStrokeColor: "#b9a895", polygonStrokeWidth: 0.6 };
+    case "coast":
+      return { lineColor: "#4f93b8", lineOpacity: 0.95, lineWidth: 1.5 };
+    case "water":
+      return {
+        ...polygonStyle(sourceKind === "glacier" ? "#e5f0f5" : "#a8cce0"),
+        lineColor: "#6ba9c9",
+        lineOpacity: 0.9,
+        lineWidth: 1.2,
+      };
+    case "boundary":
+      return { lineColor: "#b27188", lineOpacity: 0.75, lineWidth: 1 };
+    case "street":
+      return { lineColor: "#9a8c7d", lineOpacity: 0.72, lineWidth: 0.9 };
+  }
 }
 
 async function loadShortbreadTile(tile: MapsRasterTileId, signal: AbortSignal) {
@@ -153,7 +208,7 @@ async function loadShortbreadTile(tile: MapsRasterTileId, signal: AbortSignal) {
     throw new Error(`Shortbread vector tile response was empty: ${tile.key}`);
   }
 
-  return decodeShortbreadBasemapLines(bytes, tile);
+  return decodeShortbreadBasemap(bytes, tile);
 }
 
 function buildShortbreadUrl(tile: MapsRasterTileId) {
@@ -175,7 +230,7 @@ function normalizeShortbreadTiles(tiles: readonly MapsRasterTileId[]) {
 }
 
 function pruneShortbreadCache(
-  cache: Map<string, ShortbreadBasemapLine[]>,
+  cache: Map<string, ShortbreadBasemapTile>,
   visibleKeys: ReadonlySet<string>,
 ) {
   while (cache.size > SHORTBREAD_CACHE_CAPACITY) {
@@ -193,17 +248,8 @@ function ancestorTile(tile: MapsRasterTileId, z: number): MapsRasterTileId {
   return { key: `${z}/${x}/${y}`, x, y, z };
 }
 
-function shortbreadStyle(kind: ShortbreadBasemapLineKind) {
-  switch (kind) {
-    case "coast":
-      return { lineColor: "#4f93b8", lineOpacity: 0.95, lineWidth: 1.5 };
-    case "water":
-      return { lineColor: "#6ba9c9", lineOpacity: 0.9, lineWidth: 1.2 };
-    case "boundary":
-      return { lineColor: "#b27188", lineOpacity: 0.75, lineWidth: 1 };
-    case "street":
-      return { lineColor: "#9a8c7d", lineOpacity: 0.72, lineWidth: 0.9 };
-  }
+function polygonStyle(polygonFillColor: string): GeoJsonLayerStyle {
+  return { polygonFillColor, polygonFillOpacity: 1, polygonStrokeWidth: 0 };
 }
 
 function shouldEnableShortbreadBasemap() {

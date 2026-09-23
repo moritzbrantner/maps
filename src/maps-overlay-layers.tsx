@@ -25,7 +25,7 @@ import {
   type VisibleAggregationSummary,
 } from "./aggregation";
 import {
-  createCanvasMapScene,
+  createCanvasMapSceneProjector,
   drawCanvasMapLabels,
   drawCanvasMapPrimitive,
   hitTestCanvasMapScene,
@@ -50,10 +50,7 @@ import {
 import { getGeometryCenter } from "./geojson-rendering";
 import { formatHeatLayerFeatureValue } from "./heat-layer-data";
 import type { HeatLayerFeature, HeatLayerProps } from "./heat-layer-types";
-import {
-  MAP_LAYER_COMPONENT_KIND,
-  type MapLayerComponent,
-} from "./map-layer-component";
+import { MAP_LAYER_COMPONENT_KIND, type MapLayerComponent } from "./map-layer-component";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import {
   createCircleVectorRenderFrame,
@@ -194,6 +191,9 @@ type MapsOverlayEntry =
 type MapsGeoJsonRuntime = {
   featureCollection: GeoJsonLayerProps<AnyRecord>["featureCollection"];
   features: GeoJsonLayerFeature<AnyRecord>[];
+  frame?: MapVectorRenderFrame<GeoJsonLayerFeature<AnyRecord>>;
+  frameInputs?: readonly unknown[];
+  anchors: WeakMap<GeoJsonLayerFeature<AnyRecord>, ReturnType<typeof getGeometryCenter>>;
 };
 
 type MapsClusterRuntime = {
@@ -224,6 +224,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<CanvasMapScene<unknown> | null>(null);
+    const [projectScene] = useState(() => createCanvasMapSceneProjector());
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
     const applicationFrameVisibleRef = useRef(false);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
@@ -275,6 +276,15 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     );
 
     useEffect(() => {
+      const geoJsonRuntimes = geoJsonRuntimesRef.current;
+      const activeGeoJsonPrefixes = new Set<string>();
+      for (const entry of entries) {
+        if (entry.kind === "geojson") activeGeoJsonPrefixes.add(entry.prefix);
+      }
+      for (const prefix of geoJsonRuntimes.keys()) {
+        if (!activeGeoJsonPrefixes.has(prefix)) geoJsonRuntimes.delete(prefix);
+      }
+
       const previousClusters = clusterRuntimesRef.current;
       const nextClusters = new Map<string, MapsClusterRuntime>();
       const activeHeatKeys = new Set<string>();
@@ -439,7 +449,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           heatRuntime,
           requestHeatRender,
         );
-        const scene = createCanvasMapScene(snapshot.frame, project, size);
+        const scene = projectScene(snapshot.frame, project, size);
         const interaction: MapScreenInteractionState = {
           hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
           selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
@@ -489,13 +499,16 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         }
       };
 
+      // A restored Canvas context has an empty backing store, even when neither
+      // the camera nor the layer data changed while it was unavailable.
+      canvas.addEventListener("contextrestored", draw);
       draw();
 
-      if (typeof ResizeObserver === "undefined") return clearApplicationFrame;
-      const observer = new ResizeObserver(draw);
-      observer.observe(canvas);
+      const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(draw);
+      observer?.observe(canvas);
       return () => {
-        observer.disconnect();
+        canvas.removeEventListener("contextrestored", draw);
+        observer?.disconnect();
         clearApplicationFrame();
       };
     }, [
@@ -504,6 +517,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       heatRevision,
       heatRuntime,
       project,
+      projectScene,
       renderApplicationFrame,
       requestHeatRender,
       surface,
@@ -558,7 +572,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
   },
 );
 
-function collectOverlayEntries(children: ReactNode, path = "root", entries: MapsOverlayEntry[] = []) {
+function collectOverlayEntries(
+  children: ReactNode,
+  path = "root",
+  entries: MapsOverlayEntry[] = [],
+) {
   Children.toArray(children).forEach((child, index) => {
     if (!isValidElement(child)) throwUnsupportedMapsLayer();
 
@@ -572,7 +590,9 @@ function collectOverlayEntries(children: ReactNode, path = "root", entries: Maps
       const props = child.props as PointLayerProps<AnyRecord>;
       entries.push({
         kind: "point",
-        prefix: props.layerId ? `point:${props.layerId}` : resolveLayerPrefix("point", child.key, childPath),
+        prefix: props.layerId
+          ? `point:${props.layerId}`
+          : resolveLayerPrefix("point", child.key, childPath),
         props,
       });
       return;
@@ -607,7 +627,9 @@ function collectOverlayEntries(children: ReactNode, path = "root", entries: Maps
       const props = child.props as FlowLayerProps<AnyRecord>;
       entries.push({
         kind: "flow",
-        prefix: props.layerId ? `flow:${props.layerId}` : resolveLayerPrefix("flow", child.key, childPath),
+        prefix: props.layerId
+          ? `flow:${props.layerId}`
+          : resolveLayerPrefix("flow", child.key, childPath),
         props,
       });
       return;
@@ -647,14 +669,6 @@ function createOverlaySnapshot(
   heatRuntime: MapsHeatLayerRuntime | null,
   requestHeatRender: () => void,
 ): MapsOverlaySnapshot {
-  const activeGeoJsonPrefixes = new Set<string>();
-  for (const entry of entries) {
-    if (entry.kind === "geojson") activeGeoJsonPrefixes.add(entry.prefix);
-  }
-  for (const prefix of geoJsonRuntimes.keys()) {
-    if (!activeGeoJsonPrefixes.has(prefix)) geoJsonRuntimes.delete(prefix);
-  }
-
   const mutable: MutableMapsOverlaySnapshot = {
     frame: { kind: "vector", primitives: [] },
     hoveredPrimitiveIds: new Set(),
@@ -784,8 +798,74 @@ function appendGeoJsonLayer(
   prefix: string,
   runtimes: Map<string, MapsGeoJsonRuntime>,
 ) {
-  const features = resolveGeoJsonLayerFeatures(props, prefix, runtimes);
-  const frame = createGeoJsonVectorRenderFrame(features, {
+  const runtime = resolveGeoJsonLayerRuntime(props, prefix, runtimes);
+  const frame = resolveGeoJsonLayerFrame(props, prefix, runtime);
+
+  for (const primitive of frame.primitives) {
+    const feature = primitive.feature;
+    const resolveFeatureId = () => primitive.featureId;
+    const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, resolveFeatureId);
+    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, resolveFeatureId);
+    const interaction = primitive.interactive
+      ? createFeatureInteraction(
+          `${prefix}|${primitive.featureId}`,
+          feature,
+          primitive.featureId,
+          resolveGeoJsonLayerAnchor(runtime, feature),
+          props,
+          surface,
+        )
+      : null;
+
+    appendPrimitive(snapshot, primitive, interaction, hovered, selected);
+  }
+}
+
+function resolveGeoJsonLayerRuntime(
+  props: GeoJsonLayerProps<AnyRecord>,
+  prefix: string,
+  runtimes: Map<string, MapsGeoJsonRuntime>,
+): MapsGeoJsonRuntime {
+  const current = runtimes.get(prefix);
+  if (current?.featureCollection === props.featureCollection) return current;
+
+  const runtime: MapsGeoJsonRuntime = {
+    featureCollection: props.featureCollection,
+    features: createGeoJsonLayerFeatures(props.featureCollection),
+    anchors: new WeakMap(),
+  };
+  runtimes.set(prefix, runtime);
+  return runtime;
+}
+
+function resolveGeoJsonLayerFrame(
+  props: GeoJsonLayerProps<AnyRecord>,
+  prefix: string,
+  runtime: MapsGeoJsonRuntime,
+) {
+  // These are all inputs consumed by createGeoJsonVectorRenderFrame. Hover,
+  // selection, tooltip positions and event callbacks do not change geometry.
+  const inputs = [
+    props.getFeatureId,
+    props.getFeatureStyle,
+    props.isFeatureInteractive,
+    props.lineColor,
+    props.lineOpacity,
+    props.lineWidth,
+    props.pointColor,
+    props.pointRadius,
+    props.polygonFillColor,
+    props.polygonFillOpacity,
+    props.polygonStrokeColor,
+    props.polygonStrokeWidth,
+  ];
+  if (
+    runtime.frame &&
+    inputs.every((value, index) => Object.is(value, runtime.frameInputs?.[index]))
+  ) {
+    return runtime.frame;
+  }
+  const frame = createGeoJsonVectorRenderFrame(runtime.features, {
     getFeatureId: props.getFeatureId,
     getFeatureStyle: props.getFeatureStyle,
     isFeatureInteractive: props.isFeatureInteractive,
@@ -802,41 +882,20 @@ function appendGeoJsonLayer(
       polygonStrokeWidth: props.polygonStrokeWidth,
     }),
   });
-
-  for (const primitive of frame.primitives) {
-    const feature = primitive.feature;
-    const resolveFeatureId = () => primitive.featureId;
-    const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, resolveFeatureId);
-    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, resolveFeatureId);
-    const interaction = primitive.interactive
-      ? createFeatureInteraction(
-          `${prefix}|${primitive.featureId}`,
-          feature,
-          primitive.featureId,
-          getGeometryCenter(feature.geometry),
-          props,
-          surface,
-        )
-      : null;
-
-    appendPrimitive(snapshot, primitive, interaction, hovered, selected);
-  }
+  runtime.frameInputs = inputs;
+  runtime.frame = frame;
+  return frame;
 }
 
-function resolveGeoJsonLayerFeatures(
-  props: GeoJsonLayerProps<AnyRecord>,
-  prefix: string,
-  runtimes: Map<string, MapsGeoJsonRuntime>,
+function resolveGeoJsonLayerAnchor(
+  runtime: MapsGeoJsonRuntime,
+  feature: GeoJsonLayerFeature<AnyRecord>,
 ) {
-  const current = runtimes.get(prefix);
-  if (current?.featureCollection === props.featureCollection) return current.features;
-
-  const features = createGeoJsonLayerFeatures(props.featureCollection);
-  runtimes.set(prefix, {
-    featureCollection: props.featureCollection,
-    features,
-  });
-  return features;
+  const cached = runtime.anchors.get(feature);
+  if (cached) return cached;
+  const anchor = getGeometryCenter(feature.geometry);
+  runtime.anchors.set(feature, anchor);
+  return anchor;
 }
 
 function appendClusterLayer(
@@ -855,7 +914,11 @@ function appendClusterLayer(
   for (const primitive of frame.primitives) {
     const feature = primitive.feature;
     const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, props.getFeatureId);
-    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, props.getFeatureId);
+    const selected = surface.isFeatureSelected(
+      feature,
+      props.selectedFeatureId,
+      props.getFeatureId,
+    );
     const interaction = createClusterFeatureInteraction(
       `${prefix}|${primitive.featureId}`,
       feature,
@@ -887,16 +950,20 @@ function appendFlowLayer(
 
   for (const feature of features) {
     const featureId = props.getFeatureId?.(feature) || feature.flow.id;
-    const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, props.getFeatureId);
+    const selected = surface.isFeatureSelected(
+      feature,
+      props.selectedFeatureId,
+      props.getFeatureId,
+    );
     const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, props.getFeatureId);
     const hasActiveFlow = Boolean(props.selectedFeatureId) || hasHoveredFlow;
     const active = selected || hovered;
     const opacity = active
       ? hovered
-        ? props.hoveredFlowOpacity ?? 0.95
-        : props.selectedFlowOpacity ?? 0.95
+        ? (props.hoveredFlowOpacity ?? 0.95)
+        : (props.selectedFlowOpacity ?? 0.95)
       : hasActiveFlow
-        ? props.inactiveFlowOpacity ?? 0.22
+        ? (props.inactiveFlowOpacity ?? 0.22)
         : 0.72;
     const color = props.getFlowColor?.(feature) ?? props.flowColor ?? "#0f766e";
     const coordinates = createFlowPathCoordinates(feature, props.flowShape ?? "straight");
@@ -922,7 +989,11 @@ function appendFlowLayer(
 
     appendPrimitive(snapshot, line, interaction, false, false);
 
-    if (props.showDirection && (props.directionMarker ?? "arrow") !== "none" && coordinates.length >= 2) {
+    if (
+      props.showDirection &&
+      (props.directionMarker ?? "arrow") !== "none" &&
+      coordinates.length >= 2
+    ) {
       const marker: MapRenderDirectionMarker<FlowLayerFeature<AnyRecord>> = {
         anchor: coordinates[coordinates.length - 1]!,
         color,
@@ -1212,6 +1283,6 @@ function assertNoUnsupportedPointDrag(
 
 function throwUnsupportedMapsLayer(): never {
   throw new Error(
-    'The direct-feature Maps runtime supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer, plus HeatLayer, through Maps-owned semantic adapters. Other map layer types remain explicitly MapLibre-backed.',
+    "The direct-feature Maps runtime supports PointLayer, GeoJsonLayer, FlowLayer, and ClusterLayer, plus HeatLayer, through Maps-owned semantic adapters. Other map layer types remain explicitly MapLibre-backed.",
   );
 }

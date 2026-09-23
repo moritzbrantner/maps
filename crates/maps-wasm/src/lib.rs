@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 use maps_core::{
     AggregatedMapFeature, IndexedMapPoint, MapPoint,
     PointAggregationIndex as CorePointAggregationIndex, PointAggregationOptions, TileId,
-    ViewportAggregation, ViewportAggregationQuery, decode_shortbread_basemap_lines,
-    get_bounds_from_points, normalize_map_points,
+    ViewportAggregation, ViewportAggregationQuery, decode_shortbread_basemap,
+    decode_shortbread_basemap_lines, get_bounds_from_points, normalize_map_points,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -274,6 +274,19 @@ pub fn decode_shortbread_basemap_lines_for_js(
     let tile = TileId::new(z, x, y).ok_or_else(|| JsValue::from_str("invalid vector tile id"))?;
     let lines = decode_shortbread_basemap_lines(&bytes, tile).map_err(to_js_error)?;
     encode_json_compatible(&lines)
+}
+
+/// Decodes selected Shortbread linework and polygons with their interior rings.
+#[wasm_bindgen(js_name = decodeShortbreadBasemap)]
+pub fn decode_shortbread_basemap_for_js(
+    bytes: Vec<u8>,
+    z: u8,
+    x: u32,
+    y: u32,
+) -> Result<JsValue, JsValue> {
+    let tile = TileId::new(z, x, y).ok_or_else(|| JsValue::from_str("invalid vector tile id"))?;
+    let basemap = decode_shortbread_basemap(&bytes, tile).map_err(to_js_error)?;
+    encode_json_compatible(&basemap)
 }
 
 /// Normalizes native map points using the Maps-owned Rust contract.

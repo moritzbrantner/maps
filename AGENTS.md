@@ -40,14 +40,14 @@ Before adding a new engine subsystem or generic helper layer, classify the work 
 4. **Maps-specific renderer/backend detail** — keep it local, but do not let it acquire semantic authority.
 5. **Speculative reuse only** — keep it local and narrow until there is a concrete second consumer; do not create a framework for hypothetical reuse.
 
-For camera/matrix, generic spatial, rendering-infrastructure, asset-pipeline, or cross-project frame work, inspect the relevant existing repositories before creating local equivalents. In particular:
+For genuinely 3D camera/spatial work, 2D rendering experiments, asset-pipeline work, or cross-project infrastructure, inspect the relevant existing repositories before creating local equivalents. In particular:
 
 - use `moenarch-geo-core` / `geo-analysis` for generic geospatial geometry and algorithms while Maps retains map-product semantics;
-- reuse or deliberately extend the renderer-independent `3d-lab` Rust foundations (`three-d-core`, `three-d-animation`, `three-d-camera`, `three-d-spatial`) for generic vectors, transforms, view/projection math and spatial interoperability;
+- reuse or deliberately extend the `3d-lab` Rust foundations (`three-d-core`, `three-d-animation`, `three-d-camera`, `three-d-spatial`) only for genuinely 3D vectors, transforms, view/projection math and spatial interoperability after Maps has established its own numerically safe local render frame; do not route ordinary flat-map camera/projection or 2D renderer ownership through `3d-lab`;
 - use `asset-tooling` for reproducible generated/static asset production and provenance rather than creating a Maps-specific asset pipeline;
-- use `viz-engine` only where a genuinely renderer-agnostic data/frame contract already fits; it must not own geographic camera, tile, style, label or interaction semantics.
+- treat `viz-engine` as a Rust/WASM 2D rendering decision lab: consume benchmark findings, backend experiments and small proven techniques, not its `BenchmarkWorkload`/display-list model as a Maps runtime contract. Any representative Maps adapter into the lab is disposable or Maps-owned; `viz-engine` must not own geographic camera, tile, style, label, interaction or map render-planning semantics.
 
-Do not add a Maps-local general-purpose `Vec3`, `Mat4`, perspective-camera abstraction, scene graph, transform hierarchy or equivalent simply to finish a map slice when the generic primitive already exists elsewhere. If the shared primitive is almost suitable, improve the shared boundary and keep only a narrow Maps adapter.
+Do not add a Maps-local general-purpose `Vec3`, `Mat4`, perspective-camera abstraction, scene graph, transform hierarchy or equivalent merely to finish a genuinely 3D map slice when the generic primitive already exists elsewhere. Flat-map camera/projection and map-specific render planning remain Maps concerns; sharing is not a goal by itself. If a genuinely 3D shared primitive is almost suitable, improve the shared boundary and keep only a narrow Maps adapter.
 
 Precision remains a Maps concern at the geographic boundary. Longitude/latitude, Mercator/world calculations and other authoritative geographic state keep the precision required by Maps. Shared `f32` camera/matrix primitives are suitable only after Maps has converted to a numerically safe local render frame; they must not replace authoritative `f64` geographic state.
 

@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { createCanvasMapScene, hitTestCanvasMapScene } from "./canvas-map-renderer";
+import {
+  createCanvasMapScene,
+  createCanvasMapSceneProjector,
+  hitTestCanvasMapScene,
+} from "./canvas-map-renderer";
 import type {
   MapRenderCircle,
   MapRenderLine,
@@ -164,3 +168,108 @@ function polygon(featureId: string, rings: [number, number][][]): MapRenderPolyg
     strokeWidth: 2,
   };
 }
+
+describe("retained Canvas projection", () => {
+  it("reuses immutable primitives while preserving holes, ordering and picking", () => {
+    const project = vi.fn(([x, y]: [number, number]) => ({ x, y }));
+    const prepare = createCanvasMapSceneProjector();
+    const area = polygon("area", [
+      [
+        [0, 0],
+        [40, 0],
+        [40, 40],
+        [0, 40],
+        [0, 0],
+      ],
+      [
+        [10, 10],
+        [30, 10],
+        [30, 30],
+        [10, 30],
+        [10, 10],
+      ],
+    ]);
+    const lower = circle("lower", [4, 4]);
+    const upper = circle("upper", [4, 4]);
+    const frame: MapVectorRenderFrame = { kind: "vector", primitives: [area, lower, upper] };
+    const size = { width: 100, height: 100 };
+    const initial = prepare(frame, project, size);
+    const calls = project.mock.calls.length;
+    expect(prepare(frame, project, size)).toEqual(initial);
+    expect(project).toHaveBeenCalledTimes(calls);
+    expect(hitTestCanvasMapScene(initial, { x: 20, y: 20 })).toBeNull();
+    expect(hitTestCanvasMapScene(initial, { x: 4, y: 4 })?.renderPrimitive.featureId).toBe("upper");
+    const reordered = prepare({ ...frame, primitives: [area, upper, lower] }, project, size);
+    expect(project).toHaveBeenCalledTimes(calls);
+    expect(reordered.primitives[1]).toBe(initial.primitives[2]);
+    expect(hitTestCanvasMapScene(reordered, { x: 4, y: 4 })?.renderPrimitive.featureId).toBe(
+      "lower",
+    );
+    expect(reordered).toEqual(
+      createCanvasMapScene(
+        { ...frame, primitives: [area, upper, lower] },
+        ([x, y]) => ({ x, y }),
+        size,
+      ),
+    );
+  });
+
+  it("invalidates changed primitives, dimensions and camera callbacks independently", () => {
+    const prepare = createCanvasMapSceneProjector();
+    const project = vi.fn(([x, y]: [number, number]) => ({ x, y }));
+    const frame: MapVectorRenderFrame = {
+      kind: "vector",
+      primitives: [circle("a", [1, 2]), circle("b", [3, 4])],
+    };
+    const size = { width: 100, height: 100 };
+    const initial = prepare(frame, project, size);
+    const changed: MapVectorRenderFrame = {
+      ...frame,
+      primitives: [frame.primitives[0]!, circle("b", [8, 9])],
+    };
+    const updated = prepare(changed, project, size);
+    expect(project).toHaveBeenCalledTimes(3);
+    expect(updated.primitives[0]).toBe(initial.primitives[0]);
+    expect(updated.primitives[1]).toMatchObject({ x: 8, y: 9 });
+    prepare(changed, project, { ...size, width: 200 });
+    expect(project).toHaveBeenCalledTimes(5);
+    prepare(changed, project, { width: 200, height: 150 });
+    expect(project).toHaveBeenCalledTimes(7);
+    const moved = vi.fn(([x, y]: [number, number]) => ({ x: x + 10, y }));
+    const result = prepare(changed, moved, size);
+    expect(moved).toHaveBeenCalledTimes(2);
+    expect(result.primitives[0]).toMatchObject({ x: 11, y: 2 });
+  });
+
+  it("caches whole-primitive rejection and retries it after a camera change", () => {
+    const prepare = createCanvasMapSceneProjector();
+    const invalid = vi.fn(([x, y]: [number, number]) => (x === 99 ? null : { x, y }));
+    const frame: MapVectorRenderFrame = {
+      kind: "vector",
+      primitives: [
+        line("line", [
+          [1, 2],
+          [99, 3],
+        ]),
+        polygon("polygon", [
+          [
+            [0, 0],
+            [20, 0],
+            [20, 20],
+          ],
+          [
+            [3, 3],
+            [99, 3],
+            [3, 5],
+          ],
+        ]),
+      ],
+    };
+    const size = { width: 100, height: 100 };
+    expect(prepare(frame, invalid, size).primitives).toEqual([]);
+    const calls = invalid.mock.calls.length;
+    expect(prepare(frame, invalid, size).primitives).toEqual([]);
+    expect(invalid).toHaveBeenCalledTimes(calls);
+    expect(prepare(frame, ([x, y]) => ({ x, y }), size).primitives).toHaveLength(2);
+  });
+});
