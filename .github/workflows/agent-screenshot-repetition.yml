@@ -1,4 +1,4 @@
-name: Validate WebGPU screenshot capture
+name: Validate deterministic WebGPU acceptance
 on:
   push:
     branches: [diagnostics/maps-screenshot-stall]
@@ -34,7 +34,7 @@ jobs:
           run-id: 35853859543
           artifact-ids: 10746089047
           path: .artifacts/package
-      - name: Change only screenshot capture, preserving all renderer assertions
+      - name: Isolate the raster fixture from the unrelated live comparison map
         run: |
           mkdir -p public
           cp -R .artifacts/package/public/wasm public/wasm
@@ -42,28 +42,41 @@ jobs:
           from pathlib import Path
           p = Path('e2e/maps-wgpu-stroke-runtime.spec.ts')
           text = p.read_text()
-          text = text.replace('  const page = await browser.newPage();', '  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });', 1)
+          old = '    const acceptedHeaders: string[] = [];'
+          assert text.count(old) == 1
+          text = text.replace(old, '''    const unexpectedVectorRequests: string[] = [];
+              await page.route("https://vector.openstreetmap.org/**", async (route) => {
+                unexpectedVectorRequests.push(route.request().url());
+                await route.abort();
+              });
+              const acceptedHeaders: string[] = [];''', 1)
+          old = '      "/?acceptance=maps-runtime-raster-fetch",'
+          assert text.count(old) == 1
+          text = text.replace(old, '''      // Keep the unrelated comparison map below this fixture off live data.
+                "/?e2e=1&acceptance=maps-runtime-raster-fetch",''', 1)
           old = '    await map.screenshot({ path: testInfo.outputPath("mixed-point-flow-wgpu.png") });'
           assert text.count(old) == 1
-          text = text.replace(old, '''    // Capture the already-visible viewport without the element screenshot's
-              // additional scroll/stability cycle over the software WebGPU surface.
-              const clip = await map.boundingBox();
-              expect(clip).not.toBeNull();
-              expect(clip!.x).toBeGreaterThanOrEqual(0);
-              expect(clip!.y).toBeGreaterThanOrEqual(0);
-              expect(clip!.x + clip!.width).toBeLessThanOrEqual(1440);
-              expect(clip!.y + clip!.height).toBeLessThanOrEqual(1000);
-              await page.screenshot({
-                clip: clip!,
-                path: testInfo.outputPath("mixed-point-flow-wgpu.png"),
-              });''', 1)
+          text = text.replace(old, '''    expect(unexpectedVectorRequests).toEqual([]);
+              await map.screenshot({ path: testInfo.outputPath("mixed-point-flow-wgpu.png") });
+              expect(unexpectedVectorRequests).toEqual([]);''', 1)
           p.write_text(text)
           PY
           bunx oxfmt e2e/maps-wgpu-stroke-runtime.spec.ts
           bun run check-types
           bun run lint
           git diff --check
-          git diff --stat
+      - name: Prove the network guard fails on the original URL
+        run: |
+          cp e2e/maps-wgpu-stroke-runtime.spec.ts /tmp/deterministic-spec.ts
+          sed -i 's/?e2e=1\&acceptance=maps-runtime-raster-fetch/?acceptance=maps-runtime-raster-fetch/' e2e/maps-wgpu-stroke-runtime.spec.ts
+          set +e
+          bunx playwright test e2e/maps-wgpu-stroke-runtime.spec.ts --grep 'mixed point' --project=chromium --workers=1 --retries=0 --reporter=line > /tmp/baseline.log 2>&1
+          status=$?
+          set -e
+          cp /tmp/deterministic-spec.ts e2e/maps-wgpu-stroke-runtime.spec.ts
+          test "$status" -eq 1
+          grep 'unexpectedVectorRequests' /tmp/baseline.log
+          grep 'vector.openstreetmap.org/shortbread_v1/' /tmp/baseline.log
       - name: Repeat the real GPU test ten times without retries
         run: bunx playwright test e2e/maps-wgpu-stroke-runtime.spec.ts --grep 'mixed point' --project=chromium --repeat-each=10 --workers=1 --retries=0 --reporter=line
       - name: Publish tested source blob
