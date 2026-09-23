@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
 import * as geometry from "./geojson-rendering";
 import { MapsOverlayLayers, type MapsOverlayLayersController } from "./maps-overlay-layers";
+import { PointLayer } from "./point-layer";
 import type { CanvasMapScene } from "./canvas-map-renderer";
 import type { MapScreenInteractionState } from "./map-screen-render-frame";
 
@@ -145,6 +146,30 @@ describe("retained Maps overlay geometry", () => {
     const replacement = lineCollection(12);
     mounted.rerender(view({ featureCollection: replacement }));
     expect(project.mock.calls.length).toBe(42);
+  });
+
+  it("releases retained native point preparation when a layer is removed", () => {
+    const project = vi.fn(([x, y]: [number, number]) => ({ x, y }));
+    const surface = createSurface();
+    const filterPoint = vi.fn(() => true);
+    const points = [{ id: "native", longitude: 100, latitude: 40 }];
+    const view = (visible: boolean) => (
+      <MapsOverlayLayers
+        project={project}
+        getViewport={getViewport}
+        unproject={unproject}
+        surface={surface}
+      >
+        {visible && <PointLayer points={points} filterPoint={filterPoint} />}
+      </MapsOverlayLayers>
+    );
+
+    const mounted = render(view(true));
+    expect(filterPoint).toHaveBeenCalledOnce();
+    mounted.rerender(view(false));
+    filterPoint.mockClear();
+    mounted.rerender(view(true));
+    expect(filterPoint).toHaveBeenCalledOnce();
   });
 
   it("keeps click handlers current and releases removed layers", () => {
