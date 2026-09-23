@@ -11,6 +11,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -88,6 +89,8 @@ export type MapsOverlayPick = {
 };
 
 export type MapsOverlayLayersController = {
+  /** Refresh screen coordinates and picking against the current Rust camera. */
+  redraw(): void;
   clearHover(): void;
   handleClickAtClientPoint(clientX: number, clientY: number): boolean;
   handleContextMenuAtClientPoint(clientX: number, clientY: number): boolean;
@@ -225,6 +228,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<CanvasMapScene<unknown> | null>(null);
     const [projectScene] = useState(() => createCanvasMapSceneProjector());
+    const projectionRevisionRef = useRef(0);
+    const drawRef = useRef<(() => void) | null>(null);
+    const clearApplicationFrameRef = useRef<(() => void) | null>(null);
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
     const applicationFrameVisibleRef = useRef(false);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
@@ -275,7 +281,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       [requestHeatRender],
     );
 
-    useEffect(() => {
+    useLayoutEffect(() => {
       const geoJsonRuntimes = geoJsonRuntimesRef.current;
       const activeGeoJsonPrefixes = new Set<string>();
       for (const entry of entries) {
@@ -370,6 +376,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     useImperativeHandle(
       ref,
       () => ({
+        redraw() {
+          projectionRevisionRef.current += 1;
+          drawRef.current?.();
+        },
         clearHover,
         handleClickAtClientPoint(clientX, clientY) {
           const hit = pickInternal(clientX, clientY);
@@ -407,9 +417,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       [],
     );
 
-    useEffect(() => {
+    useLayoutEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) {
+        clearApplicationFrameRef.current?.();
         sceneRef.current = null;
         renderedSnapshotRef.current = null;
         return;
@@ -423,6 +434,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         }
         applicationFrameVisibleRef.current = false;
       };
+      clearApplicationFrameRef.current = clearApplicationFrame;
 
       const draw = () => {
         const size = resizeCanvasBackingStore(canvas);
@@ -449,7 +461,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           heatRuntime,
           requestHeatRender,
         );
-        const scene = projectScene(snapshot.frame, project, size);
+        const scene = projectScene(snapshot.frame, project, size, projectionRevisionRef.current);
         const interaction: MapScreenInteractionState = {
           hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
           selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
@@ -502,6 +514,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       // A restored Canvas context has an empty backing store, even when neither
       // the camera nor the layer data changed while it was unavailable.
       canvas.addEventListener("contextrestored", draw);
+      drawRef.current = draw;
       draw();
 
       const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(draw);
@@ -509,7 +522,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       return () => {
         canvas.removeEventListener("contextrestored", draw);
         observer?.disconnect();
-        clearApplicationFrame();
+        drawRef.current = null;
       };
     }, [
       entries,
@@ -523,6 +536,13 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       surface,
       unproject,
     ]);
+
+    useLayoutEffect(() => {
+      return () => {
+        drawRef.current = null;
+        clearApplicationFrameRef.current?.();
+      };
+    }, []);
 
     useEffect(() => {
       return () => {

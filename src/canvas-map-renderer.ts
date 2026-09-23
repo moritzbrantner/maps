@@ -47,13 +47,15 @@ export function createCanvasMapScene<TFeature = unknown>(
 
 /**
  * Internal projector for immutable Maps-owned render primitives. A new camera
- * callback or viewport size invalidates screen coordinates, not source geometry.
+ * callback, explicit camera revision or viewport size invalidates screen coordinates,
+ * not source geometry. Camera presentation does not need a React render.
  * Weak keys do not retain primitives belonging to removed/replaced layers.
  */
 export function createCanvasMapSceneProjector<TFeature = unknown>() {
   let previousProject: MapRenderProject | undefined;
   let previousWidth: number | undefined;
   let previousHeight: number | undefined;
+  let previousRevision: number | undefined;
   let projected = new WeakMap<
     MapVectorRenderPrimitive<TFeature>,
     Array<CanvasMapScenePrimitive<TFeature>>
@@ -63,13 +65,16 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
     frame: MapVectorRenderFrame<TFeature>,
     project: MapRenderProject,
     size: { height: number; width: number },
+    projectionRevision = 0,
   ): CanvasMapScene<TFeature> => {
     if (
+      previousRevision !== projectionRevision ||
       previousProject !== project ||
       previousWidth !== size.width ||
       previousHeight !== size.height
     ) {
       projected = new WeakMap();
+      previousRevision = projectionRevision;
       previousProject = project;
       previousWidth = size.width;
       previousHeight = size.height;

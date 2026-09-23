@@ -110,6 +110,8 @@ export function MapsMapView({
     viewState,
   });
   const resolvedMaxZoom = normalizeMapMaxZoom(maxZoom);
+  const currentViewStateRef = useRef(currentViewState);
+  currentViewStateRef.current = currentViewState;
 
   const getFeatureId = useCallback((feature: unknown, getId?: (feature: never) => string) => {
     if (getId) {
@@ -183,17 +185,18 @@ export function MapsMapView({
 
   const setSurfaceViewState = useCallback(
     (next: MapViewState, reason: MapViewStateChangeReason = "programmatic") => {
+      const runtime = runtimeControllerRef.current;
+      const camera = runtime?.getViewState() ?? currentViewStateRef.current;
       const resolvedNext =
         reason === "cluster-expand"
           ? {
               ...next,
-              ...(currentViewState.bearing === undefined
+              ...(camera.bearing === undefined
                 ? {}
-                : { bearing: currentViewState.bearing }),
-              ...(currentViewState.pitch === undefined ? {} : { pitch: currentViewState.pitch }),
+                : { bearing: camera.bearing }),
+              ...(camera.pitch === undefined ? {} : { pitch: camera.pitch }),
             }
           : next;
-      const runtime = runtimeControllerRef.current;
 
       if (runtime) {
         runtime.setViewState(resolvedNext, reason);
@@ -202,35 +205,21 @@ export function MapsMapView({
 
       setViewState(resolvedNext, reason);
     },
-    [currentViewState.bearing, currentViewState.pitch, setViewState],
+    [setViewState],
   );
 
   const projectCoordinate = useCallback(
     (coordinates: [longitude: number, latitude: number]) => {
       return runtimeControllerRef.current?.project(coordinates) ?? null;
     },
-    [
-      currentViewState.center[0],
-      currentViewState.center[1],
-      currentViewState.zoom,
-      currentViewState.bearing,
-      currentViewState.pitch,
-      isReady,
-    ],
+    [isReady],
   );
 
   const unprojectCoordinate = useCallback(
     (x: number, y: number) => {
       return runtimeControllerRef.current?.unproject(x, y) ?? null;
     },
-    [
-      currentViewState.center[0],
-      currentViewState.center[1],
-      currentViewState.zoom,
-      currentViewState.bearing,
-      currentViewState.pitch,
-      isReady,
-    ],
+    [isReady],
   );
 
   const renderApplicationFrame = useCallback(
@@ -246,17 +235,10 @@ export function MapsMapView({
 
       return {
         bounds: runtime.getVisibleBounds(),
-        zoom: currentViewState.zoom,
+        zoom: runtime.getViewState().zoom,
       };
     },
-    [
-      currentViewState.center[0],
-      currentViewState.center[1],
-      currentViewState.zoom,
-      currentViewState.bearing,
-      currentViewState.pitch,
-      isReady,
-    ],
+    [isReady],
   );
 
   const handleMapContextMenu = useCallback(
@@ -312,7 +294,7 @@ export function MapsMapView({
         fitBoundsNow(getBoundsFromGeoJson(source as GeoJsonMapSource), options);
       },
       flyTo: flyToNow,
-      getViewState: () => currentViewState,
+      getViewState: () => runtimeControllerRef.current?.getViewState() ?? currentViewStateRef.current,
       getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
       setViewState: setSurfaceViewState,
     };
@@ -352,7 +334,7 @@ export function MapsMapView({
     viewState,
   ]);
 
-  const context = useMemo<MapSurfaceContextValue>(
+  const interactionSurface = useMemo<Omit<MapSurfaceContextValue, "viewState">>(
     () => ({
       closeFeaturePopup,
       display: "flat",
@@ -509,17 +491,20 @@ export function MapsMapView({
         }
       },
       setViewState: setSurfaceViewState,
-      viewState: currentViewState,
     }),
     [
       closeContextMenu,
       closeFeaturePopup,
-      currentViewState,
       getFeatureId,
       handleBackgroundClick,
       hovered,
       setSurfaceViewState,
     ],
+  );
+
+  const context = useMemo<MapSurfaceContextValue>(
+    () => ({ ...interactionSurface, viewState: currentViewState }),
+    [interactionSurface, currentViewState],
   );
 
   if (runtimeError) {
@@ -630,6 +615,7 @@ export function MapsMapView({
           mapStyle={resolvedMapStyle}
           maxBounds={maxBounds}
           maxZoom={resolvedMaxZoom}
+          onCameraFrame={() => overlayControllerRef.current?.redraw()}
           onContextMenu={handleMapContextMenu}
           onControllerReady={(controller) => {
             runtimeControllerRef.current = controller;
@@ -653,7 +639,7 @@ export function MapsMapView({
           getViewport={getViewportAggregationQuery}
           project={projectCoordinate}
           renderApplicationFrame={renderApplicationFrame}
-          surface={context}
+          surface={interactionSurface}
           unproject={unprojectCoordinate}
         >
           {mapChildren.layers}

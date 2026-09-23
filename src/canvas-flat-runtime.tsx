@@ -62,6 +62,7 @@ type MapsWgpuApplicationFrameFactory = (
 
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
+  getViewState(): MapViewState;
   getVisibleBounds(): MapBounds;
   getVisibleTiles(): MapsRasterTileId[];
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
@@ -77,6 +78,8 @@ type MapsCanvasFlatRuntimeProps = {
   mapStyle: RasterMapStyle;
   maxBounds?: MapBounds;
   maxZoom?: number;
+  /** Prepare Map Layers before presenting a changed Rust camera. */
+  onCameraFrame?: () => void;
   onContextMenu?: (context: {
     coordinates: [longitude: number, latitude: number];
     position: { x: number; y: number };
@@ -98,6 +101,7 @@ export function MapsCanvasFlatRuntime({
   mapStyle,
   maxBounds,
   maxZoom,
+  onCameraFrame,
   onContextMenu,
   onControllerReady,
   onError,
@@ -128,6 +132,7 @@ export function MapsCanvasFlatRuntime({
   const maxZoomRef = useRef(maxZoom);
   const viewStateRef = useRef(viewState);
   const onViewStateChangeRef = useRef(onViewStateChange);
+  const onCameraFrameRef = useRef(onCameraFrame);
   const onContextMenuRef = useRef(onContextMenu);
   const onControllerReadyRef = useRef(onControllerReady);
   const onErrorRef = useRef(onError);
@@ -140,15 +145,61 @@ export function MapsCanvasFlatRuntime({
   const kineticLastFrameTimeRef = useRef<number | null>(null);
   const kineticAnchorRef = useRef<ScreenPoint | null>(null);
   const viewStateEchoTrackerRef = useRef(createMapsViewStateEchoTracker());
+  const cameraFrameRef = useRef<number | null>(null);
+  const cameraReasonRef = useRef<MapViewStateChangeReason | null>(null);
+  const cameraCommandsRef = useRef<Array<() => void>>([]);
 
   sourceRef.current = source;
   maxZoomRef.current = maxZoom;
   viewStateRef.current = viewState;
   onViewStateChangeRef.current = onViewStateChange;
+  onCameraFrameRef.current = onCameraFrame;
   onContextMenuRef.current = onContextMenu;
   onControllerReadyRef.current = onControllerReady;
   onErrorRef.current = onError;
   onReadyRef.current = onReady;
+
+  function cancelCameraFrame(preserveCommands = false) {
+    if (cameraFrameRef.current !== null) cancelAnimationFrame(cameraFrameRef.current);
+    cameraFrameRef.current = null;
+    if (!preserveCommands) {
+      cameraReasonRef.current = null;
+      cameraCommandsRef.current = [];
+    }
+  }
+
+  function applyCameraCommands() {
+    const commands = cameraCommandsRef.current;
+    cameraCommandsRef.current = [];
+    for (const command of commands) {
+      try {
+        command();
+      } catch (error) {
+        onErrorRef.current?.(error);
+      }
+    }
+  }
+
+  function scheduleCameraFrame(reason: MapViewStateChangeReason, command?: () => void) {
+    // Queue commands, never a second camera. Until this frame runs, data/hover
+    // redraws still project against the camera used by the retained base frame.
+    if (command) cameraCommandsRef.current.push(command);
+    cameraReasonRef.current = reason;
+    if (cameraFrameRef.current !== null) return;
+    cameraFrameRef.current = requestAnimationFrame(() => {
+      cameraFrameRef.current = null;
+      const nextReason = cameraReasonRef.current;
+      cameraReasonRef.current = null;
+      const syncFrame = syncFrameRef.current;
+      if (!syncFrame || !nextReason) return;
+      try {
+        applyCameraCommands();
+        emitViewStateRef.current?.(syncFrame(), nextReason);
+      } catch (error) {
+        onErrorRef.current?.(error);
+      }
+    });
+  }
 
   function cancelKineticPan() {
     if (kineticFrameRef.current !== null) {
@@ -158,12 +209,19 @@ export function MapsCanvasFlatRuntime({
     kineticStateRef.current = null;
     kineticLastFrameTimeRef.current = null;
     kineticAnchorRef.current = null;
+    // A new gesture may interrupt inertia before its first tick drains the last
+    // drag commands. Return those commands to the normal presentation queue.
+    if (cameraCommandsRef.current.length > 0 && cameraFrameRef.current === null) {
+      scheduleCameraFrame(cameraReasonRef.current ?? "pan");
+    }
   }
 
   function startKineticPan(velocity: MapsPanVelocity, anchor: ScreenPoint) {
     cancelKineticPan();
     const initial = createMapsKineticPanState(velocity);
     if (!initial) return;
+    // The first kinetic frame drains the final drag commands before inertia.
+    cancelCameraFrame(true);
 
     kineticStateRef.current = initial;
     kineticLastFrameTimeRef.current = performance.now();
@@ -181,6 +239,9 @@ export function MapsCanvasFlatRuntime({
         return;
       }
 
+      const hadCommands = cameraCommandsRef.current.length > 0;
+      applyCameraCommands();
+      cameraReasonRef.current = null;
       const step = advanceMapsKineticPan(state, now - lastFrameTime);
       kineticStateRef.current = step.next;
       kineticLastFrameTimeRef.current = now;
@@ -203,6 +264,8 @@ export function MapsCanvasFlatRuntime({
           return;
         }
         kineticAnchorRef.current = currentAnchor;
+      }
+      if (hadCommands || step.deltaX !== 0 || step.deltaY !== 0) {
         emitViewStateRef.current?.(syncFrame(), "pan");
       }
 
@@ -234,8 +297,10 @@ export function MapsCanvasFlatRuntime({
       const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
 
       try {
-        runtime.zoomAbout(-event.deltaY * 0.0025, position.x, position.y, 0, effectiveMaxZoom);
-        emitViewStateRef.current?.(syncFrame(), "zoom");
+        const deltaZoom = -event.deltaY * 0.0025;
+        scheduleCameraFrame("zoom", () => {
+          runtime.zoomAbout(deltaZoom, position.x, position.y, 0, effectiveMaxZoom);
+        });
       } catch (error) {
         onErrorRef.current?.(error);
       }
@@ -318,6 +383,7 @@ export function MapsCanvasFlatRuntime({
         source: () => sourceRef.current,
         onError: (error) => onErrorRef.current?.(error),
         onRendererFailure: activateCanvasFallback,
+        onCameraFrame: () => onCameraFrameRef.current?.(),
       });
       const syncFrame = frameSynchronizer.syncFrame;
       disposeFrameSynchronizer = frameSynchronizer.dispose;
@@ -341,10 +407,14 @@ export function MapsCanvasFlatRuntime({
       const controller: MapsCanvasFlatRuntimeController = {
         fitBounds(bounds, options = {}) {
           cancelKineticPan();
+          cancelCameraFrame();
           const effectiveMaxZoom =
             options.maxZoom ?? normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
           runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
           emitViewState(syncFrame(), options.reason ?? "fit-bounds");
+        },
+        getViewState() {
+          return frameSynchronizer.getViewState();
         },
         getVisibleBounds() {
           const bounds = frameSynchronizer.getVisibleBounds();
@@ -362,6 +432,7 @@ export function MapsCanvasFlatRuntime({
         },
         setViewState(next, reason = "programmatic") {
           cancelKineticPan();
+          cancelCameraFrame();
           runtime.setViewState(next);
           emitViewState(syncFrame(), reason);
         },
@@ -372,6 +443,7 @@ export function MapsCanvasFlatRuntime({
 
       resizeObserver = new ResizeObserver(() => {
         cancelKineticPan();
+        cancelCameraFrame();
         const nextSize = getCanvasCssSize(canvas);
         resizeCanvasBackingStore(canvas);
         resizeCanvasBackingStore(fallbackCanvas);
@@ -400,6 +472,7 @@ export function MapsCanvasFlatRuntime({
       resizeObserver?.disconnect();
       disposeFrameSynchronizer?.();
       cancelKineticPan();
+      cancelCameraFrame();
       onControllerReadyRef.current?.(null);
       syncFrameRef.current = null;
       emitViewStateRef.current = null;
@@ -429,6 +502,7 @@ export function MapsCanvasFlatRuntime({
 
     viewStateEchoTrackerRef.current.clear();
     cancelKineticPan();
+    cancelCameraFrame();
     runtime.setViewState(viewState);
     const frame = syncFrame();
     if (!areMapsViewStatesEqual(frameViewState(frame), viewState)) {
@@ -496,20 +570,22 @@ export function MapsCanvasFlatRuntime({
                   event.timeStamp - previousTime,
                 );
               }
-              runtime.panBetween(delta.previousX, delta.previousY, delta.x, delta.y);
-              emitViewStateRef.current?.(syncFrame(), "pan");
+              scheduleCameraFrame("pan", () => {
+                runtime.panBetween(delta.previousX, delta.previousY, delta.x, delta.y);
+              });
               return;
             }
 
             velocityTrackerRef.current.clear();
-            if (delta.deltaX !== 0 || delta.deltaY !== 0) {
-              runtime.panBetween(delta.previousX, delta.previousY, delta.x, delta.y);
-            }
-            if (delta.deltaZoom !== 0) {
-              const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
-              runtime.zoomAbout(delta.deltaZoom, delta.x, delta.y, 0, effectiveMaxZoom);
-            }
-            emitViewStateRef.current?.(syncFrame(), delta.deltaZoom === 0 ? "pan" : "zoom");
+            const effectiveMaxZoom = normalizeMapMaxZoom(maxZoomRef.current) ?? MAX_MAP_ZOOM;
+            scheduleCameraFrame(delta.deltaZoom === 0 ? "pan" : "zoom", () => {
+              if (delta.deltaX !== 0 || delta.deltaY !== 0) {
+                runtime.panBetween(delta.previousX, delta.previousY, delta.x, delta.y);
+              }
+              if (delta.deltaZoom !== 0) {
+                runtime.zoomAbout(delta.deltaZoom, delta.x, delta.y, 0, effectiveMaxZoom);
+              }
+            });
           } catch (error) {
             velocityTrackerRef.current.clear();
             onErrorRef.current?.(error);
@@ -569,6 +645,7 @@ function createFrameSynchronizer({
   source,
   onError,
   onRendererFailure,
+  onCameraFrame,
 }: {
   canvas: HTMLCanvasElement;
   fallbackCanvas: HTMLCanvasElement;
@@ -580,12 +657,14 @@ function createFrameSynchronizer({
   source: () => ReturnType<typeof resolveTileLayerOptions>;
   onError: (error: unknown) => void;
   onRendererFailure: () => void;
+  onCameraFrame: () => void;
 }) {
   let disposed = false;
   let rendererRetryFrame: number | null = null;
   let deviceLossMonitorTimer: number | null = null;
   let lastFrame: MapsFlatRasterFrame | null = null;
   let applicationFrame: MapsWgpuApplicationFrame | null = null;
+  let preparingCameraFrame = false;
 
   function cancelRendererRetry() {
     if (rendererRetryFrame !== null) {
@@ -635,7 +714,10 @@ function createFrameSynchronizer({
   function failRenderer() {
     cancelRendererRetry();
     cancelDeviceLossMonitor();
+    if (!renderer()) return;
     onRendererFailure();
+    // Device loss also invalidates the layer backend, even on an idle camera.
+    prepareCameraLayers();
   }
 
   startDeviceLossMonitor();
@@ -643,6 +725,30 @@ function createFrameSynchronizer({
 
   function restoreCanvasFrame() {
     if (lastFrame) renderFrame(lastFrame);
+  }
+
+  function prepareCameraLayers() {
+    preparingCameraFrame = true;
+    try {
+      onCameraFrame();
+    } finally {
+      preparingCameraFrame = false;
+    }
+  }
+
+  function presentFrame(frame: MapsFlatRasterFrame) {
+    const previous = lastFrame?.camera;
+    const camera = frame.camera;
+    const cameraChanged = !previous ||
+      previous.width !== camera.width || previous.height !== camera.height ||
+      previous.center[0] !== camera.center[0] || previous.center[1] !== camera.center[1] ||
+      previous.zoom !== camera.zoom || previous.bearing !== camera.bearing ||
+      previous.pitch !== camera.pitch;
+    // Reads made by layer preparation must see this same Rust snapshot. Packing
+    // the application frame here must not recursively submit an older base frame.
+    lastFrame = frame;
+    if (cameraChanged) prepareCameraLayers();
+    renderFrame(frame);
   }
 
   function renderFrame(frame: MapsFlatRasterFrame) {
@@ -687,8 +793,10 @@ function createFrameSynchronizer({
 
     const next = packApplicationFrame(frame, interaction);
     applicationFrame = next;
-    if (lastFrame) renderFrame(lastFrame);
-    else syncFrame();
+    if (!preparingCameraFrame) {
+      if (lastFrame) renderFrame(lastFrame);
+      else syncFrame();
+    }
     return next !== null && renderer() !== null;
   }
 
@@ -718,11 +826,11 @@ function createFrameSynchronizer({
         for (const tile of frame.requests) runtime.markLoaded(tile);
         frame = runtime.frame();
       }
-      renderFrame(frame);
+      presentFrame(frame);
       return frame;
     }
 
-    renderFrame(frame);
+    presentFrame(frame);
 
     for (const tile of frame.requests) {
       if (loads.has(tile.key) || images.has(tile.key)) continue;
@@ -776,6 +884,9 @@ function createFrameSynchronizer({
       cancelDeviceLossMonitor();
       lastFrame = null;
       applicationFrame = null;
+    },
+    getViewState() {
+      return frameViewState(lastFrame ?? syncFrame());
     },
     getVisibleBounds() {
       return (lastFrame ?? syncFrame()).visibleBounds;

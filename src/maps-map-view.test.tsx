@@ -20,12 +20,14 @@ vi.mock("./canvas-flat-runtime", async () => {
       bounds: [number, number, number, number],
       options?: { maxZoom?: number; reason?: Reason },
     ) => void;
+    getViewState: () => ViewState;
     getVisibleBounds: () => [number, number, number, number];
     project: (coordinates: [number, number]) => { x: number; y: number };
     setViewState: (viewState: ViewState, reason?: Reason) => void;
     unproject: (x: number, y: number) => [number, number];
   };
   type Props = {
+    viewState: ViewState;
     maxBounds?: [number, number, number, number];
     onContextMenu?: (context: {
       coordinates: [number, number];
@@ -38,7 +40,9 @@ vi.mock("./canvas-flat-runtime", async () => {
 
   function MockMapsCanvasFlatRuntime(props: Props) {
     React.useEffect(() => {
+      let currentViewState = props.viewState;
       const controller: Controller = {
+        getViewState() { return currentViewState; },
         fitBounds(bounds, options = {}) {
           props.onViewStateChange(
             {
@@ -58,6 +62,7 @@ vi.mock("./canvas-flat-runtime", async () => {
           };
         },
         setViewState(next, reason = "programmatic") {
+          currentViewState = next;
           props.onViewStateChange(next, reason);
         },
         unproject() {
