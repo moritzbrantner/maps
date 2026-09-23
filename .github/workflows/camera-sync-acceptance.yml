@@ -1,51 +1,30 @@
-name: Camera synchronization acceptance
+name: Maps runtime ownership audit
 on:
   push:
     branches: [diagnostics/maps-camera-sync-20260923]
     paths: [.github/workflows/camera-sync-acceptance.yml]
 permissions:
   contents: read
-  actions: read
 jobs:
-  acceptance:
+  export:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: f6a7e10fb6a66c51c455ba9c5f5487f4b57360e8
+          ref: ea57e1d2258d3fb211b653b867e48d779b71ebee
           persist-credentials: false
-      - run: |
-          mkdir -p evidence/camera-sync
-          git rev-parse HEAD > evidence/camera-sync/source-commit.txt
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('e2e/maps-camera-presentation.spec.ts')
-          s=p.read_text().replace('const screenshot = await page.screenshot();', 'const screenshot = await map.screenshot();')
-          p.write_text(s)
-          PY
-          git diff -- e2e/maps-camera-presentation.spec.ts > evidence/camera-sync/exact-test-change.patch
-      - uses: oven-sh/setup-bun@v2
+      - name: Export source without credentials or dependencies
+        run: |
+          mkdir -p /tmp/maps-audit
+          git archive HEAD -o /tmp/maps-audit/source.tar
+          git rev-parse HEAD > /tmp/maps-audit/source-commit.txt
+          curl --fail --location --max-time 30 'https://moritzbrantner.github.io/coding-tooling/analysis.json/?repo=moritzbrantner%2Fmaps&view=agent&envelope=1' > /tmp/maps-audit/analysis.json || true
+      - uses: actions/upload-artifact@v4
         with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 35853859543
-          name: build-artifact-1b67fda8f10f-9124783074ab-35853859543-1
-          path: .
-      - run: bunx playwright install --with-deps chromium
-      - name: Require real geometry inside the map rather than page text
-        env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/camera-sync/report
-        run: bun run test:browser --project=chromium e2e/maps-camera-presentation.spec.ts --repeat-each=2 --output=evidence/camera-sync/results > evidence/camera-sync/browser.log 2>&1
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: maps-camera-synchronization-evidence
-          path: evidence/camera-sync
-          retention-days: 7
+          name: maps-audit-source
+          path: /tmp/maps-audit
+          retention-days: 1
