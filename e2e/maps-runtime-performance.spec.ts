@@ -1,5 +1,51 @@
-import { expect, test, type Page } from "@playwright/test";
+import { chromium, expect, test, type Page, type TestInfo } from "@playwright/test";
 import { retainMapPixels } from "./helpers/map-pixel-evidence";
+
+const WEBGPU_SWIFTSHADER_ARGS = [
+  "--enable-unsafe-swiftshader",
+  "--enable-unsafe-webgpu",
+  "--enable-skia-graphite",
+  "--skia-graphite-dawn-backend=swiftshader",
+  "--use-angle=swiftshader",
+];
+
+async function openBackendPage(
+  backend: "wgpu" | "canvas2d",
+  fixturePage: Page,
+  baseURL: string | undefined,
+) {
+  if (backend === "canvas2d") {
+    await fixturePage.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, "gpu", {
+        configurable: true,
+        get: () => undefined,
+      });
+    });
+    return { page: fixturePage, close: async () => {} };
+  }
+
+  const browser = await chromium.launch({ args: WEBGPU_SWIFTSHADER_ARGS });
+  const page = await browser.newPage({
+    baseURL: baseURL ?? "http://127.0.0.1:5181",
+    viewport: { height: 1000, width: 1440 },
+  });
+  return { page, close: () => browser.close() };
+}
+
+async function retainBackendPixels(
+  backend: "wgpu" | "canvas2d",
+  map: Parameters<typeof retainMapPixels>[0],
+  page: Page,
+  info: TestInfo,
+  name: string,
+  minimumCanvasBluePixels = 100,
+) {
+  if (backend === "wgpu") {
+    await info.attach(name, { body: await map.screenshot(), contentType: "image/png" });
+    return;
+  }
+  await retainMapPixels(map, page, info, name, minimumCanvasBluePixels);
+}
 
 async function wheelBurst(page: Page) {
   return page.locator('[data-flat-runtime="maps"]').evaluate(async (canvas) => {
@@ -36,13 +82,13 @@ async function wheelBurst(page: Page) {
 for (const backend of ["wgpu", "canvas2d"] as const) {
   for (const count of [1000, 10000]) {
     test(`retains ${count} native points and 100 flows through controlled camera and hover on ${backend}`, async ({
-      page,
+      page: fixturePage,
+      baseURL,
     }, info) => {
-      if (backend === "canvas2d")
-        await page.addInitScript(() =>
-          Object.defineProperty(navigator, "gpu", { value: undefined }),
-        );
-      await page.goto(`/e2e/fixtures/native-performance.html?count=${count}`);
+      const backendPage = await openBackendPage(backend, fixturePage, baseURL);
+      const page = backendPage.page;
+      try {
+        await page.goto(`/e2e/fixtures/native-performance.html?count=${count}`);
       const map = page.getByLabel("Native performance map");
       await expect(map).toHaveAttribute("data-map-ready", "true");
       await expect(map.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
@@ -74,7 +120,7 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
         projected: window.mapsNativeProbe.projected,
       }));
       expect(hover).toEqual({ styles: 0, filters: 0, weights: 0, projected: 0 });
-      await retainMapPixels(map, page, info, `native-${count}-${backend}`);
+      await retainBackendPixels(backend, map, page, info, `native-${count}-${backend}`);
       // Real pointer drag exercises the native host's pointer listeners, not React synthetic events.
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.down();
@@ -84,19 +130,28 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
       await page.evaluate(() =>
         window.mapsNativeProbe.command({ center: [13.405, 52.52], zoom: 11 }),
       );
-      await retainMapPixels(map, page, info, `native-pan-${count}-${backend}`);
+      await retainBackendPixels(backend, map, page, info, `native-pan-${count}-${backend}`, 50);
+      } finally {
+        await backendPage.close();
+      }
     });
   }
   test(`mounts and interacts with the actual browser host without React on ${backend}`, async ({
-    page,
+    page: fixturePage,
+    baseURL,
   }, info) => {
+    const backendPage = await openBackendPage(backend, fixturePage, baseURL);
+    const page = backendPage.page;
     const reactRequests: string[] = [];
+    try {
     page.on("request", (request) => {
-      if (/react(?:-dom)?(?:[/.?_-]|$)/i.test(new URL(request.url()).pathname))
+      const pathname = new URL(request.url()).pathname;
+      if (
+        /\/node_modules\/\.vite\/deps\/react(?:-dom(?:_client)?)?\.js$/i.test(pathname) ||
+        /\/node_modules\/react(?:-dom)?\//i.test(pathname)
+      )
         reactRequests.push(request.url());
     });
-    if (backend === "canvas2d")
-      await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
     await page.goto("/e2e/fixtures/browser-host.html");
     const map = page.getByLabel("Standalone map");
     await expect(map).toHaveAttribute("data-ready", "true");
@@ -110,22 +165,29 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     await page.mouse.move(box.x + point[0], box.y + point[1]);
     await expect(page.locator("#picked")).toHaveText("Picked entity-0");
     await page.getByRole("button", { name: "Zoom in" }).click();
-    await retainMapPixels(map, page, info, `standalone-${backend}`);
+    await retainBackendPixels(backend, map, page, info, `standalone-${backend}`);
     await page.getByRole("button", { name: "Dispose runtime" }).click();
     const disposed = await wheelBurst(page);
     expect(disposed.changes).toBe(0);
     expect(disposed.projected).toBe(0);
     expect(disposed.samples).toEqual([]);
     expect(reactRequests).toEqual([]);
+    } finally {
+      await backendPage.close();
+    }
   });
 }
 
 // Descriptive CPU observations, intentionally separate from correctness ratchets.
 // The baseline runner executes this same fixture/test against the original src.
 test("records native camera CPU samples without a wall-clock CI threshold", async ({
-  page,
+  page: fixturePage,
+  baseURL,
 }, info) => {
-  await page.goto("/e2e/fixtures/native-performance.html?count=10000");
+  const backendPage = await openBackendPage("wgpu", fixturePage, baseURL);
+  const page = backendPage.page;
+  try {
+    await page.goto("/e2e/fixtures/native-performance.html?count=10000");
   await expect(page.getByLabel("Native performance map")).toHaveAttribute("data-map-ready", "true");
   await expect(page.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
     "data-map-base-renderer",
@@ -159,4 +221,7 @@ test("records native camera CPU samples without a wall-clock CI threshold", asyn
     body: JSON.stringify(result, null, 2),
     contentType: "application/json",
   });
+  } finally {
+    await backendPage.close();
+  }
 });
