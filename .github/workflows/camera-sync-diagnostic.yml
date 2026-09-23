@@ -1,0 +1,33 @@
+name: Camera synchronization diagnostic workspace
+on:
+  push:
+    branches: [diagnostics/maps-camera-sync-20260923]
+    paths: [.github/workflows/camera-sync-diagnostic.yml]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 1b67fda8f10fee0aaeaf8cf5589ab9a6aca5181f
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Prepare offline regression workspace
+        run: |
+          mkdir -p /tmp/maps-camera-workspace
+          git archive HEAD | tar -x -C /tmp/maps-camera-workspace
+          cp -a node_modules /tmp/maps-camera-workspace/
+          mkdir /tmp/maps-camera-workspace/.tools
+          cp "$(command -v bun)" /tmp/maps-camera-workspace/.tools/bun
+          tar -C /tmp/maps-camera-workspace -czf /tmp/maps-camera-workspace.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maps-camera-workspace
+          path: /tmp/maps-camera-workspace.tar.gz
+          retention-days: 1
