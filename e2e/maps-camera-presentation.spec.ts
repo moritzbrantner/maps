@@ -55,6 +55,10 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
         samples: probe.samples,
       };
     });
+    await testInfo.attach("camera-work-counts", {
+      body: JSON.stringify(work, null, 2),
+      contentType: "application/json",
+    });
     expect(work.beforePaint).toEqual({ frames: 0, samples: 0, projected: 0 });
     // No-raster scheduling may drain synthetic tile requests; rendering and
     // projection counts are the deterministic hot-path acceptance boundary.
@@ -67,14 +71,16 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
       expect(sample.actual![1]).toBeCloseTo(sample.expected[1], 4);
     }
     const box = await map.boundingBox();
+    expect(box).not.toBeNull();
     const point = work.samples[0]!.expected;
+    // An offscreen feature is not a valid target for browser pointer input.
+    expect(point[0]).toBeGreaterThan(3);
+    expect(point[0]).toBeLessThan(box!.width - 3);
+    expect(point[1]).toBeGreaterThan(3);
+    expect(point[1]).toBeLessThan(box!.height - 3);
     await page.mouse.move(box!.x + point[0], box!.y + point[1]);
     await expect(page.getByText("Picked entity-0", { exact: true })).toBeVisible();
     await map.screenshot({ path: testInfo.outputPath(`camera-alignment-${backend}.png`) });
     expect(external).toEqual([]);
-    await testInfo.attach("camera-work-counts", {
-      body: JSON.stringify(work, null, 2),
-      contentType: "application/json",
-    });
   });
 }
