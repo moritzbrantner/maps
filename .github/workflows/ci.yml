@@ -52,7 +52,7 @@ jobs:
         run: cargo check -p maps-wasm --target wasm32-unknown-unknown --locked
 
   build-package:
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Build or reuse browser package
     permissions:
       actions: read
