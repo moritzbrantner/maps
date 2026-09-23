@@ -326,7 +326,9 @@ function hitPrimitive<TFeature>(
   switch (primitive.kind) {
     case "circle": {
       const radius = Math.max(8, (primitive.renderPrimitive as MapRenderCircle<TFeature>).radius);
-      return squaredDistance(point, { x: primitive.x, y: primitive.y }) <= radius * radius;
+      const dx = point.x - primitive.x;
+      const dy = point.y - primitive.y;
+      return dx * dx + dy * dy <= radius * radius;
     }
     case "direction-marker":
       return false;
@@ -335,14 +337,14 @@ function hitPrimitive<TFeature>(
         4,
         (primitive.renderPrimitive as MapRenderLine<TFeature>).strokeWidth / 2 + 2,
       );
-      return squaredDistanceToPolyline(point, primitive.points) <= tolerance * tolerance;
+      return isWithinPolylineTolerance(point, primitive.points, tolerance * tolerance);
     }
     case "polygon": {
       const renderPrimitive = primitive.renderPrimitive as MapRenderPolygon<TFeature>;
       if (pointInRings(point, primitive.rings)) return true;
       const tolerance = Math.max(4, renderPrimitive.strokeWidth / 2 + 2);
       return primitive.rings.some(
-        (ring) => squaredDistanceToClosedPolyline(point, ring) <= tolerance * tolerance,
+        (ring) => isWithinPolylineTolerance(point, ring, tolerance * tolerance, true),
       );
     }
   }
@@ -369,20 +371,26 @@ function pointInRing(point: MapScreenPoint, ring: readonly MapScreenPoint[]) {
   return inside;
 }
 
-function squaredDistanceToClosedPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
-  if (points.length < 2) return Number.POSITIVE_INFINITY;
-  return Math.min(
-    squaredDistanceToPolyline(point, points),
-    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!),
-  );
-}
-
-function squaredDistanceToPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
-  let minimum = Number.POSITIVE_INFINITY;
+/** Picking needs any matching segment, not the minimum distance over the whole path. */
+function isWithinPolylineTolerance(
+  point: MapScreenPoint,
+  points: readonly MapScreenPoint[],
+  squaredTolerance: number,
+  closed = false,
+) {
   for (let index = 1; index < points.length; index += 1) {
-    minimum = Math.min(minimum, squaredDistanceToSegment(point, points[index - 1]!, points[index]!));
+    if (
+      squaredDistanceToSegment(point, points[index - 1]!, points[index]!) <= squaredTolerance
+    ) {
+      return true;
+    }
   }
-  return minimum;
+  // Canvas closes polygon rings even when the source does not repeat the first point.
+  return (
+    closed &&
+    points.length >= 2 &&
+    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!) <= squaredTolerance
+  );
 }
 
 function squaredDistanceToSegment(point: MapScreenPoint, start: MapScreenPoint, end: MapScreenPoint) {
@@ -393,7 +401,10 @@ function squaredDistanceToSegment(point: MapScreenPoint, start: MapScreenPoint, 
     0,
     Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)),
   );
-  return squaredDistance(point, { x: start.x + t * dx, y: start.y + t * dy });
+  // Preserve the distance arithmetic without allocating a closest-point object per segment.
+  const offsetX = point.x - (start.x + t * dx);
+  const offsetY = point.y - (start.y + t * dy);
+  return offsetX * offsetX + offsetY * offsetY;
 }
 
 function squaredDistance(left: MapScreenPoint, right: MapScreenPoint) {

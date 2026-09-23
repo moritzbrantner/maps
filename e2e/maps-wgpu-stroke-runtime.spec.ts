@@ -5,19 +5,41 @@ const VISIBLE_RASTER_TILE = Buffer.from(
   "base64",
 );
 
+// Use Graphite/Dawn with SwiftShader for both WebGPU and canvas presentation.
+// Ganesh/Vulkan interop can destroy the device on GPU-less Linux runners.
 const WEBGPU_SWIFTSHADER_ARGS = [
-  "--disable-vulkan-surface",
-  "--enable-features=Vulkan",
   "--enable-unsafe-swiftshader",
   "--enable-unsafe-webgpu",
+  "--enable-skia-graphite",
+  "--skia-graphite-dawn-backend=swiftshader",
   "--use-angle=swiftshader",
 ];
 
 test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path @smoke", async ({
   baseURL,
-}) => {
+}, testInfo) => {
   const browser = await chromium.launch({ args: WEBGPU_SWIFTSHADER_ARGS });
   const page = await browser.newPage();
+
+  await page.addInitScript(() => {
+    const browserGlobal = globalThis as typeof globalThis & {
+      GPUDevice: {
+        prototype: {
+          createTexture(descriptor: { label?: string; usage: number }): unknown;
+        };
+      };
+      __mapsRasterTextureUsages: number[];
+    };
+    browserGlobal.__mapsRasterTextureUsages = [];
+    const prototype = browserGlobal.GPUDevice.prototype;
+    const createTexture = prototype.createTexture;
+    prototype.createTexture = function (descriptor) {
+      if (descriptor.label === "Maps raster tile texture") {
+        browserGlobal.__mapsRasterTextureUsages.push(descriptor.usage);
+      }
+      return createTexture.call(this, descriptor);
+    };
+  });
 
   try {
     const acceptedHeaders: string[] = [];
@@ -59,6 +81,16 @@ test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path 
       "1 clusters / 3 points",
     );
     await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+    const usages = await page.evaluate(
+      () =>
+        (globalThis as typeof globalThis & { __mapsRasterTextureUsages: number[] })
+          .__mapsRasterTextureUsages,
+    );
+    expect(usages.length).toBeGreaterThan(0);
+    // COPY_DST | TEXTURE_BINDING | RENDER_ATTACHMENT: external image uploads
+    // need the attachment flag even when the texture is only sampled later.
+    expect(usages.every((usage) => (usage & 0x16) === 0x16)).toBe(true);
+    await map.screenshot({ path: testInfo.outputPath("mixed-point-flow-wgpu.png") });
   } finally {
     await browser.close();
   }
