@@ -1,0 +1,86 @@
+name: Validate WebGPU screenshot capture
+on:
+  push:
+    branches: [diagnostics/maps-screenshot-stall]
+    paths: [.github/workflows/agent-screenshot-repetition.yml]
+permissions:
+  contents: write
+  packages: read
+  actions: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: 1b67fda8f10fee0aaeaf8cf5589ab9a6aca5181f
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Install locked tools
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium > /tmp/playwright-install.log 2>&1 || { tail -50 /tmp/playwright-install.log; exit 1; }
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          github-token: ${{ github.token }}
+          run-id: 35853859543
+          artifact-ids: 10746089047
+          path: .artifacts/package
+      - name: Change only screenshot capture, preserving all renderer assertions
+        run: |
+          mkdir -p public
+          cp -R .artifacts/package/public/wasm public/wasm
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('e2e/maps-wgpu-stroke-runtime.spec.ts')
+          text = p.read_text()
+          text = text.replace('  const page = await browser.newPage();', '  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });', 1)
+          old = '    await map.screenshot({ path: testInfo.outputPath("mixed-point-flow-wgpu.png") });'
+          assert text.count(old) == 1
+          text = text.replace(old, '''    // Capture the already-visible viewport without the element screenshot's
+              // additional scroll/stability cycle over the software WebGPU surface.
+              const clip = await map.boundingBox();
+              expect(clip).not.toBeNull();
+              expect(clip!.x).toBeGreaterThanOrEqual(0);
+              expect(clip!.y).toBeGreaterThanOrEqual(0);
+              expect(clip!.x + clip!.width).toBeLessThanOrEqual(1440);
+              expect(clip!.y + clip!.height).toBeLessThanOrEqual(1000);
+              await page.screenshot({
+                clip: clip!,
+                path: testInfo.outputPath("mixed-point-flow-wgpu.png"),
+              });''', 1)
+          p.write_text(text)
+          PY
+          bunx oxfmt e2e/maps-wgpu-stroke-runtime.spec.ts
+          bun run check-types
+          bun run lint
+          git diff --check
+          git diff --stat
+      - name: Repeat the real GPU test ten times without retries
+        run: bunx playwright test e2e/maps-wgpu-stroke-runtime.spec.ts --grep 'mixed point' --project=chromium --repeat-each=10 --workers=1 --retries=0 --reporter=line
+      - name: Publish tested source blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          filename='e2e/maps-wgpu-stroke-runtime.spec.ts'
+          assert subprocess.check_output(['git','diff','--name-only'],text=True).splitlines()==[filename]
+          result=subprocess.run(['gh','api','--method','POST','repos/moritzbrantner/maps/git/blobs','--input','-'],input=json.dumps({'content':Path(filename).read_text(),'encoding':'utf-8'}),text=True,capture_output=True,check=True)
+          print('TESTED_BLOB',json.loads(result.stdout)['sha'])
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: maps-webgpu-screenshot-repetition
+          path: test-results
+          retention-days: 7
