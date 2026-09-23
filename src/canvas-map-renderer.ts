@@ -38,9 +38,14 @@ export function createCanvasMapScene<TFeature = unknown>(
   project: MapRenderProject,
   size: { height: number; width: number },
 ): CanvasMapScene<TFeature> {
+  const primitives: Array<CanvasMapScenePrimitive<TFeature>> = [];
+  for (const primitive of frame.primitives) {
+    const projected = projectPrimitive(primitive, project);
+    if (projected) primitives.push(projected);
+  }
   return {
     height: Math.max(0, size.height),
-    primitives: frame.primitives.flatMap((primitive) => projectPrimitive(primitive, project)),
+    primitives,
     width: Math.max(0, size.width),
   };
 }
@@ -56,9 +61,17 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
   let previousWidth: number | undefined;
   let previousHeight: number | undefined;
   let previousRevision: number | undefined;
+  let coordinates = new WeakMap<readonly [number, number][], MapScreenPoint[] | null>();
+  let points = new WeakMap<[number, number], MapScreenPoint | null>();
+  const projectCoordinate: MapRenderProject = (coordinate) => {
+    if (points.has(coordinate)) return points.get(coordinate)!;
+    const point = projectPoint(previousProject!, coordinate);
+    points.set(coordinate, point);
+    return point;
+  };
   let projected = new WeakMap<
     MapVectorRenderPrimitive<TFeature>,
-    Array<CanvasMapScenePrimitive<TFeature>>
+    CanvasMapScenePrimitive<TFeature> | null
   >();
 
   return (
@@ -74,21 +87,27 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
       previousHeight !== size.height
     ) {
       projected = new WeakMap();
+      coordinates = new WeakMap();
+      points = new WeakMap();
       previousRevision = projectionRevision;
       previousProject = project;
       previousWidth = size.width;
       previousHeight = size.height;
     }
+    const primitives: Array<CanvasMapScenePrimitive<TFeature>> = [];
+    for (const primitive of frame.primitives) {
+      let result: CanvasMapScenePrimitive<TFeature> | null;
+      if (projected.has(primitive)) {
+        result = projected.get(primitive) ?? null;
+      } else {
+        result = projectPrimitive(primitive, projectCoordinate, coordinates);
+        projected.set(primitive, result);
+      }
+      if (result) primitives.push(result);
+    }
     return {
       height: Math.max(0, size.height),
-      primitives: frame.primitives.flatMap((primitive) => {
-        let result = projected.get(primitive);
-        if (!result) {
-          result = projectPrimitive(primitive, project);
-          projected.set(primitive, result);
-        }
-        return result;
-      }),
+      primitives,
       width: Math.max(0, size.width),
     };
   };
@@ -151,42 +170,39 @@ export function drawCanvasMapLabels<TFeature = unknown>(
 function projectPrimitive<TFeature>(
   primitive: MapVectorRenderPrimitive<TFeature>,
   project: MapRenderProject,
-): Array<CanvasMapScenePrimitive<TFeature>> {
+  cache?: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
+): CanvasMapScenePrimitive<TFeature> | null {
   switch (primitive.kind) {
     case "circle": {
       const center = projectPoint(project, primitive.center);
-      if (!isFinitePoint(center)) return [];
-      return [{ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y }];
+      if (!isFinitePoint(center)) return null;
+      return { kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y };
     }
     case "direction-marker": {
       const anchor = projectPoint(project, primitive.anchor);
       const previous = projectPoint(project, primitive.previous);
-      if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return [];
-      return [
-        {
-          angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
-          kind: "direction-marker",
-          renderPrimitive: primitive,
-          x: anchor.x,
-          y: anchor.y,
-        },
-      ];
+      if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return null;
+      return {
+        angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
+        kind: "direction-marker",
+        renderPrimitive: primitive,
+        x: anchor.x,
+        y: anchor.y,
+      };
     }
     case "line": {
-      const points = projectCoordinates(primitive.coordinates, project);
-      if (!points || points.length < 2) return [];
-      return [{ kind: "line", points, renderPrimitive: primitive }];
+      const points = projectCoordinates(primitive.coordinates, project, cache);
+      if (!points || points.length < 2) return null;
+      return { kind: "line", points, renderPrimitive: primitive };
     }
     case "polygon": {
-      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project));
-      if (rings.some((ring) => !ring || ring.length < 3)) return [];
-      return [
-        {
-          kind: "polygon",
-          renderPrimitive: primitive,
-          rings: rings as MapScreenPoint[][],
-        },
-      ];
+      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project, cache));
+      if (rings.some((ring) => !ring || ring.length < 3)) return null;
+      return {
+        kind: "polygon",
+        renderPrimitive: primitive,
+        rings: rings as MapScreenPoint[][],
+      };
     }
   }
 }
@@ -194,13 +210,19 @@ function projectPrimitive<TFeature>(
 function projectCoordinates(
   coordinates: readonly [number, number][],
   project: MapRenderProject,
+  cache?: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
 ): MapScreenPoint[] | null {
+  if (cache?.has(coordinates)) return cache.get(coordinates)!;
   const points: MapScreenPoint[] = [];
   for (const coordinate of coordinates) {
-    const point = projectPoint(project, [coordinate[0], coordinate[1]]);
-    if (!isFinitePoint(point)) return null;
+    const point = projectPoint(project, coordinate);
+    if (!isFinitePoint(point)) {
+      cache?.set(coordinates, null);
+      return null;
+    }
     points.push(point);
   }
+  cache?.set(coordinates, points);
   return points;
 }
 

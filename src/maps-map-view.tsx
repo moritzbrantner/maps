@@ -4,6 +4,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,10 +12,7 @@ import {
 } from "react";
 
 import { getBoundsFromPoints, type ViewportAggregationQuery } from "./aggregation";
-import {
-  MapsCanvasFlatRuntime,
-  type MapsCanvasFlatRuntimeController,
-} from "./canvas-flat-runtime";
+import { MapsCanvasFlatRuntime, type MapsCanvasFlatRuntimeController } from "./canvas-flat-runtime";
 import {
   FeatureOverlays,
   type ContextMenuOverlayState,
@@ -35,22 +33,10 @@ import {
   type MapViewStateChangeReason,
   type RasterMapStyle,
 } from "./map-display";
-import type {
-  MapContextMenuContext,
-  MapFeatureContextMenuContext,
-} from "./map-interaction";
-import type {
-  MapScreenInteractionState,
-  MapScreenRenderFrame,
-} from "./map-screen-render-frame";
-import {
-  MapsOverlayLayers,
-  type MapsOverlayLayersController,
-} from "./maps-overlay-layers";
-import {
-  MapSurfaceContext,
-  type MapSurfaceContextValue,
-} from "./map-surface-context";
+import type { MapContextMenuContext, MapFeatureContextMenuContext } from "./map-interaction";
+import type { MapScreenInteractionState, MapScreenRenderFrame } from "./map-screen-render-frame";
+import { MapsOverlayLayers, type MapsOverlayLayersController } from "./maps-overlay-layers";
+import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-surface-context";
 import { useControllableMapViewState } from "./map-view-state";
 import { getFeatureCoordinate, isBlockedHoverPosition } from "./map-view-utils";
 import type { MapViewProps as LegacyMapViewProps } from "./map-view-maplibre";
@@ -111,7 +97,9 @@ export function MapsMapView({
   });
   const resolvedMaxZoom = normalizeMapMaxZoom(maxZoom);
   const currentViewStateRef = useRef(currentViewState);
-  currentViewStateRef.current = currentViewState;
+  useLayoutEffect(() => {
+    currentViewStateRef.current = currentViewState;
+  });
 
   const getFeatureId = useCallback((feature: unknown, getId?: (feature: never) => string) => {
     if (getId) {
@@ -191,9 +179,7 @@ export function MapsMapView({
         reason === "cluster-expand"
           ? {
               ...next,
-              ...(camera.bearing === undefined
-                ? {}
-                : { bearing: camera.bearing }),
+              ...(camera.bearing === undefined ? {} : { bearing: camera.bearing }),
               ...(camera.pitch === undefined ? {} : { pitch: camera.pitch }),
             }
           : next;
@@ -275,40 +261,34 @@ export function MapsMapView({
     [closeContextMenu, onMapContextMenu, renderMapContextMenu],
   );
 
-  useEffect(() => {
-    if (!isReady || !onMapControllerReady) {
-      return;
-    }
-
-    const controller: MapSurfaceController &
-      Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles"> = {
-      display: "flat",
-      fitToData: fitToDataNow,
-      fitBounds: (bounds, options) => {
-        fitBoundsNow(bounds, options);
-      },
-      fitPoints: (points, options) => {
-        fitBoundsNow(getBoundsFromPoints(points), options);
-      },
-      fitGeoJson: (source, options) => {
-        fitBoundsNow(getBoundsFromGeoJson(source as GeoJsonMapSource), options);
-      },
-      flyTo: flyToNow,
-      getViewState: () => runtimeControllerRef.current?.getViewState() ?? currentViewStateRef.current,
-      getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
-      setViewState: setSurfaceViewState,
-    };
-
-    onMapControllerReady(controller);
-  }, [
-    currentViewState,
-    fitBoundsNow,
-    fitToDataNow,
-    flyToNow,
-    isReady,
-    onMapControllerReady,
-    setSurfaceViewState,
-  ]);
+  // Controller identity describes runtime availability, not camera frequency.
+  // Publish current actions only after commit; saved controller handles continue
+  // to use the newest bounds/options without speculative-render side effects.
+  const controllerActions = useRef({ fitBoundsNow, fitToDataNow, flyToNow, setSurfaceViewState });
+  useLayoutEffect(() => {
+    controllerActions.current = { fitBoundsNow, fitToDataNow, flyToNow, setSurfaceViewState };
+  });
+  const [controller] = useState<
+    MapSurfaceController & Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles">
+  >(() => ({
+    display: "flat",
+    fitToData: () => controllerActions.current.fitToDataNow(),
+    fitBounds: (bounds, options) => controllerActions.current.fitBoundsNow(bounds, options),
+    fitPoints: (points, options) =>
+      controllerActions.current.fitBoundsNow(getBoundsFromPoints(points), options),
+    fitGeoJson: (source, options) =>
+      controllerActions.current.fitBoundsNow(
+        getBoundsFromGeoJson(source as GeoJsonMapSource),
+        options,
+      ),
+    flyTo: (next, options) => controllerActions.current.flyToNow(next, options),
+    getViewState: () => runtimeControllerRef.current?.getViewState() ?? currentViewStateRef.current,
+    getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
+    setViewState: (next, reason) => controllerActions.current.setSurfaceViewState(next, reason),
+  }));
+  useLayoutEffect(() => {
+    if (isReady) onMapControllerReady?.(controller);
+  }, [controller, isReady, onMapControllerReady]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -421,7 +401,9 @@ export function MapsMapView({
         }
       },
       handleFeatureHover(feature, position, options) {
-        const featureId = feature ? getFeatureId(feature, options?.getFeatureId as never) || null : null;
+        const featureId = feature
+          ? getFeatureId(feature, options?.getFeatureId as never) || null
+          : null;
 
         startTransition(() => {
           options?.onFeatureHover?.(feature);
@@ -595,8 +577,10 @@ export function MapsMapView({
             target.hasPointerCapture(event.pointerId);
           const hit = gestureOwnsPointer
             ? (overlayControllerRef.current?.clearHover(), null)
-            : overlayControllerRef.current?.handleHoverAtClientPoint(event.clientX, event.clientY) ??
-              null;
+            : (overlayControllerRef.current?.handleHoverAtClientPoint(
+                event.clientX,
+                event.clientY,
+              ) ?? null);
           event.currentTarget.style.cursor = hit ? "pointer" : fallbackCursor;
         }}
         onClick={(event) => {
@@ -674,7 +658,10 @@ export function MapsMapView({
 }
 
 function isMapsSurfaceEventTarget(target: EventTarget | null, root: HTMLDivElement) {
-  return target === root || (target instanceof HTMLCanvasElement && target.dataset.flatRuntime === "maps");
+  return (
+    target === root ||
+    (target instanceof HTMLCanvasElement && target.dataset.flatRuntime === "maps")
+  );
 }
 
 function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapStyle {
@@ -695,7 +682,9 @@ function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapSt
   const layers = style.layers ?? [];
   const sources = style.sources ?? {};
   const rasterSources = Object.entries(sources).filter(([, source]) => {
-    return Boolean(source && typeof source === "object" && "type" in source && source.type === "raster");
+    return Boolean(
+      source && typeof source === "object" && "type" in source && source.type === "raster",
+    );
   });
 
   if (layers.length === 0 && Object.keys(sources).length === 0) {
@@ -712,7 +701,9 @@ function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapSt
   const rasterSource = source as { tiles?: unknown };
 
   if (typeof layers[0].source === "string" && layers[0].source !== sourceId) {
-    throw new Error('flatRuntime="maps" raster layer must reference its single raster source directly.');
+    throw new Error(
+      'flatRuntime="maps" raster layer must reference its single raster source directly.',
+    );
   }
   if (!Array.isArray(rasterSource.tiles) || typeof rasterSource.tiles[0] !== "string") {
     throw new Error(
