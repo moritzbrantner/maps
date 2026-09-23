@@ -19,9 +19,15 @@ jobs:
           ref: f6a7e10fb6a66c51c455ba9c5f5487f4b57360e8
           persist-credentials: false
       - run: |
-          git fetch --depth=1 origin 1b67fda8f10fee0aaeaf8cf5589ab9a6aca5181f
           mkdir -p evidence/camera-sync
           git rev-parse HEAD > evidence/camera-sync/source-commit.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('e2e/maps-camera-presentation.spec.ts')
+          s=p.read_text().replace('const screenshot = await page.screenshot();', 'const screenshot = await map.screenshot();')
+          p.write_text(s)
+          PY
+          git diff -- e2e/maps-camera-presentation.spec.ts > evidence/camera-sync/exact-test-change.patch
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
@@ -33,68 +39,10 @@ jobs:
           name: build-artifact-1b67fda8f10f-9124783074ab-35853859543-1
           path: .
       - run: bunx playwright install --with-deps chromium
-      - name: Install observation-only map-pixel diagnostic
-        run: |
-          cat > e2e/maps-camera-pixels.local.spec.ts <<'TEST'
-          import { test, expect } from '@playwright/test';
-          for (const backend of ['wgpu', 'canvas2d']) {
-            test(`observe actual map pixels on ${backend}`, async ({page}, info) => {
-              if (backend === 'canvas2d') await page.addInitScript(() => Object.defineProperty(navigator, 'gpu', {value: undefined}));
-              const errors: string[] = [];
-              page.on('pageerror', e => errors.push(String(e)));
-              page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-              await page.goto('/e2e/fixtures/camera-presentation.html');
-              const map = page.getByLabel('Camera synchronization acceptance');
-              const canvas = map.locator('[data-flat-runtime="maps"]');
-              await expect(map).toHaveAttribute('data-map-ready', 'true');
-              await expect(canvas).toHaveAttribute('data-map-base-renderer', backend);
-              await expect(map.locator('[data-map-overlay-runtime="maps"]')).toHaveAttribute('data-map-overlay-primitives', '1000');
-              const counts: Record<string, number> = {};
-              const capture = async (phase: string) => {
-                const png = await map.screenshot();
-                await info.attach(`${phase}-${backend}`, {body: png, contentType: 'image/png'});
-                counts[phase] = await page.evaluate(async base64 => {
-                  const image = new Image(); image.src = `data:image/png;base64,${base64}`; await image.decode();
-                  const c = document.createElement('canvas'); c.width = image.width; c.height = image.height;
-                  const ctx = c.getContext('2d')!; ctx.drawImage(image, 0, 0);
-                  const p = ctx.getImageData(0, 0, c.width, c.height).data;
-                  let count = 0;
-                  for (let i = 0; i < p.length; i += 4) if(p[i+2]! > p[i]!+60 && p[i+2]! > p[i+1]!+40 && p[i+3]! > 0) count++;
-                  return count;
-                }, png.toString('base64'));
-              };
-              await capture('initial');
-              await canvas.evaluate(async el => {
-                window.mapsCameraProbe.reset(); const r = el.getBoundingClientRect();
-                for(let i=0;i<8;i++) el.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-20,clientX:r.left+r.width/2+i,clientY:r.top+r.height/2}));
-                await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
-              });
-              await capture('zoom');
-              const point = await page.evaluate(() => window.mapsCameraProbe.samples.at(-1)!.expected);
-              const box = (await map.boundingBox())!;
-              await page.mouse.move(box.x + point[0], box.y + point[1]);
-              await expect(page.getByText('Picked entity-0',{exact:true})).toBeVisible();
-              await capture('hover');
-              await page.evaluate(async () => {await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);});
-              await capture('settled');
-              await page.mouse.move(0, 0);
-              await capture('leave');
-              const state = await canvas.evaluate(el => ({html:el.outerHTML, css: {opacity:getComputedStyle(el).opacity,visibility:getComputedStyle(el).visibility}, samples:window.mapsCameraProbe.samples}));
-              await info.attach('pixel-diagnostic', {body:JSON.stringify({backend,counts,errors,state},null,2),contentType:'application/json'});
-              console.log(JSON.stringify({backend,counts,errors}));
-            });
-          }
-          TEST
-      - name: Observe candidate without changing renderer behavior
+      - name: Require real geometry inside the map rather than page text
         env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/camera-sync/candidate-report
-        run: bun run test:browser --project=chromium e2e/maps-camera-pixels.local.spec.ts --output=evidence/camera-sync/candidate-results > evidence/camera-sync/candidate.log 2>&1
-      - name: Observe unchanged original renderer with identical fixture
-        env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/camera-sync/base-report
-        run: |
-          git restore --source=1b67fda8f10fee0aaeaf8cf5589ab9a6aca5181f --worktree src
-          bun run test:browser --project=chromium e2e/maps-camera-pixels.local.spec.ts --output=evidence/camera-sync/base-results > evidence/camera-sync/base.log 2>&1
+          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/camera-sync/report
+        run: bun run test:browser --project=chromium e2e/maps-camera-presentation.spec.ts --repeat-each=2 --output=evidence/camera-sync/results > evidence/camera-sync/browser.log 2>&1
       - if: always()
         uses: actions/upload-artifact@v4
         with:
