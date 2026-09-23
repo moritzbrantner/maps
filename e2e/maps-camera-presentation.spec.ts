@@ -86,8 +86,10 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     });
     // Inspect composited pixels: a WebGPU canvas readback can be empty after
     // presentation even while its retained compositor image is visible.
+    let verifiedScreenshot: Buffer | undefined;
     await expect.poll(async () => {
       const screenshot = await page.screenshot();
+      verifiedScreenshot = screenshot;
       return page.evaluate(async (base64) => {
         const image = new Image();
         image.src = `data:image/png;base64,${base64}`;
@@ -107,7 +109,11 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
         return bluePixels;
       }, screenshot.toString("base64"));
     }).toBeGreaterThan(1000);
-    await page.screenshot({ path: testInfo.outputPath(`camera-alignment-${backend}.png`) });
+    // Retain exactly the pixels that passed, not a second asynchronous capture.
+    await testInfo.attach(`camera-alignment-${backend}`, {
+      body: verifiedScreenshot!,
+      contentType: "image/png",
+    });
     expect(external).toEqual([]);
   });
 }
