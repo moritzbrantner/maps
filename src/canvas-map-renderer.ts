@@ -56,6 +56,14 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
   let previousWidth: number | undefined;
   let previousHeight: number | undefined;
   let previousRevision: number | undefined;
+  let coordinates = new WeakMap<readonly [number, number][], MapScreenPoint[] | null>();
+  let points = new WeakMap<[number, number], MapScreenPoint | null>();
+  const projectCoordinate: MapRenderProject = (coordinate) => {
+    if (points.has(coordinate)) return points.get(coordinate)!;
+    const point = projectPoint(previousProject!, coordinate);
+    points.set(coordinate, point);
+    return point;
+  };
   let projected = new WeakMap<
     MapVectorRenderPrimitive<TFeature>,
     Array<CanvasMapScenePrimitive<TFeature>>
@@ -74,6 +82,8 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
       previousHeight !== size.height
     ) {
       projected = new WeakMap();
+      coordinates = new WeakMap();
+      points = new WeakMap();
       previousRevision = projectionRevision;
       previousProject = project;
       previousWidth = size.width;
@@ -84,7 +94,7 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
       primitives: frame.primitives.flatMap((primitive) => {
         let result = projected.get(primitive);
         if (!result) {
-          result = projectPrimitive(primitive, project);
+          result = projectPrimitive(primitive, projectCoordinate, coordinates);
           projected.set(primitive, result);
         }
         return result;
@@ -151,6 +161,7 @@ export function drawCanvasMapLabels<TFeature = unknown>(
 function projectPrimitive<TFeature>(
   primitive: MapVectorRenderPrimitive<TFeature>,
   project: MapRenderProject,
+  cache?: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
 ): Array<CanvasMapScenePrimitive<TFeature>> {
   switch (primitive.kind) {
     case "circle": {
@@ -173,12 +184,12 @@ function projectPrimitive<TFeature>(
       ];
     }
     case "line": {
-      const points = projectCoordinates(primitive.coordinates, project);
+      const points = projectCoordinates(primitive.coordinates, project, cache);
       if (!points || points.length < 2) return [];
       return [{ kind: "line", points, renderPrimitive: primitive }];
     }
     case "polygon": {
-      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project));
+      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project, cache));
       if (rings.some((ring) => !ring || ring.length < 3)) return [];
       return [
         {
@@ -194,13 +205,19 @@ function projectPrimitive<TFeature>(
 function projectCoordinates(
   coordinates: readonly [number, number][],
   project: MapRenderProject,
+  cache?: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
 ): MapScreenPoint[] | null {
+  if (cache?.has(coordinates)) return cache.get(coordinates)!;
   const points: MapScreenPoint[] = [];
   for (const coordinate of coordinates) {
-    const point = projectPoint(project, [coordinate[0], coordinate[1]]);
-    if (!isFinitePoint(point)) return null;
+    const point = projectPoint(project, coordinate);
+    if (!isFinitePoint(point)) {
+      cache?.set(coordinates, null);
+      return null;
+    }
     points.push(point);
   }
+  cache?.set(coordinates, points);
   return points;
 }
 

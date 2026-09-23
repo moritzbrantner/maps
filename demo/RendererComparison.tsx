@@ -6,6 +6,7 @@ import {
   GeoJsonLayer,
   MapView,
   type AggregatedMapFeature,
+  type GeoJsonLayerFeature,
   type MapPoint,
   type MapSurfaceController,
   type MapViewState,
@@ -99,10 +100,8 @@ export function RendererComparison() {
           {backend === "maps" && basemap.enabled ? (
             <GeoJsonLayer
               featureCollection={basemap.featureCollection}
-              getFeatureStyle={(feature) =>
-                getShortbreadBasemapStyle(feature.properties.kind, feature.properties.sourceKind)
-              }
-              isFeatureInteractive={() => false}
+              getFeatureStyle={shortbreadFeatureStyle}
+              isFeatureInteractive={nonInteractiveBasemap}
               layerId="shortbread-basemap"
             />
           ) : null}
@@ -176,4 +175,11 @@ function createComparisonPoints(): Array<MapPoint<ComparisonPointProperties>> {
   }
 
   return points;
+}
+
+function shortbreadFeatureStyle(feature: GeoJsonLayerFeature) {
+  return getShortbreadBasemapStyle(feature.properties.kind, feature.properties.sourceKind);
+}
+function nonInteractiveBasemap() {
+  return false;
 }
