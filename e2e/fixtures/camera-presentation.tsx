@@ -7,7 +7,9 @@ import type { MapSurfaceController, MapViewState } from "../../src/map-display";
 import type { MapsFlatRasterFrame, MapsFlatRasterRuntime } from "../../src/flat-runtime-wasm";
 import type { MapsWgpuApplicationFrame } from "../../src/wgpu-application-frame";
 
-const coordinates: [number, number] = [13.32, 52.57];
+// Keep the entire grid, including the first entity used for picking, inside
+// the viewport both before and after the measured zoom burst.
+const coordinates: [number, number] = [13.335, 52.544];
 const data: GeoJsonLayerProps["featureCollection"] = {
   type: "FeatureCollection",
   features: Array.from({ length: 1000 }, (_, i) => ({
@@ -16,7 +18,7 @@ const data: GeoJsonLayerProps["featureCollection"] = {
     properties: {},
     geometry: {
       type: "Point",
-      coordinates: [coordinates[0] + (i % 40) * 0.004, coordinates[1] - Math.floor(i / 40) * 0.004],
+      coordinates: [coordinates[0] + (i % 40) * 0.0035, coordinates[1] - Math.floor(i / 40) * 0.002],
     },
   })),
 };
