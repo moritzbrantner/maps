@@ -84,28 +84,30 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
       body: JSON.stringify(await page.evaluate(() => window.mapsCameraProbe.samples), null, 2),
       contentType: "application/json",
     });
-    // A coherent submission and successful hit test do not prove that a GPU
-    // surface actually presented its geometry. Verify visible pixels too.
-    const geometryCanvas = backend === "wgpu"
-      ? canvas
-      : map.locator('[data-map-overlay-runtime="maps"]');
-    await expect.poll(() => geometryCanvas.evaluate((element) => {
-      const source = element as HTMLCanvasElement;
-      const capture = document.createElement("canvas");
-      capture.width = source.width;
-      capture.height = source.height;
-      const context = capture.getContext("2d")!;
-      context.drawImage(source, 0, 0);
-      const pixels = context.getImageData(0, 0, capture.width, capture.height).data;
-      let bluePixels = 0;
-      for (let offset = 0; offset < pixels.length; offset += 4) {
-        if (pixels[offset + 2]! > pixels[offset]! + 60 &&
-            pixels[offset + 2]! > pixels[offset + 1]! + 40 &&
-            pixels[offset + 3]! > 0) bluePixels++;
-      }
-      return bluePixels;
-    })).toBeGreaterThan(1000);
-    await map.screenshot({ path: testInfo.outputPath(`camera-alignment-${backend}.png`) });
+    // Inspect composited pixels: a WebGPU canvas readback can be empty after
+    // presentation even while its retained compositor image is visible.
+    await expect.poll(async () => {
+      const screenshot = await page.screenshot();
+      return page.evaluate(async (base64) => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${base64}`;
+        await image.decode();
+        const capture = document.createElement("canvas");
+        capture.width = image.width;
+        capture.height = image.height;
+        const context = capture.getContext("2d")!;
+        context.drawImage(image, 0, 0);
+        const pixels = context.getImageData(0, 0, capture.width, capture.height).data;
+        let bluePixels = 0;
+        for (let offset = 0; offset < pixels.length; offset += 4) {
+          if (pixels[offset + 2]! > pixels[offset]! + 60 &&
+              pixels[offset + 2]! > pixels[offset + 1]! + 40 &&
+              pixels[offset + 3]! > 0) bluePixels++;
+        }
+        return bluePixels;
+      }, screenshot.toString("base64"));
+    }).toBeGreaterThan(1000);
+    await page.screenshot({ path: testInfo.outputPath(`camera-alignment-${backend}.png`) });
     expect(external).toEqual([]);
   });
 }
