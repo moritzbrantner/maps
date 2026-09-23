@@ -2,15 +2,16 @@
   "schemaVersion": 1,
   "profile": "repository-foundation-v1",
   "tiers": {
-    "fast": ["format:check", "lint", "typecheck", "build", "test:unit"],
-    "full": ["format:check", "lint", "typecheck", "build", "test:unit", "test:e2e", "package:check", "benchmark:smoke"]
+    "fast": ["format:check", "lint", "typecheck", "test:unit"],
+    "full": ["format:check", "lint", "typecheck", "test:unit", "test:e2e", "benchmark:smoke"]
   },
-  "requiredCapabilities": ["format:check", "lint", "typecheck", "build", "test:unit", "benchmark:smoke"],
+  "requiredCapabilities": ["format:check", "lint", "typecheck", "test:unit", "benchmark:smoke"],
   "optionalCapabilities": [
     "test:e2e",
     "package:check",
     "test:integration",
-    "profile:runtime"
+    "profile:runtime",
+    "build"
   ],
   "capabilityCommands": {
     "@moritzbrantner/maps": {

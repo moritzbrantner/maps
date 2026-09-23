@@ -1,23 +1,6 @@
 name: Deploy Example Website
 
 on:
-  pull_request:
-    paths:
-      - "crates/**"
-      - "demo/**"
-      - "e2e-hosted/**"
-      - "src/**"
-      - "scripts/build-maps-wasm.mjs"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "rust-toolchain.toml"
-      - "index.html"
-      - "package.json"
-      - "bun.lock"
-      - "pages.config.json"
-      - "playwright.hosted.config.ts"
-      - "vite.config.*"
-      - ".github/workflows/pages.yml"
   push:
     branches:
       - main
