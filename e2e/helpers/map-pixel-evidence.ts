@@ -1,6 +1,12 @@
 import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 
-export async function retainMapPixels(map: Locator, page: Page, info: TestInfo, name: string) {
+export async function retainMapPixels(
+  map: Locator,
+  page: Page,
+  info: TestInfo,
+  name: string,
+  minimumBluePixels = 1000,
+) {
   let verified: Buffer | undefined;
   await expect
     .poll(async () => {
@@ -28,6 +34,6 @@ export async function retainMapPixels(map: Locator, page: Page, info: TestInfo, 
         return blue;
       }, image.toString("base64"));
     })
-    .toBeGreaterThan(1000);
+    .toBeGreaterThan(minimumBluePixels);
   await info.attach(name, { body: verified!, contentType: "image/png" });
 }
