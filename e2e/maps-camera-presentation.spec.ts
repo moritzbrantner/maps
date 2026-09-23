@@ -80,6 +80,31 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     expect(point[1]).toBeLessThan(box!.height - 3);
     await page.mouse.move(box!.x + point[0], box!.y + point[1]);
     await expect(page.getByText("Picked entity-0", { exact: true })).toBeVisible();
+    await testInfo.attach("camera-hover-state", {
+      body: JSON.stringify(await page.evaluate(() => window.mapsCameraProbe.samples), null, 2),
+      contentType: "application/json",
+    });
+    // A coherent submission and successful hit test do not prove that a GPU
+    // surface actually presented its geometry. Verify visible pixels too.
+    const geometryCanvas = backend === "wgpu"
+      ? canvas
+      : map.locator('[data-map-overlay-runtime="maps"]');
+    await expect.poll(() => geometryCanvas.evaluate((element) => {
+      const source = element as HTMLCanvasElement;
+      const capture = document.createElement("canvas");
+      capture.width = source.width;
+      capture.height = source.height;
+      const context = capture.getContext("2d")!;
+      context.drawImage(source, 0, 0);
+      const pixels = context.getImageData(0, 0, capture.width, capture.height).data;
+      let bluePixels = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4) {
+        if (pixels[offset + 2]! > pixels[offset]! + 60 &&
+            pixels[offset + 2]! > pixels[offset + 1]! + 40 &&
+            pixels[offset + 3]! > 0) bluePixels++;
+      }
+      return bluePixels;
+    })).toBeGreaterThan(1000);
     await map.screenshot({ path: testInfo.outputPath(`camera-alignment-${backend}.png`) });
     expect(external).toEqual([]);
   });
