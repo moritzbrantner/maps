@@ -1,0 +1,74 @@
+name: Retained browser runtime acceptance
+on:
+  push:
+    branches: [diagnostics/maps-retained-runtime-20260923]
+    paths: [.github/workflows/retained-runtime-acceptance.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish tested code without diagnostic files
+        id: publish
+        run: |
+          cat .diagnostics/runtime-patch.{1..7} | base64 -d | xz -d > /tmp/runtime.patch
+          echo '614600a8bfe08633aa6c79f123d2c2a44bc6206751dcd18027b0fe095c0e79d6  /tmp/runtime.patch' | sha256sum --check
+          git fetch --depth=1 origin ea57e1d2258d3fb211b653b867e48d779b71ebee
+          git switch --create perf/maps-retained-browser-runtime ea57e1d2258d3fb211b653b867e48d779b71ebee
+          git apply --index /tmp/runtime.patch
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'perf: decouple the browser runtime from React and retain native map geometry'
+          git push origin HEAD:refs/heads/perf/maps-retained-browser-runtime
+          mkdir -p evidence/retained-runtime
+          git rev-parse HEAD | tee evidence/retained-runtime/source-commit.txt
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Agent and API gate
+        run: |
+          bun run verify:agent > evidence/retained-runtime/agent.log 2>&1
+          bun run verify:api-surface > evidence/retained-runtime/api.log 2>&1
+      - name: Reuse unchanged Rust WASM from the validated ancestor
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 35853859543
+          name: build-artifact-1b67fda8f10f-9124783074ab-35853859543-1
+          path: .
+      - run: bunx playwright install --with-deps chromium
+      - name: Real browser behavior and descriptive CPU samples
+        id: browser
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/retained-runtime/candidate-report
+        run: bun run test:browser --project=chromium e2e/maps-runtime-performance.spec.ts e2e/maps-camera-presentation.spec.ts e2e/maps-overlay-retention.spec.ts --output=evidence/retained-runtime/candidate-results > evidence/retained-runtime/candidate.log 2>&1
+      - name: Same CPU observation on original source
+        if: always() && steps.browser.outcome != 'skipped'
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/retained-runtime/baseline-report
+        run: |
+          candidate=$(git rev-parse HEAD)
+          trap 'git restore --source="$candidate" --worktree src' EXIT
+          git restore --source=ea57e1d2258d3fb211b653b867e48d779b71ebee --worktree src
+          bun run test:browser --project=chromium e2e/maps-runtime-performance.spec.ts --grep 'records native camera CPU' --output=evidence/retained-runtime/baseline-results > evidence/retained-runtime/baseline.log 2>&1
+          set +e
+          bun run test:tdd:run -- src/maps-native-retention.test.tsx > evidence/retained-runtime/negative.log 2>&1
+          result=$?
+          set -e
+          test "$result" -eq 1
+          grep -F 'but got 1000 times' evidence/retained-runtime/negative.log
+      - name: Retain evidence and screenshots even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maps-retained-runtime-evidence
+          path: evidence/retained-runtime
+          retention-days: 7
