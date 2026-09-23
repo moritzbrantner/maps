@@ -1,0 +1,69 @@
+name: Camera synchronization acceptance
+on:
+  push:
+    branches: [diagnostics/maps-camera-sync-20260923]
+    paths: [.github/workflows/camera-sync-acceptance.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish only the tested source patch on a clean fix branch
+        shell: bash
+        run: |
+          cat .diagnostics/camera-patch.{1..5} | base64 -d | xz -d > /tmp/camera-sync.patch
+          echo 'cf49884fb030fb221b9fb24ede73af31c776bf6fef255930d8f81164bec52620  /tmp/camera-sync.patch' | sha256sum --check
+          git fetch --depth=1 origin 1b67fda8f10fee0aaeaf8cf5589ab9a6aca5181f
+          git switch --create fix/maps-camera-overlay-sync 1b67fda8f10fee0aaeaf8cf5589ab9a6aca5181f
+          git apply --index /tmp/camera-sync.patch
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: present map layers and camera together once per input frame'
+          git push origin HEAD:refs/heads/fix/maps-camera-overlay-sync
+          echo "Tested source commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Agent gate
+        run: |
+          mkdir -p evidence/camera-sync
+          bun run verify:agent 2>&1 | tee evidence/camera-sync/agent.log
+      - name: Reuse the unchanged Rust WASM from the exact base commit
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 35853859543
+          name: build-artifact-1b67fda8f10f-9124783074ab-35853859543-1
+          path: .
+      - run: bunx playwright install --with-deps chromium
+      - name: Real WebGPU and Canvas acceptance on the candidate
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/camera-sync/after-report
+        run: |
+          bun run test:browser --project=chromium e2e/maps-camera-presentation.spec.ts e2e/maps-overlay-retention.spec.ts --output=evidence/camera-sync/after-results 2>&1 | tee evidence/camera-sync/after.log
+      - name: Verify the new browser regressions reject the original source
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/camera-sync/before-report
+        shell: bash
+        run: |
+          candidate=$(git rev-parse HEAD)
+          git restore --source=1b67fda8f10fee0aaeaf8cf5589ab9a6aca5181f --worktree src
+          set +e
+          bun run test:browser --project=chromium e2e/maps-camera-presentation.spec.ts --output=evidence/camera-sync/before-results > evidence/camera-sync/before.log 2>&1
+          result=$?
+          set -e
+          git restore --source="$candidate" --worktree src
+          cat evidence/camera-sync/before.log
+          test "$result" -eq 1
+          grep -F 'expect(work.beforePaint)' evidence/camera-sync/before.log
+      - name: Retain browser screenshots and work counts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maps-camera-synchronization-evidence
+          path: evidence/camera-sync
+          retention-days: 7
