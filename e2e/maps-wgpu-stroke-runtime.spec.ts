@@ -42,6 +42,11 @@ test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path 
   });
 
   try {
+    const unexpectedVectorRequests: string[] = [];
+    await page.route("https://vector.openstreetmap.org/**", async (route) => {
+      unexpectedVectorRequests.push(route.request().url());
+      await route.abort();
+    });
     const acceptedHeaders: string[] = [];
     await page.route("https://tiles.example.test/**", async (route) => {
       const headers = await route.request().allHeaders();
@@ -57,7 +62,8 @@ test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path 
     });
 
     const url = new URL(
-      "/?acceptance=maps-runtime-raster-fetch",
+      // Keep the unrelated comparison map below this fixture off live data.
+      "/?e2e=1&acceptance=maps-runtime-raster-fetch",
       baseURL ?? "http://127.0.0.1:5181",
     );
     await page.goto(url.toString());
@@ -90,7 +96,9 @@ test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path 
     // COPY_DST | TEXTURE_BINDING | RENDER_ATTACHMENT: external image uploads
     // need the attachment flag even when the texture is only sampled later.
     expect(usages.every((usage) => (usage & 0x16) === 0x16)).toBe(true);
+    expect(unexpectedVectorRequests).toEqual([]);
     await map.screenshot({ path: testInfo.outputPath("mixed-point-flow-wgpu.png") });
+    expect(unexpectedVectorRequests).toEqual([]);
   } finally {
     await browser.close();
   }
