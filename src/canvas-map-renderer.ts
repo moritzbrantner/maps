@@ -45,6 +45,50 @@ export function createCanvasMapScene<TFeature = unknown>(
   };
 }
 
+/**
+ * Internal projector for immutable Maps-owned render primitives. A new camera
+ * callback or viewport size invalidates screen coordinates, not source geometry.
+ * Weak keys do not retain primitives belonging to removed/replaced layers.
+ */
+export function createCanvasMapSceneProjector<TFeature = unknown>() {
+  let previousProject: MapRenderProject | undefined;
+  let previousWidth: number | undefined;
+  let previousHeight: number | undefined;
+  let projected = new WeakMap<
+    MapVectorRenderPrimitive<TFeature>,
+    Array<CanvasMapScenePrimitive<TFeature>>
+  >();
+
+  return (
+    frame: MapVectorRenderFrame<TFeature>,
+    project: MapRenderProject,
+    size: { height: number; width: number },
+  ): CanvasMapScene<TFeature> => {
+    if (
+      previousProject !== project ||
+      previousWidth !== size.width ||
+      previousHeight !== size.height
+    ) {
+      projected = new WeakMap();
+      previousProject = project;
+      previousWidth = size.width;
+      previousHeight = size.height;
+    }
+    return {
+      height: Math.max(0, size.height),
+      primitives: frame.primitives.flatMap((primitive) => {
+        let result = projected.get(primitive);
+        if (!result) {
+          result = projectPrimitive(primitive, project);
+          projected.set(primitive, result);
+        }
+        return result;
+      }),
+      width: Math.max(0, size.width),
+    };
+  };
+}
+
 export function hitTestCanvasMapScene<TFeature = unknown>(
   scene: CanvasMapScene<TFeature>,
   point: MapScreenPoint,
@@ -185,14 +229,16 @@ function drawPrimitive<TFeature>(
 
   switch (scenePrimitive.kind) {
     case "circle":
-      drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, selected, hovered);
-      return;
-    case "direction-marker":
-      drawDirectionMarker(
+      drawCircle(
         context,
         scenePrimitive,
-        primitive as MapRenderDirectionMarker<TFeature>,
+        primitive as MapRenderCircle<TFeature>,
+        selected,
+        hovered,
       );
+      return;
+    case "direction-marker":
+      drawDirectionMarker(context, scenePrimitive, primitive as MapRenderDirectionMarker<TFeature>);
       return;
     case "line":
       drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, selected, hovered);
@@ -343,8 +389,8 @@ function hitPrimitive<TFeature>(
       const renderPrimitive = primitive.renderPrimitive as MapRenderPolygon<TFeature>;
       if (pointInRings(point, primitive.rings)) return true;
       const tolerance = Math.max(4, renderPrimitive.strokeWidth / 2 + 2);
-      return primitive.rings.some(
-        (ring) => isWithinPolylineTolerance(point, ring, tolerance * tolerance, true),
+      return primitive.rings.some((ring) =>
+        isWithinPolylineTolerance(point, ring, tolerance * tolerance, true),
       );
     }
   }
@@ -379,9 +425,7 @@ function isWithinPolylineTolerance(
   closed = false,
 ) {
   for (let index = 1; index < points.length; index += 1) {
-    if (
-      squaredDistanceToSegment(point, points[index - 1]!, points[index]!) <= squaredTolerance
-    ) {
+    if (squaredDistanceToSegment(point, points[index - 1]!, points[index]!) <= squaredTolerance) {
       return true;
     }
   }
@@ -393,7 +437,11 @@ function isWithinPolylineTolerance(
   );
 }
 
-function squaredDistanceToSegment(point: MapScreenPoint, start: MapScreenPoint, end: MapScreenPoint) {
+function squaredDistanceToSegment(
+  point: MapScreenPoint,
+  start: MapScreenPoint,
+  end: MapScreenPoint,
+) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   if (dx === 0 && dy === 0) return squaredDistance(point, start);
