@@ -1,0 +1,33 @@
+name: Maps performance workspace
+on:
+  push:
+    branches: [diagnostics/maps-perf-next-20260924]
+    paths: [.github/workflows/perf-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f7ba3a09512c6fcab77ca2a862035171e9d02ff0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Prepare exact-head workspace
+        run: |
+          mkdir -p /tmp/maps-workspace
+          git archive HEAD | tar -x -C /tmp/maps-workspace
+          cp -a node_modules /tmp/maps-workspace/
+          mkdir -p /tmp/maps-workspace/.tools
+          cp "$(command -v bun)" /tmp/maps-workspace/.tools/bun
+          tar -C /tmp/maps-workspace -czf /tmp/maps-workspace.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maps-perf-workspace
+          path: /tmp/maps-workspace.tar.gz
+          retention-days: 1
