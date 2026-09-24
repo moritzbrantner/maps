@@ -300,14 +300,15 @@ impl MapsFlatRasterRuntime {
 
     #[wasm_bindgen(js_name = projectPacked)]
     pub fn project_packed(&self, coordinates: &[f64]) -> Result<Vec<f64>, JsValue> {
-        if coordinates.len() % 2 != 0 {
+        let (coordinate_pairs, remainder) = coordinates.as_chunks::<2>();
+        if !remainder.is_empty() {
             return Err(JsValue::from_str(
                 "packed projection coordinates must contain longitude/latitude pairs",
             ));
         }
 
         let mut projected = Vec::with_capacity(coordinates.len());
-        for coordinate in coordinates.chunks_exact(2) {
+        for coordinate in coordinate_pairs {
             match self.inner.project_screen(coordinate[0], coordinate[1]) {
                 Ok(screen) => {
                     projected.push(screen.x);
