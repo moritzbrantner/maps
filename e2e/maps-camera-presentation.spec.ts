@@ -51,6 +51,8 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
         beforePaint,
         frames: probe.frames,
         projected: probe.projected,
+        projectionBatches: probe.projectionBatches,
+        scalarProjections: probe.scalarProjections,
         changes: probe.changes,
         samples: probe.samples,
       };
@@ -64,6 +66,8 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     // projection counts are the deterministic hot-path acceptance boundary.
     expect(work.samples).toHaveLength(1);
     expect(work.projected).toBe(1000);
+    expect(work.projectionBatches).toBe(1);
+    expect(work.scalarProjections).toBe(0);
     expect(work.changes).toBe(1);
     for (const sample of work.samples) {
       expect(sample.actual).not.toBeNull();
@@ -87,28 +91,33 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     // Check map-local compositor pixels after GPU work settles. Page heading
     // text alone can satisfy the color predicate, so exclude all page chrome.
     let verifiedScreenshot: Buffer | undefined;
-    await expect.poll(async () => {
-      const screenshot = await map.screenshot();
-      verifiedScreenshot = screenshot;
-      return page.evaluate(async (base64) => {
-        const image = new Image();
-        image.src = `data:image/png;base64,${base64}`;
-        await image.decode();
-        const capture = document.createElement("canvas");
-        capture.width = image.width;
-        capture.height = image.height;
-        const context = capture.getContext("2d")!;
-        context.drawImage(image, 0, 0);
-        const pixels = context.getImageData(0, 0, capture.width, capture.height).data;
-        let bluePixels = 0;
-        for (let offset = 0; offset < pixels.length; offset += 4) {
-          if (pixels[offset + 2]! > pixels[offset]! + 60 &&
+    await expect
+      .poll(async () => {
+        const screenshot = await map.screenshot();
+        verifiedScreenshot = screenshot;
+        return page.evaluate(async (base64) => {
+          const image = new Image();
+          image.src = `data:image/png;base64,${base64}`;
+          await image.decode();
+          const capture = document.createElement("canvas");
+          capture.width = image.width;
+          capture.height = image.height;
+          const context = capture.getContext("2d")!;
+          context.drawImage(image, 0, 0);
+          const pixels = context.getImageData(0, 0, capture.width, capture.height).data;
+          let bluePixels = 0;
+          for (let offset = 0; offset < pixels.length; offset += 4) {
+            if (
+              pixels[offset + 2]! > pixels[offset]! + 60 &&
               pixels[offset + 2]! > pixels[offset + 1]! + 40 &&
-              pixels[offset + 3]! > 0) bluePixels++;
-        }
-        return bluePixels;
-      }, screenshot.toString("base64"));
-    }).toBeGreaterThan(1000);
+              pixels[offset + 3]! > 0
+            )
+              bluePixels++;
+          }
+          return bluePixels;
+        }, screenshot.toString("base64"));
+      })
+      .toBeGreaterThan(1000);
     // Retain exactly the pixels that passed, not a second asynchronous capture.
     await testInfo.attach(`camera-alignment-${backend}`, {
       body: verifiedScreenshot!,

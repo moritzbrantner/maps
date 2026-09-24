@@ -1,9 +1,12 @@
 import type { MapVectorRenderPrimitive } from "./map-render-frame";
 
 export type MapScreenPoint = { x: number; y: number };
-export type MapScreenProject = (
+export type MapScreenProject = ((
   coordinate: [longitude: number, latitude: number],
-) => MapScreenPoint | null;
+) => MapScreenPoint | null) & {
+  /** Projects interleaved longitude/latitude pairs in one Maps runtime call. */
+  projectPacked?: (coordinates: Float64Array) => Float64Array | null;
+};
 
 export type MapScreenInteractionState = {
   hoveredPrimitiveIds?: ReadonlySet<string>;
