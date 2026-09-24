@@ -1,33 +1,61 @@
-name: Maps performance workspace
+name: Packed projection candidate validation
 on:
   push:
     branches: [diagnostics/maps-perf-next-20260924]
     paths: [.github/workflows/perf-workspace.yml]
 permissions:
-  contents: read
+  contents: write
+  actions: read
 jobs:
-  workspace:
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: f7ba3a09512c6fcab77ca2a862035171e9d02ff0
-          persist-credentials: false
+          ref: diagnostics/maps-perf-next-20260924
+      - name: Publish exact locally-tested patch
+        run: |
+          cat .diagnostics/batch-projection.* | base64 -d | xz -d > /tmp/batch-projection.patch
+          echo '934aeb1750e40b80fb923ddb536de2ccf318b16061e5cc42a1f91c128ffc87dc  /tmp/batch-projection.patch' | sha256sum --check
+          git fetch origin perf/batch-screen-projection
+          git switch perf/batch-screen-projection
+          git apply --index /tmp/batch-projection.patch
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'perf: batch screen projection across the WASM boundary'
+          git push origin HEAD:perf/batch-screen-projection
+          mkdir -p evidence
+          git rev-parse HEAD | tee evidence/source-sha.txt
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - name: Prepare exact-head workspace
-        run: |
-          mkdir -p /tmp/maps-workspace
-          git archive HEAD | tar -x -C /tmp/maps-workspace
-          cp -a node_modules /tmp/maps-workspace/
-          mkdir -p /tmp/maps-workspace/.tools
-          cp "$(command -v bun)" /tmp/maps-workspace/.tools/bun
-          tar -C /tmp/maps-workspace -czf /tmp/maps-workspace.tar.gz .
-      - uses: actions/upload-artifact@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: maps-perf-workspace
-          path: /tmp/maps-workspace.tar.gz
-          retention-days: 1
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: bun install --frozen-lockfile
+      - name: TypeScript and unit verification
+        run: bun run verify:agent 2>&1 | tee evidence/verify-agent.log
+      - name: Rust verification
+        run: bun run verify:rust 2>&1 | tee evidence/verify-rust.log
+      - name: Build changed WASM boundary
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          bun run build:wasm
+          rm -rf public/wasm
+          mkdir -p public/wasm
+          cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
+      - run: bunx playwright install --with-deps chromium
+      - name: Dense projection browser acceptance
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/playwright-report
+        run: |
+          bun run test:browser --project=chromium e2e/maps-camera-presentation.spec.ts e2e/maps-runtime-performance.spec.ts --output=evidence/test-results 2>&1 | tee evidence/browser.log
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packed-projection-evidence
+          path: evidence
+          retention-days: 7
