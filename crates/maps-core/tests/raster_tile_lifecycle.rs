@@ -28,16 +28,21 @@ fn failed_tiles_do_not_starve_the_remaining_visible_cover() {
     assert_ne!(next.requests[0], failed_tile);
     runtime.mark_loaded(next.requests[0]);
 
-    // Every other tile must make progress, then the queue must settle even when
-    // the browser asks for more frames while the failed tile stays visible.
-    for _ in 0..initial.placements.len() {
+    // Every other requested tile, including bounded prefetch work, must make
+    // progress and settle while the failed visible tile stays suppressed.
+    let mut settled = false;
+    for _ in 0..64 {
         let plan = runtime.frame_plan().unwrap();
+        if plan.requests.is_empty() {
+            settled = true;
+            break;
+        }
         for tile in plan.requests {
             assert_ne!(tile, failed_tile);
             runtime.mark_loaded(tile);
         }
     }
-    assert!(runtime.frame_plan().unwrap().requests.is_empty());
+    assert!(settled, "raster request cover did not settle");
 
     // Leaving and revisiting the area allows recovery without retaining a
     // permanent failure cache or treating an unsuccessful fetch as ready.
