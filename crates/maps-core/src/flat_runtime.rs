@@ -17,6 +17,7 @@ const CAMERA_TILE_SIZE: f64 = 512.0;
 const DEFAULT_MAX_VISIBLE_TILES: usize = 256;
 const DEFAULT_CACHE_CAPACITY: usize = 512;
 const DEFAULT_LOAD_CONCURRENCY: usize = 8;
+const REQUEST_PREFETCH_RADIUS_TILES: i64 = 1;
 const WORLD_EPSILON: f64 = 1.0e-12;
 
 /// Raster pyramid metadata that affects deterministic tile selection.
@@ -163,6 +164,7 @@ pub struct FlatRasterRuntime {
     limits: FlatRasterRuntimeLimits,
     pending: BTreeSet<TileId>,
     failed: BTreeSet<TileId>,
+    ready: BTreeSet<TileId>,
     ready_lru: VecDeque<TileId>,
 }
 
@@ -188,6 +190,7 @@ impl FlatRasterRuntime {
             limits,
             pending: BTreeSet::new(),
             failed: BTreeSet::new(),
+            ready: BTreeSet::new(),
             ready_lru: VecDeque::new(),
         })
     }
@@ -507,8 +510,8 @@ impl FlatRasterRuntime {
     /// Marks a browser-fetched tile ready and updates deterministic recency.
     /// Completions for cancelled or already completed requests are ignored.
     pub fn mark_loaded(&mut self, tile: TileId) {
-        if self.pending.remove(&tile) {
-            touch_ready(&mut self.ready_lru, tile);
+        if self.pending.remove(&tile) && self.ready.insert(tile) {
+            self.ready_lru.push_back(tile);
         }
     }
 
@@ -539,37 +542,47 @@ impl FlatRasterRuntime {
             .iter()
             .map(|placement| placement.tile)
             .collect::<BTreeSet<_>>();
+        let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let request_tiles = buffered_request_cover(
+            &visible_tiles,
+            center,
+            self.limits.cache_capacity,
+            REQUEST_PREFETCH_RADIUS_TILES,
+        );
 
         let cancellations = self
             .pending
             .iter()
             .copied()
-            .filter(|tile| !visible_tiles.contains(tile))
+            .filter(|tile| !request_tiles.contains(tile))
             .collect::<Vec<_>>();
         for tile in &cancellations {
             self.pending.remove(tile);
         }
-        self.failed.retain(|tile| visible_tiles.contains(tile));
+        self.failed.retain(|tile| request_tiles.contains(tile));
 
         let evictions = self.prune_cache(&visible_tiles);
         let available_slots = self
             .limits
             .load_concurrency
             .saturating_sub(self.pending.len());
-        let mut request_candidates = visible_tiles
+        let mut request_candidates = request_tiles
             .iter()
             .copied()
             .filter(|tile| {
                 !self.pending.contains(tile)
                     && !self.failed.contains(tile)
-                    && !self.ready_lru.contains(tile)
+                    && !self.ready.contains(tile)
             })
             .collect::<Vec<_>>();
-        let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
-            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         request_candidates.sort_by(|left, right| {
-            tile_center_distance_squared(*left, center)
-                .total_cmp(&tile_center_distance_squared(*right, center))
+            (!visible_tiles.contains(left))
+                .cmp(&(!visible_tiles.contains(right)))
+                .then_with(|| {
+                    tile_center_distance_squared(*left, center)
+                        .total_cmp(&tile_center_distance_squared(*right, center))
+                })
                 .then_with(|| left.cmp(right))
         });
         request_candidates.truncate(available_slots);
@@ -577,11 +590,7 @@ impl FlatRasterRuntime {
         for tile in &request_candidates {
             self.pending.insert(*tile);
         }
-        for tile in &visible_tiles {
-            if self.ready_lru.contains(tile) {
-                touch_ready(&mut self.ready_lru, *tile);
-            }
-        }
+        touch_ready_tiles(&mut self.ready_lru, &self.ready, &visible_tiles);
 
         Ok(RasterFramePlan {
             render_camera,
@@ -603,6 +612,7 @@ impl FlatRasterRuntime {
                 .position(|tile| !visible.contains(tile))
                 .unwrap_or(0);
             if let Some(tile) = self.ready_lru.remove(candidate_index) {
+                self.ready.remove(&tile);
                 evictions.push(tile);
             }
         }
@@ -833,6 +843,66 @@ fn visible_tile_placements(
     Ok(placements)
 }
 
+fn buffered_request_cover(
+    visible: &BTreeSet<TileId>,
+    camera_center: WorldCoordinate,
+    cache_capacity: usize,
+    radius: i64,
+) -> BTreeSet<TileId> {
+    if radius <= 0 || visible.len() >= cache_capacity {
+        return visible.clone();
+    }
+
+    let mut buffered = visible.clone();
+    for tile in visible {
+        let dimension = 1_i64 << u32::from(tile.z);
+        let tile_x = i64::from(tile.x);
+        let tile_y = i64::from(tile.y);
+
+        for delta_y in -radius..=radius {
+            let y = tile_y + delta_y;
+            if y < 0 || y >= dimension {
+                continue;
+            }
+            let Ok(y) = u32::try_from(y) else {
+                continue;
+            };
+
+            for delta_x in -radius..=radius {
+                let x = (tile_x + delta_x).rem_euclid(dimension);
+                let Ok(x) = u32::try_from(x) else {
+                    continue;
+                };
+                if let Some(neighbor) = TileId::new(tile.z, x, y) {
+                    buffered.insert(neighbor);
+                }
+            }
+        }
+    }
+
+    if buffered.len() <= cache_capacity {
+        return buffered;
+    }
+
+    let mut prefetch = buffered
+        .difference(visible)
+        .copied()
+        .collect::<Vec<_>>();
+    prefetch.sort_by(|left, right| {
+        tile_center_distance_squared(*left, camera_center)
+            .total_cmp(&tile_center_distance_squared(*right, camera_center))
+            .then_with(|| left.cmp(right))
+    });
+
+    let mut bounded = visible.clone();
+    bounded.extend(
+        prefetch
+            .into_iter()
+            .take(cache_capacity.saturating_sub(visible.len())),
+    );
+    bounded
+}
+
 fn tile_center_distance_squared(tile: TileId, camera_center: WorldCoordinate) -> f64 {
     let dimension = 2.0_f64.powi(i32::from(tile.z));
     let tile_x = (f64::from(tile.x) + 0.5) / dimension;
@@ -844,11 +914,13 @@ fn tile_center_distance_squared(tile: TileId, camera_center: WorldCoordinate) ->
     x_delta * x_delta + y_delta * y_delta
 }
 
-fn touch_ready(ready: &mut VecDeque<TileId>, tile: TileId) {
-    if let Some(index) = ready.iter().position(|candidate| *candidate == tile) {
-        ready.remove(index);
-    }
-    ready.push_back(tile);
+fn touch_ready_tiles(
+    ready_lru: &mut VecDeque<TileId>,
+    ready: &BTreeSet<TileId>,
+    visible: &BTreeSet<TileId>,
+) {
+    ready_lru.retain(|tile| !visible.contains(tile));
+    ready_lru.extend(visible.intersection(ready).copied());
 }
 
 #[cfg(test)]
@@ -1074,6 +1146,111 @@ mod tests {
         let second = runtime.frame_plan().unwrap();
 
         assert!(!second.requests.contains(&tile));
+    }
+
+    #[test]
+    fn visible_tiles_are_scheduled_before_buffered_prefetch() {
+        let mut runtime = runtime([13.405, 52.52], 5.0, 640.0, 480.0);
+        let plan = runtime.frame_plan().unwrap();
+        let visible = plan
+            .placements
+            .iter()
+            .map(|placement| placement.tile)
+            .collect::<BTreeSet<_>>();
+
+        assert!(visible.len() < plan.requests.len());
+        assert!(
+            plan.requests
+                .iter()
+                .take(visible.len())
+                .all(|tile| visible.contains(tile))
+        );
+        assert!(
+            plan.requests
+                .iter()
+                .skip(visible.len())
+                .any(|tile| !visible.contains(tile))
+        );
+    }
+
+    #[test]
+    fn prefetched_tile_is_reused_when_it_becomes_visible() {
+        let mut runtime = runtime([13.405, 52.52], 5.0, 640.0, 480.0);
+        let first = runtime.frame_plan().unwrap();
+        let visible = first
+            .placements
+            .iter()
+            .map(|placement| placement.tile)
+            .collect::<BTreeSet<_>>();
+        let prefetched = *first
+            .requests
+            .iter()
+            .find(|tile| !visible.contains(tile))
+            .expect("buffered prefetch request");
+        runtime.mark_loaded(prefetched);
+
+        let dimension = 2.0_f64.powi(i32::from(prefetched.z));
+        let center = unproject_web_mercator(WorldCoordinate {
+            x: (f64::from(prefetched.x) + 0.5) / dimension,
+            y: (f64::from(prefetched.y) + 0.5) / dimension,
+        })
+        .expect("prefetched tile center");
+        runtime
+            .set_view_state(center.longitude, center.latitude, f64::from(prefetched.z))
+            .unwrap();
+
+        let next = runtime.frame_plan().unwrap();
+
+        assert!(
+            next.placements
+                .iter()
+                .any(|placement| placement.tile == prefetched)
+        );
+        assert!(!next.requests.contains(&prefetched));
+    }
+
+    #[test]
+    fn prefetch_is_bounded_by_cache_capacity() {
+        let camera = MapCamera::new(
+            13.405,
+            52.52,
+            5.0,
+            0.0,
+            0.0,
+            ViewportSize::new(640.0, 480.0).unwrap(),
+        )
+        .unwrap();
+        let visible_count = visible_tile_placements(
+            camera,
+            RasterSourceSpec::new(0, 19, 512).unwrap(),
+            DEFAULT_MAX_VISIBLE_TILES,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|placement| placement.tile)
+        .collect::<BTreeSet<_>>()
+        .len();
+        let limits = FlatRasterRuntimeLimits::new(
+            DEFAULT_MAX_VISIBLE_TILES,
+            visible_count,
+            DEFAULT_LOAD_CONCURRENCY,
+        )
+        .unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(0, 19, 512).unwrap(),
+            limits,
+        )
+        .unwrap();
+
+        let plan = runtime.frame_plan().unwrap();
+
+        assert_eq!(plan.requests.len(), visible_count.min(DEFAULT_LOAD_CONCURRENCY));
+        assert!(
+            plan.requests
+                .iter()
+                .all(|tile| plan.placements.iter().any(|placement| placement.tile == *tile))
+        );
     }
 
     #[test]
