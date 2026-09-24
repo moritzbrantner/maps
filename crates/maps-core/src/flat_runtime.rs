@@ -1230,12 +1230,9 @@ mod tests {
         .map(|placement| placement.tile)
         .collect::<BTreeSet<_>>()
         .len();
-        let limits = FlatRasterRuntimeLimits::new(
-            DEFAULT_MAX_VISIBLE_TILES,
-            visible_count,
-            DEFAULT_LOAD_CONCURRENCY,
-        )
-        .unwrap();
+        let limits =
+            FlatRasterRuntimeLimits::new(visible_count, visible_count, DEFAULT_LOAD_CONCURRENCY)
+                .unwrap();
         let mut runtime = FlatRasterRuntime::new(
             camera,
             RasterSourceSpec::new(0, 19, 512).unwrap(),
