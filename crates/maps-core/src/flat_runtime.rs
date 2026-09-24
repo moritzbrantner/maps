@@ -1328,12 +1328,9 @@ mod tests {
         let limits =
             FlatRasterRuntimeLimits::new(visible_count, visible_count, DEFAULT_LOAD_CONCURRENCY)
                 .unwrap();
-        let mut runtime = FlatRasterRuntime::new(
-            camera,
-            RasterSourceSpec::new(0, 19, 512).unwrap(),
-            limits,
-        )
-        .unwrap();
+        let mut runtime =
+            FlatRasterRuntime::new(camera, RasterSourceSpec::new(0, 19, 512).unwrap(), limits)
+                .unwrap();
 
         let plan = runtime.frame_plan().unwrap();
 
