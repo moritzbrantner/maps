@@ -916,10 +916,7 @@ fn buffered_request_cover(
         return buffered;
     }
 
-    let mut prefetch = buffered
-        .difference(visible)
-        .copied()
-        .collect::<Vec<_>>();
+    let mut prefetch = buffered.difference(visible).copied().collect::<Vec<_>>();
     prefetch.sort_by(|left, right| {
         tile_center_distance_squared(*left, camera_center)
             .total_cmp(&tile_center_distance_squared(*right, camera_center))
@@ -1217,12 +1214,9 @@ mod tests {
         )
         .unwrap();
         let limits = FlatRasterRuntimeLimits::new(64, 64, 4).unwrap();
-        let mut runtime = FlatRasterRuntime::new(
-            camera,
-            RasterSourceSpec::new(0, 19, 512).unwrap(),
-            limits,
-        )
-        .unwrap();
+        let mut runtime =
+            FlatRasterRuntime::new(camera, RasterSourceSpec::new(0, 19, 512).unwrap(), limits)
+                .unwrap();
 
         let first = runtime.frame_plan().unwrap();
         let initial_visible = first
@@ -1343,12 +1337,15 @@ mod tests {
 
         let plan = runtime.frame_plan().unwrap();
 
-        assert_eq!(plan.requests.len(), visible_count.min(DEFAULT_LOAD_CONCURRENCY));
-        assert!(
-            plan.requests
-                .iter()
-                .all(|tile| plan.placements.iter().any(|placement| placement.tile == *tile))
+        assert_eq!(
+            plan.requests.len(),
+            visible_count.min(DEFAULT_LOAD_CONCURRENCY)
         );
+        assert!(plan.requests.iter().all(|tile| {
+            plan.placements
+                .iter()
+                .any(|placement| placement.tile == *tile)
+        }));
     }
 
     #[test]
