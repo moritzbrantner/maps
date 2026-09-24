@@ -551,7 +551,7 @@ impl FlatRasterRuntime {
             REQUEST_PREFETCH_RADIUS_TILES,
         );
 
-        let cancellations = self
+        let mut cancellations = self
             .pending
             .iter()
             .copied()
@@ -563,6 +563,38 @@ impl FlatRasterRuntime {
         self.failed.retain(|tile| request_tiles.contains(tile));
 
         let evictions = self.prune_cache(&visible_tiles);
+        let missing_visible = visible_tiles
+            .iter()
+            .filter(|tile| {
+                !self.pending.contains(tile)
+                    && !self.failed.contains(tile)
+                    && !self.ready.contains(tile)
+            })
+            .count();
+        let available_slots = self
+            .limits
+            .load_concurrency
+            .saturating_sub(self.pending.len());
+        let preemptions_needed = missing_visible.saturating_sub(available_slots);
+        if preemptions_needed > 0 {
+            let mut pending_prefetch = self
+                .pending
+                .iter()
+                .copied()
+                .filter(|tile| !visible_tiles.contains(tile))
+                .collect::<Vec<_>>();
+            pending_prefetch.sort_by(|left, right| {
+                tile_center_distance_squared(*right, center)
+                    .total_cmp(&tile_center_distance_squared(*left, center))
+                    .then_with(|| right.cmp(left))
+            });
+            for tile in pending_prefetch.into_iter().take(preemptions_needed) {
+                if self.pending.remove(&tile) {
+                    cancellations.push(tile);
+                }
+            }
+            cancellations.sort_unstable();
+        }
         let available_slots = self
             .limits
             .load_concurrency
@@ -1170,6 +1202,75 @@ mod tests {
                 .iter()
                 .skip(visible.len())
                 .any(|tile| !visible.contains(tile))
+        );
+    }
+
+    #[test]
+    fn visible_tiles_preempt_pending_prefetch() {
+        let camera = MapCamera::new(
+            0.0,
+            0.0,
+            5.0,
+            0.0,
+            0.0,
+            ViewportSize::new(640.0, 480.0).unwrap(),
+        )
+        .unwrap();
+        let limits = FlatRasterRuntimeLimits::new(64, 64, 4).unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(0, 19, 512).unwrap(),
+            limits,
+        )
+        .unwrap();
+
+        let first = runtime.frame_plan().unwrap();
+        let initial_visible = first
+            .placements
+            .iter()
+            .map(|placement| placement.tile)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(first.requests.len(), 4);
+        assert!(
+            first
+                .requests
+                .iter()
+                .all(|tile| initial_visible.contains(tile))
+        );
+        for tile in first.requests {
+            runtime.mark_loaded(tile);
+        }
+
+        let prefetch = runtime.frame_plan().unwrap();
+        assert_eq!(prefetch.requests.len(), 4);
+        assert!(
+            prefetch
+                .requests
+                .iter()
+                .all(|tile| !initial_visible.contains(tile))
+        );
+
+        runtime.set_view_state(6.0, 0.0, 5.0).unwrap();
+        let shifted = runtime.frame_plan().unwrap();
+        let newly_visible = shifted
+            .placements
+            .iter()
+            .map(|placement| placement.tile)
+            .filter(|tile| !initial_visible.contains(tile))
+            .collect::<BTreeSet<_>>();
+
+        assert!(!newly_visible.is_empty());
+        assert!(
+            shifted
+                .cancellations
+                .iter()
+                .any(|tile| prefetch.requests.contains(tile))
+        );
+        assert!(
+            shifted
+                .requests
+                .iter()
+                .all(|tile| newly_visible.contains(tile))
         );
     }
 
