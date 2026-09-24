@@ -1,31 +1,19 @@
-name: Packed projection candidate validation
+name: Packed projection matched baseline
 on:
   push:
     branches: [diagnostics/maps-perf-next-20260924]
     paths: [.github/workflows/perf-workspace.yml]
 permissions:
-  contents: write
-  actions: read
+  contents: read
 jobs:
-  validate:
+  baseline:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: diagnostics/maps-perf-next-20260924
-      - name: Publish exact locally-tested patch
-        run: |
-          cat .diagnostics/batch-projection.* | base64 -d | xz -d > /tmp/batch-projection.patch
-          echo '934aeb1750e40b80fb923ddb536de2ccf318b16061e5cc42a1f91c128ffc87dc  /tmp/batch-projection.patch' | sha256sum --check
-          git fetch origin perf/batch-screen-projection
-          git switch perf/batch-screen-projection
-          git apply --index /tmp/batch-projection.patch
-          git diff --cached --check
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'perf: batch screen projection across the WASM boundary'
-          git push origin HEAD:perf/batch-screen-projection
-          mkdir -p evidence
-          git rev-parse HEAD | tee evidence/source-sha.txt
+          ref: f7ba3a09512c6fcab77ca2a862035171e9d02ff0
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
@@ -35,11 +23,12 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - run: bun install --frozen-lockfile
-      - name: TypeScript and unit verification
-        run: bun run verify:agent 2>&1 | tee evidence/verify-agent.log
-      - name: Rust verification
-        run: bun run verify:rust 2>&1 | tee evidence/verify-rust.log
-      - name: Build changed WASM boundary
+      - name: Match candidate verification warmup
+        run: |
+          mkdir -p evidence
+          bun run verify:agent > evidence/verify-agent.log 2>&1
+          bun run verify:rust > evidence/verify-rust.log 2>&1
+      - name: Build base WASM
         run: |
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
           bun run build:wasm
@@ -47,15 +36,15 @@ jobs:
           mkdir -p public/wasm
           cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
       - run: bunx playwright install --with-deps chromium
-      - name: Dense projection browser acceptance
+      - name: Exact matched browser sequence
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: evidence/playwright-report
         run: |
           bun run test:browser --project=chromium e2e/maps-camera-presentation.spec.ts e2e/maps-runtime-performance.spec.ts --output=evidence/test-results 2>&1 | tee evidence/browser.log
-      - name: Retain evidence
+      - name: Retain baseline evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: packed-projection-evidence
+          name: packed-projection-baseline
           path: evidence
           retention-days: 7
