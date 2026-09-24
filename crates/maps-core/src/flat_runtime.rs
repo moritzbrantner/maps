@@ -5,7 +5,7 @@
 //! objects and pixels, but consume these deterministic decisions rather than
 //! reimplementing map semantics.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::{
@@ -156,6 +156,12 @@ impl fmt::Display for FlatRasterRuntimeError {
 
 impl std::error::Error for FlatRasterRuntimeError {}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailedTileState {
+    AwaitingExit,
+    AwaitingVisibility,
+}
+
 /// Stateful first-party raster runtime.
 #[derive(Debug)]
 pub struct FlatRasterRuntime {
@@ -163,7 +169,8 @@ pub struct FlatRasterRuntime {
     source: RasterSourceSpec,
     limits: FlatRasterRuntimeLimits,
     pending: BTreeSet<TileId>,
-    failed: BTreeSet<TileId>,
+    failed: BTreeMap<TileId, FailedTileState>,
+    visible: BTreeSet<TileId>,
     ready: BTreeSet<TileId>,
     ready_lru: VecDeque<TileId>,
 }
@@ -189,7 +196,8 @@ impl FlatRasterRuntime {
             source,
             limits,
             pending: BTreeSet::new(),
-            failed: BTreeSet::new(),
+            failed: BTreeMap::new(),
+            visible: BTreeSet::new(),
             ready: BTreeSet::new(),
             ready_lru: VecDeque::new(),
         })
@@ -515,12 +523,17 @@ impl FlatRasterRuntime {
         }
     }
 
-    /// Marks an active browser fetch failed. Suppress automatic retries while
-    /// the tile remains visible so failures cannot starve the rest of the cover.
-    /// A tile becomes eligible again after leaving and reentering the cover.
+    /// Marks an active browser fetch failed. A visible failure is suppressed
+    /// until the tile leaves and becomes visible again. A speculative failure
+    /// remains suppressed only until that tile first becomes visible.
     pub fn mark_failed(&mut self, tile: TileId) {
         if self.pending.remove(&tile) {
-            self.failed.insert(tile);
+            let state = if self.visible.contains(&tile) {
+                FailedTileState::AwaitingExit
+            } else {
+                FailedTileState::AwaitingVisibility
+            };
+            self.failed.insert(tile, state);
         }
     }
 
@@ -560,14 +573,29 @@ impl FlatRasterRuntime {
         for tile in &cancellations {
             self.pending.remove(tile);
         }
-        self.failed.retain(|tile| request_tiles.contains(tile));
+        self.failed.retain(|tile, state| {
+            if !request_tiles.contains(tile) {
+                return false;
+            }
 
-        let evictions = self.prune_cache(&visible_tiles);
+            let visible = visible_tiles.contains(tile);
+            match (*state, visible) {
+                (FailedTileState::AwaitingExit, false) => {
+                    *state = FailedTileState::AwaitingVisibility;
+                    true
+                }
+                (FailedTileState::AwaitingVisibility, true) => false,
+                _ => true,
+            }
+        });
+        self.visible.clone_from(&visible_tiles);
+
+        let evictions = self.prune_cache(&request_tiles);
         let missing_visible = visible_tiles
             .iter()
             .filter(|tile| {
                 !self.pending.contains(tile)
-                    && !self.failed.contains(tile)
+                    && !self.failed.contains_key(tile)
                     && !self.ready.contains(tile)
             })
             .count();
@@ -604,7 +632,7 @@ impl FlatRasterRuntime {
             .copied()
             .filter(|tile| {
                 !self.pending.contains(tile)
-                    && !self.failed.contains(tile)
+                    && !self.failed.contains_key(tile)
                     && !self.ready.contains(tile)
             })
             .collect::<Vec<_>>();
@@ -634,14 +662,14 @@ impl FlatRasterRuntime {
         })
     }
 
-    fn prune_cache(&mut self, visible: &BTreeSet<TileId>) -> Vec<TileId> {
+    fn prune_cache(&mut self, protected: &BTreeSet<TileId>) -> Vec<TileId> {
         let mut evictions = Vec::new();
 
         while self.ready_lru.len() > self.limits.cache_capacity {
             let candidate_index = self
                 .ready_lru
                 .iter()
-                .position(|tile| !visible.contains(tile))
+                .position(|tile| !protected.contains(tile))
                 .unwrap_or(0);
             if let Some(tile) = self.ready_lru.remove(candidate_index) {
                 self.ready.remove(&tile);
@@ -1269,6 +1297,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_prefetch_retries_when_it_becomes_visible() {
+        let mut runtime = runtime([13.405, 52.52], 5.0, 640.0, 480.0);
+        let first = runtime.frame_plan().unwrap();
+        let visible = first
+            .placements
+            .iter()
+            .map(|placement| placement.tile)
+            .collect::<BTreeSet<_>>();
+        let prefetched = *first
+            .requests
+            .iter()
+            .find(|tile| !visible.contains(tile))
+            .expect("buffered prefetch request");
+        runtime.mark_failed(prefetched);
+
+        let dimension = 2.0_f64.powi(i32::from(prefetched.z));
+        let center = unproject_web_mercator(WorldCoordinate {
+            x: (f64::from(prefetched.x) + 0.5) / dimension,
+            y: (f64::from(prefetched.y) + 0.5) / dimension,
+        })
+        .expect("prefetched tile center");
+        runtime
+            .set_view_state(center.longitude, center.latitude, f64::from(prefetched.z))
+            .unwrap();
+
+        let next = runtime.frame_plan().unwrap();
+
+        assert!(
+            next.placements
+                .iter()
+                .any(|placement| placement.tile == prefetched)
+        );
+        assert!(next.requests.contains(&prefetched));
+    }
+
+    #[test]
     fn prefetched_tile_is_reused_when_it_becomes_visible() {
         let mut runtime = runtime([13.405, 52.52], 5.0, 640.0, 480.0);
         let first = runtime.frame_plan().unwrap();
@@ -1302,6 +1366,48 @@ mod tests {
                 .any(|placement| placement.tile == prefetched)
         );
         assert!(!next.requests.contains(&prefetched));
+    }
+
+    #[test]
+    fn cache_eviction_never_requeues_a_buffered_tile_in_the_same_frame() {
+        let camera = MapCamera::new(
+            0.0,
+            0.0,
+            5.0,
+            0.0,
+            0.0,
+            ViewportSize::new(640.0, 480.0).unwrap(),
+        )
+        .unwrap();
+        let limits = FlatRasterRuntimeLimits::new(8, 8, 8).unwrap();
+        let mut runtime =
+            FlatRasterRuntime::new(camera, RasterSourceSpec::new(0, 19, 512).unwrap(), limits)
+                .unwrap();
+
+        let first = runtime.frame_plan().unwrap();
+        assert_eq!(first.requests.len(), 8);
+        for tile in first.requests {
+            runtime.mark_loaded(tile);
+        }
+
+        runtime.set_view_state(6.0, 0.0, 5.0).unwrap();
+        let shifted = runtime.frame_plan().unwrap();
+        let new_tile = shifted
+            .requests
+            .first()
+            .copied()
+            .expect("shifted request");
+        runtime.mark_loaded(new_tile);
+
+        let after_load = runtime.frame_plan().unwrap();
+
+        assert!(!after_load.evictions.is_empty());
+        assert!(
+            after_load
+                .evictions
+                .iter()
+                .all(|tile| !after_load.requests.contains(tile))
+        );
     }
 
     #[test]
