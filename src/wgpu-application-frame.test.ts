@@ -7,7 +7,10 @@ import type {
   MapRenderPolygon,
 } from "./map-render-frame";
 import type { MapScreenRenderFrame } from "./map-screen-render-frame";
-import { createMapsWgpuApplicationFrame } from "./wgpu-application-frame";
+import {
+  createMapsWgpuApplicationFrame,
+  createMapsWgpuApplicationFramePacker,
+} from "./wgpu-application-frame";
 
 describe("wgpu application frame", () => {
   test("packs a complete labeled circle frame with interaction-adjusted stroke width", () => {
@@ -170,6 +173,44 @@ describe("wgpu application frame", () => {
       ],
       width: 640,
     });
+  });
+
+  test("reuses retained paint across camera-only frames and invalidates style changes", () => {
+    const primitive: MapRenderCircle = {
+      center: [0, 0],
+      feature: null,
+      featureId: "point-a",
+      fillColor: "#336699",
+      fillOpacity: 0.5,
+      interactive: true,
+      kind: "circle",
+      label: null,
+      primitiveId: "circle-a",
+      radius: 7,
+      strokeColor: "#ffffff",
+      strokeOpacity: 0.75,
+      strokeWidth: 2,
+    };
+    const pack = createMapsWgpuApplicationFramePacker();
+    const frame = (x: number): MapScreenRenderFrame => ({
+      height: 480,
+      primitives: [{ kind: "circle", renderPrimitive: primitive, x, y: 80 }],
+      width: 640,
+    });
+
+    const first = pack(frame(120))!;
+    const second = pack(frame(140))!;
+
+    expect(second.circles[0]!.x).toBe(140);
+    expect(second.circles[0]!.fillColor).toBe(first.circles[0]!.fillColor);
+    expect(second.circles[0]!.strokeColor).toBe(first.circles[0]!.strokeColor);
+
+    primitive.fillOpacity = 0.25;
+    const changed = pack(frame(160))!;
+
+    expect(changed.circles[0]!.fillColor).not.toBe(first.circles[0]!.fillColor);
+    expect(changed.circles[0]!.fillColor[3]).toBe(0.25);
+    expect(changed.circles[0]!.strokeColor).toBe(first.circles[0]!.strokeColor);
   });
 
   test("fails closed for polygons until even-odd GPU filling is supported", () => {
