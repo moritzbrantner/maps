@@ -131,19 +131,38 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, input: CircleInput) -> Vert
   return output;
 }
 
+fn premultiplied(color: vec4<f32>) -> vec4<f32> {
+  return vec4<f32>(color.rgb * color.a, color.a);
+}
+
+fn over(foreground: vec4<f32>, background: vec4<f32>) -> vec4<f32> {
+  return foreground + background * (1.0 - foreground.a);
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let distance = length(input.local);
   if distance > 1.0 {
     discard;
   }
-  var color = input.fill_color;
-  if distance >= input.stroke_inner_ratio {
-    color = input.stroke_color;
-  } else if distance > input.fill_ratio {
-    discard;
+
+  let fill = premultiplied(input.fill_color);
+  if distance < input.stroke_inner_ratio {
+    return fill;
   }
-  return vec4<f32>(color.rgb * color.a, color.a);
+
+  if input.stroke_inner_ratio <= 1.0 {
+    let stroke = premultiplied(input.stroke_color);
+    if input.fill_ratio > 0.0 && distance <= input.fill_ratio {
+      return over(stroke, fill);
+    }
+    return stroke;
+  }
+
+  if distance <= input.fill_ratio {
+    return fill;
+  }
+  discard;
 }
 "#;
 
