@@ -512,9 +512,12 @@ function MapLibreBenchmarkPreview({
           "maplibre",
           async (journey) => {
             if (!map) throw new Error("MapLibre reference is unavailable.");
-            const summary = await measureJourney(journey, (viewState) =>
-              waitForMapLibreRender(map!, viewState),
-            );
+            const summary = await measureJourney(journey, (viewState) => {
+              map!.jumpTo({
+                center: viewState.center,
+                zoom: viewState.zoom,
+              });
+            });
             return { detail: "Complete · MapLibre GL 6.4.1", summary };
           },
           "Ready · MapLibre GL 6.4.1",
@@ -574,7 +577,11 @@ function LeafletBenchmarkPreview({
         map = leaflet.map(host, {
           attributionControl: false,
           preferCanvas: true,
+          fadeAnimation: false,
+          markerZoomAnimation: false,
+          zoomAnimation: false,
           zoomControl: false,
+          zoomSnap: 0,
         });
         map.setView(
           [BENCHMARK_INITIAL_VIEW.center[1], BENCHMARK_INITIAL_VIEW.center[0]],
@@ -691,15 +698,6 @@ function waitForPresentation() {
   });
 }
 
-function waitForMapLibreRender(map: MapLibreMap, viewState: MapViewState) {
-  return new Promise<void>((resolve) => {
-    map.once("render", () => resolve());
-    map.jumpTo({
-      center: viewState.center,
-      zoom: viewState.zoom,
-    });
-  });
-}
 
 function createScreenPoints(count: number) {
   const columns = Math.ceil(Math.sqrt(count));
@@ -806,8 +804,12 @@ type LeafletNamespace = {
     element: HTMLElement,
     options: {
       attributionControl: boolean;
+      fadeAnimation: boolean;
+      markerZoomAnimation: boolean;
       preferCanvas: boolean;
+      zoomAnimation: boolean;
       zoomControl: boolean;
+      zoomSnap: number;
     },
   ): LeafletMapLike;
 };
@@ -859,6 +861,12 @@ function loadLeafletScript() {
 
   return new Promise<void>((resolve, reject) => {
     const script = existing ?? document.createElement("script");
+    script.addEventListener("load", () => resolve(), { once: true });
+    script.addEventListener(
+      "error",
+      () => reject(new Error("Leaflet script could not be loaded.")),
+      { once: true },
+    );
     if (!existing) {
       script.crossOrigin = "anonymous";
       script.dataset.mapsBenchmarkLeaflet = "script";
@@ -866,11 +874,5 @@ function loadLeafletScript() {
       script.src = LEAFLET_SCRIPT_URL;
       document.head.append(script);
     }
-    script.addEventListener("load", () => resolve(), { once: true });
-    script.addEventListener(
-      "error",
-      () => reject(new Error("Leaflet script could not be loaded.")),
-      { once: true },
-    );
   });
 }
