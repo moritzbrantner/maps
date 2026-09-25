@@ -311,7 +311,7 @@ export function createMapsBrowserRuntime(
     try {
       renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
       packApplicationFrame = (await import("./wgpu-application-frame"))
-        .createMapsWgpuApplicationFrame;
+        .createMapsWgpuApplicationFramePacker();
       delete canvas.dataset.mapBaseRendererError;
     } catch (error) {
       canvas.dataset.mapBaseRendererError = error instanceof Error ? error.message : String(error);
