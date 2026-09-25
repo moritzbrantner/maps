@@ -30,6 +30,18 @@ void bootstrap();
 async function bootstrap() {
   await initializeHostedRustRuntime();
 
+  if (isBenchmarksPath(window.location.pathname)) {
+    const { BenchmarksPage } = await import("./BenchmarksPage");
+    createRoot(document.getElementById("root")!).render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <BenchmarksPage />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    return;
+  }
+
   const acceptanceMode = new URLSearchParams(window.location.search).get("acceptance");
   let content = <App />;
 
@@ -80,4 +92,10 @@ async function initializeHostedRustRuntime() {
   markRustRuntimeUnavailable(
     "Rust/WASM could not initialize; the deterministic control path remains active.",
   );
+}
+
+
+function isBenchmarksPath(pathname: string) {
+  const segments = pathname.split("/").filter(Boolean);
+  return segments.at(-1) === "benchmarks";
 }
