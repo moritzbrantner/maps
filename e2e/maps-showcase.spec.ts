@@ -14,6 +14,10 @@ test("Pages showcase makes the Map Library capabilities and runtime boundary vis
   await expect(runtimeStatus).toHaveAttribute("data-state", "authoritative");
   await expect(runtimeStatus).toContainText("Rust authoritative");
   await expect(page.getByText("Rust/WASM + wgpu", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Benchmarks" })).toHaveAttribute(
+    "href",
+    "/benchmarks/",
+  );
   await expect(page.locator(".mb-maps").first()).toBeVisible();
 });
 
