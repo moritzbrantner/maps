@@ -70,9 +70,33 @@ export type MapsWgpuApplicationFrame = {
  * polygon/hole behavior until the GPU path can preserve it explicitly. Labels remain a thin Canvas
  * annotation pass above wgpu geometry.
  */
+type CachedPaint = {
+  fill?: { color: string; opacity: number; value: MapsWgpuColor | null };
+  stroke?: { color: string; opacity: number; value: MapsWgpuColor | null };
+  marker?: { color: string; opacity: number; value: MapsWgpuColor | null };
+};
+
+export function createMapsWgpuApplicationFramePacker() {
+  const paintCache = new WeakMap<object, CachedPaint>();
+
+  return (
+    frame: MapScreenRenderFrame<unknown>,
+    interaction: MapScreenInteractionState = {},
+  ): MapsWgpuApplicationFrame | null =>
+    packMapsWgpuApplicationFrame(frame, interaction, paintCache);
+}
+
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
   interaction: MapScreenInteractionState = {},
+): MapsWgpuApplicationFrame | null {
+  return packMapsWgpuApplicationFrame(frame, interaction, new WeakMap());
+}
+
+function packMapsWgpuApplicationFrame(
+  frame: MapScreenRenderFrame<unknown>,
+  interaction: MapScreenInteractionState,
+  paintCache: WeakMap<object, CachedPaint>,
 ): MapsWgpuApplicationFrame | null {
   if (
     !Number.isFinite(frame.width) ||
@@ -92,8 +116,20 @@ export function createMapsWgpuApplicationFrame(
     switch (scenePrimitive.kind) {
       case "circle": {
         const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
-        const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
-        const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
+        const fillColor = resolveCachedColor(
+          paintCache,
+          primitive,
+          "fill",
+          primitive.fillColor,
+          primitive.fillOpacity,
+        );
+        const strokeColor = resolveCachedColor(
+          paintCache,
+          primitive,
+          "stroke",
+          primitive.strokeColor,
+          primitive.strokeOpacity,
+        );
         const strokeWidth = resolveStrokeWidth(
           primitive.strokeWidth,
           primitive.primitiveId,
@@ -125,7 +161,13 @@ export function createMapsWgpuApplicationFrame(
       }
       case "direction-marker": {
         const primitive = scenePrimitive.renderPrimitive as MapRenderDirectionMarker<unknown>;
-        const color = parseSupportedCssColor(primitive.color, primitive.opacity);
+        const color = resolveCachedColor(
+          paintCache,
+          primitive,
+          "marker",
+          primitive.color,
+          primitive.opacity,
+        );
         if (
           !color ||
           !Number.isFinite(scenePrimitive.x) ||
@@ -149,7 +191,13 @@ export function createMapsWgpuApplicationFrame(
       }
       case "line": {
         const primitive = scenePrimitive.renderPrimitive as MapRenderLine<unknown>;
-        const color = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
+        const color = resolveCachedColor(
+          paintCache,
+          primitive,
+          "stroke",
+          primitive.strokeColor,
+          primitive.strokeOpacity,
+        );
         const strokeWidth = resolveStrokeWidth(
           primitive.strokeWidth,
           primitive.primitiveId,
@@ -213,6 +261,29 @@ function resolveStrokeWidth(
           ? 1
           : 0),
   );
+}
+
+function resolveCachedColor(
+  cache: WeakMap<object, CachedPaint>,
+  primitive: object,
+  slot: keyof CachedPaint,
+  color: string,
+  opacity: number,
+): MapsWgpuColor | null {
+  let cached = cache.get(primitive);
+  if (!cached) {
+    cached = {};
+    cache.set(primitive, cached);
+  }
+
+  const current = cached[slot];
+  if (current && current.color === color && Object.is(current.opacity, opacity)) {
+    return current.value;
+  }
+
+  const value = parseSupportedCssColor(color, opacity);
+  cached[slot] = { color, opacity, value };
+  return value;
 }
 
 function parseSupportedCssColor(value: string, opacity: number): MapsWgpuColor | null {
