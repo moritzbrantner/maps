@@ -1392,11 +1392,7 @@ mod tests {
 
         runtime.set_view_state(6.0, 0.0, 5.0).unwrap();
         let shifted = runtime.frame_plan().unwrap();
-        let new_tile = shifted
-            .requests
-            .first()
-            .copied()
-            .expect("shifted request");
+        let new_tile = shifted.requests.first().copied().expect("shifted request");
         runtime.mark_loaded(new_tile);
 
         let after_load = runtime.frame_plan().unwrap();
