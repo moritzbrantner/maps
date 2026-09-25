@@ -89,9 +89,8 @@ export function BenchmarksPage() {
     leaflet: "Loading reference runtime",
     maplibre: "Initializing",
   });
-  const [results, setResults] = useState<Record<BenchmarkId, BenchmarkResultState>>(
-    createInitialResults,
-  );
+  const [results, setResults] =
+    useState<Record<BenchmarkId, BenchmarkResultState>>(createInitialResults);
   const [runningAll, setRunningAll] = useState(false);
   const runnersRef = useRef(new Map<BenchmarkId, BenchmarkRunner>());
 
@@ -371,10 +370,7 @@ function MapsBenchmarkPreview({
     [registerRunner],
   );
 
-  useEffect(
-    () => () => registerRunner("maps", null, "Initializing"),
-    [registerRunner],
-  );
+  useEffect(() => () => registerRunner("maps", null, "Initializing"), [registerRunner]);
 
   return (
     <BenchmarkPreviewCard
@@ -611,11 +607,9 @@ function LeafletBenchmarkPreview({
           async (journey) => {
             if (!map) throw new Error("Leaflet reference is unavailable.");
             const summary = await measureJourney(journey, (viewState) => {
-              map!.setView(
-                [viewState.center[1], viewState.center[0]],
-                viewState.zoom,
-                { animate: false },
-              );
+              map!.setView([viewState.center[1], viewState.center[0]], viewState.zoom, {
+                animate: false,
+              });
             });
             return { detail: "Complete · Leaflet 1.9.4 Canvas", summary };
           },
@@ -697,7 +691,6 @@ function waitForPresentation() {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 }
-
 
 function createScreenPoints(count: number) {
   const columns = Math.ceil(Math.sqrt(count));
