@@ -92,6 +92,8 @@ export function BenchmarksPage() {
   const [results, setResults] =
     useState<Record<BenchmarkId, BenchmarkResultState>>(createInitialResults);
   const [runningAll, setRunningAll] = useState(false);
+  const benchmarkRunning =
+    runningAll || Object.values(results).some((result) => result.status === "running");
   const runnersRef = useRef(new Map<BenchmarkId, BenchmarkRunner>());
 
   const featureCollection = useMemo(
@@ -207,6 +209,7 @@ export function BenchmarksPage() {
           <input
             aria-label="Benchmark point count"
             inputMode="numeric"
+            disabled={benchmarkRunning}
             max={20_000}
             min={100}
             onChange={updatePointCount}
@@ -220,6 +223,7 @@ export function BenchmarksPage() {
           <input
             aria-label="Benchmark camera steps"
             inputMode="numeric"
+            disabled={benchmarkRunning}
             max={40}
             min={3}
             onChange={updateCameraSteps}
@@ -230,7 +234,7 @@ export function BenchmarksPage() {
         </label>
         <button
           className="maps-benchmarks__button maps-benchmarks__button--primary"
-          disabled={runningAll}
+          disabled={benchmarkRunning}
           onClick={() => void runAll()}
           type="button"
         >
@@ -280,7 +284,7 @@ export function BenchmarksPage() {
                       <button
                         aria-label={"Run " + row.label}
                         className="maps-benchmarks__button"
-                        disabled={runningAll || isRunning}
+                        disabled={benchmarkRunning}
                         onClick={() => void runBenchmark(row.id)}
                         type="button"
                       >
