@@ -37,7 +37,11 @@
               url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/${bunAsset.archive}.zip";
               inherit (bunAsset) hash;
             };
-            nativeBuildInputs = [ pkgs.unzip ];
+            nativeBuildInputs = [
+              pkgs.autoPatchelfHook
+              pkgs.unzip
+            ];
+            buildInputs = [ pkgs.openssl ];
             dontUnpack = true;
             installPhase = ''
               mkdir -p "$out/bin"
