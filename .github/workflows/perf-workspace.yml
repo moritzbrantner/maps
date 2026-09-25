@@ -17,7 +17,7 @@ jobs:
       - name: Apply verified renderer patch to current-main candidate
         shell: bash
         run: |
-          cat .diagnostics/instanced-circles.{1,2,3} | tr -d '\\n' | base64 -d | gzip -d > /tmp/candidate.patch
+          cat .diagnostics/instanced-circles.{1,2,3} | base64 -d | gzip -d > /tmp/candidate.patch
           echo '9f8a272c0377a7a547b53c7b1d58ac2310a0e1e51be6832c1248136172288b87  /tmp/candidate.patch' | sha256sum --check
           git fetch origin perf/instanced-application-circles
           git switch perf/instanced-application-circles
