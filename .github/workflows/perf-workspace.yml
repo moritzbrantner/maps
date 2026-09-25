@@ -21,13 +21,13 @@ jobs:
           echo '9f8a272c0377a7a547b53c7b1d58ac2310a0e1e51be6832c1248136172288b87  /tmp/candidate.patch' | sha256sum --check
           git fetch origin perf/instanced-application-circles
           git switch perf/instanced-application-circles
-          git reset --hard origin/perf/instanced-application-circles
+          git reset --hard 1352926d45ed19dd26aeb7eaeb95515aff3164fe
           git apply --check /tmp/candidate.patch
           git apply /tmp/candidate.patch
           git diff --check
           git add crates/maps-wasm/src/wgpu_base_map.rs
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'perf: instance dense application circles on WebGPU'
-          git push origin HEAD
+          git push --force-with-lease origin HEAD:perf/instanced-application-circles
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
