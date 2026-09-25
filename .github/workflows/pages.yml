@@ -46,6 +46,8 @@ jobs:
         mkdir -p public/wasm
         cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
+        mkdir -p dist/benchmarks
+        cp dist/index.html dist/benchmarks/index.html
         node .github-pages-template/bin/github-pages-template.mjs build --config ./pages.config.json --out ./dist --augment
       artifact_paths: dist
       reuse_across_runs: true
