@@ -76,7 +76,7 @@ async function initializeHostedRustRuntime() {
 
   markRustRuntimeLoading();
 
-  const moduleUrl = new URL("wasm/maps_wasm.js", document.baseURI).href;
+  const moduleUrl = new URL(`${import.meta.env.BASE_URL}wasm/maps_wasm.js`, window.location.origin).href;
   configureMapsWasmPackage(moduleUrl);
 
   const initialized = await initializeMapsAggregationWasm({
