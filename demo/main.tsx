@@ -94,7 +94,6 @@ async function initializeHostedRustRuntime() {
   );
 }
 
-
 function isBenchmarksPath(pathname: string) {
   const segments = pathname.split("/").filter(Boolean);
   return segments.at(-1) === "benchmarks";
