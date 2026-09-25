@@ -22,6 +22,10 @@ const layers = document.querySelector<HTMLCanvasElement>("#layers")!;
 const map = document.querySelector<HTMLElement>("#map")!;
 const data = createMapsNativeLayerRuntime();
 const projectScene = createCanvasMapSceneProjector();
+const project = Object.assign(
+  (coordinate: [number, number]) => host.controller!.project(coordinate),
+  { projectPacked: (coordinates: Float64Array) => host.controller!.projectPacked(coordinates) },
+);
 let scene: CanvasMapScene | null = null;
 let revision = 0;
 const host = createMapsBrowserRuntime(base, fallback, {
@@ -38,7 +42,7 @@ const host = createMapsBrowserRuntime(base, fallback, {
     if (layers.height !== height * ratio) layers.height = height * ratio;
     scene = projectScene(
       data.pointFrame({ points, getPointColor: pointColor, filterPoint, pointRadius: 2 }, "native"),
-      (coordinate) => controller.project(coordinate),
+      project,
       { width, height },
       ++revision,
     );

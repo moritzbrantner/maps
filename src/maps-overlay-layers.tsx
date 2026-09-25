@@ -54,7 +54,7 @@ import {
   type MapVectorRenderFrame,
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
-import type { MapScreenInteractionState } from "./map-screen-render-frame";
+import type { MapScreenInteractionState, MapScreenProject } from "./map-screen-render-frame";
 import type { MapSurfaceContextValue } from "./map-surface-context";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
 import type {
@@ -67,9 +67,7 @@ import { PointLayer, type PointLayerProps } from "./point-layer";
 
 import { createMapsNativeLayerRuntime } from "./maps-native-layer-runtime";
 
-export type MapsProjectCoordinate = (
-  coordinates: [longitude: number, latitude: number],
-) => { x: number; y: number } | null;
+export type MapsProjectCoordinate = MapScreenProject;
 
 export type MapsUnprojectCoordinate = (
   x: number,

@@ -94,6 +94,8 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
       previousWidth = size.width;
       previousHeight = size.height;
     }
+    preprojectPackedCoordinates(frame.primitives, project, points, coordinates);
+
     const primitives: Array<CanvasMapScenePrimitive<TFeature>> = [];
     for (const primitive of frame.primitives) {
       let result: CanvasMapScenePrimitive<TFeature> | null;
@@ -164,6 +166,70 @@ export function drawCanvasMapLabels<TFeature = unknown>(
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.fillText(label, primitive.x, primitive.y);
+  }
+}
+
+function preprojectPackedCoordinates<TFeature>(
+  primitives: readonly MapVectorRenderPrimitive<TFeature>[],
+  project: MapRenderProject,
+  points: WeakMap<[number, number], MapScreenPoint | null>,
+  coordinateArrays: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
+) {
+  const projectPacked = project.projectPacked;
+  if (!projectPacked) return;
+
+  const pending: Array<[number, number]> = [];
+  const seen = new Set<[number, number]>();
+  const queuePoint = (coordinate: [number, number]) => {
+    if (points.has(coordinate) || seen.has(coordinate)) return;
+    seen.add(coordinate);
+    pending.push(coordinate);
+  };
+  const queueCoordinates = (values: readonly [number, number][]) => {
+    if (coordinateArrays.has(values)) return;
+    for (const coordinate of values) queuePoint(coordinate);
+  };
+
+  for (const primitive of primitives) {
+    switch (primitive.kind) {
+      case "circle":
+        queuePoint(primitive.center);
+        break;
+      case "direction-marker":
+        queuePoint(primitive.anchor);
+        queuePoint(primitive.previous);
+        break;
+      case "line":
+        queueCoordinates(primitive.coordinates);
+        break;
+      case "polygon":
+        for (const ring of primitive.rings) queueCoordinates(ring);
+        break;
+    }
+  }
+  if (pending.length === 0) return;
+
+  const packed = new Float64Array(pending.length * 2);
+  for (let index = 0; index < pending.length; index += 1) {
+    const coordinate = pending[index]!;
+    packed[index * 2] = coordinate[0];
+    packed[index * 2 + 1] = coordinate[1];
+  }
+
+  let result: Float64Array | null;
+  try {
+    result = projectPacked(packed);
+  } catch {
+    // Preserve the scalar path as a correctness fallback if an older/custom
+    // projector exposes a broken packed implementation.
+    return;
+  }
+  if (!result || result.length !== packed.length) return;
+
+  for (let index = 0; index < pending.length; index += 1) {
+    const x = result[index * 2]!;
+    const y = result[index * 2 + 1]!;
+    points.set(pending[index]!, Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null);
   }
 }
 

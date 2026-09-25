@@ -104,6 +104,16 @@ beforeEach(() => {
       camera.width / 2 + (longitude - camera.center[0]) * camera.zoom,
       camera.height / 2 - (latitude - camera.center[1]) * camera.zoom,
     ]),
+    projectPacked: vi.fn((coordinates: Float64Array) => {
+      const projected = new Float64Array(coordinates.length);
+      for (let index = 0; index < coordinates.length; index += 2) {
+        projected[index] =
+          camera.width / 2 + (coordinates[index]! - camera.center[0]) * camera.zoom;
+        projected[index + 1] =
+          camera.height / 2 - (coordinates[index + 1]! - camera.center[1]) * camera.zoom;
+      }
+      return projected;
+    }),
     unproject: vi.fn((): [number, number] => [0, 0]),
     zoomAbout: vi.fn((delta, _x, _y, min, max) => {
       camera.zoom = Math.max(min, Math.min(max, camera.zoom + delta));
@@ -176,6 +186,7 @@ async function mountMap() {
   paints.length = 0;
   vi.mocked(runtime.frame).mockClear();
   vi.mocked(runtime.project).mockClear();
+  vi.mocked(runtime.projectPacked).mockClear();
   changed.mockClear();
   const canvas = mounted.container.querySelector<HTMLCanvasElement>('[data-flat-runtime="maps"]')!;
   const overlay = mounted.container.querySelector<HTMLCanvasElement>(
@@ -243,7 +254,8 @@ describe("Maps camera presentation", () => {
     expect(paints[0]!.zoom).toBeCloseTo(4.4);
     expect(paints[0]!.x).toBeCloseTo(344);
     expect(runtime.frame).toHaveBeenCalledTimes(1);
-    expect(runtime.project).toHaveBeenCalledTimes(1);
+    expect(runtime.project).not.toHaveBeenCalled();
+    expect(runtime.projectPacked).toHaveBeenCalledTimes(1);
     expect(changed).toHaveBeenCalledTimes(1);
   });
 
@@ -269,7 +281,8 @@ describe("Maps camera presentation", () => {
     act(() => flushAnimationFrame(216));
     expect(runtime.panBetween).toHaveBeenCalledTimes(3);
     expect(paints).toHaveLength(1);
-    expect(runtime.project).toHaveBeenCalledTimes(1);
+    expect(runtime.project).not.toHaveBeenCalled();
+    expect(runtime.projectPacked).toHaveBeenCalledTimes(1);
     expect(paints[0]!.x).toBeGreaterThan(404);
   });
 
@@ -294,7 +307,8 @@ describe("Maps camera presentation", () => {
     });
     // Reflecting camera state into React must not clear and submit the layers again.
     expect(paints).toEqual([{ zoom: 7, x: 370 }]);
-    expect(runtime.project).toHaveBeenCalledTimes(1);
+    expect(runtime.project).not.toHaveBeenCalled();
+    expect(runtime.projectPacked).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes layers on resize even when the geographic camera is unchanged", async () => {

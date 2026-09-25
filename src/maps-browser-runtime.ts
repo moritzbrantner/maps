@@ -58,6 +58,7 @@ export type MapsCanvasFlatRuntimeController = {
   getVisibleBounds(): MapBounds;
   getVisibleTiles(): MapsRasterTileId[];
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
+  projectPacked(coordinates: Float64Array): Float64Array;
   renderApplicationFrame(
     frame: MapScreenRenderFrame<unknown>,
     interaction?: MapScreenInteractionState,
@@ -407,6 +408,10 @@ export function createMapsBrowserRuntime(
         assertActive();
         const [x, y] = runtime.project(coordinates[0], coordinates[1]);
         return { x, y };
+      },
+      projectPacked(coordinates) {
+        assertActive();
+        return runtime.projectPacked(coordinates);
       },
       renderApplicationFrame(frame, interaction = {}) {
         if (cancelled) return false;

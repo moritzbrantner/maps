@@ -18,7 +18,10 @@ const data: GeoJsonLayerProps["featureCollection"] = {
     properties: {},
     geometry: {
       type: "Point",
-      coordinates: [coordinates[0] + (i % 40) * 0.0035, coordinates[1] - Math.floor(i / 40) * 0.002],
+      coordinates: [
+        coordinates[0] + (i % 40) * 0.0035,
+        coordinates[1] - Math.floor(i / 40) * 0.002,
+      ],
     },
   })),
 };
@@ -29,6 +32,8 @@ declare global {
     mapsCameraProbe: {
       frames: number;
       projected: number;
+      projectionBatches: number;
+      scalarProjections: number;
       changes: number;
       samples: Sample[];
       reset(): void;
@@ -40,11 +45,15 @@ let controller: MapSurfaceController | undefined;
 const probe = (window.mapsCameraProbe = {
   frames: 0,
   projected: 0,
+  projectionBatches: 0,
+  scalarProjections: 0,
   changes: 0,
   samples: [] as Sample[],
   reset() {
     this.frames = 0;
     this.projected = 0;
+    this.projectionBatches = 0;
+    this.scalarProjections = 0;
     this.changes = 0;
     this.samples = [];
   },
@@ -58,7 +67,9 @@ const probe = (window.mapsCameraProbe = {
 configureMapsWasmPackage("/wasm/maps_wasm.js");
 type WasmModule = {
   default(): Promise<unknown>;
-  MapsFlatRasterRuntime: { prototype: Pick<MapsFlatRasterRuntime, "frame" | "project"> };
+  MapsFlatRasterRuntime: {
+    prototype: Pick<MapsFlatRasterRuntime, "frame" | "project" | "projectPacked">;
+  };
   MapsWgpuBaseMapRenderer: {
     prototype: {
       render(
@@ -74,6 +85,7 @@ await wasm.default();
 const runtimePrototype = wasm.MapsFlatRasterRuntime.prototype;
 const originalFrame = runtimePrototype.frame;
 const originalProject = runtimePrototype.project;
+const originalProjectPacked = runtimePrototype.projectPacked;
 let activeRuntime: typeof runtimePrototype | undefined;
 runtimePrototype.frame = function (): MapsFlatRasterFrame {
   // oxlint-disable-next-line typescript/no-this-alias -- Observe the actual instrumented Rust instance.
@@ -83,7 +95,13 @@ runtimePrototype.frame = function (): MapsFlatRasterFrame {
 };
 runtimePrototype.project = function (longitude, latitude) {
   probe.projected++;
+  probe.scalarProjections++;
   return originalProject.call(this, longitude, latitude);
+};
+runtimePrototype.projectPacked = function (packed) {
+  probe.projected += packed.length / 2;
+  probe.projectionBatches++;
+  return originalProjectPacked.call(this, packed);
 };
 const expected = (): [number, number] => originalProject.call(activeRuntime!, ...coordinates);
 const rendererPrototype = wasm.MapsWgpuBaseMapRenderer.prototype;

@@ -108,6 +108,16 @@ beforeEach(() => {
       camera.width / 2 + (longitude - camera.center[0]) * camera.zoom,
       camera.height / 2 - (latitude - camera.center[1]) * camera.zoom,
     ]),
+    projectPacked: vi.fn((coordinates: Float64Array) => {
+      const projected = new Float64Array(coordinates.length);
+      for (let index = 0; index < coordinates.length; index += 2) {
+        projected[index] =
+          camera.width / 2 + (coordinates[index]! - camera.center[0]) * camera.zoom;
+        projected[index + 1] =
+          camera.height / 2 - (coordinates[index + 1]! - camera.center[1]) * camera.zoom;
+      }
+      return projected;
+    }),
     unproject: vi.fn((): [number, number] => [0, 0]),
     zoomAbout: vi.fn((delta, _x, _y, min, max) => {
       camera.zoom = Math.max(min, Math.min(max, camera.zoom + delta));
@@ -307,12 +317,15 @@ describe("Controlled composition regression", () => {
     await ready(mounted.container);
     paints.length = 0;
     vi.mocked(runtime.project).mockClear();
+    vi.mocked(runtime.projectPacked).mockClear();
     style.mockClear();
     const canvas = mounted.container.querySelector('[data-flat-runtime="maps"]')!;
     fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
     act(flushAnimationFrame);
     expect(style).not.toHaveBeenCalled();
-    expect(vi.mocked(runtime.project)).toHaveBeenCalledTimes(1000);
+    expect(vi.mocked(runtime.project)).not.toHaveBeenCalled();
+    expect(vi.mocked(runtime.projectPacked)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runtime.projectPacked).mock.calls[0]![0]).toHaveLength(2000);
     expect(paints).toHaveLength(1);
   });
 });
