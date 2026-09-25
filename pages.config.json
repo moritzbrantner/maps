@@ -13,6 +13,10 @@
       "href": "/maps/"
     },
     {
+      "label": "Benchmarks",
+      "href": "/maps/benchmarks/"
+    },
+    {
       "label": "Source",
       "href": "https://github.com/moritzbrantner/maps"
     }
