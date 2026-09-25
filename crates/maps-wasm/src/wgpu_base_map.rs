@@ -13,8 +13,9 @@ const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
 const CAMERA_UNIFORM_SIZE: u64 = 64;
 const VERTEX_SIZE: u64 = 16;
 const APPLICATION_VERTEX_SIZE: u64 = 24;
+const APPLICATION_CIRCLE_INSTANCE_SIZE: u64 = 56;
+const APPLICATION_CIRCLE_VERTEX_COUNT: u32 = 6;
 const VERTICES_PER_TILE: u32 = 4;
-const CIRCLE_SEGMENTS: usize = 24;
 const LINE_CAP_SEGMENTS: usize = 12;
 const MAX_LINE_MITER_SCALE: f64 = 4.0;
 const GEOMETRY_EPSILON: f64 = 1.0e-9;
@@ -90,6 +91,62 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+const APPLICATION_CIRCLE_SHADER: &str = r#"
+struct CircleInput {
+  @location(0) center_clip: vec2<f32>,
+  @location(1) outer_clip: vec2<f32>,
+  @location(2) fill_ratio: f32,
+  @location(3) stroke_inner_ratio: f32,
+  @location(4) fill_color: vec4<f32>,
+  @location(5) stroke_color: vec4<f32>,
+};
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) local: vec2<f32>,
+  @location(1) fill_ratio: f32,
+  @location(2) stroke_inner_ratio: f32,
+  @location(3) fill_color: vec4<f32>,
+  @location(4) stroke_color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32, input: CircleInput) -> VertexOutput {
+  let corners = array<vec2<f32>, 6>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(1.0, -1.0),
+    vec2<f32>(-1.0, 1.0),
+    vec2<f32>(-1.0, 1.0),
+    vec2<f32>(1.0, -1.0),
+    vec2<f32>(1.0, 1.0),
+  );
+  let local = corners[vertex_index];
+  var output: VertexOutput;
+  output.position = vec4<f32>(input.center_clip + local * input.outer_clip, 0.0, 1.0);
+  output.local = local;
+  output.fill_ratio = input.fill_ratio;
+  output.stroke_inner_ratio = input.stroke_inner_ratio;
+  output.fill_color = input.fill_color;
+  output.stroke_color = input.stroke_color;
+  return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  let distance = length(input.local);
+  if distance > 1.0 {
+    discard;
+  }
+  var color = input.fill_color;
+  if distance >= input.stroke_inner_ratio {
+    color = input.stroke_color;
+  } else if distance > input.fill_ratio {
+    discard;
+  }
+  return vec4<f32>(color.rgb * color.a, color.a);
+}
+"#;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WgpuRasterRenderCamera {
@@ -162,6 +219,25 @@ struct TileTexture {
     bind_group: wgpu::BindGroup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApplicationDraw {
+    Circles {
+        first_instance: u32,
+        instance_count: u32,
+    },
+    Triangles {
+        first_vertex: u32,
+        vertex_count: u32,
+    },
+}
+
+#[derive(Default)]
+struct ApplicationGeometry {
+    circle_instances: Vec<u8>,
+    triangle_vertices: Vec<u8>,
+    draws: Vec<ApplicationDraw>,
+}
+
 #[wasm_bindgen]
 pub struct MapsWgpuBaseMapRenderer {
     surface: wgpu::Surface<'static>,
@@ -181,6 +257,9 @@ pub struct MapsWgpuBaseMapRenderer {
     application_pipeline: wgpu::RenderPipeline,
     application_vertex_buffer: wgpu::Buffer,
     application_vertex_capacity: u64,
+    application_circle_pipeline: wgpu::RenderPipeline,
+    application_circle_instance_buffer: wgpu::Buffer,
+    application_circle_instance_capacity: u64,
     tiles: HashMap<String, TileTexture>,
 }
 
@@ -389,18 +468,6 @@ impl MapsWgpuBaseMapRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &application_attributes,
         })];
-        let premultiplied_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
         let application_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Maps application geometry pipeline"),
             layout: Some(&application_pipeline_layout),
@@ -422,7 +489,7 @@ impl MapsWgpuBaseMapRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_view_format,
-                    blend: Some(premultiplied_blend),
+                    blend: Some(premultiplied_blend_state()),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -431,6 +498,79 @@ impl MapsWgpuBaseMapRenderer {
         });
         let application_vertex_buffer =
             create_application_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
+
+        let application_circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Maps application instanced circle shader"),
+            source: wgpu::ShaderSource::Wgsl(APPLICATION_CIRCLE_SHADER.into()),
+        });
+        let application_circle_attributes = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 8,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 16,
+                shader_location: 2,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 20,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 24,
+                shader_location: 4,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 40,
+                shader_location: 5,
+            },
+        ];
+        let application_circle_vertex_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: APPLICATION_CIRCLE_INSTANCE_SIZE,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &application_circle_attributes,
+        })];
+        let application_circle_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Maps application instanced circle pipeline"),
+                layout: Some(&application_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &application_circle_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &application_circle_vertex_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &application_circle_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_view_format,
+                        blend: Some(premultiplied_blend_state()),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        let application_circle_instance_buffer =
+            create_application_circle_instance_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
         Ok(Self {
             surface,
@@ -450,6 +590,9 @@ impl MapsWgpuBaseMapRenderer {
             application_pipeline,
             application_vertex_buffer,
             application_vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
+            application_circle_pipeline,
+            application_circle_instance_buffer,
+            application_circle_instance_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             tiles: HashMap::new(),
         })
     }
@@ -590,11 +733,12 @@ impl MapsWgpuBaseMapRenderer {
             &camera_uniform_bytes(render_camera.view_projection),
         );
 
-        let mut application_vertices = Vec::new();
-        if let Some(frame) = application_frame.as_ref() {
-            append_application_vertices(&mut application_vertices, frame)?;
-        }
-        let application_required = application_vertices.len() as u64;
+        let application_geometry = application_frame
+            .as_ref()
+            .map(prepare_application_geometry)
+            .transpose()?
+            .unwrap_or_default();
+        let application_required = application_geometry.triangle_vertices.len() as u64;
         if application_required > self.application_vertex_capacity {
             let capacity = application_required
                 .next_power_of_two()
@@ -603,12 +747,29 @@ impl MapsWgpuBaseMapRenderer {
                 create_application_vertex_buffer(&self.device, capacity);
             self.application_vertex_capacity = capacity;
         }
-        if !application_vertices.is_empty() {
-            self.queue
-                .write_buffer(&self.application_vertex_buffer, 0, &application_vertices);
+        if !application_geometry.triangle_vertices.is_empty() {
+            self.queue.write_buffer(
+                &self.application_vertex_buffer,
+                0,
+                &application_geometry.triangle_vertices,
+            );
         }
-        let application_vertex_count =
-            (application_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+        let circle_required = application_geometry.circle_instances.len() as u64;
+        if circle_required > self.application_circle_instance_capacity {
+            let capacity = circle_required
+                .next_power_of_two()
+                .max(INITIAL_VERTEX_BUFFER_SIZE);
+            self.application_circle_instance_buffer =
+                create_application_circle_instance_buffer(&self.device, capacity);
+            self.application_circle_instance_capacity = capacity;
+        }
+        if !application_geometry.circle_instances.is_empty() {
+            self.queue.write_buffer(
+                &self.application_circle_instance_buffer,
+                0,
+                &application_geometry.circle_instances,
+            );
+        }
 
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
@@ -663,10 +824,31 @@ impl MapsWgpuBaseMapRenderer {
                 drawn_tiles += 1;
             }
 
-            if application_vertex_count > 0 {
-                pass.set_pipeline(&self.application_pipeline);
-                pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
-                pass.draw(0..application_vertex_count, 0..1);
+            for draw in &application_geometry.draws {
+                match *draw {
+                    ApplicationDraw::Circles {
+                        first_instance,
+                        instance_count,
+                    } => {
+                        pass.set_pipeline(&self.application_circle_pipeline);
+                        pass.set_vertex_buffer(
+                            0,
+                            self.application_circle_instance_buffer.slice(..),
+                        );
+                        pass.draw(
+                            0..APPLICATION_CIRCLE_VERTEX_COUNT,
+                            first_instance..first_instance + instance_count,
+                        );
+                    }
+                    ApplicationDraw::Triangles {
+                        first_vertex,
+                        vertex_count,
+                    } => {
+                        pass.set_pipeline(&self.application_pipeline);
+                        pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
+                        pass.draw(first_vertex..first_vertex + vertex_count, 0..1);
+                    }
+                }
             }
         }
 
@@ -725,6 +907,15 @@ fn create_application_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::B
     })
 }
 
+fn create_application_circle_instance_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Maps application circle instances"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn append_tile_vertices(
     output: &mut Vec<u8>,
     placement: &WgpuRasterTilePlacement,
@@ -764,10 +955,9 @@ fn append_tile_vertices(
     Ok(())
 }
 
-fn append_application_vertices(
-    output: &mut Vec<u8>,
+fn prepare_application_geometry(
     frame: &WgpuApplicationFrame,
-) -> Result<(), JsValue> {
+) -> Result<ApplicationGeometry, JsValue> {
     if !frame.width.is_finite()
         || !frame.height.is_finite()
         || frame.width <= 0.0
@@ -776,42 +966,114 @@ fn append_application_vertices(
         return Err(JsValue::from_str("invalid wgpu application frame extent"));
     }
 
+    let mut geometry = ApplicationGeometry::default();
     for [kind, index] in &frame.order {
         let index = *index as usize;
         match *kind {
-            APPLICATION_CIRCLE => append_application_circle(
-                output,
-                frame.width,
-                frame.height,
-                frame
-                    .circles
-                    .get(index)
-                    .ok_or_else(|| JsValue::from_str("invalid wgpu circle order index"))?,
-            )?,
-            APPLICATION_LINE => append_application_line(
-                output,
-                frame.width,
-                frame.height,
-                frame
-                    .lines
-                    .get(index)
-                    .ok_or_else(|| JsValue::from_str("invalid wgpu line order index"))?,
-            )?,
-            APPLICATION_DIRECTION_MARKER => append_application_direction_marker(
-                output,
-                frame.width,
-                frame.height,
-                frame.direction_markers.get(index).ok_or_else(|| {
-                    JsValue::from_str("invalid wgpu direction marker order index")
-                })?,
-            )?,
+            APPLICATION_CIRCLE => {
+                let first_instance = (geometry.circle_instances.len() as u64
+                    / APPLICATION_CIRCLE_INSTANCE_SIZE) as u32;
+                append_application_circle_instance(
+                    &mut geometry.circle_instances,
+                    frame.width,
+                    frame.height,
+                    frame
+                        .circles
+                        .get(index)
+                        .ok_or_else(|| JsValue::from_str("invalid wgpu circle order index"))?,
+                )?;
+                append_application_draw(
+                    &mut geometry.draws,
+                    ApplicationDraw::Circles {
+                        first_instance,
+                        instance_count: 1,
+                    },
+                );
+            }
+            APPLICATION_LINE => {
+                let first_vertex =
+                    (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+                append_application_line(
+                    &mut geometry.triangle_vertices,
+                    frame.width,
+                    frame.height,
+                    frame
+                        .lines
+                        .get(index)
+                        .ok_or_else(|| JsValue::from_str("invalid wgpu line order index"))?,
+                )?;
+                let vertex_count = (geometry.triangle_vertices.len() as u64
+                    / APPLICATION_VERTEX_SIZE) as u32
+                    - first_vertex;
+                if vertex_count > 0 {
+                    append_application_draw(
+                        &mut geometry.draws,
+                        ApplicationDraw::Triangles {
+                            first_vertex,
+                            vertex_count,
+                        },
+                    );
+                }
+            }
+            APPLICATION_DIRECTION_MARKER => {
+                let first_vertex =
+                    (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+                append_application_direction_marker(
+                    &mut geometry.triangle_vertices,
+                    frame.width,
+                    frame.height,
+                    frame.direction_markers.get(index).ok_or_else(|| {
+                        JsValue::from_str("invalid wgpu direction marker order index")
+                    })?,
+                )?;
+                let vertex_count = (geometry.triangle_vertices.len() as u64
+                    / APPLICATION_VERTEX_SIZE) as u32
+                    - first_vertex;
+                append_application_draw(
+                    &mut geometry.draws,
+                    ApplicationDraw::Triangles {
+                        first_vertex,
+                        vertex_count,
+                    },
+                );
+            }
             _ => return Err(JsValue::from_str("invalid wgpu application order kind")),
         }
     }
-    Ok(())
+    Ok(geometry)
 }
 
-fn append_application_circle(
+fn append_application_draw(draws: &mut Vec<ApplicationDraw>, draw: ApplicationDraw) {
+    match (draws.last_mut(), draw) {
+        (
+            Some(ApplicationDraw::Circles {
+                first_instance,
+                instance_count,
+            }),
+            ApplicationDraw::Circles {
+                first_instance: next_first,
+                instance_count: next_count,
+            },
+        ) if *first_instance + *instance_count == next_first => {
+            *instance_count += next_count;
+        }
+        (
+            Some(ApplicationDraw::Triangles {
+                first_vertex,
+                vertex_count,
+            }),
+            ApplicationDraw::Triangles {
+                first_vertex: next_first,
+                vertex_count: next_count,
+            },
+        ) if *first_vertex + *vertex_count == next_first => {
+            *vertex_count += next_count;
+        }
+        (_, draw) => draws.push(draw),
+    }
+}
+
+fn append_application_circle_instance(
     output: &mut Vec<u8>,
     width: f64,
     height: f64,
@@ -828,40 +1090,46 @@ fn append_application_circle(
         return Err(JsValue::from_str("invalid wgpu application circle"));
     }
 
-    for segment in 0..CIRCLE_SEGMENTS {
-        let angle_a = std::f64::consts::TAU * segment as f64 / CIRCLE_SEGMENTS as f64;
-        let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
-        let a = point_on_circle(circle.x, circle.y, circle.radius, angle_a);
-        let b = point_on_circle(circle.x, circle.y, circle.radius, angle_b);
-        append_application_vertex(output, width, height, circle.x, circle.y, circle.fill_color)?;
-        append_application_vertex(output, width, height, a.0, a.1, circle.fill_color)?;
-        append_application_vertex(output, width, height, b.0, b.1, circle.fill_color)?;
+    let outer_radius = circle.radius + circle.stroke_width / 2.0;
+    let center_clip = [
+        (circle.x / width * 2.0 - 1.0) as f32,
+        (1.0 - circle.y / height * 2.0) as f32,
+    ];
+    let outer_clip = [
+        (outer_radius / width * 2.0) as f32,
+        (outer_radius / height * 2.0) as f32,
+    ];
+    if center_clip
+        .into_iter()
+        .chain(outer_clip)
+        .any(|value| !value.is_finite())
+    {
+        return Err(JsValue::from_str(
+            "wgpu application circle is not representable as f32",
+        ));
     }
+    let (fill_ratio, stroke_inner_ratio) = if outer_radius > 0.0 {
+        (
+            (circle.radius / outer_radius) as f32,
+            if circle.stroke_width > 0.0 {
+                ((circle.radius - circle.stroke_width / 2.0).max(0.0) / outer_radius) as f32
+            } else {
+                2.0
+            },
+        )
+    } else {
+        (0.0, 2.0)
+    };
 
-    if circle.stroke_width > 0.0 {
-        let inner_radius = (circle.radius - circle.stroke_width / 2.0).max(0.0);
-        let outer_radius = circle.radius + circle.stroke_width / 2.0;
-        for segment in 0..CIRCLE_SEGMENTS {
-            let angle_a = std::f64::consts::TAU * segment as f64 / CIRCLE_SEGMENTS as f64;
-            let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
-            let inner_a = point_on_circle(circle.x, circle.y, inner_radius, angle_a);
-            let inner_b = point_on_circle(circle.x, circle.y, inner_radius, angle_b);
-            let outer_a = point_on_circle(circle.x, circle.y, outer_radius, angle_a);
-            let outer_b = point_on_circle(circle.x, circle.y, outer_radius, angle_b);
-
-            for point in [inner_a, outer_a, outer_b, inner_a, outer_b, inner_b] {
-                append_application_vertex(
-                    output,
-                    width,
-                    height,
-                    point.0,
-                    point.1,
-                    circle.stroke_color,
-                )?;
-            }
-        }
+    for value in center_clip
+        .into_iter()
+        .chain(outer_clip)
+        .chain([fill_ratio, stroke_inner_ratio])
+        .chain(circle.fill_color)
+        .chain(circle.stroke_color)
+    {
+        output.extend_from_slice(&value.to_le_bytes());
     }
-
     Ok(())
 }
 
@@ -1119,17 +1387,25 @@ fn append_application_vertex(
     Ok(())
 }
 
-fn point_on_circle(center_x: f64, center_y: f64, radius: f64, angle: f64) -> (f64, f64) {
-    (
-        center_x + angle.cos() * radius,
-        center_y + angle.sin() * radius,
-    )
-}
-
 fn valid_color(color: [f32; 4]) -> bool {
     color
         .into_iter()
         .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
+}
+
+fn premultiplied_blend_state() -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
 }
 
 fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
@@ -1139,6 +1415,103 @@ fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+#[cfg(test)]
+mod application_geometry_tests {
+    use super::*;
+
+    fn circle(x: f64) -> WgpuApplicationCircle {
+        WgpuApplicationCircle {
+            fill_color: [0.1, 0.2, 0.8, 1.0],
+            radius: 6.0,
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            stroke_width: 2.0,
+            x,
+            y: 50.0,
+        }
+    }
+
+    fn line() -> WgpuApplicationLine {
+        WgpuApplicationLine {
+            color: [0.2, 0.3, 0.4, 1.0],
+            points: vec![
+                WgpuApplicationPoint { x: 10.0, y: 10.0 },
+                WgpuApplicationPoint { x: 20.0, y: 20.0 },
+            ],
+            stroke_width: 2.0,
+        }
+    }
+
+    #[test]
+    fn dense_circles_use_one_instanced_draw_without_triangle_tessellation() {
+        let count = 10_000_u32;
+        let frame = WgpuApplicationFrame {
+            circles: (0..count).map(|index| circle(f64::from(index))).collect(),
+            direction_markers: Vec::new(),
+            height: 100.0,
+            lines: Vec::new(),
+            order: (0..count)
+                .map(|index| [APPLICATION_CIRCLE, index])
+                .collect(),
+            width: 100.0,
+        };
+
+        let geometry = prepare_application_geometry(&frame).unwrap();
+
+        assert!(geometry.triangle_vertices.is_empty());
+        assert_eq!(
+            geometry.circle_instances.len() as u64,
+            u64::from(count) * APPLICATION_CIRCLE_INSTANCE_SIZE
+        );
+        assert_eq!(
+            geometry.draws,
+            vec![ApplicationDraw::Circles {
+                first_instance: 0,
+                instance_count: count,
+            }]
+        );
+    }
+
+    #[test]
+    fn interleaved_circle_and_line_batches_preserve_painter_order() {
+        let frame = WgpuApplicationFrame {
+            circles: vec![circle(10.0), circle(30.0), circle(40.0)],
+            direction_markers: Vec::new(),
+            height: 100.0,
+            lines: vec![line()],
+            order: vec![
+                [APPLICATION_CIRCLE, 0],
+                [APPLICATION_CIRCLE, 1],
+                [APPLICATION_LINE, 0],
+                [APPLICATION_CIRCLE, 2],
+            ],
+            width: 100.0,
+        };
+
+        let geometry = prepare_application_geometry(&frame).unwrap();
+        let line_vertices =
+            (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+
+        assert!(line_vertices > 0);
+        assert_eq!(
+            geometry.draws,
+            vec![
+                ApplicationDraw::Circles {
+                    first_instance: 0,
+                    instance_count: 2,
+                },
+                ApplicationDraw::Triangles {
+                    first_vertex: 0,
+                    vertex_count: line_vertices,
+                },
+                ApplicationDraw::Circles {
+                    first_instance: 2,
+                    instance_count: 1,
+                },
+            ]
+        );
+    }
 }
 
 fn js_error(context: &str, error: impl std::fmt::Display) -> JsValue {
