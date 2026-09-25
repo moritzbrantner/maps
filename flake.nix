@@ -78,7 +78,7 @@
           };
         in
         {
-          default = pkgs.mkShellNoCC {
+          default = pkgs.mkShell {
             packages = [
               bun
               pkgs.binaryen
