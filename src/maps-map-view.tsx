@@ -35,7 +35,11 @@ import {
 } from "./map-display";
 import type { MapContextMenuContext, MapFeatureContextMenuContext } from "./map-interaction";
 import type { MapScreenInteractionState, MapScreenRenderFrame } from "./map-screen-render-frame";
-import { MapsOverlayLayers, type MapsOverlayLayersController } from "./maps-overlay-layers";
+import {
+  MapsOverlayLayers,
+  type MapsOverlayLayersController,
+  type MapsProjectCoordinate,
+} from "./maps-overlay-layers";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-surface-context";
 import { useControllableMapViewState } from "./map-view-state";
 import { getFeatureCoordinate, isBlockedHoverPosition } from "./map-view-utils";
@@ -194,12 +198,13 @@ export function MapsMapView({
     [setViewState],
   );
 
-  const projectCoordinate = useCallback(
-    (coordinates: [longitude: number, latitude: number]) => {
-      return runtimeControllerRef.current?.project(coordinates) ?? null;
-    },
-    [isReady],
-  );
+  const projectCoordinate = useMemo<MapsProjectCoordinate>(() => {
+    const project = ((coordinates: [longitude: number, latitude: number]) =>
+      runtimeControllerRef.current?.project(coordinates) ?? null) as MapsProjectCoordinate;
+    project.projectPacked = (coordinates) =>
+      runtimeControllerRef.current?.projectPacked(coordinates) ?? null;
+    return project;
+  }, [isReady]);
 
   const unprojectCoordinate = useCallback(
     (x: number, y: number) => {

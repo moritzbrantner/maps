@@ -298,6 +298,33 @@ impl MapsFlatRasterRuntime {
         encode_json_compatible(&[screen.x, screen.y])
     }
 
+    #[wasm_bindgen(js_name = projectPacked)]
+    pub fn project_packed(&self, coordinates: &[f64]) -> Result<Vec<f64>, JsValue> {
+        let (coordinate_pairs, remainder) = coordinates.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(JsValue::from_str(
+                "packed projection coordinates must contain longitude/latitude pairs",
+            ));
+        }
+
+        let mut projected = Vec::with_capacity(coordinates.len());
+        for coordinate in coordinate_pairs {
+            match self.inner.project_screen(coordinate[0], coordinate[1]) {
+                Ok(screen) => {
+                    projected.push(screen.x);
+                    projected.push(screen.y);
+                }
+                Err(_) => {
+                    // Preserve scalar-project fail-closed behavior per coordinate
+                    // without turning one invalid point into a failed whole batch.
+                    projected.push(f64::NAN);
+                    projected.push(f64::NAN);
+                }
+            }
+        }
+        Ok(projected)
+    }
+
     pub fn unproject(&self, screen_x: f64, screen_y: f64) -> Result<JsValue, JsValue> {
         let coordinate = self
             .inner

@@ -241,6 +241,76 @@ describe("retained Canvas projection", () => {
     expect(result.primitives[0]).toMatchObject({ x: 11, y: 2 });
   });
 
+  it("projects a dense retained frame through one packed runtime call per camera revision", () => {
+    const prepare = createCanvasMapSceneProjector();
+    const scalar = vi.fn(([x, y]: [number, number]) => ({ x, y }));
+    const packed = vi.fn((coordinates: Float64Array) => {
+      const result = new Float64Array(coordinates.length);
+      for (let index = 0; index < coordinates.length; index += 2) {
+        result[index] = coordinates[index]! * 10;
+        result[index + 1] = coordinates[index + 1]! * 10;
+      }
+      return result;
+    });
+    const project = Object.assign(scalar, { projectPacked: packed });
+    const shared: [number, number] = [5, 6];
+    const frame: MapVectorRenderFrame = {
+      kind: "vector",
+      primitives: [
+        circle("point", shared),
+        line("road", [shared, [7, 8], [9, 10]]),
+        polygon("area", [[[1, 2], [3, 4], shared]]),
+      ],
+    };
+    const size = { width: 100, height: 100 };
+
+    const first = prepare(frame, project, size, 1);
+    expect(packed).toHaveBeenCalledTimes(1);
+    expect(scalar).not.toHaveBeenCalled();
+    expect(packed.mock.calls[0]![0]).toHaveLength(10);
+    expect(first.primitives[0]).toMatchObject({ x: 50, y: 60 });
+
+    prepare(frame, project, size, 1);
+    expect(packed).toHaveBeenCalledTimes(1);
+    expect(scalar).not.toHaveBeenCalled();
+
+    prepare(frame, project, size, 2);
+    expect(packed).toHaveBeenCalledTimes(2);
+    expect(scalar).not.toHaveBeenCalled();
+  });
+
+  it("preserves per-coordinate rejection in packed projection without failing the frame", () => {
+    const prepare = createCanvasMapSceneProjector();
+    const scalar = vi.fn(([x, y]: [number, number]) => ({ x, y }));
+    const project = Object.assign(scalar, {
+      projectPacked(coordinates: Float64Array) {
+        const result = new Float64Array(coordinates.length);
+        for (let index = 0; index < coordinates.length; index += 2) {
+          const x = coordinates[index]!;
+          result[index] = x === 99 ? Number.NaN : x;
+          result[index + 1] = x === 99 ? Number.NaN : coordinates[index + 1]!;
+        }
+        return result;
+      },
+    });
+    const frame: MapVectorRenderFrame = {
+      kind: "vector",
+      primitives: [
+        circle("visible", [1, 2]),
+        line("hidden", [
+          [3, 4],
+          [99, 5],
+        ]),
+      ],
+    };
+
+    const scene = prepare(frame, project, { width: 100, height: 100 });
+    expect(scene.primitives.map((primitive) => primitive.renderPrimitive.featureId)).toEqual([
+      "visible",
+    ]);
+    expect(scalar).not.toHaveBeenCalled();
+  });
+
   it("caches whole-primitive rejection and retries it after a camera change", () => {
     const prepare = createCanvasMapSceneProjector();
     const invalid = vi.fn(([x, y]: [number, number]) => (x === 99 ? null : { x, y }));

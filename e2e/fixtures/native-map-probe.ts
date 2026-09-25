@@ -19,6 +19,8 @@ export const flows = Array.from({ length: 100 }, (_, i) => ({
 type Sample = { actual: [number, number] | null; expected: [number, number] };
 export const probe = {
   projected: 0,
+  projectionBatches: 0,
+  scalarProjections: 0,
   styles: 0,
   filters: 0,
   weights: 0,
@@ -34,6 +36,8 @@ export const probe = {
   },
   reset() {
     this.projected = 0;
+    this.projectionBatches = 0;
+    this.scalarProjections = 0;
     this.styles = 0;
     this.filters = 0;
     this.weights = 0;
@@ -81,6 +85,7 @@ export async function observeNativeMap() {
   const runtime = wasm.MapsFlatRasterRuntime.prototype;
   const originalFrame = runtime.frame;
   const originalProject = runtime.project;
+  const originalProjectPacked = runtime.projectPacked;
   let active: MapsFlatRasterRuntime;
   let started: number | null = null;
   runtime.frame = function () {
@@ -91,7 +96,13 @@ export async function observeNativeMap() {
   };
   runtime.project = function (longitude, latitude) {
     probe.projected++;
+    probe.scalarProjections++;
     return originalProject.call(this, longitude, latitude);
+  };
+  runtime.projectPacked = function (coordinates) {
+    probe.projected += coordinates.length / 2;
+    probe.projectionBatches++;
+    return originalProjectPacked.call(this, coordinates);
   };
   probe.position = () => originalProject.call(active, ...anchor);
   const renderer = wasm.MapsWgpuBaseMapRenderer.prototype;

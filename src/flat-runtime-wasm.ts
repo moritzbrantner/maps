@@ -1,7 +1,4 @@
-import {
-  importMapsWasmModule,
-  type MapsWasmModuleBase,
-} from "./aggregation-wasm";
+import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
 import type { MapBounds, MapViewState } from "./map-display";
 
 export type MapsRasterTileId = {
@@ -74,9 +71,7 @@ type MapsFlatRasterWasmFrame = {
   camera: MapsFlatRasterFrame["camera"];
   cancellations: MapsRasterTileCoordinates[];
   evictions: MapsRasterTileCoordinates[];
-  placements: Array<
-    Omit<MapsRasterTilePlacement, "tile"> & { tile: MapsRasterTileCoordinates }
-  >;
+  placements: Array<Omit<MapsRasterTilePlacement, "tile"> & { tile: MapsRasterTileCoordinates }>;
   renderCamera: MapsRasterRenderCamera;
   requests: MapsRasterTileCoordinates[];
   visibleBounds: MapsFlatRasterFrame["visibleBounds"];
@@ -112,16 +107,11 @@ export type MapsFlatRasterRuntime = {
   panBetween(previousX: number, previousY: number, currentX: number, currentY: number): void;
   panBy(deltaX: number, deltaY: number): void;
   project(longitude: number, latitude: number): [x: number, y: number];
+  projectPacked(coordinates: Float64Array): Float64Array;
   resize(width: number, height: number): void;
   setViewState(viewState: MapViewState): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
-  zoomAbout(
-    deltaZoom: number,
-    x: number,
-    y: number,
-    minZoom: number,
-    maxZoom: number,
-  ): void;
+  zoomAbout(deltaZoom: number, x: number, y: number, minZoom: number, maxZoom: number): void;
 };
 
 type MapsFlatRasterWasmRuntime = {
@@ -140,6 +130,7 @@ type MapsFlatRasterWasmRuntime = {
   panBetween(previousX: number, previousY: number, currentX: number, currentY: number): void;
   panBy(deltaX: number, deltaY: number): void;
   project(longitude: number, latitude: number): [x: number, y: number];
+  projectPacked(coordinates: Float64Array): Float64Array;
   resize(width: number, height: number): void;
   setViewState(
     longitude: number,
@@ -149,13 +140,7 @@ type MapsFlatRasterWasmRuntime = {
     pitch: number,
   ): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
-  zoomAbout(
-    deltaZoom: number,
-    x: number,
-    y: number,
-    minZoom: number,
-    maxZoom: number,
-  ): void;
+  zoomAbout(deltaZoom: number, x: number, y: number, minZoom: number, maxZoom: number): void;
 };
 
 type MapsFlatRasterWasmRuntimeConstructor = new (
@@ -214,6 +199,10 @@ export async function loadMapsFlatRasterRuntime(
     project(longitude, latitude) {
       assertLive(disposed);
       return runtime.project(longitude, latitude);
+    },
+    projectPacked(coordinates) {
+      assertLive(disposed);
+      return runtime.projectPacked(coordinates);
     },
     resize(width, height) {
       assertLive(disposed);
