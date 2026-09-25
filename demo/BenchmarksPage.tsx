@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ReactNode,
 } from "react";
 import { Map as MapLibreMap } from "maplibre-gl";
 
@@ -649,7 +650,7 @@ function BenchmarkPreviewCard({
   label,
   status,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   description: string;
   label: string;
   status: string;
