@@ -32,8 +32,7 @@ export function createBenchmarkFeatureCollection(count: number): BenchmarkFeatur
       const row = Math.floor(benchmarkIndex / columns);
       const longitude =
         BENCHMARK_INITIAL_VIEW.center[0] + (column - (columns - 1) / 2) * columnSpacing;
-      const latitude =
-        BENCHMARK_INITIAL_VIEW.center[1] - (row - (columns - 1) / 2) * rowSpacing;
+      const latitude = BENCHMARK_INITIAL_VIEW.center[1] - (row - (columns - 1) / 2) * rowSpacing;
 
       return {
         type: "Feature" as const,
