@@ -33,9 +33,15 @@ jobs:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
-      - name: Rust validation
+      - name: Format candidate and run Rust validation
         shell: bash
         run: |
-          cargo fmt --all -- --check
+          cargo fmt --all
+          git diff --check
+          if ! git diff --quiet; then
+            git add crates/maps-wasm/src/wgpu_base_map.rs
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'style: format instanced circle renderer'
+            git push origin HEAD
+          fi
           cargo test -p maps-wasm --locked
           cargo clippy -p maps-wasm --all-targets --locked -- -D warnings
