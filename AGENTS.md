@@ -29,6 +29,7 @@ For this program:
 - `runtime-profiler` captures immutable runtime evidence and Moonlight owns baseline/candidate evaluation policy;
 - missing/incomparable required evidence is unavailable/inconclusive, never green;
 - authority transfer requires representative parity/evidence and convergence/removal of the superseded path.
+- every first-party feature follows `Developed → Correct → Fast`; do not optimize unresolved semantics, and do not call a feature complete until all three gates pass; see `docs/feature-completion.md`.
 
 #### Foundation seam check
 
