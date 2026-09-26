@@ -39,3 +39,26 @@ test("hosted evidence page fails closed with actionable missing runtime diagnost
 
   expect(pageErrors).toEqual([]);
 });
+
+
+test("hosted Pages publishes the benchmark lab as a direct route", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route("https://unpkg.com/**", (route) => route.abort());
+
+  await page.goto("/maps/benchmarks/?e2e=1");
+
+  await expect(page.getByRole("heading", { name: "Renderer benchmark lab" })).toBeVisible();
+  await expect(page.getByLabel("Benchmark point count")).toHaveValue("400");
+  await expect(page.getByTestId("benchmark-result-maplibre")).toContainText("MapLibre GL 6.4.1");
+
+  await page.getByRole("button", { name: "Run Canvas2D reference" }).click();
+  await expect(page.getByTestId("benchmark-result-canvas2d")).toContainText(
+    "Complete · pixel-only Canvas2D",
+  );
+  await expect(page.getByTestId("benchmark-result-leaflet")).toContainText("Unavailable", {
+    timeout: 10_000,
+  });
+
+  expect(pageErrors).toEqual([]);
+});

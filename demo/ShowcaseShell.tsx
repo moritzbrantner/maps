@@ -27,6 +27,7 @@ export function ShowcaseShell({ children }: { children: ReactNode }) {
             MapLibre.
           </p>
           <nav className="maps-showcase__project-links" aria-label="Project evidence">
+            <a href={`${pagesBase}benchmarks/`}>Benchmarks</a>
             <a href={`${pagesBase}stats/`}>Stats</a>
             <a href={`${pagesBase}evidence/`}>Evidence</a>
             <a href="https://github.com/moritzbrantner/maps">Source</a>
