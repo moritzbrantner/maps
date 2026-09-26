@@ -24,7 +24,11 @@ function ControlledMap() {
   const ready = useCallback((controller: MapSurfaceController) => {
     probe.readyCount++;
     setController(controller);
-    probe.command = (state) => controller.setViewState(state);
+    probe.command = (state) => {
+      const started = performance.now();
+      controller.setViewState(state);
+      probe.commandCpuMs.push(performance.now() - started);
+    };
   }, []);
   const changed = useCallback((state: MapViewState) => {
     probe.changes++;
