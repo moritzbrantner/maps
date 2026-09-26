@@ -5,7 +5,11 @@ import type { MapViewState } from "../../src/map-display";
 
 export const anchor: [number, number] = [13.335, 52.544];
 export const initialCamera: MapViewState = { center: [13.405, 52.52], zoom: 11 };
-export const count = new URLSearchParams(location.search).get("count") === "10000" ? 10000 : 1000;
+const requestedCount = Number(new URLSearchParams(location.search).get("count"));
+export const count =
+  Number.isInteger(requestedCount) && requestedCount >= 100 && requestedCount <= 20_000
+    ? requestedCount
+    : 1000;
 export const points = Array.from({ length: count }, (_, i) => ({
   id: `entity-${i}`,
   longitude: i === 0 ? anchor[0] : 13.36 + (i % 100) * 0.001,
@@ -28,6 +32,10 @@ export const probe = {
   readyCount: 0,
   samples: [] as Sample[],
   cameraCpuMs: [] as number[],
+  commandCpuMs: [] as number[],
+  projectionCpuMs: [] as number[],
+  rendererCpuMs: [] as number[],
+  runtimeFrameCpuMs: [] as number[],
   command: (_state: MapViewState) => {
     throw new Error("Map runtime not ready");
   },
@@ -44,6 +52,10 @@ export const probe = {
     this.changes = 0;
     this.samples = [];
     this.cameraCpuMs = [];
+    this.commandCpuMs = [];
+    this.projectionCpuMs = [];
+    this.rendererCpuMs = [];
+    this.runtimeFrameCpuMs = [];
   },
 };
 declare global {
@@ -92,7 +104,10 @@ export async function observeNativeMap() {
     // oxlint-disable-next-line typescript/no-this-alias -- Observe the actual Rust instance.
     active = this;
     started = performance.now();
-    return originalFrame.call(this);
+    const phaseStarted = performance.now();
+    const result = originalFrame.call(this);
+    probe.runtimeFrameCpuMs.push(performance.now() - phaseStarted);
+    return result;
   };
   runtime.project = function (longitude, latitude) {
     probe.projected++;
@@ -102,7 +117,10 @@ export async function observeNativeMap() {
   runtime.projectPacked = function (coordinates) {
     probe.projected += coordinates.length / 2;
     probe.projectionBatches++;
-    return originalProjectPacked.call(this, coordinates);
+    const phaseStarted = performance.now();
+    const result = originalProjectPacked.call(this, coordinates);
+    probe.projectionCpuMs.push(performance.now() - phaseStarted);
+    return result;
   };
   probe.position = () => originalProject.call(active, ...anchor);
   const renderer = wasm.MapsWgpuBaseMapRenderer.prototype;
@@ -114,8 +132,11 @@ export async function observeNativeMap() {
         actual: circle ? [circle.x, circle.y] : null,
         expected: probe.position(),
       });
+    const phaseStarted = performance.now();
     const result = originalRender.call(this, tiles, camera, frame);
-    // Synchronous camera preparation + submission only, not GPU completion or FPS.
+    if (circle) probe.rendererCpuMs.push(performance.now() - phaseStarted);
+    // Synchronous work from the final Rust frame() call through renderer submission.
+    // This is not GPU completion or FPS; commandCpuMs measures the wider controller call.
     if (started !== null && circle) probe.cameraCpuMs.push(performance.now() - started);
     started = null;
     return result;
