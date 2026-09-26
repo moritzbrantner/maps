@@ -43,7 +43,7 @@ The committed `Cargo.lock` is part of the deterministic repository contract.
 Rust validation uses `--locked` and must fail rather than silently changing the
 dependency graph. Maps may reuse lower-level geo/Moenarch crates when they
 remove duplicate primitive correctness logic, but map-domain behavior remains
-owned by this repository and must not be routed through `viz-engine` or a new
+owned by this repository and must not be routed through `2d-lab` or a new
 generic visualization layer.
 
 ## Distributable WASM Validation
