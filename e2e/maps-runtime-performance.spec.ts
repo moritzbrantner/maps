@@ -194,44 +194,76 @@ test("records native camera CPU samples without a wall-clock CI threshold", asyn
 }, info) => {
   const backendPage = await openBackendPage("wgpu", fixturePage, baseURL);
   const page = backendPage.page;
+  const profiles: unknown[] = [];
   try {
-    await page.goto("/e2e/fixtures/native-performance.html?count=10000");
-    await expect(page.getByLabel("Native performance map")).toHaveAttribute(
-      "data-map-ready",
-      "true",
-    );
-    await expect(page.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
-      "data-map-base-renderer",
-      "wgpu",
-    );
-    const result = await page.evaluate(async () => {
-      await new Promise(requestAnimationFrame);
-      await new Promise(requestAnimationFrame);
-      const p = window.mapsNativeProbe;
-      p.reset();
-      for (let i = 0; i < 30; i++) {
-        p.command({ center: [13.405 + (i % 2) * 0.001, 52.52], zoom: 11 + (i % 2) * 0.05 });
+    for (const count of [1000, 10000]) {
+      await page.goto(`/e2e/fixtures/native-performance.html?count=${count}`);
+      await expect(page.getByLabel("Native performance map")).toHaveAttribute(
+        "data-map-ready",
+        "true",
+      );
+      await expect(page.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
+        "data-map-base-renderer",
+        "wgpu",
+      );
+      const result = await page.evaluate(async () => {
         await new Promise(requestAnimationFrame);
         await new Promise(requestAnimationFrame);
-      }
-      return {
-        scenario: "camera-world-pan-v1",
-        workload: "native-10000-points-100-arcs",
-        samples: p.cameraCpuMs,
-        projected: p.projected,
-        projectionBatches: p.projectionBatches,
-        scalarProjections: p.scalarProjections,
-        styles: p.styles,
-        filters: p.filters,
-        weights: p.weights,
-        presentations: p.samples.length,
-        changes: p.changes,
-        readyCount: p.readyCount,
-      };
-    });
-    expect(result.samples.length).toBeGreaterThanOrEqual(20);
-    await info.attach("native-camera-cpu", {
-      body: JSON.stringify(result, null, 2),
+        const p = window.mapsNativeProbe;
+        const summarize = (values: readonly number[]) => {
+          const sorted = [...values].sort((left, right) => left - right);
+          const percentile = (ratio: number) =>
+            sorted.length === 0
+              ? 0
+              : sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))]!;
+          return {
+            count: sorted.length,
+            meanMs:
+              sorted.length === 0
+                ? 0
+                : sorted.reduce((total, value) => total + value, 0) / sorted.length,
+            p50Ms: percentile(0.5),
+            p95Ms: percentile(0.95),
+          };
+        };
+
+        p.reset();
+        for (let i = 0; i < 30; i++) {
+          p.command({ center: [13.405 + (i % 2) * 0.001, 52.52], zoom: 11 + (i % 2) * 0.05 });
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+        }
+        return {
+          scenario: "camera-world-pan-v1",
+          workload: `native-${new URLSearchParams(location.search).get("count")}-points-100-arcs`,
+          phases: {
+            command: summarize(p.commandCpuMs),
+            finalFrameToSubmit: summarize(p.cameraCpuMs),
+            projection: summarize(p.projectionCpuMs),
+            renderer: summarize(p.rendererCpuMs),
+            runtimeFrame: summarize(p.runtimeFrameCpuMs),
+          },
+          projected: p.projected,
+          projectionBatches: p.projectionBatches,
+          scalarProjections: p.scalarProjections,
+          styles: p.styles,
+          filters: p.filters,
+          weights: p.weights,
+          presentations: p.samples.length,
+          changes: p.changes,
+          readyCount: p.readyCount,
+        };
+      });
+      profiles.push(result);
+      expect(result.phases.command.count).toBeGreaterThanOrEqual(20);
+      expect(result.phases.projection.count).toBeGreaterThanOrEqual(20);
+      expect(result.phases.renderer.count).toBeGreaterThanOrEqual(20);
+      expect(result.scalarProjections).toBe(0);
+      expect([result.styles, result.filters, result.weights]).toEqual([0, 0, 0]);
+    }
+    console.log("MAPS_CAMERA_PHASE_PROFILE " + JSON.stringify(profiles));
+    await info.attach("native-camera-cpu-phases", {
+      body: JSON.stringify(profiles, null, 2),
       contentType: "application/json",
     });
   } finally {
