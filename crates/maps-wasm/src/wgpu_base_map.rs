@@ -1249,14 +1249,7 @@ fn append_application_polygon(
     }
 
     for point in &polygon.fill_points {
-        append_application_vertex(
-            output,
-            width,
-            height,
-            point.x,
-            point.y,
-            polygon.fill_color,
-        )?;
+        append_application_vertex(output, width, height, point.x, point.y, polygon.fill_color)?;
     }
 
     if polygon.stroke_width == 0.0 {
