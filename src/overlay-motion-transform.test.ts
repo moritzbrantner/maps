@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   captureOverlayMotionAnchors,
   invertOverlayMotionPoint,
+  isHeavyOverlayScene,
+  OVERLAY_MOTION_MIN_POINTS,
   resolveOverlayMotionTransform,
 } from "./overlay-motion-transform";
 
@@ -91,5 +93,16 @@ describe("overlay motion transform", () => {
     const camera = flatCamera([0, 0], 2);
     expect(captureOverlayMotionAnchors(camera.unproject, 0, HEIGHT)).toBeNull();
     expect(captureOverlayMotionAnchors(() => null, WIDTH, HEIGHT)).toBeNull();
+  });
+
+  it("presents motion only for overlays too heavy to re-draw every frame", () => {
+    const circle = { kind: "circle" as const, x: 0, y: 0, renderPrimitive: {} as never };
+    const ring = Array.from({ length: OVERLAY_MOTION_MIN_POINTS }, () => ({ x: 0, y: 0 }));
+    const frame = (primitives: unknown[]) =>
+      ({ height: HEIGHT, primitives, width: WIDTH }) as Parameters<typeof isHeavyOverlayScene>[0];
+    expect(isHeavyOverlayScene(frame(Array.from({ length: 10_000 }, () => circle)))).toBe(false);
+    expect(
+      isHeavyOverlayScene(frame([{ kind: "polygon", rings: [ring], renderPrimitive: {} }])),
+    ).toBe(true);
   });
 });

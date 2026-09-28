@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GeoJsonLayer } from "./geojson-layer";
+import { OVERLAY_MOTION_MIN_POINTS } from "./overlay-motion-transform";
 import { MapsMapView } from "./maps-map-view";
 import type { MapSurfaceController, MapViewState } from "./map-display";
 import type { MapsFlatRasterFrame, MapsFlatRasterRuntime } from "./flat-runtime-wasm";
@@ -227,6 +228,27 @@ async function mountMap(onMapContextMenu?: () => void) {
   };
 }
 
+/** The ±20° x ±10° rectangle, densified past the heavy-overlay threshold. */
+function denseRectangle() {
+  const perEdge = OVERLAY_MOTION_MIN_POINTS / 4;
+  const corners: Array<[number, number]> = [
+    [-20, -10],
+    [20, -10],
+    [20, 10],
+    [-20, 10],
+  ];
+  const ring: Array<[number, number]> = [];
+  corners.forEach(([x, y], index) => {
+    const [nextX, nextY] = corners[(index + 1) % corners.length]!;
+    for (let step = 0; step < perEdge; step += 1) {
+      const t = step / perEdge;
+      ring.push([x + (nextX - x) * t, y + (nextY - y) * t]);
+    }
+  });
+  ring.push([-20, -10]);
+  return ring;
+}
+
 const polygonCollection = {
   type: "FeatureCollection" as const,
   features: [
@@ -234,23 +256,15 @@ const polygonCollection = {
       type: "Feature" as const,
       id: "area",
       properties: {},
-      geometry: {
-        type: "Polygon" as const,
-        coordinates: [
-          [
-            [-20, -10],
-            [20, -10],
-            [20, 10],
-            [-20, 10],
-            [-20, -10],
-          ],
-        ],
-      },
+      geometry: { type: "Polygon" as const, coordinates: [denseRectangle()] },
     },
   ],
 };
 
-/** Polygons are drawn by the Canvas overlay (the wgpu application frame fails closed). */
+/**
+ * A heavy polygon: drawn by the Canvas overlay (the wgpu application frame fails closed on
+ * polygons) and large enough for motion presentation.
+ */
 async function mountPolygonMap(onSelectedFeatureIdChange?: (featureId: string | null) => void) {
   const content = (collection: typeof polygonCollection = polygonCollection) => (
     <MapsMapView
@@ -637,6 +651,27 @@ describe("Maps camera presentation", () => {
     expect(runtime.projectPacked).toHaveBeenCalled();
     expect(overlay.style.transform).toBe("");
     now.mockRestore();
+  });
+
+  it("keeps re-drawing light Canvas overlays exactly on every camera frame", async () => {
+    const light = structuredClone(polygonCollection);
+    light.features[0]!.geometry.coordinates = [
+      [
+        [-20, -10],
+        [20, -10],
+        [20, 10],
+        [-20, 10],
+        [-20, -10],
+      ],
+    ];
+    const { canvas, overlay, replaceData } = await mountPolygonMap();
+    act(() => replaceData(light));
+    vi.mocked(runtime.projectPacked).mockClear();
+    pointer(canvas, "pointerdown", 100, 100);
+    pointer(canvas, "pointermove", 108, 116);
+    act(flushAnimationFrame);
+    expect(runtime.projectPacked).toHaveBeenCalledTimes(1);
+    expect(overlay.style.transform).toBe("");
   });
 
   it("defers overlay data changes during motion to the settle render", async () => {

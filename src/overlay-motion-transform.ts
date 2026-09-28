@@ -1,4 +1,4 @@
-import type { MapScreenPoint } from "./map-screen-render-frame";
+import type { MapScreenPoint, MapScreenRenderFrame } from "./map-screen-render-frame";
 
 /**
  * Presentation-only motion transform for a retained overlay render.
@@ -30,6 +30,12 @@ export type OverlayMotionAnchors = {
 type Project = (coordinate: [longitude: number, latitude: number]) => MapScreenPoint | null;
 type Unproject = (x: number, y: number) => [longitude: number, latitude: number] | null;
 
+/**
+ * Overlays below this many projected points are re-drawn exactly every frame: for them
+ * a transform would only trade symbol/label fidelity (scaled, rotated) for nothing.
+ */
+export const OVERLAY_MOTION_MIN_POINTS = 50_000;
+
 /** Retained content is only presented within one zoom level of its render. */
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 2;
@@ -38,6 +44,27 @@ const MIN_COVERAGE = 0.5;
 const COVERAGE_GRID = 4;
 /** Relative tolerance for "the camera change is a similarity" (no pitch/perspective). */
 const SIMILARITY_TOLERANCE = 1e-3;
+
+/** Whether re-drawing `scene` every camera frame is heavy enough to present motion instead. */
+export function isHeavyOverlayScene(scene: MapScreenRenderFrame<unknown>) {
+  let points = 0;
+  for (const primitive of scene.primitives) {
+    switch (primitive.kind) {
+      case "circle":
+      case "direction-marker":
+        points += 1;
+        break;
+      case "line":
+        points += primitive.points.length;
+        break;
+      case "polygon":
+        for (const ring of primitive.rings) points += ring.length;
+        break;
+    }
+    if (points >= OVERLAY_MOTION_MIN_POINTS) return true;
+  }
+  return false;
+}
 
 export function captureOverlayMotionAnchors(
   unproject: Unproject,

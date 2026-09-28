@@ -69,6 +69,7 @@ import { createMapsNativeLayerRuntime } from "./maps-native-layer-runtime";
 import {
   captureOverlayMotionAnchors,
   invertOverlayMotionPoint,
+  isHeavyOverlayScene,
   overlayMotionMatrixCss,
   resolveOverlayMotionTransform,
   type OverlayMotionAnchors,
@@ -249,8 +250,8 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const drawRef = useRef<(() => void) | null>(null);
     const clearApplicationFrameRef = useRef<(() => void) | null>(null);
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
-    // Canvas-rendered overlays are presented by a CSS transform of the retained render
-    // while the camera moves; re-projection waits until motion settles.
+    // Heavy Canvas-rendered overlays are presented by a CSS transform of the retained
+    // render while the camera moves; re-projection waits until motion settles.
     const motionAnchorsRef = useRef<OverlayMotionAnchors | null>(null);
     const motionMatrixRef = useRef<OverlayMotionMatrix | null>(null);
     const motionSettleFrameRef = useRef<number | null>(null);
@@ -613,7 +614,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           for (const primitive of scene.primitives) {
             drawCanvasMapPrimitive(context, primitive, interaction);
           }
-          const anchors = captureOverlayMotionAnchors(unproject, size.width, size.height);
+          const anchors = isHeavyOverlayScene(scene)
+            ? captureOverlayMotionAnchors(unproject, size.width, size.height)
+            : null;
           motionAnchorsRef.current = anchors;
           lastDrawRef.current.motionAnchors = anchors;
           return;
