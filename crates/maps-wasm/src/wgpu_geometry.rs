@@ -18,11 +18,11 @@ const APPLICATION_POLYGON: u32 = 3;
 pub(super) type RasterTileKey = (u8, u32, u32);
 
 /// Packed tile draw input shared with `src/wgpu-base-map-wasm.ts`: 16
-/// view-projection elements, the render-surface margin (CSS px per side) and the
-/// viewport clip width/height (CSS px; 0 draws the whole surface), followed by one
-/// [`PACKED_TILE_DRAW_STRIDE`] record per placement
-/// (z, x, y, local west, local north, local size).
-const PACKED_TILE_DRAW_HEADER_LENGTH: usize = 19;
+/// view-projection elements, the render-surface margin (CSS px per side), the
+/// viewport clip width/height (CSS px; 0 draws the whole surface) and the CSS-to-
+/// physical pixel ratio, followed by one [`PACKED_TILE_DRAW_STRIDE`] record per
+/// placement (z, x, y, local west, local north, local size).
+const PACKED_TILE_DRAW_HEADER_LENGTH: usize = 20;
 const PACKED_TILE_DRAW_STRIDE: usize = 6;
 
 pub(super) struct WgpuRasterTilePlacement {
@@ -46,6 +46,8 @@ pub(super) struct SurfaceClip {
     pub(super) margin: f64,
     /// Viewport CSS size when only the viewport is drawn (continuous motion).
     pub(super) viewport: Option<(f64, f64)>,
+    /// CSS-to-physical pixel ratio of the surface (screen-space line widths).
+    pub(super) pixel_ratio: f64,
 }
 
 impl SurfaceClip {
@@ -107,9 +109,17 @@ pub(super) fn unpack_tile_draws(
         }
         _ => return Err("invalid wgpu viewport clip"),
     };
+    let pixel_ratio = header[19];
+    if !pixel_ratio.is_finite() || pixel_ratio <= 0.0 {
+        return Err("invalid wgpu pixel ratio");
+    }
     Ok((
         view_projection,
-        SurfaceClip { margin, viewport },
+        SurfaceClip {
+            margin,
+            viewport,
+            pixel_ratio,
+        },
         records
             .as_chunks::<PACKED_TILE_DRAW_STRIDE>()
             .0
@@ -1104,6 +1114,7 @@ mod surface_clip_tests {
         let clip = SurfaceClip {
             margin: 128.0,
             viewport: Some((1024.0, 768.0)),
+            pixel_ratio: 1.0,
         };
         // 1x: the surface is 1280 x 1024 physical pixels.
         assert_eq!(clip.scissor(1280, 1024), Some((128, 128, 1024, 768)));
@@ -1116,6 +1127,7 @@ mod surface_clip_tests {
         let clip = SurfaceClip {
             margin: 10.5,
             viewport: Some((99.3, 50.0)),
+            pixel_ratio: 1.0,
         };
         let (x, y, width, height) = clip.scissor(241, 142).unwrap();
         let scale_x = 241.0 / (99.3 + 21.0);
@@ -1129,6 +1141,7 @@ mod surface_clip_tests {
         let clip = SurfaceClip {
             margin: 128.0,
             viewport: None,
+            pixel_ratio: 1.0,
         };
         assert_eq!(clip.scissor(1280, 1024), None);
     }
@@ -1144,14 +1157,15 @@ mod raster_geometry_tests {
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ];
         let mut packed = matrix.to_vec();
-        packed.extend([12.0, 99.0, 50.0, 2.0, 3.0, 1.0, 100.0, 200.0, 64.0]);
+        packed.extend([12.0, 99.0, 50.0, 2.0, 2.0, 3.0, 1.0, 100.0, 200.0, 64.0]);
 
         let (camera, clip, mut placements) = unpack_tile_draws(&packed).unwrap();
         assert_eq!(
             clip,
             SurfaceClip {
                 margin: 12.0,
-                viewport: Some((99.0, 50.0))
+                viewport: Some((99.0, 50.0)),
+                pixel_ratio: 2.0,
             }
         );
         let tile = placements.next().unwrap();
@@ -1180,15 +1194,17 @@ mod raster_geometry_tests {
     #[test]
     fn malformed_packed_draws_and_unrepresentable_tile_geometry_fail_closed() {
         assert!(unpack_tile_draws(&[]).is_err());
-        assert!(unpack_tile_draws(&[0.0; 20]).is_err());
-        for (margin, width, height) in [
-            (-1.0, 0.0, 0.0),
-            (f64::NAN, 0.0, 0.0),
-            (0.0, 10.0, 0.0),
-            (0.0, f64::INFINITY, 10.0),
+        assert!(unpack_tile_draws(&[0.0; 21]).is_err());
+        for (margin, width, height, pixel_ratio) in [
+            (-1.0, 0.0, 0.0, 1.0),
+            (f64::NAN, 0.0, 0.0, 1.0),
+            (0.0, 10.0, 0.0, 1.0),
+            (0.0, f64::INFINITY, 10.0, 1.0),
+            (0.0, 0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0, f64::NAN),
         ] {
-            let mut packed = [0.0; 19];
-            packed[16..].copy_from_slice(&[margin, width, height]);
+            let mut packed = [0.0; 20];
+            packed[16..].copy_from_slice(&[margin, width, height, pixel_ratio]);
             assert!(unpack_tile_draws(&packed).is_err());
         }
         for (west, north, size) in [(0.0, 0.0, 0.0), (f64::NAN, 0.0, 1.0), (f64::MAX, 0.0, 1.0)] {

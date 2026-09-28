@@ -145,9 +145,23 @@ beforeEach(() => {
   renderer = {
     dispose: vi.fn(),
     evictTile: vi.fn(),
+    evictVectorTile: vi.fn(),
+    frameStats: vi.fn(() => ({
+      drawCalls: 0,
+      rasterTiles: 0,
+      retainedVectorBytes: 0,
+      retainedVectorFeatures: 0,
+      retainedVectorLineSegments: 0,
+      retainedVectorTiles: 0,
+      retainedVectorTriangles: 0,
+      vectorTiles: 0,
+    })),
     isDeviceLost: vi.fn(() => false),
     resize: vi.fn(),
+    setVectorMaxZoom: vi.fn(),
+    setVectorStyle: vi.fn(),
     uploadTile: vi.fn(),
+    uploadVectorTile: vi.fn(() => 0),
     render: vi.fn((_tiles, matrix, application) => {
       paints.push({ zoom: matrix.viewProjection[0], x: application?.circles[0]?.x });
       return 0;
@@ -360,6 +374,46 @@ describe("plain browser host lifecycle", () => {
     expect(renderer.dispose).toHaveBeenCalledOnce();
     expect(runtime.dispose).toHaveBeenCalledOnce();
     expect(() => controller.setViewState({ center: [0, 0], zoom: 9 })).toThrow(/disposed/);
+  });
+
+  it("re-renders retained vector tiles once and withdraws them when WebGPU fails", async () => {
+    const { createMapsBrowserRuntime } = await import("./maps-browser-runtime");
+    const canvas = document.createElement("canvas");
+    const host = createMapsBrowserRuntime(canvas, document.createElement("canvas"), {
+      mapStyle: { tiles: false },
+      viewState: { center: [0, 0], zoom: 4 },
+      onViewStateChange: vi.fn(),
+    });
+    await host.ready;
+    const controller = host.controller!;
+    const renderers: string[] = [];
+    controller.subscribeBaseRenderer((backend) => renderers.push(backend));
+    const basemap = controller.getRetainedVectorBasemap()!;
+    expect(controller.getBaseRenderer()).toBe("wgpu");
+    vi.mocked(renderer.uploadVectorTile).mockReturnValue(3);
+    const tile = { key: "4/8/5", x: 8, y: 5, z: 4 };
+    const bytes = new Uint8Array([1, 2, 3]);
+
+    const rendersBefore = vi.mocked(renderer.render).mock.calls.length;
+    expect(basemap.uploadTile(tile, bytes)).toBe(3);
+    basemap.uploadTile({ ...tile, key: "4/9/5", x: 9 }, bytes);
+    expect(renderer.uploadVectorTile).toHaveBeenCalledWith(tile, bytes);
+    flushAnimationFrame();
+    // Two uploads in one frame coalesce into one render of the unchanged camera.
+    expect(vi.mocked(renderer.render).mock.calls.length - rendersBefore).toBe(1);
+    expect(controller.getRendererStats()).toMatchObject({ backend: "wgpu", renders: 2 });
+
+    vi.mocked(renderer.render).mockImplementation(() => {
+      throw new Error("device lost");
+    });
+    basemap.evictTile(tile);
+    flushAnimationFrame();
+    expect(renderer.evictVectorTile).toHaveBeenCalledWith(tile);
+    expect(controller.getBaseRenderer()).toBe("canvas2d");
+    expect(renderers).toEqual(["canvas2d"]);
+    expect(controller.getRetainedVectorBasemap()).toBeNull();
+    expect(basemap.uploadTile(tile, bytes)).toBe(0);
+    host.dispose();
   });
 
   it.each(["wasm", "gpu"] as const)(

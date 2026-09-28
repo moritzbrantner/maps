@@ -155,9 +155,23 @@ beforeEach(() => {
   renderer = {
     dispose: vi.fn(),
     evictTile: vi.fn(),
+    evictVectorTile: vi.fn(),
+    frameStats: vi.fn(() => ({
+      drawCalls: 0,
+      rasterTiles: 0,
+      retainedVectorBytes: 0,
+      retainedVectorFeatures: 0,
+      retainedVectorLineSegments: 0,
+      retainedVectorTiles: 0,
+      retainedVectorTriangles: 0,
+      vectorTiles: 0,
+    })),
     isDeviceLost: vi.fn(() => false),
     resize: vi.fn(),
+    setVectorMaxZoom: vi.fn(),
+    setVectorStyle: vi.fn(),
     uploadTile: vi.fn(),
+    uploadVectorTile: vi.fn(() => 0),
     render: vi.fn((_tiles, matrix, application, _margin, viewportClip) => {
       paints.push({
         zoom: matrix.viewProjection[0],
