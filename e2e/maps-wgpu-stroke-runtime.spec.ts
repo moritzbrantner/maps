@@ -247,6 +247,13 @@ test("Pages Shortbread basemap renders through the Canvas fallback @smoke", asyn
 test("Shortbread fills preserve forest islands beneath application points @smoke", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "gpu", {
+      configurable: true,
+      get: () => undefined,
+    });
+  });
+
   const tiles: Array<{ x: number; y: number; z: number }> = [];
   const fixture = createShortbreadWaterFixture();
   await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
