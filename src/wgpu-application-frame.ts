@@ -1,7 +1,10 @@
+import earcut from "earcut";
+
 import type {
   MapRenderCircle,
   MapRenderDirectionMarker,
   MapRenderLine,
+  MapRenderPolygon,
 } from "./map-render-frame";
 import type {
   MapScreenInteractionState,
@@ -38,15 +41,25 @@ export type MapsWgpuApplicationLine = {
   strokeWidth: number;
 };
 
+export type MapsWgpuApplicationPolygon = {
+  fillColor: MapsWgpuColor;
+  fillPoints: readonly MapsWgpuApplicationPoint[];
+  rings: readonly (readonly MapsWgpuApplicationPoint[])[];
+  strokeColor: MapsWgpuColor;
+  strokeWidth: number;
+};
+
 export const MAPS_WGPU_APPLICATION_CIRCLE = 0;
 export const MAPS_WGPU_APPLICATION_LINE = 1;
 export const MAPS_WGPU_APPLICATION_DIRECTION_MARKER = 2;
+export const MAPS_WGPU_APPLICATION_POLYGON = 3;
 
 export type MapsWgpuApplicationOrderEntry = [
   kind:
     | typeof MAPS_WGPU_APPLICATION_CIRCLE
     | typeof MAPS_WGPU_APPLICATION_LINE
-    | typeof MAPS_WGPU_APPLICATION_DIRECTION_MARKER,
+    | typeof MAPS_WGPU_APPLICATION_DIRECTION_MARKER
+    | typeof MAPS_WGPU_APPLICATION_POLYGON,
   index: number,
 ];
 
@@ -56,6 +69,7 @@ export type MapsWgpuApplicationFrame = {
   height: number;
   lines: MapsWgpuApplicationLine[];
   order: MapsWgpuApplicationOrderEntry[];
+  polygons: MapsWgpuApplicationPolygon[];
   width: number;
 };
 
@@ -64,11 +78,11 @@ export type MapsWgpuApplicationFrame = {
  *
  * Projection has already happened through the Maps-owned runtime. This transport only resolves
  * renderer-side colors and interaction stroke widths. Per-kind arrays keep WASM deserialization
- * simple and compact; `order` preserves the exact Maps render order across circles, lines, and flow
- * direction markers. Projected line points are reused directly until the unavoidable WASM boundary.
- * Polygon frames still fail closed to Canvas because the correctness backend owns even-odd
- * polygon/hole behavior until the GPU path can preserve it explicitly. Labels remain a thin Canvas
- * annotation pass above wgpu geometry.
+ * simple and compact; `order` preserves the exact Maps render order across circles, lines, polygons,
+ * and flow direction markers. Projected line and polygon points are reused directly until the
+ * unavoidable WASM boundary. Polygon fills use Earcut only as renderer-side screen-space
+ * tessellation; Maps remains authoritative for geographic projection, ring semantics, identity and
+ * interaction state. Labels remain a thin Canvas annotation pass above wgpu geometry.
  */
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
@@ -87,6 +101,7 @@ export function createMapsWgpuApplicationFrame(
   const directionMarkers: MapsWgpuApplicationDirectionMarker[] = [];
   const lines: MapsWgpuApplicationLine[] = [];
   const order: MapsWgpuApplicationOrderEntry[] = [];
+  const polygons: MapsWgpuApplicationPolygon[] = [];
 
   for (const scenePrimitive of frame.primitives) {
     switch (scenePrimitive.kind) {
@@ -171,8 +186,31 @@ export function createMapsWgpuApplicationFrame(
         lines.push({ color, points, strokeWidth });
         break;
       }
-      case "polygon":
-        return null;
+      case "polygon": {
+        const primitive = scenePrimitive.renderPrimitive as MapRenderPolygon<unknown>;
+        const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
+        const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
+        const strokeWidth = resolveStrokeWidth(
+          primitive.strokeWidth,
+          primitive.primitiveId,
+          interaction,
+        );
+        const geometry = preparePolygonGeometry(scenePrimitive.rings);
+
+        if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth) || !geometry) {
+          return null;
+        }
+
+        order.push([MAPS_WGPU_APPLICATION_POLYGON, polygons.length]);
+        polygons.push({
+          fillColor,
+          fillPoints: geometry.fillPoints,
+          rings: geometry.rings,
+          strokeColor,
+          strokeWidth,
+        });
+        break;
+      }
     }
   }
 
@@ -182,6 +220,7 @@ export function createMapsWgpuApplicationFrame(
     height: frame.height,
     lines,
     order,
+    polygons,
     width: frame.width,
   };
 }
@@ -197,6 +236,58 @@ function hasNonDegenerateSegment(points: readonly MapsWgpuApplicationPoint[]) {
     if (previous.x !== point.x || previous.y !== point.y) return true;
   }
   return false;
+}
+
+function preparePolygonGeometry(
+  sourceRings: readonly (readonly MapsWgpuApplicationPoint[])[],
+): { fillPoints: MapsWgpuApplicationPoint[]; rings: MapsWgpuApplicationPoint[][] } | null {
+  if (sourceRings.length === 0) return null;
+
+  const rings: MapsWgpuApplicationPoint[][] = [];
+  const vertices: number[] = [];
+  const holeIndices: number[] = [];
+
+  for (let ringIndex = 0; ringIndex < sourceRings.length; ringIndex += 1) {
+    const ring = normalizePolygonRing(sourceRings[ringIndex]!);
+    if (ring.length < 3 || !allFinitePoints(ring)) return null;
+
+    if (ringIndex > 0) holeIndices.push(vertices.length / 2);
+    rings.push(ring);
+    for (const point of ring) vertices.push(point.x, point.y);
+  }
+
+  let indices: number[];
+  try {
+    indices = earcut(vertices, holeIndices, 2);
+  } catch {
+    return null;
+  }
+  if (indices.length === 0 || indices.length % 3 !== 0) return null;
+
+  const fillPoints: MapsWgpuApplicationPoint[] = [];
+  for (const index of indices) {
+    if (!Number.isInteger(index) || index < 0 || index * 2 + 1 >= vertices.length) return null;
+    fillPoints.push({ x: vertices[index * 2]!, y: vertices[index * 2 + 1]! });
+  }
+  return { fillPoints, rings };
+}
+
+function normalizePolygonRing(
+  source: readonly MapsWgpuApplicationPoint[],
+): MapsWgpuApplicationPoint[] {
+  const ring: MapsWgpuApplicationPoint[] = [];
+  for (const point of source) {
+    const previous = ring.at(-1);
+    if (previous?.x === point.x && previous.y === point.y) continue;
+    ring.push(point);
+  }
+
+  const first = ring[0];
+  const last = ring.at(-1);
+  if (ring.length > 1 && first && last && first.x === last.x && first.y === last.y) {
+    ring.pop();
+  }
+  return ring;
 }
 
 function resolveStrokeWidth(
