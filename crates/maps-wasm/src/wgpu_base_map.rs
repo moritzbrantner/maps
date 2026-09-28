@@ -1619,6 +1619,28 @@ mod application_geometry_tests {
         }
     }
 
+    fn polygon() -> WgpuApplicationPolygon {
+        WgpuApplicationPolygon {
+            fill_color: [0.1, 0.4, 0.2, 0.8],
+            fill_points: vec![
+                WgpuApplicationPoint { x: 10.0, y: 10.0 },
+                WgpuApplicationPoint { x: 30.0, y: 10.0 },
+                WgpuApplicationPoint { x: 30.0, y: 30.0 },
+                WgpuApplicationPoint { x: 10.0, y: 10.0 },
+                WgpuApplicationPoint { x: 30.0, y: 30.0 },
+                WgpuApplicationPoint { x: 10.0, y: 30.0 },
+            ],
+            rings: vec![vec![
+                WgpuApplicationPoint { x: 10.0, y: 10.0 },
+                WgpuApplicationPoint { x: 30.0, y: 10.0 },
+                WgpuApplicationPoint { x: 30.0, y: 30.0 },
+                WgpuApplicationPoint { x: 10.0, y: 30.0 },
+            ]],
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            stroke_width: 2.0,
+        }
+    }
+
     #[test]
     fn dense_circles_use_one_instanced_draw_without_triangle_tessellation() {
         let count = 10_000_u32;
@@ -1630,6 +1652,7 @@ mod application_geometry_tests {
             order: (0..count)
                 .map(|index| [APPLICATION_CIRCLE, index])
                 .collect(),
+            polygons: Vec::new(),
             width: 100.0,
         };
 
@@ -1650,6 +1673,71 @@ mod application_geometry_tests {
     }
 
     #[test]
+    fn polygon_fill_and_closed_stroke_use_existing_triangle_path() {
+        let frame = WgpuApplicationFrame {
+            circles: Vec::new(),
+            direction_markers: Vec::new(),
+            height: 100.0,
+            lines: Vec::new(),
+            order: vec![[APPLICATION_POLYGON, 0]],
+            polygons: vec![polygon()],
+            width: 100.0,
+        };
+
+        let geometry = prepare_application_geometry(&frame).unwrap();
+        let vertex_count =
+            (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+
+        assert_eq!(vertex_count, 30);
+        assert_eq!(
+            geometry.draws,
+            vec![ApplicationDraw::Triangles {
+                first_vertex: 0,
+                vertex_count,
+            }]
+        );
+    }
+
+    #[test]
+    fn polygon_between_circles_preserves_painter_order() {
+        let frame = WgpuApplicationFrame {
+            circles: vec![circle(10.0), circle(40.0)],
+            direction_markers: Vec::new(),
+            height: 100.0,
+            lines: Vec::new(),
+            order: vec![
+                [APPLICATION_CIRCLE, 0],
+                [APPLICATION_POLYGON, 0],
+                [APPLICATION_CIRCLE, 1],
+            ],
+            polygons: vec![polygon()],
+            width: 100.0,
+        };
+
+        let geometry = prepare_application_geometry(&frame).unwrap();
+        let polygon_vertices =
+            (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+
+        assert_eq!(
+            geometry.draws,
+            vec![
+                ApplicationDraw::Circles {
+                    first_instance: 0,
+                    instance_count: 1,
+                },
+                ApplicationDraw::Triangles {
+                    first_vertex: 0,
+                    vertex_count: polygon_vertices,
+                },
+                ApplicationDraw::Circles {
+                    first_instance: 1,
+                    instance_count: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn interleaved_circle_and_line_batches_preserve_painter_order() {
         let frame = WgpuApplicationFrame {
             circles: vec![circle(10.0), circle(30.0), circle(40.0)],
@@ -1662,6 +1750,7 @@ mod application_geometry_tests {
                 [APPLICATION_LINE, 0],
                 [APPLICATION_CIRCLE, 2],
             ],
+            polygons: Vec::new(),
             width: 100.0,
         };
 
