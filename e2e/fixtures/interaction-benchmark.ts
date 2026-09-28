@@ -16,6 +16,9 @@ type BenchmarkCamera = {
 const params = new URLSearchParams(location.search);
 const engine = (params.get("engine") ?? "maps-wgpu") as BenchmarkEngine;
 const tileUrl = `${location.origin}/__bench_tiles/{z}/{x}/{y}.png`;
+const vectorTileUrl = `${location.origin}/__bench_vector/{z}/{x}/{y}.mvt`;
+/** `raster` (deterministic PNG tiles) or `vector` (deterministic Shortbread-like MVT). */
+const basemap = params.get("basemap") === "vector" ? "vector" : "raster";
 const initial = { center: [13.405, 52.52] as [number, number], zoom: 11 };
 const container = document.getElementById("map")!;
 
@@ -23,6 +26,57 @@ if (engine === "maps-canvas2d") {
   // Same capability probe the browser runtime uses; forces its Canvas2D backend.
   Object.defineProperty(Navigator.prototype, "gpu", { configurable: true, get: () => undefined });
 }
+
+// The Shortbread demo style (demo/ShortbreadBasemapLayer.tsx), expressed for MapLibre.
+const vectorStyle = {
+  version: 8,
+  sources: { bench: { type: "vector", tiles: [vectorTileUrl], maxzoom: 14 } },
+  layers: [
+    { id: "background", type: "background", paint: { "background-color": "#f9f4ee" } },
+    {
+      id: "land",
+      type: "fill",
+      source: "bench",
+      "source-layer": "land",
+      paint: { "fill-color": ["match", ["get", "kind"], "forest", "#c4d8b4", "#dce4cc"] },
+    },
+    {
+      id: "water",
+      type: "fill",
+      source: "bench",
+      "source-layer": "water_polygons",
+      paint: { "fill-color": "#a8cce0" },
+    },
+    {
+      id: "buildings",
+      type: "fill",
+      source: "bench",
+      "source-layer": "buildings",
+      paint: { "fill-color": "#d8c8b8" },
+    },
+    {
+      id: "building-outlines",
+      type: "line",
+      source: "bench",
+      "source-layer": "buildings",
+      paint: { "line-color": "#b9a895", "line-width": 0.6 },
+    },
+    {
+      id: "water-lines",
+      type: "line",
+      source: "bench",
+      "source-layer": "water_polygons",
+      paint: { "line-color": "#6ba9c9", "line-opacity": 0.9, "line-width": 1.2 },
+    },
+    {
+      id: "streets",
+      type: "line",
+      source: "bench",
+      "source-layer": "streets",
+      paint: { "line-color": "#9a8c7d", "line-opacity": 0.72, "line-width": 0.9 },
+    },
+  ],
+};
 
 const rasterStyle = {
   version: 8,
@@ -41,7 +95,7 @@ async function mountEngine(): Promise<MountedEngine> {
   switch (engine) {
     case "maps-wgpu":
     case "maps-canvas2d":
-      return mountMaps();
+      return basemap === "vector" ? mountMapsVector() : mountMaps();
     case "maplibre":
       return mountMapLibre();
     case "leaflet":
@@ -87,13 +141,117 @@ async function mountMaps() {
   };
 }
 
+/**
+ * The Pages composition: Map View + Shortbread hook. With WebGPU the basemap is
+ * retained on the GPU; without it (maps-canvas2d) it is the Canvas GeoJSON overlay
+ * with the motion-transform presentation.
+ */
+async function mountMapsVector() {
+  const { configureMapsWasmPackage } = await import("../../src/aggregation-wasm");
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { MapView } = await import("../../src/map-view");
+  const { GeoJsonLayer } = await import("../../src/geojson-layer");
+  const { getShortbreadBasemapStyle, useShortbreadBasemap } =
+    await import("../../demo/ShortbreadBasemapLayer");
+  configureMapsWasmPackage("/wasm/maps_wasm.js");
+  type Controller = Parameters<typeof useShortbreadBasemap>[1] extends infer Options
+    ? Options extends { controller?: infer C }
+      ? NonNullable<C> & {
+          getViewState(): { center: [number, number]; zoom: number; bearing?: number };
+          getVisibleTiles(): Parameters<typeof useShortbreadBasemap>[0][number][];
+          setViewState(state: { center: [number, number]; zoom: number; bearing?: number }): void;
+        }
+      : never
+    : never;
+  let active: Controller | null = null;
+  const status = { features: 0, renderer: "pending", state: "idle" };
+  function Host() {
+    const [controller, setController] = React.useState<Controller | null>(null);
+    const [tiles, setTiles] = React.useState<ReturnType<Controller["getVisibleTiles"]>>([]);
+    const tileKey = React.useRef("");
+    const refresh = React.useCallback(() => {
+      const next = active?.getVisibleTiles() ?? [];
+      const key = next.map((tile) => tile.key).join("|");
+      if (key === tileKey.current) return;
+      tileKey.current = key;
+      setTiles(next);
+    }, []);
+    const basemap = useShortbreadBasemap(tiles, { controller, tileUrl: vectorTileUrl });
+    status.features = basemap.featureCount;
+    status.renderer = basemap.renderer;
+    status.state = basemap.state;
+    container.dataset.basemapRenderer = basemap.renderer;
+    return React.createElement(
+      MapView,
+      {
+        fitToData: false,
+        flatRuntime: "maps",
+        initialViewState: initial,
+        mapLabel: "Benchmark map",
+        mapStyle: { attribution: "", tiles: false },
+        onMapControllerReady: (next: unknown) => {
+          active = next as Controller | null;
+          setController(active);
+          refresh();
+        },
+        onViewStateChange: refresh,
+        style: { height: "100%", width: "100%" },
+      },
+      basemap.renderer === "canvas-overlay"
+        ? React.createElement(GeoJsonLayer, {
+            featureCollection: basemap.featureCollection,
+            getFeatureStyle: (feature: { properties: Record<string, unknown> }) =>
+              getShortbreadBasemapStyle(
+                feature.properties.kind as Parameters<typeof getShortbreadBasemapStyle>[0],
+                feature.properties.sourceKind as string | null,
+              ),
+            isFeatureInteractive: () => false,
+            layerId: "shortbread-basemap",
+          })
+        : null,
+    );
+  }
+  createRoot(container).render(React.createElement(Host));
+  let stableSince = performance.now();
+  let lastFeatures = -1;
+  const ready = waitFor(() => {
+    if (status.features !== lastFeatures) {
+      lastFeatures = status.features;
+      stableSince = performance.now();
+    }
+    // All visible tiles decoded/uploaded: the feature count stopped growing.
+    return (
+      status.renderer !== "pending" &&
+      status.state === "ready" &&
+      status.features > 0 &&
+      performance.now() - stableSince > 1500
+    );
+  }, 60_000);
+  return {
+    ready,
+    presentCamera(state: { center: [number, number]; zoom: number; bearing?: number }) {
+      active!.setViewState(state);
+    },
+    camera() {
+      const state = active!.getViewState();
+      return {
+        longitude: state.center[0],
+        latitude: state.center[1],
+        zoom: state.zoom,
+        bearing: state.bearing ?? 0,
+      };
+    },
+  };
+}
+
 async function mountMapLibre() {
   const maplibreModule = await import("maplibre-gl");
   const maplibregl =
     (maplibreModule as { default?: typeof maplibreModule }).default ?? maplibreModule;
   const map = new maplibregl.Map({
     container,
-    style: rasterStyle as never,
+    style: (basemap === "vector" ? vectorStyle : rasterStyle) as never,
     center: initial.center,
     zoom: initial.zoom,
     attributionControl: false,

@@ -52,6 +52,17 @@ jobs:
         cp dist/index.html dist/benchmarks/index.html
         bun run bench:engine:interaction -- --output dist/evidence/engine-interaction.json
         node .github-pages-template/bin/github-pages-template.mjs build --config ./pages.config.json --out ./dist --augment
+        # Descriptive interaction benchmarks (SwiftShader, shared runner), appended to the
+        # history published at /benchmarks/history.json. A failed run republishes the
+        # previous history instead of blocking the deploy; unreadable history fails it.
+        history_url="https://moritzbrantner.github.io/${{ github.event.repository.name }}/benchmarks/history.json"
+        mkdir -p dist/benchmarks
+        if CI=1 node scripts/benchmark-interactions.mjs --engines=maps-wgpu,maps-canvas2d,maplibre --basemaps=vector,raster --repeats=2 --json=benchmark-results/interactions.json; then
+          node scripts/build-benchmark-history.mjs --run=benchmark-results/interactions.json --previous="$history_url" --out=dist/benchmarks/history.json
+        else
+          echo "::warning::Interaction benchmark failed; republishing the previous benchmark history."
+          curl -fsSL "$history_url" -o dist/benchmarks/history.json || rm -f dist/benchmarks/history.json
+        fi
       artifact_paths: dist
       reuse_across_runs: true
       artifact_retention_days: 7
