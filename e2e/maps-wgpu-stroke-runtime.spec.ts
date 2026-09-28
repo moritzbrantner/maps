@@ -104,6 +104,34 @@ test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path 
   }
 });
 
+test("Maps wgpu accepts the existing projected GeoJSON polygon frame @smoke", async ({
+  baseURL,
+}, testInfo) => {
+  const browser = await chromium.launch({ args: WEBGPU_SWIFTSHADER_ARGS });
+  const page = await browser.newPage();
+
+  try {
+    const url = new URL(
+      "/?e2e=1&acceptance=maps-runtime",
+      baseURL ?? "http://127.0.0.1:5181",
+    );
+    await page.goto(url.toString());
+
+    const map = page.getByLabel("Maps Rust runtime acceptance");
+    const baseCanvas = map.locator('canvas[data-flat-runtime="maps"]');
+    const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+
+    await expect(map).toHaveAttribute("data-map-ready", "true");
+    await expect(baseCanvas).toHaveAttribute("data-map-base-renderer", "wgpu");
+    await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
+    await expect(overlay).toHaveAttribute("data-map-overlay-backend", "wgpu");
+    await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+    await map.screenshot({ path: testInfo.outputPath("polygon-wgpu-developed.png") });
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Pages first-party engine decodes Shortbread vector tiles into wgpu linework @smoke", async ({
   baseURL,
 }) => {
