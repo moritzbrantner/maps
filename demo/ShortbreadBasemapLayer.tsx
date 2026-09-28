@@ -18,7 +18,7 @@ const SHORTBREAD_LOAD_CONCURRENCY = 8;
 const SHORTBREAD_ACCEPT =
   "application/vnd.mapbox-vector-tile,application/x-protobuf,application/octet-stream;q=0.9,*/*;q=0.1";
 
-type ShortbreadFeatureProperties = {
+export type ShortbreadFeatureProperties = {
   kind: ShortbreadBasemapLineKind | ShortbreadBasemapPolygonKind;
   sourceKind: string | null;
 };

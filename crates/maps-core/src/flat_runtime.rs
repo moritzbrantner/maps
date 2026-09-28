@@ -586,6 +586,30 @@ impl FlatRasterRuntime {
             .ok_or(FlatRasterRuntimeError::UnsupportedCamera)
     }
 
+    /// Projects a batch using one validated camera and one prepared local matrix.
+    /// Invalid coordinates remain individual missing results, as in scalar projection.
+    pub fn project_screen_batch<'a>(
+        &'a self,
+        coordinates: &'a [[f64; 2]],
+    ) -> impl Iterator<Item = Option<ScreenCoordinate>> + 'a {
+        let valid = validate_camera(self.camera).is_ok();
+        let flat = is_flat_camera(self.camera);
+        let frame = if valid && !flat {
+            self.camera.local_render_frame()
+        } else {
+            None
+        };
+        coordinates.iter().map(move |&[longitude, latitude]| {
+            if !valid {
+                None
+            } else if flat {
+                self.camera.project_screen(longitude, latitude)
+            } else {
+                frame.and_then(|frame| frame.project(longitude, latitude))
+            }
+        })
+    }
+
     pub fn unproject_screen(
         &self,
         screen: ScreenCoordinate,

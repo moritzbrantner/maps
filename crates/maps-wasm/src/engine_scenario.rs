@@ -328,13 +328,13 @@ impl MapsFlatRasterRuntime {
         }
 
         let mut projected = Vec::with_capacity(coordinates.len());
-        for coordinate in coordinate_pairs {
-            match self.inner.project_screen(coordinate[0], coordinate[1]) {
-                Ok(screen) => {
+        for screen in self.inner.project_screen_batch(coordinate_pairs) {
+            match screen {
+                Some(screen) => {
                     projected.push(screen.x);
                     projected.push(screen.y);
                 }
-                Err(_) => {
+                None => {
                     // Preserve scalar-project fail-closed behavior per coordinate
                     // without turning one invalid point into a failed whole batch.
                     projected.push(f64::NAN);

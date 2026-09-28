@@ -53,7 +53,6 @@ export async function loadMapsWgpuBaseMapRenderer(
 
   try {
     const wasmModule = await importMapsWasmModule<MapsWgpuBaseMapWasmModule>(packageName);
-    await wasmModule.default?.();
     const createRenderer = wasmModule.createWgpuBaseMapRenderer;
 
     if (!createRenderer) {

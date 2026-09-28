@@ -41,7 +41,6 @@ export async function decodeShortbreadBasemap(
   packageName?: string,
 ): Promise<ShortbreadBasemapTile> {
   const wasmModule = await importMapsWasmModule<MapsVectorTileWasmModule>(packageName);
-  await wasmModule.default?.();
   const decode = wasmModule.decodeShortbreadBasemap;
   if (!decode) throw new Error("Maps WASM Shortbread polygon decoder is unavailable.");
   return decode(new Uint8Array(bytes), tile.z, tile.x, tile.y);
@@ -53,7 +52,6 @@ export async function decodeShortbreadBasemapLines(
   packageName?: string,
 ): Promise<ShortbreadBasemapLine[]> {
   const wasmModule = await importMapsWasmModule<MapsVectorTileWasmModule>(packageName);
-  await wasmModule.default?.();
   const decode = wasmModule.decodeShortbreadBasemapLines;
 
   if (!decode) {

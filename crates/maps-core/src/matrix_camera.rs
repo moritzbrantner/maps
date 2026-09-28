@@ -6,6 +6,7 @@
 //! projective bridge retains `f64` results for precision-sensitive map projection and ray work.
 
 use crate::{GeographicCoordinate, MapCamera, ScreenCoordinate};
+use three_d_animation::Mat4;
 use three_d_camera::PerspectiveCamera;
 use three_d_core::Vec3;
 use three_d_projective::{transform_point_projective_f64, untransform_point_projective_f64};
@@ -35,7 +36,7 @@ pub struct MapLocalViewportBounds {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapLocalRenderFrame {
     flat_camera: MapCamera,
-    shared_camera: PerspectiveCamera,
+    view_projection: Mat4,
 }
 
 impl MapCamera {
@@ -95,7 +96,7 @@ impl MapCamera {
 
         Some(MapLocalRenderFrame {
             flat_camera,
-            shared_camera,
+            view_projection: shared_camera.view_projection_matrix(),
         })
     }
 
@@ -129,7 +130,7 @@ impl MapLocalRenderFrame {
     /// Returns the shared renderer-neutral view/projection matrix in column-major order.
     #[must_use]
     pub fn view_projection_elements(self) -> [f32; 16] {
-        self.shared_camera.view_projection_matrix().elements
+        self.view_projection.elements
     }
 
     /// Projects a geographic point through the local render frame.
@@ -139,9 +140,7 @@ impl MapLocalRenderFrame {
         let half_width = self.flat_camera.viewport.width * 0.5;
         let half_height = self.flat_camera.viewport.height * 0.5;
         let local = [flat.x - half_width, -(flat.y - half_height), 0.0];
-        let ndc =
-            transform_point_projective_f64(self.shared_camera.view_projection_matrix(), local)
-                .ok()?;
+        let ndc = transform_point_projective_f64(self.view_projection, local).ok()?;
 
         // The shared perspective camera uses WebGPU depth semantics. A finite projective result
         // outside the forward [0, 1] depth interval is behind the eye or outside the configured
@@ -222,7 +221,7 @@ impl MapLocalRenderFrame {
         let height = self.flat_camera.viewport.height;
         let ndc_x = screen.x / width * 2.0 - 1.0;
         let ndc_y = 1.0 - screen.y / height * 2.0;
-        let matrix = self.shared_camera.view_projection_matrix();
+        let matrix = self.view_projection;
 
         // Avoid NDC depth 1.0 here. With a very large finite far plane, the f32 WebGPU
         // projection can round to the infinite-far form where exact depth 1 represents infinity.

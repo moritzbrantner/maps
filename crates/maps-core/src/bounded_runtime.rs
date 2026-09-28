@@ -173,6 +173,13 @@ impl BoundedFlatRasterRuntime {
         self.inner.project_screen(longitude, latitude)
     }
 
+    pub fn project_screen_batch<'a>(
+        &'a self,
+        coordinates: &'a [[f64; 2]],
+    ) -> impl Iterator<Item = Option<ScreenCoordinate>> + 'a {
+        self.inner.project_screen_batch(coordinates)
+    }
+
     pub fn unproject_screen(
         &self,
         screen: ScreenCoordinate,

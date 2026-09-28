@@ -84,6 +84,7 @@
     "bench:heat-layer": "bun run ./scripts/benchmark-heat-layer.mjs",
     "bench:scalar-field": "bun run ./scripts/benchmark-scalar-field.mjs",
     "bench:performance": "bun run ./scripts/benchmark-performance.mjs",
+    "bench:engine": "node ./scripts/benchmark-engine.mjs",
     "bench:geojson-transition": "bun run ./scripts/benchmark-geojson-transition.mjs",
     "bench:temporal-geojson": "bun run ./scripts/benchmark-temporal-geojson.mjs",
     "dev": "vite --host 0.0.0.0",

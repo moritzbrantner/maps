@@ -1,10 +1,11 @@
 import { createRef } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PointLayer } from "./point-layer";
 import { FlowLayer } from "./flow-layer";
 import { MapsOverlayLayers, type MapsOverlayLayersController } from "./maps-overlay-layers";
 import type { CanvasMapScene } from "./canvas-map-renderer";
+import { HeatLayer } from "./heat-layer";
 
 beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
@@ -36,6 +37,55 @@ const surface = {
 };
 
 describe("Native Map Layer retention regressions", () => {
+  it.each(["maps", "maplibre"] as const)(
+    "prepares only scalar data for a field Heat Layer (%s)",
+    async (backend) => {
+      const points = Array.from({ length: 1000 }, (_, i) => ({
+        id: `p-${i}`,
+        longitude: i / 1000,
+        latitude: 0,
+      }));
+      const getWeight = vi.fn(() => 1);
+      const getValue = vi.fn(() => 12);
+      const project = ([x, y]: [number, number]) => ({ x, y });
+      const view = (mode: "field" | "interpolated") => {
+        const layer = (
+          <HeatLayer
+            points={points}
+            getWeight={getWeight}
+            getValue={getValue}
+            heatmapSurfaceMode={mode}
+            fieldRenderMode="contours"
+            fieldColumns={2}
+            fieldRows={2}
+          />
+        );
+        return backend === "maps" ? (
+          <MapsOverlayLayers
+            project={project}
+            getViewport={getViewport}
+            unproject={unproject}
+            surface={surface}
+            renderApplicationFrame={() => true}
+          >
+            {layer}
+          </MapsOverlayLayers>
+        ) : (
+          layer
+        );
+      };
+      const mounted = render(view("field"));
+      await waitFor(() => expect(getValue).toHaveBeenCalled());
+      expect(getWeight.mock.calls.length).toBe(0);
+
+      mounted.rerender(view("interpolated"));
+      expect(getWeight).toHaveBeenCalledTimes(points.length);
+      getWeight.mockClear();
+      mounted.rerender(view("field"));
+      expect(getWeight.mock.calls.length).toBe(0);
+    },
+  );
+
   it.each([1000, 10000])(
     "retains point source preparation and projection across interaction changes (%i points)",
     (count) => {
