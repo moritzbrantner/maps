@@ -166,24 +166,110 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WgpuRasterRenderCamera {
-    view_projection: [f32; 16],
-}
+/// Packed tile draw input shared with `src/wgpu-base-map-wasm.ts`: 16
+/// view-projection elements, the render-surface margin (CSS px per side) and the
+/// viewport clip width/height (CSS px; 0 draws the whole surface), followed by one
+/// [`PACKED_TILE_DRAW_STRIDE`] record per placement
+/// (z, x, y, local west, local north, local size).
+const PACKED_TILE_DRAW_HEADER_LENGTH: usize = 19;
+const PACKED_TILE_DRAW_STRIDE: usize = 6;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct WgpuRasterTilePlacement {
-    tile: WgpuRasterTileId,
+    key: Option<RasterTileKey>,
     local_west: f64,
     local_north: f64,
     local_size: f64,
 }
 
-#[derive(Debug, Deserialize)]
-struct WgpuRasterTileId {
-    key: String,
+fn packed_tile_key(z: f64, x: f64, y: f64) -> Option<RasterTileKey> {
+    let integral = |value: f64, max: f64| value.fract() == 0.0 && (0.0..=max).contains(&value);
+    (integral(z, f64::from(u8::MAX))
+        && integral(x, f64::from(u32::MAX))
+        && integral(y, f64::from(u32::MAX)))
+    .then_some((z as u8, x as u32, y as u32))
+}
+
+/// Where the render surface (viewport grown by `margin`) needs pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SurfaceClip {
+    margin: f64,
+    /// Viewport CSS size when only the viewport is drawn (continuous motion).
+    viewport: Option<(f64, f64)>,
+}
+
+impl SurfaceClip {
+    /// Physical-pixel scissor (x, y, width, height) covering the viewport inside a
+    /// `surface_width` x `surface_height` target, rounded outward; `None` draws all.
+    fn scissor(self, surface_width: u32, surface_height: u32) -> Option<(u32, u32, u32, u32)> {
+        let (width, height) = self.viewport?;
+        let axis = |css: f64, physical: u32| {
+            let scale = f64::from(physical) / (css + 2.0 * self.margin);
+            let start = (self.margin * scale)
+                .floor()
+                .clamp(0.0, f64::from(physical)) as u32;
+            let end = ((self.margin + css) * scale)
+                .ceil()
+                .clamp(f64::from(start), f64::from(physical)) as u32;
+            (start, end - start)
+        };
+        let (x, scissor_width) = axis(width, surface_width);
+        let (y, scissor_height) = axis(height, surface_height);
+        Some((x, y, scissor_width, scissor_height))
+    }
+}
+
+fn unpack_tile_draws(
+    packed: &[f64],
+) -> Result<
+    (
+        [f32; 16],
+        SurfaceClip,
+        impl Iterator<Item = WgpuRasterTilePlacement> + '_,
+    ),
+    JsValue,
+> {
+    if packed.len() < PACKED_TILE_DRAW_HEADER_LENGTH
+        || !(packed.len() - PACKED_TILE_DRAW_HEADER_LENGTH).is_multiple_of(PACKED_TILE_DRAW_STRIDE)
+    {
+        return Err(JsValue::from_str("invalid packed wgpu raster tile draws"));
+    }
+    let (header, records) = packed.split_at(PACKED_TILE_DRAW_HEADER_LENGTH);
+    let mut view_projection = [0.0_f32; 16];
+    for (target, value) in view_projection.iter_mut().zip(header) {
+        *target = *value as f32;
+    }
+    let margin = header[16];
+    if !margin.is_finite() || margin < 0.0 {
+        return Err(JsValue::from_str("invalid wgpu render-surface margin"));
+    }
+    let (clip_width, clip_height) = (header[17], header[18]);
+    let viewport = match (clip_width, clip_height) {
+        (0.0, 0.0) => None,
+        (width, height)
+            if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 =>
+        {
+            Some((width, height))
+        }
+        _ => return Err(JsValue::from_str("invalid wgpu viewport clip")),
+    };
+    Ok((
+        view_projection,
+        SurfaceClip { margin, viewport },
+        records
+            .as_chunks::<PACKED_TILE_DRAW_STRIDE>()
+            .0
+            .iter()
+            .map(unpack_tile_draw),
+    ))
+}
+
+fn unpack_tile_draw(record: &[f64; PACKED_TILE_DRAW_STRIDE]) -> WgpuRasterTilePlacement {
+    WgpuRasterTilePlacement {
+        key: packed_tile_key(record[0], record[1], record[2]),
+        local_west: record[3],
+        local_north: record[4],
+        local_size: record[5],
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,6 +281,32 @@ struct WgpuApplicationFrame {
     lines: Vec<WgpuApplicationLine>,
     order: Vec<[u32; 2]>,
     width: f64,
+}
+
+impl WgpuApplicationFrame {
+    /// Moves viewport CSS-pixel geometry into the render surface, which extends
+    /// the viewport by `margin` on every side. Sizes (radii, strokes) are unchanged.
+    fn offset_into_surface(&mut self, margin: f64) {
+        if margin == 0.0 {
+            return;
+        }
+        self.width += 2.0 * margin;
+        self.height += 2.0 * margin;
+        for circle in &mut self.circles {
+            circle.x += margin;
+            circle.y += margin;
+        }
+        for marker in &mut self.direction_markers {
+            marker.x += margin;
+            marker.y += margin;
+        }
+        for line in &mut self.lines {
+            for point in &mut line.points {
+                point.x += margin;
+                point.y += margin;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,8 +391,14 @@ pub struct MapsWgpuBaseMapRenderer {
     application_circle_pipeline: wgpu::RenderPipeline,
     application_circle_instance_buffer: wgpu::Buffer,
     application_circle_instance_capacity: u64,
-    tiles: HashMap<String, TileTexture>,
+    tiles: HashMap<RasterTileKey, TileTexture>,
+    /// Reused per-frame scratch space; avoids allocating on the render path.
+    frame_vertices: Vec<u8>,
+    frame_placements: Vec<WgpuRasterTilePlacement>,
 }
+
+/// Raster tile identity (z, x, y) shared with the host's tile lifecycle.
+type RasterTileKey = (u8, u32, u32);
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
 pub async fn create_wgpu_base_map_renderer(
@@ -613,6 +731,8 @@ impl MapsWgpuBaseMapRenderer {
             application_circle_instance_buffer,
             application_circle_instance_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             tiles: HashMap::new(),
+            frame_vertices: Vec::new(),
+            frame_placements: Vec::new(),
         })
     }
 
@@ -633,7 +753,13 @@ impl MapsWgpuBaseMapRenderer {
     }
 
     #[wasm_bindgen(js_name = uploadTile)]
-    pub fn upload_tile(&mut self, key: String, image: ImageBitmap) -> Result<(), JsValue> {
+    pub fn upload_tile(
+        &mut self,
+        z: u8,
+        x: u32,
+        y: u32,
+        image: ImageBitmap,
+    ) -> Result<(), JsValue> {
         let width = image.width();
         let height = image.height();
         if width == 0 || height == 0 {
@@ -694,7 +820,7 @@ impl MapsWgpuBaseMapRenderer {
             ],
         });
         self.tiles.insert(
-            key,
+            (z, x, y),
             TileTexture {
                 _texture: texture,
                 _view: view,
@@ -705,36 +831,61 @@ impl MapsWgpuBaseMapRenderer {
     }
 
     #[wasm_bindgen(js_name = evictTile)]
-    pub fn evict_tile(&mut self, key: &str) {
-        self.tiles.remove(key);
+    pub fn evict_tile(&mut self, z: u8, x: u32, y: u32) {
+        self.tiles.remove(&(z, x, y));
     }
 
-    pub fn render(
+    /// Renders one map frame from packed tile draws (see [`unpack_tile_draws`]).
+    #[wasm_bindgen(js_name = renderPacked)]
+    pub fn render_packed(
         &mut self,
-        placements: JsValue,
-        render_camera: JsValue,
+        tile_draws: &[f64],
         application_frame: JsValue,
     ) -> Result<usize, JsValue> {
-        let placements = serde_wasm_bindgen::from_value::<Vec<WgpuRasterTilePlacement>>(placements)
-            .map_err(|error| js_error("invalid wgpu raster placements", error))?;
-        let render_camera = serde_wasm_bindgen::from_value::<WgpuRasterRenderCamera>(render_camera)
-            .map_err(|error| js_error("invalid wgpu raster render camera", error))?;
-        let application_frame =
-            serde_wasm_bindgen::from_value::<Option<WgpuApplicationFrame>>(application_frame)
-                .map_err(|error| js_error("invalid wgpu application frame", error))?;
-        if render_camera
-            .view_projection
-            .into_iter()
-            .any(|value| !value.is_finite())
-        {
+        let (view_projection, clip, placements) = unpack_tile_draws(tile_draws)?;
+        let application_frame = if application_frame.is_null() || application_frame.is_undefined() {
+            None
+        } else {
+            let mut frame =
+                serde_wasm_bindgen::from_value::<WgpuApplicationFrame>(application_frame)
+                    .map_err(|error| js_error("invalid wgpu application frame", error))?;
+            frame.offset_into_surface(clip.margin);
+            Some(frame)
+        };
+        if view_projection.into_iter().any(|value| !value.is_finite()) {
             return Err(JsValue::from_str(
                 "wgpu raster render camera contains non-finite matrix values",
             ));
         }
 
-        let mut vertices = Vec::with_capacity(placements.len() * 4 * VERTEX_SIZE as usize);
-        for placement in &placements {
-            append_tile_vertices(&mut vertices, placement)?;
+        let mut placements_buffer = std::mem::take(&mut self.frame_placements);
+        placements_buffer.clear();
+        placements_buffer.extend(placements);
+        let mut vertices = std::mem::take(&mut self.frame_vertices);
+        vertices.clear();
+        let result = self.render_frame(
+            &placements_buffer,
+            &mut vertices,
+            application_frame,
+            view_projection,
+            clip,
+        );
+        self.frame_placements = placements_buffer;
+        self.frame_vertices = vertices;
+        result
+    }
+
+    fn render_frame(
+        &mut self,
+        placements: &[WgpuRasterTilePlacement],
+        vertices: &mut Vec<u8>,
+        application_frame: Option<WgpuApplicationFrame>,
+        view_projection: [f32; 16],
+        clip: SurfaceClip,
+    ) -> Result<usize, JsValue> {
+        vertices.reserve(placements.len() * 4 * VERTEX_SIZE as usize);
+        for placement in placements {
+            append_tile_vertices(vertices, placement)?;
         }
 
         let required = vertices.len() as u64;
@@ -744,12 +895,12 @@ impl MapsWgpuBaseMapRenderer {
             self.vertex_capacity = capacity;
         }
         if !vertices.is_empty() {
-            self.queue.write_buffer(&self.vertex_buffer, 0, &vertices);
+            self.queue.write_buffer(&self.vertex_buffer, 0, vertices);
         }
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            &camera_uniform_bytes(render_camera.view_projection),
+            &camera_uniform_bytes(view_projection),
         );
 
         let application_geometry = application_frame
@@ -796,15 +947,14 @@ impl MapsWgpuBaseMapRenderer {
         let view = surface_frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor {
-                label: Some("Maps base-map sRGB surface view"),
+                // Per-frame objects stay unlabeled: labels cost JS crossings every frame.
+                label: None,
                 format: Some(self.surface_view_format),
                 ..Default::default()
             });
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Maps map-frame command encoder"),
-            });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             depth_slice: None,
@@ -822,19 +972,24 @@ impl MapsWgpuBaseMapRenderer {
         let mut drawn_tiles = 0;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Maps raster and application render pass"),
+                label: None,
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some((x, y, width, height)) = clip.scissor(self.config.width, self.config.height)
+            {
+                // Continuous motion: the margin would be replaced before it is shown.
+                pass.set_scissor_rect(x, y, width, height);
+            }
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             for (index, placement) in placements.iter().enumerate() {
-                let Some(tile) = self.tiles.get(&placement.tile.key) else {
+                let Some(tile) = placement.key.and_then(|key| self.tiles.get(&key)) else {
                     continue;
                 };
                 pass.set_bind_group(1, &tile.bind_group, &[]);
@@ -1535,4 +1690,43 @@ mod application_geometry_tests {
 
 fn js_error(context: &str, error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&format!("{context}: {error}"))
+}
+
+#[cfg(test)]
+mod surface_clip_tests {
+    use super::*;
+
+    #[test]
+    fn viewport_scissor_covers_exactly_the_viewport_inside_the_margin() {
+        let clip = SurfaceClip {
+            margin: 128.0,
+            viewport: Some((1024.0, 768.0)),
+        };
+        // 1x: the surface is 1280 x 1024 physical pixels.
+        assert_eq!(clip.scissor(1280, 1024), Some((128, 128, 1024, 768)));
+        // 2x device pixels scale the scissor with the surface.
+        assert_eq!(clip.scissor(2560, 2048), Some((256, 256, 2048, 1536)));
+    }
+
+    #[test]
+    fn fractional_scissors_round_outward_and_stay_inside_the_surface() {
+        let clip = SurfaceClip {
+            margin: 10.5,
+            viewport: Some((99.3, 50.0)),
+        };
+        let (x, y, width, height) = clip.scissor(241, 142).unwrap();
+        let scale_x = 241.0 / (99.3 + 21.0);
+        assert!(f64::from(x) <= 10.5 * scale_x);
+        assert!(f64::from(x + width) >= (10.5 + 99.3) * scale_x);
+        assert!(x + width <= 241 && y + height <= 142);
+    }
+
+    #[test]
+    fn a_full_surface_render_has_no_scissor() {
+        let clip = SurfaceClip {
+            margin: 128.0,
+            viewport: None,
+        };
+        assert_eq!(clip.scissor(1280, 1024), None);
+    }
 }

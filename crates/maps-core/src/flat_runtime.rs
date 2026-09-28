@@ -19,6 +19,8 @@ const DEFAULT_CACHE_CAPACITY: usize = 512;
 const DEFAULT_LOAD_CONCURRENCY: usize = 8;
 const REQUEST_PREFETCH_RADIUS_TILES: i64 = 1;
 const WORLD_EPSILON: f64 = 1.0e-12;
+/// Upper bound for the render-surface margin, in CSS pixels.
+pub const MAX_RENDER_MARGIN: f64 = 1024.0;
 
 /// Raster pyramid metadata that affects deterministic tile selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,13 +114,25 @@ pub struct RasterTilePlacement {
     pub screen_y: f64,
     pub screen_width: f64,
     pub screen_height: f64,
+    /// The tile intersects the viewport, not only the render-surface margin.
+    pub visible: bool,
 }
 
 /// Deterministic browser work produced by one runtime frame.
+///
+/// The render surface is the viewport grown by `surface_margin` CSS pixels on every
+/// side. `render_camera` maps local geometry into that surface: it is the viewport
+/// view-projection scaled in clip space, so the viewport occupies the surface center
+/// exactly for every bearing/pitch. When `overscan` is true the margin also holds map
+/// content (`placements` cover the whole surface), which lets hosts present a pure
+/// screen translation of this frame without re-rendering; otherwise only the viewport
+/// region is meaningful.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RasterFramePlan {
     pub render_camera: RasterRenderCamera,
     pub visible_bounds: MapViewportBounds,
+    pub surface_margin: f64,
+    pub overscan: bool,
     pub placements: Vec<RasterTilePlacement>,
     pub requests: Vec<TileId>,
     pub cancellations: Vec<TileId>,
@@ -173,6 +187,7 @@ pub struct FlatRasterRuntime {
     visible: BTreeSet<TileId>,
     ready: BTreeSet<TileId>,
     ready_lru: VecDeque<TileId>,
+    render_margin: f64,
 }
 
 impl FlatRasterRuntime {
@@ -200,7 +215,23 @@ impl FlatRasterRuntime {
             visible: BTreeSet::new(),
             ready: BTreeSet::new(),
             ready_lru: VecDeque::new(),
+            render_margin: 0.0,
         })
+    }
+
+    #[must_use]
+    pub const fn render_margin(&self) -> f64 {
+        self.render_margin
+    }
+
+    /// Sets the render-surface margin (CSS pixels per side). Presentation only: camera,
+    /// projection, visible bounds and request scheduling keep using the viewport.
+    pub fn set_render_margin(&mut self, margin: f64) -> Result<(), FlatRasterRuntimeError> {
+        if !margin.is_finite() || !(0.0..=MAX_RENDER_MARGIN).contains(&margin) {
+            return Err(FlatRasterRuntimeError::InvalidCamera);
+        }
+        self.render_margin = margin;
+        Ok(())
     }
 
     #[must_use]
@@ -426,6 +457,62 @@ impl FlatRasterRuntime {
         )
     }
 
+    /// Rotates the bearing by `delta_bearing` degrees while keeping the
+    /// geographic ground point under `screen` stable. A positive delta turns the
+    /// map content counter-clockwise on screen, matching the bearing convention.
+    pub fn rotate_about(
+        &mut self,
+        delta_bearing: f64,
+        screen: ScreenCoordinate,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        if !delta_bearing.is_finite() || !screen.x.is_finite() || !screen.y.is_finite() {
+            return Err(FlatRasterRuntimeError::InvalidCamera);
+        }
+
+        validate_camera(self.camera)?;
+        if delta_bearing == 0.0 {
+            return Ok(());
+        }
+
+        let anchor = self.unproject_screen(screen)?;
+        let provisional = MapCamera::new(
+            self.camera.longitude,
+            self.camera.latitude,
+            self.camera.zoom,
+            self.camera.bearing + delta_bearing,
+            self.camera.pitch,
+            self.camera.viewport,
+        )
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        validate_camera(provisional)?;
+        let provisional_anchor = if is_flat_camera(provisional) {
+            provisional.unproject_screen(screen)
+        } else {
+            provisional.unproject_screen_matrix(screen)
+        }
+        .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
+        let anchor_world = project_web_mercator(anchor.longitude, anchor.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let provisional_anchor_world =
+            project_web_mercator(provisional_anchor.longitude, provisional_anchor.latitude)
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let center_world = project_web_mercator(self.camera.longitude, self.camera.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let next_center = unproject_web_mercator(WorldCoordinate {
+            x: center_world.x + shortest_world_delta(anchor_world.x - provisional_anchor_world.x),
+            y: center_world.y + anchor_world.y - provisional_anchor_world.y,
+        })
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+
+        self.set_camera_state(
+            next_center.longitude,
+            next_center.latitude,
+            self.camera.zoom,
+            provisional.bearing,
+            self.camera.pitch,
+        )
+    }
+
     pub fn fit_bounds(
         &mut self,
         west: f64,
@@ -545,16 +632,28 @@ impl FlatRasterRuntime {
             .camera
             .local_render_frame()
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        let render_camera = RasterRenderCamera {
-            view_projection: local_render_frame.view_projection_elements(),
-        };
-        let placements =
+        let margin = self.render_margin;
+        let viewport = self.camera.viewport;
+        let mut view_projection = local_render_frame.view_projection_elements();
+        if margin > 0.0 {
+            // Clip-space scale: the viewport image lands exactly in the surface center.
+            let scale_x = (viewport.width / (viewport.width + 2.0 * margin)) as f32;
+            let scale_y = (viewport.height / (viewport.height + 2.0 * margin)) as f32;
+            for column in 0..4 {
+                view_projection[column * 4] *= scale_x;
+                view_projection[column * 4 + 1] *= scale_y;
+            }
+        }
+        let render_camera = RasterRenderCamera { view_projection };
+        let viewport_placements =
             visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;
         let visible_bounds = visible_bounds_for_camera(self.camera)?;
-        let visible_tiles = placements
+        let visible_tiles = viewport_placements
             .iter()
             .map(|placement| placement.tile)
             .collect::<BTreeSet<_>>();
+        let (placements, overscan) =
+            self.surface_placements(viewport_placements, &visible_tiles)?;
         let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         let request_tiles = buffered_request_cover(
@@ -655,11 +754,53 @@ impl FlatRasterRuntime {
         Ok(RasterFramePlan {
             render_camera,
             visible_bounds,
+            surface_margin: margin,
+            overscan,
             placements,
             requests: request_candidates,
             cancellations,
             evictions,
         })
+    }
+
+    /// Extends placements over the render margin for flat-plane (pitch 0) cameras.
+    /// Margin tiles are drawn when resident; they are within the existing prefetch
+    /// ring, so request scheduling stays viewport-driven.
+    fn surface_placements(
+        &self,
+        viewport_placements: Vec<RasterTilePlacement>,
+        visible_tiles: &BTreeSet<TileId>,
+    ) -> Result<(Vec<RasterTilePlacement>, bool), FlatRasterRuntimeError> {
+        let margin = self.render_margin;
+        if margin <= 0.0 || self.camera.pitch != 0.0 {
+            return Ok((viewport_placements, false));
+        }
+        let viewport = self.camera.viewport;
+        let surface = ViewportSize::new(
+            viewport.width + 2.0 * margin,
+            viewport.height + 2.0 * margin,
+        )
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let surface_camera = self
+            .camera
+            .with_viewport(surface)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        match visible_tile_placements(surface_camera, self.source, self.limits.max_visible_tiles) {
+            Ok(mut placements) => {
+                for placement in &mut placements {
+                    // Screen rectangles stay in viewport coordinates.
+                    placement.screen_x -= margin;
+                    placement.screen_y -= margin;
+                    placement.visible = visible_tiles.contains(&placement.tile);
+                }
+                Ok((placements, true))
+            }
+            // Degrade to viewport-only rendering rather than failing the frame.
+            Err(FlatRasterRuntimeError::TileCoverOverflow { .. }) => {
+                Ok((viewport_placements, false))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn prune_cache(&mut self, protected: &BTreeSet<TileId>) -> Vec<TileId> {
@@ -896,6 +1037,7 @@ fn visible_tile_placements(
                 screen_y: camera.viewport.height / 2.0 - local_north,
                 screen_width: tile_screen_size,
                 screen_height: tile_screen_size,
+                visible: true,
             });
         }
     }
@@ -1011,6 +1153,221 @@ mod tests {
             FlatRasterRuntimeLimits::default(),
         )
         .unwrap()
+    }
+
+    fn screen_angle_degrees(anchor: ScreenCoordinate, point: ScreenCoordinate) -> f64 {
+        (point.y - anchor.y).atan2(point.x - anchor.x).to_degrees()
+    }
+
+    #[test]
+    fn rotation_keeps_the_anchor_ground_point_fixed_and_turns_content() {
+        let anchor = ScreenCoordinate { x: 610.0, y: 170.0 };
+        for (bearing, pitch) in [(0.0, 0.0), (35.0, 0.0), (-120.0, 40.0)] {
+            let mut runtime =
+                runtime_with_camera([13.405, 52.52], 11.0, bearing, pitch, 800.0, 600.0);
+            let anchored = runtime.unproject_screen(anchor).unwrap();
+            let probe = runtime.project_screen(13.5, 52.55).unwrap();
+
+            runtime.rotate_about(30.0, anchor).unwrap();
+
+            let camera = runtime.camera();
+            assert!((camera.bearing - normalize_test_bearing(bearing + 30.0)).abs() < 1e-9);
+            assert_eq!(camera.pitch, pitch);
+            let anchor_after = runtime
+                .project_screen(anchored.longitude, anchored.latitude)
+                .unwrap();
+            assert!((anchor_after.x - anchor.x).abs() < 1e-6, "{anchor_after:?}");
+            assert!((anchor_after.y - anchor.y).abs() < 1e-6, "{anchor_after:?}");
+            if pitch == 0.0 {
+                // Positive bearing turns content counter-clockwise on screen (y down).
+                let probe_after = runtime.project_screen(13.5, 52.55).unwrap();
+                let turned =
+                    screen_angle_degrees(anchor, probe_after) - screen_angle_degrees(anchor, probe);
+                assert!(
+                    ((turned + 30.0 + 540.0) % 360.0 - 180.0).abs() < 1e-4,
+                    "{turned}"
+                );
+            }
+        }
+    }
+
+    fn normalize_test_bearing(bearing: f64) -> f64 {
+        let wrapped = bearing.rem_euclid(360.0);
+        if wrapped >= 180.0 {
+            wrapped - 360.0
+        } else {
+            wrapped
+        }
+    }
+
+    #[test]
+    fn rotation_about_the_center_keeps_the_center_and_wraps_bearing() {
+        let mut runtime = runtime_with_camera([179.9, -33.0], 6.0, 170.0, 0.0, 640.0, 480.0);
+        let center = ScreenCoordinate { x: 320.0, y: 240.0 };
+
+        runtime.rotate_about(25.0, center).unwrap();
+
+        let camera = runtime.camera();
+        assert!((camera.longitude - 179.9).abs() < 1e-9);
+        assert!((camera.latitude + 33.0).abs() < 1e-9);
+        assert!((camera.bearing + 165.0).abs() < 1e-9);
+        runtime.rotate_about(165.0, center).unwrap();
+        assert!(runtime.camera().bearing.abs() < 1e-9);
+        assert!(runtime.frame_plan().is_ok());
+    }
+
+    #[test]
+    fn rotation_rejects_non_finite_input_without_mutating() {
+        let mut runtime = runtime([0.0, 0.0], 3.0, 400.0, 300.0);
+        let before = runtime.camera();
+        assert_eq!(
+            runtime.rotate_about(f64::NAN, ScreenCoordinate { x: 1.0, y: 1.0 }),
+            Err(FlatRasterRuntimeError::InvalidCamera)
+        );
+        assert_eq!(
+            runtime.rotate_about(
+                10.0,
+                ScreenCoordinate {
+                    x: f64::INFINITY,
+                    y: 1.0
+                }
+            ),
+            Err(FlatRasterRuntimeError::InvalidCamera)
+        );
+        assert_eq!(runtime.camera(), before);
+    }
+
+    fn project_local(
+        view_projection: [f32; 16],
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> (f64, f64) {
+        let m = view_projection.map(f64::from);
+        let clip_x = m[0] * x + m[4] * y + m[12];
+        let clip_y = m[1] * x + m[5] * y + m[13];
+        let clip_w = m[3] * x + m[7] * y + m[15];
+        (
+            (clip_x / clip_w + 1.0) * width / 2.0,
+            (1.0 - clip_y / clip_w) * height / 2.0,
+        )
+    }
+
+    #[test]
+    fn render_margin_places_the_viewport_exactly_in_the_surface_center() {
+        let (width, height, margin) = (800.0, 600.0, 128.0);
+        for (bearing, pitch) in [(0.0, 0.0), (30.0, 0.0), (-75.0, 45.0)] {
+            let mut plain =
+                runtime_with_camera([13.405, 52.52], 11.3, bearing, pitch, width, height);
+            let mut surface =
+                runtime_with_camera([13.405, 52.52], 11.3, bearing, pitch, width, height);
+            surface.set_render_margin(margin).unwrap();
+            let plain_plan = plain.frame_plan().unwrap();
+            let surface_plan = surface.frame_plan().unwrap();
+            assert_eq!(surface_plan.surface_margin, margin);
+            assert_eq!(surface_plan.visible_bounds, plain_plan.visible_bounds);
+            for (x, y) in [(0.0, 0.0), (-310.0, 145.5), (220.0, -90.0)] {
+                let viewport = project_local(
+                    plain_plan.render_camera.view_projection,
+                    x,
+                    y,
+                    width,
+                    height,
+                );
+                let in_surface = project_local(
+                    surface_plan.render_camera.view_projection,
+                    x,
+                    y,
+                    width + 2.0 * margin,
+                    height + 2.0 * margin,
+                );
+                assert!(
+                    (in_surface.0 - (viewport.0 + margin)).abs() < 1e-3,
+                    "{bearing} {pitch}"
+                );
+                assert!(
+                    (in_surface.1 - (viewport.1 + margin)).abs() < 1e-3,
+                    "{bearing} {pitch}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overscan_covers_the_margin_only_for_flat_plane_cameras_without_changing_scheduling() {
+        let mut plain = runtime_with_camera([13.405, 52.52], 11.3, 20.0, 0.0, 800.0, 600.0);
+        let mut surface = runtime_with_camera([13.405, 52.52], 11.3, 20.0, 0.0, 800.0, 600.0);
+        surface.set_render_margin(128.0).unwrap();
+        let plain_plan = plain.frame_plan().unwrap();
+        let surface_plan = surface.frame_plan().unwrap();
+
+        assert!(surface_plan.overscan);
+        assert!(!plain_plan.overscan);
+        assert_eq!(surface_plan.requests, plain_plan.requests);
+        assert_eq!(surface_plan.cancellations, plain_plan.cancellations);
+        let visible = surface_plan
+            .placements
+            .iter()
+            .filter(|placement| placement.visible)
+            .map(|placement| (placement.tile, placement.world_copy))
+            .collect::<Vec<_>>();
+        let expected = plain_plan
+            .placements
+            .iter()
+            .map(|placement| (placement.tile, placement.world_copy))
+            .collect::<Vec<_>>();
+        assert!(expected.iter().all(|tile| visible.contains(tile)));
+        assert!(surface_plan.placements.len() >= plain_plan.placements.len());
+
+        // The world center is a z2 tile corner: a 128px margin adds tile columns.
+        let mut corner = runtime([0.0, 0.0], 2.0, 800.0, 600.0);
+        corner.set_render_margin(128.0).unwrap();
+        let corner_plan = corner.frame_plan().unwrap();
+        assert!(corner_plan.overscan);
+        // x spans world px 496..1552 (4 columns); y spans 596..1452 (rows 1-2).
+        assert_eq!(corner_plan.placements.len(), 8);
+        assert_eq!(
+            corner_plan
+                .placements
+                .iter()
+                .filter(|placement| placement.visible)
+                .count(),
+            4
+        );
+        let covers = |x: f64, y: f64| {
+            corner_plan.placements.iter().any(|placement| {
+                x >= placement.screen_x
+                    && x <= placement.screen_x + placement.screen_width
+                    && y >= placement.screen_y
+                    && y <= placement.screen_y + placement.screen_height
+            })
+        };
+        assert!(covers(-128.0, -128.0) && covers(928.0, 728.0));
+
+        let mut pitched = runtime_with_camera([13.405, 52.52], 11.3, 20.0, 40.0, 800.0, 600.0);
+        pitched.set_render_margin(128.0).unwrap();
+        let pitched_plan = pitched.frame_plan().unwrap();
+        assert!(!pitched_plan.overscan);
+        assert!(
+            pitched_plan
+                .placements
+                .iter()
+                .all(|placement| placement.visible)
+        );
+    }
+
+    #[test]
+    fn render_margin_rejects_invalid_values_without_mutating() {
+        let mut runtime = runtime([0.0, 0.0], 3.0, 400.0, 300.0);
+        runtime.set_render_margin(64.0).unwrap();
+        for invalid in [-1.0, f64::NAN, f64::INFINITY, MAX_RENDER_MARGIN + 1.0] {
+            assert_eq!(
+                runtime.set_render_margin(invalid),
+                Err(FlatRasterRuntimeError::InvalidCamera)
+            );
+        }
+        assert_eq!(runtime.render_margin(), 64.0);
     }
 
     #[test]

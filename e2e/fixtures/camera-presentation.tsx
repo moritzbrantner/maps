@@ -4,7 +4,7 @@ import { configureMapsWasmPackage, importMapsWasmModule } from "../../src/aggreg
 import { GeoJsonLayer, type GeoJsonLayerProps } from "../../src/geojson-layer";
 import { MapsMapView } from "../../src/maps-map-view";
 import type { MapSurfaceController, MapViewState } from "../../src/map-display";
-import type { MapsFlatRasterFrame, MapsFlatRasterRuntime } from "../../src/flat-runtime-wasm";
+import type { MapsFlatRasterRuntime } from "../../src/flat-runtime-wasm";
 import type { MapsWgpuApplicationFrame } from "../../src/wgpu-application-frame";
 
 // Keep the entire grid, including the first entity used for picking, inside
@@ -68,26 +68,24 @@ configureMapsWasmPackage("/wasm/maps_wasm.js");
 type WasmModule = {
   default(): Promise<unknown>;
   MapsFlatRasterRuntime: {
-    prototype: Pick<MapsFlatRasterRuntime, "frame" | "project" | "projectPacked">;
+    prototype: Pick<MapsFlatRasterRuntime, "project" | "projectPacked"> & {
+      framePacked(): Float64Array;
+    };
   };
   MapsWgpuBaseMapRenderer: {
     prototype: {
-      render(
-        placements: unknown,
-        camera: unknown,
-        application: MapsWgpuApplicationFrame | null,
-      ): number;
+      renderPacked(tileDraws: Float64Array, application: MapsWgpuApplicationFrame | null): number;
     };
   };
 };
 const wasm = await importMapsWasmModule<WasmModule>();
 await wasm.default();
 const runtimePrototype = wasm.MapsFlatRasterRuntime.prototype;
-const originalFrame = runtimePrototype.frame;
+const originalFrame = runtimePrototype.framePacked;
 const originalProject = runtimePrototype.project;
 const originalProjectPacked = runtimePrototype.projectPacked;
 let activeRuntime: typeof runtimePrototype | undefined;
-runtimePrototype.frame = function (): MapsFlatRasterFrame {
+runtimePrototype.framePacked = function (): Float64Array {
   // oxlint-disable-next-line typescript/no-this-alias -- Observe the actual instrumented Rust instance.
   activeRuntime = this;
   probe.frames++;
@@ -105,13 +103,13 @@ runtimePrototype.projectPacked = function (packed) {
 };
 const expected = (): [number, number] => originalProject.call(activeRuntime!, ...coordinates);
 const rendererPrototype = wasm.MapsWgpuBaseMapRenderer.prototype;
-const originalRender = rendererPrototype.render;
-rendererPrototype.render = function (placements, camera, application) {
+const originalRender = rendererPrototype.renderPacked;
+rendererPrototype.renderPacked = function (tileDraws, application) {
   if (activeRuntime) {
     const circle = application?.circles[0];
     probe.samples.push({ actual: circle ? [circle.x, circle.y] : null, expected: expected() });
   }
-  return originalRender.call(this, placements, camera, application);
+  return originalRender.call(this, tileDraws, application);
 };
 // Canvas fallback uses the identical acceptance check, at its actual draw edge.
 const originalClear = CanvasRenderingContext2D.prototype.clearRect;

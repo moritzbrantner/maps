@@ -39,6 +39,7 @@ export type MapViewStateChangeReason =
   | "fly-to"
   | "pan"
   | "zoom"
+  | "rotate"
   | "cluster-expand"
   | "prop-change"
   | "programmatic";
