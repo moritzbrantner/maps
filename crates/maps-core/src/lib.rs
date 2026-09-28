@@ -38,7 +38,8 @@ pub use scenario::{
 };
 pub use vector_tile::{
     VectorBasemapLine, VectorBasemapLineKind, VectorBasemapPolygon, VectorBasemapPolygonKind,
-    VectorBasemapTile, VectorTileError, decode_shortbread_basemap, decode_shortbread_basemap_lines,
+    VectorBasemapTile, VectorTileError, VectorTilePixel, decode_shortbread_basemap,
+    decode_shortbread_basemap_lines, decode_shortbread_tile_pixels,
 };
 
 /// Numeric metrics attached to native map points.

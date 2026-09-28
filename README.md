@@ -30,7 +30,7 @@ Live demo: <https://moritzbrantner.github.io/maps/>
 
 Standalone Rust/WASM engine: <https://moritzbrantner.github.io/maps/engine/>
 
-Engine benchmark stats: <https://moritzbrantner.github.io/maps/stats/>
+Engine benchmark stats (full-map interaction and projection): <https://moritzbrantner.github.io/maps/stats/>
 See [engine performance evidence](docs/engine-performance.md) for workload and measurement limits.
 
 ## Which Map Should I Use?

@@ -2,22 +2,20 @@ import { useCallback, useMemo, useState } from "react";
 import { Button, NativeSelect } from "@moritzbrantner/ui";
 import { MapsMapView } from "../src/maps-map-view";
 import { ClusterLayer } from "../src/cluster-layer";
-import { GeoJsonLayer, type GeoJsonLayerFeature } from "../src/geojson-layer";
 import type { AggregatedMapFeature, MapPoint } from "../src/aggregation";
-import type { MapSurfaceController, MapViewState, RasterMapStyle } from "../src/map-display";
-import type { MapsCanvasFlatRuntimeController } from "../src/canvas-flat-runtime";
-import {
-  getShortbreadBasemapStyle,
-  useShortbreadBasemap,
-  type ShortbreadFeatureProperties,
-} from "./ShortbreadBasemapLayer";
+import type { MapViewState, RasterMapStyle } from "../src/map-display";
+import { createShortbreadTileLoader } from "./shortbread-tile-loader";
 
 const initialView: MapViewState = { center: [10.3, 50.4], zoom: 4.4 };
-const mapStyle: RasterMapStyle = { tiles: false, attribution: "© OpenStreetMap contributors" };
+const mapStyle: RasterMapStyle = {
+  tiles: "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt",
+  minZoom: 0,
+  maxZoom: 14,
+  tileSize: 256,
+  attribution: "© OpenStreetMap contributors",
+};
+const emptyStyle: RasterMapStyle = { tiles: false };
 const counts = [1000, 10000, 100000];
-const basemapInteractive = () => false;
-const basemapStyle = (feature: GeoJsonLayerFeature<ShortbreadFeatureProperties>) =>
-  getShortbreadBasemapStyle(feature.properties.kind, feature.properties.sourceKind);
 const featureId = (feature: AggregatedMapFeature) =>
   feature.kind === "cluster" ? `cluster:${feature.clusterId}` : `point:${feature.point.id}`;
 
@@ -27,19 +25,29 @@ export function EnginePage() {
     return counts.includes(requested) ? requested : 1000;
   });
   const [viewState, setViewState] = useState(initialView);
-  const [controller, setController] = useState<Pick<
-    MapsCanvasFlatRuntimeController,
-    "getVisibleTiles"
-  > | null>(null);
+  const [tileError, setTileError] = useState<string | null>(null);
+  const [basemapEnabled] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    return !params.has("e2e") || params.get("vectorTiles") === "fixture";
+  });
   const [selected, setSelected] = useState<string | null>(null);
   const points = useMemo(() => createPoints(count), [count]);
-  const basemap = useShortbreadBasemap(controller?.getVisibleTiles() ?? []);
-  const ready = useCallback((value: MapSurfaceController | null) => {
-    setController(
-      value && "getVisibleTiles" in value
-        ? (value as MapSurfaceController & Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles">)
-        : null,
-    );
+  const createTileImageLoader = useCallback(() => {
+    const wasmPackage = new URL(`${import.meta.env.BASE_URL}wasm/maps_wasm.js`, location.origin)
+      .href;
+    const loader = createShortbreadTileLoader(wasmPackage);
+    return {
+      ...loader,
+      async load(...args: Parameters<typeof loader.load>) {
+        try {
+          return await loader.load(...args);
+        } catch (error) {
+          if (!args[2].aborted)
+            setTileError(error instanceof Error ? error.message : String(error));
+          throw error;
+        }
+      },
+    };
   }, []);
   const select = useCallback((feature: AggregatedMapFeature | null) => {
     setSelected(feature ? featureId(feature) : null);
@@ -96,21 +104,14 @@ export function EnginePage() {
       <MapsMapView
         mapLabel="Maps engine map"
         fitToData={false}
-        mapStyle={mapStyle}
-        onMapControllerReady={ready}
+        maxZoom={22}
+        mapStyle={basemapEnabled ? mapStyle : emptyStyle}
+        createTileImageLoader={createTileImageLoader}
         onViewStateChange={setViewState}
         viewState={viewState}
         className="engine-map"
         style={{ height: "100%", minHeight: 320 }}
       >
-        {basemap.enabled ? (
-          <GeoJsonLayer
-            featureCollection={basemap.featureCollection}
-            getFeatureStyle={basemapStyle}
-            isFeatureInteractive={basemapInteractive}
-            layerId="engine-basemap"
-          />
-        ) : null}
         <ClusterLayer
           points={points}
           getFeatureId={featureId}
@@ -121,7 +122,7 @@ export function EnginePage() {
       <footer className="engine-status">
         <span>Rust/WASM · {count.toLocaleString("en")} points</span>
         <span role="status">{selected ? `Selected ${selected}` : "No selection"}</span>
-        {basemap.error ? (
+        {tileError ? (
           <span role="alert">Basemap unavailable. You can still explore the points.</span>
         ) : null}
         <a href={`${import.meta.env.BASE_URL}`}>Library showcase</a>

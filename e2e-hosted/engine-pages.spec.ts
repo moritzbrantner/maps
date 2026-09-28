@@ -1,17 +1,34 @@
 import { expect, test } from "@playwright/test";
+import { createShortbreadTileFixture } from "../e2e/fixtures/shortbread-tile.mjs";
 
 test("standalone engine survives direct navigation and refresh under the Pages base path", async ({
   page,
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/maps/engine/?e2e=1");
+  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", (route) =>
+    route.fulfill({
+      body: createShortbreadTileFixture(),
+      contentType: "application/vnd.mapbox-vector-tile",
+    }),
+  );
+  await page.goto("/maps/engine/?e2e=1&vectorTiles=fixture");
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
   await expect(page.locator('[data-map-runtime="maps"]')).toBeVisible();
   await expect(page.locator(".maplibregl-canvas")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Stats" })).toHaveAttribute("href", "/maps/stats/");
+  await expect
+    .poll(async () =>
+      Number(await page.locator("[data-flat-runtime=maps]").getAttribute("data-map-base-tiles")),
+    )
+    .toBeGreaterThan(0);
   await page.reload();
   await expect(page.locator('[data-map-runtime="maps"]')).toBeVisible();
+  await expect
+    .poll(async () =>
+      Number(await page.locator("[data-flat-runtime=maps]").getAttribute("data-map-base-tiles")),
+    )
+    .toBeGreaterThan(0);
   expect(errors).toEqual([]);
 });
 
@@ -39,11 +56,21 @@ test("stats displays the built engine measurements without inventing missing evi
     expect(result.medianMs).toBeGreaterThan(0);
     expect(result.p95Ms).toBeGreaterThanOrEqual(result.medianMs);
   }
+  const interactionResponse = await request.get("/maps/evidence/engine-interaction.json");
+  expect(interactionResponse.ok()).toBe(true);
+  const interaction = await interactionResponse.json();
+  expect(interaction.producer).toBe("maps-engine-interaction");
+  expect(interaction.workload.scenario).toBe("vector-city-style-v1");
+  expect(interaction.results).toHaveLength(5);
+  expect(interaction.summary.p95FrameMs).toBeGreaterThan(0);
   await page.goto("/maps/stats/");
   await expect(page.getByRole("heading", { name: "Stats", exact: true })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "Engine benchmark scope" })).toContainText(
     "CPU + WASM bridge only",
   );
+  await expect(
+    page.getByRole("row").filter({ hasText: "Full map pan/zoom · frame interval · p95" }),
+  ).toContainText("measured");
   const row = page
     .getByRole("row")
     .filter({ hasText: "Rust/WASM oriented projection · 100k points · median" });

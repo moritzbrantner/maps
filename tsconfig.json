@@ -12,5 +12,11 @@
       "@moritzbrantner/maps": ["./src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "demo/engine-main.tsx", "demo/vite-env.d.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "demo/engine-main.tsx",
+    "demo/vite-env.d.ts",
+    "demo/shortbread-tile-worker.ts"
+  ]
 }

@@ -149,8 +149,11 @@ their wgpu path. This is not yet a general style evaluator or GPU polygon pipeli
 Focused evidence lives in the Rust vector-tile tests and
 `e2e/maps-wgpu-stroke-runtime.spec.ts`: deterministic MVT bytes exercise forest beneath
 water, island holes, source classification, paint order and visible application points.
-Malformed polygon command streams are rejected. These checks do not yet make this named
-scenario executable or establish full MapLibre cartographic/performance parity.
+Malformed polygon command streams are rejected. The standalone fixed-style journey is now executable through
+`bench:engine:interaction`, using `engine-scenarios/vector-city-style-v1.json` and
+`e2e/fixtures/shortbread-tile.mjs`. Browser checks cover retained tile pixels,
+water holes, style order, warm reuse and worker lifecycle. This scoped fixture
+and journey do not establish full MapLibre style/cartographic parity.
 
 The same browser suite verifies that Canvas base and overlay surfaces redraw after
 `contextrestored`, and that a polygon with zero stroke width paints only its fill. Restoration

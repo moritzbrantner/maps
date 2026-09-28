@@ -25,6 +25,7 @@ import {
   loadMapsFlatRasterRuntime,
   type MapsFlatRasterFrame,
   type MapsFlatRasterRuntime,
+  type MapsFlatRasterRuntimeConfig,
   type MapsRasterTileId,
 } from "./flat-runtime-wasm";
 import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
@@ -83,9 +84,18 @@ export type MapsCanvasFlatRuntimeController = {
   unproject(x: number, y: number): [longitude: number, latitude: number];
 };
 
+/** A runtime-owned decoder for tile images; Rust still owns scheduling and tile identity. */
+export type MapsTileImageLoader = {
+  /** Rust validates and enforces the decoded-image retention and load budgets. */
+  limits?: MapsFlatRasterRuntimeConfig["limits"];
+  load(url: string, tile: MapsRasterTileId, signal: AbortSignal): Promise<ImageBitmap>;
+  dispose(): void;
+};
+
 export type MapsBrowserRuntimeOptions = {
   /** Source, bounds and WASM identity are fixed for this host lifetime. */
   mapStyle: RasterMapStyle;
+  createTileImageLoader?: () => MapsTileImageLoader;
   maxBounds?: MapBounds;
   maxZoom?: number;
   /** Prepare Map Layers before presenting a changed Rust camera. */
@@ -133,6 +143,7 @@ export function createMapsBrowserRuntime(
   let config = { ...options, viewState: copyViewState(options.viewState) };
   const identity = runtimeIdentity(config);
   const source = resolveTileLayerOptions(config.mapStyle);
+  const tileImageLoader = options.createTileImageLoader?.();
   const maxBounds = config.maxBounds ? ([...config.maxBounds] as MapBounds) : undefined;
   const wasmPackage = config.wasmPackage;
   const renderMargin = normalizeRenderMargin(config.renderMargin);
@@ -352,6 +363,7 @@ export function createMapsBrowserRuntime(
         maxBounds,
         pitch: config.viewState.pitch ?? 0,
         renderMargin,
+        limits: tileImageLoader?.limits,
         source: {
           maxZoom: Math.round(currentSource?.options.maxZoom ?? DEFAULT_SOURCE_MAX_ZOOM),
           minZoom: Math.round(currentSource?.options.minZoom ?? 0),
@@ -413,6 +425,8 @@ export function createMapsBrowserRuntime(
     };
 
     const frameSynchronizer = createFrameSynchronizer({
+      loadTile: (url, tile, signal) =>
+        tileImageLoader ? tileImageLoader.load(url, tile, signal) : loadRasterTile(url, signal),
       canvas,
       fallbackCanvas,
       images: images,
@@ -694,7 +708,10 @@ export function createMapsBrowserRuntime(
   }
   function update(next: MapsBrowserRuntimeOptions) {
     if (cancelled) return;
-    if (runtimeIdentity(next) !== identity) {
+    if (
+      runtimeIdentity(next) !== identity ||
+      next.createTileImageLoader !== options.createTileImageLoader
+    ) {
       throw new Error(
         "Source, bounds or WASM changed: dispose and recreate the Maps browser runtime.",
       );
@@ -736,6 +753,7 @@ export function createMapsBrowserRuntime(
     mouseRotation = null;
     viewStateEchoTracker.clear();
     for (const load of loads.values()) load.abort.abort();
+    tileImageLoader?.dispose();
     loads.clear();
     for (const image of images.values()) image.close();
     images.clear();
@@ -838,6 +856,7 @@ function applySurfaceGeometry(targets: HTMLCanvasElement[], margin: number) {
 }
 
 function createFrameSynchronizer({
+  loadTile,
   canvas,
   fallbackCanvas,
   images,
@@ -852,6 +871,7 @@ function createFrameSynchronizer({
   onRendererFailure,
   onCameraFrame,
 }: {
+  loadTile: MapsTileImageLoader["load"];
   canvas: HTMLCanvasElement;
   fallbackCanvas: HTMLCanvasElement;
   images: Map<string, ImageBitmap>;
@@ -890,6 +910,14 @@ function createFrameSynchronizer({
   let lastReshape = Number.NEGATIVE_INFINITY;
   let settleHandle: number | null = null;
   let drawnTilesAttribute = "0";
+  let pendingTilesAttribute = "0";
+
+  function publishPendingTiles() {
+    const value = String(loads.size);
+    if (value === pendingTilesAttribute) return;
+    pendingTilesAttribute = value;
+    canvas.dataset.mapBasePendingTiles = value;
+  }
 
   /** Marks rendered pixels stale; a tile only matters if the last render placed it. */
   function invalidateRendered(tileKey?: string) {
@@ -1198,6 +1226,7 @@ function createFrameSynchronizer({
         frame = runtime.frame();
       }
       presentFrame(frame);
+      publishPendingTiles();
       return frame;
     }
 
@@ -1209,7 +1238,7 @@ function createFrameSynchronizer({
       const load = { abort, tile };
       loads.set(tile.key, load);
 
-      loadRasterTile(buildRasterTileUrl(currentSource.url, tile), abort.signal)
+      loadTile(buildRasterTileUrl(currentSource.url, tile), tile, abort.signal)
         .then(
           (image) => {
             // A cancelled fetch/decode may finish after this tile has been
@@ -1250,6 +1279,7 @@ function createFrameSynchronizer({
         });
     }
 
+    publishPendingTiles();
     return frame;
   }
 
