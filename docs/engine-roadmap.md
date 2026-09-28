@@ -6,6 +6,10 @@ The target is not "MapLibre rewritten in Rust". The target is a Maps-owned geogr
 
 "First-party" describes semantic ownership, not implementation isolation. Maps should own map behavior while composing existing lower-level workspace foundations for generic geo, assets, evidence and genuinely 3D primitives. For 2D rendering, `viz-engine` supplies experiments and evidence rather than runtime authority. ADR 0007 defines that boundary.
 
+## Completion discipline
+
+Every first-party feature advances through **Developed → Correct → Fast** in that order. Implementation establishes the authoritative end-to-end path; deterministic/browser/reference evidence proves semantics; only then does representative profiling drive retention, batching, culling, GPU/resource and bridge optimizations. A feature is complete only when all three gates pass. See [`feature-completion.md`](feature-completion.md) for the live matrix and sequencing rules.
+
 ## Target architecture
 
 ```text
