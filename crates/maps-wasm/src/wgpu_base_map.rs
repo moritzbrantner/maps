@@ -23,6 +23,7 @@ const GEOMETRY_EPSILON_SQUARED: f64 = GEOMETRY_EPSILON * GEOMETRY_EPSILON;
 const APPLICATION_CIRCLE: u32 = 0;
 const APPLICATION_LINE: u32 = 1;
 const APPLICATION_DIRECTION_MARKER: u32 = 2;
+const APPLICATION_POLYGON: u32 = 3;
 const MAP_BACKGROUND_RED: f64 = 249.0 / 255.0;
 const MAP_BACKGROUND_GREEN: f64 = 244.0 / 255.0;
 const MAP_BACKGROUND_BLUE: f64 = 238.0 / 255.0;
@@ -194,6 +195,7 @@ struct WgpuApplicationFrame {
     height: f64,
     lines: Vec<WgpuApplicationLine>,
     order: Vec<[u32; 2]>,
+    polygons: Vec<WgpuApplicationPolygon>,
     width: f64,
 }
 
@@ -229,6 +231,16 @@ struct WgpuApplicationPoint {
 struct WgpuApplicationLine {
     color: [f32; 4],
     points: Vec<WgpuApplicationPoint>,
+    stroke_width: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WgpuApplicationPolygon {
+    fill_color: [f32; 4],
+    fill_points: Vec<WgpuApplicationPoint>,
+    rings: Vec<Vec<WgpuApplicationPoint>>,
+    stroke_color: [f32; 4],
     stroke_width: f64,
 }
 
@@ -1056,6 +1068,31 @@ fn prepare_application_geometry(
                     },
                 );
             }
+            APPLICATION_POLYGON => {
+                let first_vertex =
+                    (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+                append_application_polygon(
+                    &mut geometry.triangle_vertices,
+                    frame.width,
+                    frame.height,
+                    frame
+                        .polygons
+                        .get(index)
+                        .ok_or_else(|| JsValue::from_str("invalid wgpu polygon order index"))?,
+                )?;
+                let vertex_count = (geometry.triangle_vertices.len() as u64
+                    / APPLICATION_VERTEX_SIZE) as u32
+                    - first_vertex;
+                if vertex_count > 0 {
+                    append_application_draw(
+                        &mut geometry.draws,
+                        ApplicationDraw::Triangles {
+                            first_vertex,
+                            vertex_count,
+                        },
+                    );
+                }
+            }
             _ => return Err(JsValue::from_str("invalid wgpu application order kind")),
         }
     }
@@ -1180,6 +1217,126 @@ fn append_application_direction_marker(
         let x = marker.x + local_x * cosine - local_y * sine;
         let y = marker.y + local_x * sine + local_y * cosine;
         append_application_vertex(output, width, height, x, y, marker.color)?;
+    }
+    Ok(())
+}
+
+fn append_application_polygon(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    polygon: &WgpuApplicationPolygon,
+) -> Result<(), JsValue> {
+    if polygon.fill_points.is_empty()
+        || polygon.fill_points.len() % 3 != 0
+        || polygon
+            .fill_points
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        || polygon.rings.is_empty()
+        || polygon.rings.iter().any(|ring| {
+            ring.len() < 3
+                || ring
+                    .iter()
+                    .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        })
+        || !valid_color(polygon.fill_color)
+        || !valid_color(polygon.stroke_color)
+        || !polygon.stroke_width.is_finite()
+        || polygon.stroke_width < 0.0
+    {
+        return Err(JsValue::from_str("invalid wgpu application polygon"));
+    }
+
+    for point in &polygon.fill_points {
+        append_application_vertex(
+            output,
+            width,
+            height,
+            point.x,
+            point.y,
+            polygon.fill_color,
+        )?;
+    }
+
+    if polygon.stroke_width == 0.0 {
+        return Ok(());
+    }
+    for ring in &polygon.rings {
+        append_application_polygon_ring_stroke(
+            output,
+            width,
+            height,
+            ring,
+            polygon.stroke_width,
+            polygon.stroke_color,
+        )?;
+    }
+    Ok(())
+}
+
+fn append_application_polygon_ring_stroke(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    ring: &[WgpuApplicationPoint],
+    stroke_width: f64,
+    color: [f32; 4],
+) -> Result<(), JsValue> {
+    let mut points = deduplicate_line_points(ring).into_owned();
+    if points.len() > 1 {
+        let first = points[0];
+        let last = *points.last().expect("polygon ring is non-empty");
+        let dx = last.x - first.x;
+        let dy = last.y - first.y;
+        if dx * dx + dy * dy <= GEOMETRY_EPSILON_SQUARED {
+            points.pop();
+        }
+    }
+    if points.len() < 3 {
+        return Err(JsValue::from_str(
+            "wgpu application polygon ring has fewer than three distinct points",
+        ));
+    }
+
+    let half_width = stroke_width / 2.0;
+    let mut directions = Vec::with_capacity(points.len());
+    for index in 0..points.len() {
+        directions.push(unit_direction(
+            points[index],
+            points[(index + 1) % points.len()],
+        )?);
+    }
+
+    let mut offsets = Vec::with_capacity(points.len());
+    for index in 0..points.len() {
+        offsets.push(line_join_offset(
+            directions[(index + directions.len() - 1) % directions.len()],
+            directions[index],
+            half_width,
+        ));
+    }
+
+    for index in 0..points.len() {
+        let start = points[index];
+        let end = points[(index + 1) % points.len()];
+        let start_offset = offsets[index];
+        let end_offset = offsets[(index + 1) % offsets.len()];
+        let start_left = (start.x + start_offset.0, start.y + start_offset.1);
+        let start_right = (start.x - start_offset.0, start.y - start_offset.1);
+        let end_left = (end.x + end_offset.0, end.y + end_offset.1);
+        let end_right = (end.x - end_offset.0, end.y - end_offset.1);
+
+        for point in [
+            start_left,
+            start_right,
+            end_left,
+            start_right,
+            end_right,
+            end_left,
+        ] {
+            append_application_vertex(output, width, height, point.0, point.1, color)?;
+        }
     }
     Ok(())
 }
