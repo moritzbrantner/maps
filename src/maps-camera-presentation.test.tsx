@@ -80,6 +80,11 @@ beforeEach(() => {
     save: vi.fn(),
     restore: vi.fn(),
     setLineDash: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    closePath: vi.fn(),
+    rotate: vi.fn(),
+    translate: vi.fn(),
   } as unknown as CanvasRenderingContext2D;
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
   runtime = {
@@ -111,7 +116,10 @@ beforeEach(() => {
       }
       return projected;
     }),
-    unproject: vi.fn((): [number, number] => [0, 0]),
+    unproject: vi.fn((x: number, y: number): [number, number] => [
+      camera.center[0] + (x - camera.width / 2) / camera.zoom,
+      camera.center[1] - (y - camera.height / 2) / camera.zoom,
+    ]),
     rotateAbout: vi.fn((delta: number) => {
       camera.bearing = (camera.bearing ?? 0) + delta;
     }),
@@ -216,6 +224,61 @@ async function mountMap(onMapContextMenu?: () => void) {
           ],
         }),
       ),
+  };
+}
+
+const polygonCollection = {
+  type: "FeatureCollection" as const,
+  features: [
+    {
+      type: "Feature" as const,
+      id: "area",
+      properties: {},
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [
+          [
+            [-20, -10],
+            [20, -10],
+            [20, 10],
+            [-20, 10],
+            [-20, -10],
+          ],
+        ],
+      },
+    },
+  ],
+};
+
+/** Polygons are drawn by the Canvas overlay (the wgpu application frame fails closed). */
+async function mountPolygonMap(onSelectedFeatureIdChange?: (featureId: string | null) => void) {
+  const content = (collection: typeof polygonCollection = polygonCollection) => (
+    <MapsMapView
+      mapLabel="Polygon overlay"
+      mapStyle={{ tiles: false }}
+      fitToData={false}
+      initialViewState={{ center: [0, 0], zoom: 4 }}
+    >
+      <GeoJsonLayer
+        featureCollection={collection}
+        onSelectedFeatureIdChange={onSelectedFeatureIdChange}
+      />
+    </MapsMapView>
+  );
+  const mounted = render(content());
+  await waitFor(() =>
+    expect(mounted.getByLabelText("Polygon overlay").dataset.mapReady).toBe("true"),
+  );
+  const canvas = mounted.container.querySelector<HTMLCanvasElement>('[data-flat-runtime="maps"]')!;
+  const overlay = mounted.container.querySelector<HTMLCanvasElement>(
+    '[data-map-overlay-runtime="maps"]',
+  )!;
+  await waitFor(() => expect(overlay.dataset.mapOverlayBackend).toBe("canvas2d"));
+  vi.mocked(runtime.projectPacked).mockClear();
+  return {
+    canvas,
+    overlay,
+    replaceData: (collection: typeof polygonCollection) => mounted.rerender(content(collection)),
   };
 }
 
@@ -532,6 +595,104 @@ describe("Maps camera presentation", () => {
     act(flushAnimationFrame);
     expect(paints).toHaveLength(3);
     expect(canvas.style.transform).toMatch(/^translate\(/);
+    now.mockRestore();
+  });
+
+  it("presents Canvas overlay motion by transforming the retained render, then settles crisply", async () => {
+    const { canvas, overlay } = await mountPolygonMap();
+    let clock = performance.now();
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+
+    pointer(canvas, "pointerdown", 100, 100);
+    pointer(canvas, "pointermove", 108, 116);
+    act(flushAnimationFrame);
+    // The retained overlay is moved with the camera instead of re-projected: the mock
+    // pans the center by -8 degrees and projects 4 px per degree.
+    expect(runtime.projectPacked).not.toHaveBeenCalled();
+    expect(overlay.style.transform).toBe("matrix(1, 0, 0, 1, 32, 0)");
+
+    clock += 16;
+    fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+    act(flushAnimationFrame);
+    expect(runtime.projectPacked).not.toHaveBeenCalled();
+    expect(overlay.style.transform).toMatch(/^matrix\(1\.0\d*, 0, 0, 1\.0\d*, /);
+    // Browsers notify a newly observed element even without a size change (the overlay
+    // re-observes after React re-renders): that must not force a full render mid-motion.
+    act(() =>
+      resizeCallbacks
+        .filter((entry) => entry.target === overlay)
+        .at(-1)!
+        .callback([], {} as ResizeObserver),
+    );
+    expect(runtime.projectPacked).not.toHaveBeenCalled();
+    expect(overlay.style.transform).not.toBe("");
+
+    // Quiet for the settle window: one crisp re-projection replaces the transform.
+    pointer(canvas, "pointerup", 108, 200);
+    clock += 50;
+    act(flushAnimationFrame);
+    expect(runtime.projectPacked).not.toHaveBeenCalled();
+    clock += 100;
+    act(flushAnimationFrame);
+    expect(runtime.projectPacked).toHaveBeenCalled();
+    expect(overlay.style.transform).toBe("");
+    now.mockRestore();
+  });
+
+  it("defers overlay data changes during motion to the settle render", async () => {
+    const { canvas, overlay, replaceData } = await mountPolygonMap();
+    let clock = performance.now();
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    pointer(canvas, "pointerdown", 100, 100);
+    pointer(canvas, "pointermove", 108, 116);
+    act(flushAnimationFrame);
+    pointer(canvas, "pointerup", 108, 132);
+
+    // Streamed data arriving mid-motion re-renders React (and re-runs the overlay
+    // effect) but joins the settle render instead of re-projecting immediately.
+    const moved = structuredClone(polygonCollection);
+    moved.features[0]!.geometry.coordinates = [
+      [
+        [0, 0],
+        [5, 0],
+        [5, 5],
+        [0, 0],
+      ],
+    ];
+    act(() => replaceData(moved));
+    expect(runtime.projectPacked).not.toHaveBeenCalled();
+    expect(overlay.style.transform).not.toBe("");
+
+    clock += 150;
+    act(flushAnimationFrame);
+    expect(overlay.style.transform).toBe("");
+    const projected = vi
+      .mocked(runtime.projectPacked)
+      .mock.calls.flatMap(([coordinates]) => [...coordinates]);
+    expect(projected).toEqual(expect.arrayContaining([5, 5]));
+    now.mockRestore();
+  });
+
+  it("picks features under the pointer through the overlay motion transform", async () => {
+    const selected = vi.fn();
+    const { canvas, overlay } = await mountPolygonMap(selected);
+    const now = vi.spyOn(performance, "now").mockImplementation(() => 1000);
+    // The polygon (±20° at 4 px per degree) renders at screen x 220..380. A 30 px drag
+    // moves the camera 30° west, presenting it at 340..500.
+    const row = { clientY: 200 };
+    pointer(canvas, "pointerdown", 300, 100, 1, row);
+    pointer(canvas, "pointermove", 330, 116, 1, row);
+    act(flushAnimationFrame);
+    pointer(canvas, "pointerup", 330, 132, 1, row);
+    expect(overlay.style.transform).toBe("matrix(1, 0, 0, 1, 120, 0)");
+
+    // x 480 is outside the polygon as rendered but inside it as presented.
+    fireEvent.click(canvas, { clientX: 480, clientY: 200 });
+    expect(selected).toHaveBeenLastCalledWith("area", expect.anything());
+    selected.mockClear();
+    // x 260 is inside the polygon as rendered but outside it as presented.
+    fireEvent.click(canvas, { clientX: 260, clientY: 200 });
+    expect(selected.mock.calls.every(([featureId]) => featureId !== "area")).toBe(true);
     now.mockRestore();
   });
 
