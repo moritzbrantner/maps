@@ -159,10 +159,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return stroke;
   }
 
-  if distance <= input.fill_ratio {
-    return fill;
+  // Browsers (Tint) reject a function ending in `discard`: end with a return.
+  if distance > input.fill_ratio {
+    discard;
   }
-  discard;
+  return fill;
 }
 "#;
 
