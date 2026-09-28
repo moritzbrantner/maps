@@ -65,16 +65,11 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
-    ...size,
-    x: 0,
-    y: 0,
-    left: 0,
-    top: 0,
-    right: size.width,
-    bottom: size.height,
-    toJSON() {},
-  }));
+  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLCanvasElement,
+  ) {
+    return layoutRect(this, size);
+  });
   context = {
     setTransform: vi.fn(),
     clearRect: vi.fn(),
@@ -119,6 +114,9 @@ beforeEach(() => {
       return projected;
     }),
     unproject: vi.fn((): [number, number] => [0, 0]),
+    rotateAbout: vi.fn((delta: number) => {
+      camera.bearing = (camera.bearing ?? 0) + delta;
+    }),
     zoomAbout: vi.fn((delta, _x, _y, min, max) => {
       camera.zoom = Math.max(min, Math.min(max, camera.zoom + delta));
     }),
@@ -429,3 +427,26 @@ describe("plain browser host lifecycle", () => {
     expect(onController).toHaveBeenCalledOnce();
   });
 });
+
+/** jsdom has no layout: emulate the host's inline surface geometry around the viewport. */
+function layoutRect(canvas: HTMLCanvasElement, viewport: { width: number; height: number }) {
+  const offset = (value: string) => Number.parseFloat(value) || 0;
+  const extra = (value: string) => Number(/calc\(100% \+ (\d+)px\)/.exec(value)?.[1] ?? 0);
+  // getBoundingClientRect includes the element's own transform.
+  const translate = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(canvas.style.transform);
+  const left = offset(canvas.style.left) + Number(translate?.[1] ?? 0);
+  const top = offset(canvas.style.top) + Number(translate?.[2] ?? 0);
+  const width = viewport.width + extra(canvas.style.width);
+  const height = viewport.height + extra(canvas.style.height);
+  return {
+    width,
+    height,
+    x: left,
+    y: top,
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    toJSON() {},
+  } as DOMRect;
+}

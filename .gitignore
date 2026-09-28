@@ -18,3 +18,4 @@ target/
 crates/*/pkg/
 
 /backups/
+public/wasm/
