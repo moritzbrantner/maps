@@ -66,8 +66,20 @@ import { createPointClusterRenderFrame } from "./point-cluster-render-frame";
 import { PointLayer, type PointLayerProps } from "./point-layer";
 
 import { createMapsNativeLayerRuntime } from "./maps-native-layer-runtime";
+import {
+  captureOverlayMotionAnchors,
+  invertOverlayMotionPoint,
+  isHeavyOverlayScene,
+  overlayMotionMatrixCss,
+  resolveOverlayMotionTransform,
+  type OverlayMotionAnchors,
+  type OverlayMotionMatrix,
+} from "./overlay-motion-transform";
 
 export type MapsProjectCoordinate = MapScreenProject;
+
+/** Quiet time before a motion-transformed overlay is re-rendered crisply. */
+const OVERLAY_MOTION_SETTLE_MS = 100;
 
 export type MapsUnprojectCoordinate = (
   x: number,
@@ -224,6 +236,8 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const lastDrawRef = useRef<{
+      /** Where the Canvas render's corners are, for motion presentation. */
+      motionAnchors: OverlayMotionAnchors | null;
       scene: CanvasMapScene<unknown>;
       snapshot: MapsOverlaySnapshot;
       renderer: MapsOverlayLayersProps["renderApplicationFrame"];
@@ -236,6 +250,14 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const drawRef = useRef<(() => void) | null>(null);
     const clearApplicationFrameRef = useRef<(() => void) | null>(null);
     const renderedSnapshotRef = useRef<MapsOverlaySnapshot | null>(null);
+    // Heavy Canvas-rendered overlays are presented by a CSS transform of the retained
+    // render while the camera moves; re-projection waits until motion settles.
+    const motionAnchorsRef = useRef<OverlayMotionAnchors | null>(null);
+    const motionMatrixRef = useRef<OverlayMotionMatrix | null>(null);
+    const motionSettleFrameRef = useRef<number | null>(null);
+    const lastMotionRef = useRef(0);
+    /** Layout size of the last draw; resize notifications without a change are ignored. */
+    const drawnLayoutSizeRef = useRef<string | null>(null);
     const applicationFrameVisibleRef = useRef(false);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
@@ -353,6 +375,52 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       };
     }, []);
 
+    const cancelMotionSettle = () => {
+      if (motionSettleFrameRef.current !== null) cancelAnimationFrame(motionSettleFrameRef.current);
+      motionSettleFrameRef.current = null;
+    };
+
+    const clearMotionTransform = (canvas: HTMLCanvasElement) => {
+      cancelMotionSettle();
+      if (!motionMatrixRef.current) return;
+      motionMatrixRef.current = null;
+      canvas.style.transform = "";
+      canvas.style.transformOrigin = "";
+    };
+
+    /** Presents the retained render at the current camera without re-projecting it. */
+    const presentMotion = () => {
+      const canvas = canvasRef.current;
+      const anchors = motionAnchorsRef.current;
+      if (!canvas || !anchors || !drawRef.current) return false;
+      // Layout size: unaffected by the transform being replaced.
+      const matrix = resolveOverlayMotionTransform(
+        anchors,
+        project,
+        canvas.clientWidth || anchors.width,
+        canvas.clientHeight || anchors.height,
+      );
+      if (!matrix) return false;
+      motionMatrixRef.current = matrix;
+      canvas.style.transformOrigin = "0 0";
+      canvas.style.transform = overlayMotionMatrixCss(matrix);
+      lastMotionRef.current = performance.now();
+      if (motionSettleFrameRef.current === null) {
+        const settle = () => {
+          motionSettleFrameRef.current = null;
+          if (!motionMatrixRef.current) return;
+          if (performance.now() - lastMotionRef.current < OVERLAY_MOTION_SETTLE_MS) {
+            motionSettleFrameRef.current = requestAnimationFrame(settle);
+            return;
+          }
+          // Motion stopped: one crisp render replaces the resampled transform.
+          drawRef.current?.();
+        };
+        motionSettleFrameRef.current = requestAnimationFrame(settle);
+      }
+      return true;
+    };
+
     const clearHover = () => {
       const interaction = lastHoveredInteractionRef.current;
       if (interaction) interaction.clearHover();
@@ -366,8 +434,14 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       const renderedSnapshot = renderedSnapshotRef.current;
       if (!canvas || !scene || !renderedSnapshot) return null;
 
-      const position = getClientCanvasPosition(canvas, clientX, clientY);
-      const hit = hitTestCanvasMapScene(scene, position);
+      const matrix = motionMatrixRef.current;
+      const position = matrix
+        ? getUntransformedClientPosition(canvas, clientX, clientY)
+        : getClientCanvasPosition(canvas, clientX, clientY);
+      // While a motion transform presents the retained scene, hit-test in its coordinates.
+      const scenePosition = matrix ? invertOverlayMotionPoint(matrix, position) : position;
+      if (!scenePosition) return null;
+      const hit = hitTestCanvasMapScene(scene, scenePosition);
       if (!hit) return null;
       const primitive = hit.renderPrimitive;
       const interaction = renderedSnapshot.interactions.get(primitive.primitiveId);
@@ -388,6 +462,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       () => ({
         redraw() {
           projectionRevisionRef.current += 1;
+          if (presentMotion()) return;
           drawRef.current?.();
         },
         clearHover,
@@ -448,6 +523,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       clearApplicationFrameRef.current = clearApplicationFrame;
 
       const draw = (force = false) => {
+        // Measure and draw untransformed; anchors are recaptured for Canvas renders only.
+        clearMotionTransform(canvas);
+        motionAnchorsRef.current = null;
+        drawnLayoutSizeRef.current = layoutSizeKey(canvas);
         const size = resizeCanvasBackingStore(canvas);
         const viewportQuery = getViewport(size.width, size.height);
         const heatViewport: MapsHeatLayerViewport | null = viewportQuery
@@ -499,9 +578,18 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           sameScreenFrame(previous.scene, scene) &&
           sameIds(previous.snapshot.hoveredPrimitiveIds, snapshot.hoveredPrimitiveIds) &&
           sameIds(previous.snapshot.selectedPrimitiveIds, snapshot.selectedPrimitiveIds)
-        )
+        ) {
+          // The retained pixels already show this frame.
+          if (previous.motionAnchors) motionAnchorsRef.current = previous.motionAnchors;
           return;
-        lastDrawRef.current = { scene, snapshot, renderer: renderApplicationFrame, ratio };
+        }
+        lastDrawRef.current = {
+          motionAnchors: null,
+          scene,
+          snapshot,
+          renderer: renderApplicationFrame,
+          ratio,
+        };
 
         const renderedByWgpu =
           !hasRaster && (renderApplicationFrame?.(scene, interaction) ?? false);
@@ -526,6 +614,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           for (const primitive of scene.primitives) {
             drawCanvasMapPrimitive(context, primitive, interaction);
           }
+          const anchors = isHeavyOverlayScene(scene)
+            ? captureOverlayMotionAnchors(unproject, size.width, size.height)
+            : null;
+          motionAnchorsRef.current = anchors;
+          lastDrawRef.current.motionAnchors = anchors;
           return;
         }
 
@@ -550,14 +643,22 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       const restore = () => draw(true);
       canvas.addEventListener("contextrestored", restore);
       drawRef.current = draw;
-      draw();
+      // Data changes during motion (e.g. streamed tiles) join the settle render, so
+      // the presented pixels, hit-testing scene and data stay one coherent snapshot.
+      if (!motionMatrixRef.current) draw();
 
       const observer =
-        typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => draw());
+        typeof ResizeObserver === "undefined"
+          ? null
+          : new ResizeObserver(() => {
+              // A newly observed element is notified even when its size is unchanged.
+              if (layoutSizeKey(canvas) !== drawnLayoutSizeRef.current) draw();
+            });
       observer?.observe(canvas);
       return () => {
         canvas.removeEventListener("contextrestored", restore);
         observer?.disconnect();
+        // A pending motion settle survives re-runs: it draws through the latest `drawRef`.
         drawRef.current = null;
       };
     }, [
@@ -1213,6 +1314,27 @@ function serializeVisibleAggregationSummary(summary: VisibleAggregationSummary) 
 
 function resolveLayerPrefix(kind: string, key: string | null, path: string) {
   return `${kind}:${key ?? path}`;
+}
+
+/** Layout (pre-transform) size of an element. */
+function layoutSizeKey(element: HTMLElement) {
+  return `${element.clientWidth}x${element.clientHeight}`;
+}
+
+/** Client point in the canvas' layout box, ignoring its presentation transform. */
+function getUntransformedClientPosition(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+) {
+  // The overlay canvas fills its positioned parent (inset 0).
+  const parent = canvas.parentElement;
+  if (!parent) return getClientCanvasPosition(canvas, clientX, clientY);
+  const bounds = parent.getBoundingClientRect();
+  return {
+    x: clientX - bounds.left - parent.clientLeft,
+    y: clientY - bounds.top - parent.clientTop,
+  };
 }
 
 function getClientCanvasPosition(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
