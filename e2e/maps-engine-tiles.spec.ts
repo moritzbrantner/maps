@@ -133,3 +133,49 @@ test("tile worker rejects malformed data and remains usable, then disposes pendi
   });
   expect(result).toEqual({ malformed: true, width: 512, cancelled: true, disposed: true });
 });
+
+test("pan predicts vector tiles beyond the stationary ring and reuses them @smoke", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 512, height: 512 });
+  const requests = new Map<string, number>();
+  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
+    const url = route.request().url();
+    requests.set(url, (requests.get(url) ?? 0) + 1);
+    await route.fulfill({ body, contentType: "application/vnd.mapbox-vector-tile" });
+  });
+  await page.goto("/engine/?e2e=1&vectorTiles=fixture");
+  const base = page.locator("[data-flat-runtime=maps]");
+  await expect
+    .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
+    .toBeGreaterThan(0);
+  await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
+  const initial = new Set(requests.keys());
+  // A small eastward pan keeps the visible XYZ columns unchanged, but predicts
+  // column 19 beyond the stationary ring (columns 15..18 at this camera).
+  await page.mouse.move(300, 280);
+  await page.mouse.down();
+  await page.mouse.move(284, 280, { steps: 2 });
+  await expect
+    .poll(() => [...requests.keys()].filter((url) => /\/5\/19\//.test(url)).length)
+    .toBeGreaterThan(0);
+  await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
+  const predicted = [...requests.keys()].filter((url) => /\/5\/19\//.test(url));
+  expect(predicted.every((url) => !initial.has(url))).toBe(true);
+  // Three separate drags move that predicted column into the viewport.
+  await page.mouse.up();
+  for (let step = 0; step < 3; step++) {
+    await page.mouse.move(420, 280);
+    await page.mouse.down();
+    await page.mouse.move(140, 280, { steps: 20 });
+    // Let outstanding tile work finish before continuing the journey.
+    await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
+    await page.mouse.up();
+  }
+  // Column 21 can only be predicted once column 19 has entered the cover.
+  await expect
+    .poll(() => [...requests.keys()].filter((url) => /\/5\/21\//.test(url)).length)
+    .toBeGreaterThan(0);
+  for (const url of predicted) expect(requests.get(url)).toBe(1);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});

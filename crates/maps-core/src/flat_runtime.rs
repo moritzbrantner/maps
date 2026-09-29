@@ -18,6 +18,7 @@ const DEFAULT_MAX_VISIBLE_TILES: usize = 256;
 const DEFAULT_CACHE_CAPACITY: usize = 512;
 const DEFAULT_LOAD_CONCURRENCY: usize = 8;
 const REQUEST_PREFETCH_RADIUS_TILES: i64 = 1;
+const PREFETCH_LOOKAHEAD_TILES: f64 = 2.0;
 const WORLD_EPSILON: f64 = 1.0e-12;
 /// Upper bound for the render-surface margin, in CSS pixels.
 pub const MAX_RENDER_MARGIN: f64 = 1024.0;
@@ -188,6 +189,8 @@ pub struct FlatRasterRuntime {
     ready: BTreeSet<TileId>,
     ready_lru: VecDeque<TileId>,
     render_margin: f64,
+    last_request_camera: MapCamera,
+    prefetch_offset: Option<(i64, i64)>,
 }
 
 impl FlatRasterRuntime {
@@ -216,6 +219,8 @@ impl FlatRasterRuntime {
             ready: BTreeSet::new(),
             ready_lru: VecDeque::new(),
             render_margin: 0.0,
+            last_request_camera: camera,
+            prefetch_offset: None,
         })
     }
 
@@ -680,11 +685,24 @@ impl FlatRasterRuntime {
             self.surface_placements(viewport_placements, &visible_tiles)?;
         let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        self.update_prefetch_offset(center);
+        let tile_offset = self.prefetch_offset;
+        let prefetch_center = match (tile_offset, visible_tiles.first()) {
+            (Some((x, y)), Some(tile)) => {
+                let dimension = 2.0_f64.powi(i32::from(tile.z));
+                WorldCoordinate {
+                    x: (center.x + x as f64 / dimension).rem_euclid(1.0),
+                    y: (center.y + y as f64 / dimension).clamp(0.0, 1.0),
+                }
+            }
+            _ => center,
+        };
         let request_tiles = buffered_request_cover(
             &visible_tiles,
-            center,
+            prefetch_center,
             self.limits.cache_capacity,
             REQUEST_PREFETCH_RADIUS_TILES,
+            tile_offset,
         );
 
         let mut cancellations = self
@@ -735,8 +753,8 @@ impl FlatRasterRuntime {
                 .filter(|tile| !visible_tiles.contains(tile))
                 .collect::<Vec<_>>();
             pending_prefetch.sort_by(|left, right| {
-                tile_center_distance_squared(*right, center)
-                    .total_cmp(&tile_center_distance_squared(*left, center))
+                tile_center_distance_squared(*right, prefetch_center)
+                    .total_cmp(&tile_center_distance_squared(*left, prefetch_center))
                     .then_with(|| right.cmp(left))
             });
             for tile in pending_prefetch.into_iter().take(preemptions_needed) {
@@ -763,8 +781,13 @@ impl FlatRasterRuntime {
             (!visible_tiles.contains(left))
                 .cmp(&(!visible_tiles.contains(right)))
                 .then_with(|| {
-                    tile_center_distance_squared(*left, center)
-                        .total_cmp(&tile_center_distance_squared(*right, center))
+                    let priority_center = if visible_tiles.contains(left) {
+                        center
+                    } else {
+                        prefetch_center
+                    };
+                    tile_center_distance_squared(*left, priority_center)
+                        .total_cmp(&tile_center_distance_squared(*right, priority_center))
                 })
                 .then_with(|| left.cmp(right))
         });
@@ -787,9 +810,44 @@ impl FlatRasterRuntime {
         })
     }
 
+    /// Predict only a direction, not an unbounded velocity extrapolation. Keep the
+    /// finite hint through tile-completion frames; non-pan changes and jumps reset it.
+    fn update_prefetch_offset(&mut self, center: WorldCoordinate) {
+        let previous = self.last_request_camera;
+        if previous == self.camera {
+            return;
+        }
+        self.last_request_camera = self.camera;
+        if previous.zoom != self.camera.zoom
+            || previous.bearing != self.camera.bearing
+            || previous.pitch != self.camera.pitch
+            || previous.viewport != self.camera.viewport
+        {
+            self.prefetch_offset = None;
+            return;
+        }
+        let Some(previous_center) = project_web_mercator(previous.longitude, previous.latitude)
+        else {
+            self.prefetch_offset = None;
+            return;
+        };
+        let x = shortest_world_delta(center.x - previous_center.x);
+        let y = center.y - previous_center.y;
+        let distance = x.hypot(y);
+        let pixels = distance * CAMERA_TILE_SIZE * 2.0_f64.powf(self.camera.zoom);
+        if pixels > self.camera.viewport.width.max(self.camera.viewport.height) {
+            self.prefetch_offset = None;
+        } else if pixels >= 1.0 {
+            self.prefetch_offset = Some((
+                (x / distance * PREFETCH_LOOKAHEAD_TILES).round() as i64,
+                (y / distance * PREFETCH_LOOKAHEAD_TILES).round() as i64,
+            ));
+        }
+    }
+
     /// Extends placements over the render margin for flat-plane (pitch 0) cameras.
-    /// Margin tiles are drawn when resident; they are within the existing prefetch
-    /// ring, so request scheduling stays viewport-driven.
+    /// Margin tiles are drawn when resident; request priority and budget remain
+    /// driven by the viewport and its bounded directional prefetch cover.
     fn surface_placements(
         &self,
         viewport_placements: Vec<RasterTilePlacement>,
@@ -1074,6 +1132,7 @@ fn buffered_request_cover(
     camera_center: WorldCoordinate,
     cache_capacity: usize,
     radius: i64,
+    lookahead: Option<(i64, i64)>,
 ) -> BTreeSet<TileId> {
     if radius <= 0 || visible.len() >= cache_capacity {
         return visible.clone();
@@ -1106,7 +1165,21 @@ fn buffered_request_cover(
         }
     }
 
-    if buffered.len() <= cache_capacity {
+    // Prediction redistributes the original ring's budget, never grows it.
+    let capacity = buffered.len().min(cache_capacity);
+    if let Some((delta_x, delta_y)) = lookahead {
+        for tile in visible {
+            let dimension = 1_i64 << u32::from(tile.z);
+            let x = (i64::from(tile.x) + delta_x).rem_euclid(dimension);
+            let y = i64::from(tile.y) + delta_y;
+            if (0..dimension).contains(&y)
+                && let Some(ahead) = TileId::new(tile.z, x as u32, y as u32)
+            {
+                buffered.insert(ahead);
+            }
+        }
+    }
+    if buffered.len() <= capacity {
         return buffered;
     }
 
@@ -1121,7 +1194,7 @@ fn buffered_request_cover(
     bounded.extend(
         prefetch
             .into_iter()
-            .take(cache_capacity.saturating_sub(visible.len())),
+            .take(capacity.saturating_sub(visible.len())),
     );
     bounded
 }

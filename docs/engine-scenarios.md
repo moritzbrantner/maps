@@ -82,6 +82,15 @@ must ignore late callbacks from superseded requests without removing replacement
 loads, and cancelled completions must not populate the runtime cache. These are
 correctness checks, not runtime-performance evidence.
 
+Directional prefetch extends the same lifecycle scenario. After a small eastward
+pan, request tiles two columns ahead before they enter the viewport, then verify
+their reuse. Reverse with requests still pending, ignore late cancelled results,
+cross the antimeridian, and exercise polar coverage and small caches. The public
+Rust tests remain in `raster_tile_lifecycle.rs`; `e2e/maps-engine-tiles.spec.ts`
+checks early requests and reuse through the real worker/WASM Map View. Neither
+prediction nor idle completion frames may grow the original ring's request-cover
+budget. Visible demand preempts speculative work.
+
 ### `dense-points-100k-v1`
 
 Purpose: measure the already-authoritative Rust point index together with render preparation and interaction.

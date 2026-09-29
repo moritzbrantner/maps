@@ -173,3 +173,43 @@ pass does not resolve that failure. A separate entry-bundle check reports 227,69
 bytes against the existing 222,600-byte limit, which was already exceeded by the
 deployed baseline. The limit has not been raised. These outstanding checks and
 the absence of a Moonlight comparison prevent a claim of complete Fast acceptance.
+
+## Directional tile prefetch
+
+The scheduler already fetched a symmetric one-tile ring. The next change, based
+on `289765e6aea4a355207a1510ec3e7a9372c58973`, redistributes that existing budget
+toward recent camera travel. Rust derives a direction from geographic center
+movement at unchanged zoom, bearing, pitch and viewport. A displacement of at
+least one CSS pixel updates the hint; jumps larger than the viewport's longest
+side reset it. Non-pan camera changes reset it too. Predictions reach at most
+two tile columns/rows ahead and use canonical wrapped XYZ identities.
+
+The current viewport always has first priority. Remaining candidates are ordered
+around the predicted center, and the request cover is capped at the smaller of
+the original ring's size and the existing cache limit. Concurrency and decoded
+cache limits are unchanged. Obsolete requests are cancelled on turns/reversals;
+late completions cannot populate the cache. Unchanged-camera frames retain the
+finite hint without extrapolating farther, so idle loading settles.
+
+This trades some trailing/side coverage for earlier leading-edge readiness; it
+cannot guarantee a prediction will be used or reduce total network bytes on every
+journey. It adds no zoom-level speculation, clock/velocity API, duplicate tile
+cache, or browser-owned geographic calculation. Existing raster and retained
+Shortbread sources consume the same scheduler decisions.
+
+The `raster-tile-churn-v1` lifecycle checks and real browser fixture prove tiles
+outside the old ring are requested before visibility and reused after travel.
+The full-map interaction benchmark remains the responsiveness check on `/stats`;
+request-readiness assertions are not an FPS or network-latency improvement claim.
+Shared conventions resolved to sourceRevision
+`e6acb5310afaf15c0cba24f87108f5f4ad1bedc3` for this change.
+
+Local validation passed Rust verification, canonical camera parity, the 497-test
+agent gate, all 35 browser smoke tests and four built-Pages checks. The full-map
+benchmark retained 16.7ms p95, 16.8ms maximum and zero long tasks across five warm
+journeys on the same local Chromium/Canvas environment described above. The new
+early-request browser assertion fails against the baseline WASM and passes with
+the candidate. `verify:fast` passed all 497 tests (including the earlier failing
+editor case) and the package build, then failed the unchanged 227,692-byte entry
+bundle against the 222,600-byte budget. That outstanding gate remains visible;
+the editor's earlier failure has not been diagnosed or claimed fixed.
