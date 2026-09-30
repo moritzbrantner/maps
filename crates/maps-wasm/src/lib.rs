@@ -10,6 +10,15 @@ mod engine_scenario;
     feature = "wgpu-base-map"
 ))]
 mod wgpu_base_map;
+#[cfg(any(
+    test,
+    all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "wgpu-base-map"
+    )
+))]
+mod wgpu_geometry;
 
 use std::collections::BTreeMap;
 
