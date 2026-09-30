@@ -17,6 +17,7 @@ export default defineConfig({
   },
   format: ["esm"],
   minifyWhitespace: true,
+  minifySyntax: true,
   outDir: "dist",
   splitting: true,
 });

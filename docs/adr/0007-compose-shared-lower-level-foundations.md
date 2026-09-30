@@ -8,7 +8,7 @@ Accepted; clarified 2026-09-19.
 
 ADR 0006 makes `maps` a first-party Rust/WASM map engine. "First-party" means Maps owns map-domain semantics; it does not mean Maps should grow private copies of generic foundations that already exist elsewhere in the workspace.
 
-The repository already consumes `moenarch-geo-core` for generic geo primitives and uses `runtime-profiler`, Moonlight, and `coding-tooling` at explicit evidence boundaries. The wider workspace also has 3D foundations in `3d-lab` (`three-d-core`, `three-d-animation`, `three-d-camera`, and `three-d-spatial`), asset generation/provenance in `asset-tooling`, and a Rust/WASM 2D rendering decision lab in `viz-engine`.
+The repository already consumes `moenarch-geo-core` for generic geo primitives and uses `runtime-profiler`, Moonlight, and `coding-tooling` at explicit evidence boundaries. The wider workspace also has 3D foundations in `3d-lab` (`three-d-core`, `three-d-animation`, `three-d-camera`, and `three-d-spatial`), asset generation/provenance in `asset-tooling`, and a Rust/WASM 2D rendering decision lab in `2d-lab`.
 
 The next camera/rendering work has two opposite risks: duplicating genuinely generic 3D/spatial foundations inside Maps, or forcing Maps-specific 2D rendering into a shared lab/foundation merely because some machinery looks reusable. This ADR draws that seam explicitly.
 
@@ -56,7 +56,7 @@ Do not turn that backend into another general renderer or 3D engine. Extract gen
 - `moenarch-geo-core` / `geo-analysis`: generic geospatial geometry and algorithms. Maps owns map-product semantics layered on top.
 - `3d-lab`: genuinely 3D mesh/transform/camera/spatial primitives. Maps consumes or extends those through narrow adapters only where the concern is actually 3D; it does not move flat-map camera/projection or GIS/map semantics into them.
 - `asset-tooling`: generated/static asset production, provenance and reproducibility for future map-native 3D/cartographic assets. It does not own live map sources or runtime tile state.
-- `viz-engine`: 2D Rust/WASM renderer experiments, representative workloads and performance evidence. Maps consumes findings by default, not the lab's `BenchmarkWorkload` or display-list model as a runtime contract. It does not own geographic camera, tile, style, label, interaction or map render-planning semantics.
+- `2d-lab`: 2D Rust/WASM renderer experiments, representative workloads and performance evidence. Maps consumes findings by default, not the lab's `BenchmarkWorkload` or display-list model as a runtime contract. It does not own geographic camera, tile, style, label, interaction or map render-planning semantics.
 - `runtime-profiler`, Moonlight and `coding-tooling`: evidence capture, evaluation policy and deterministic capability discovery respectively, as defined by ADR 0006.
 
 ## Foundation seam check
@@ -75,6 +75,6 @@ The seam check is especially required before adding genuinely 3D camera/matrix m
 
 - The first-party Maps engine remains genuinely Maps-owned without becoming self-contained for its own sake.
 - Perspective/3D camera work should reuse or deliberately extend shared `3d-lab` primitives where the contracts fit; ordinary flat-map camera/projection remains Maps-owned.
-- Current map-specific wgpu rendering remains valid: pixel-backend code may stay local when it is map-specific, and `viz-engine` experiments do not create a runtime dependency or authority transfer.
+- Current map-specific wgpu rendering remains valid: pixel-backend code may stay local when it is map-specific, and `2d-lab` experiments do not create a runtime dependency or authority transfer.
 - Future globe, terrain, extrusion and 3D-overlay work must begin with an authority review across Maps, `3d-lab`, geo foundations and asset tooling rather than starting from a minimal local implementation.
 - Cross-repository dependencies must be explicit and pinned/reproducible; dependency convenience is never a reason to duplicate an existing correctness authority.

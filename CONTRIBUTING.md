@@ -43,7 +43,7 @@ The committed `Cargo.lock` is part of the deterministic repository contract.
 Rust validation uses `--locked` and must fail rather than silently changing the
 dependency graph. Maps may reuse lower-level geo/Moenarch crates when they
 remove duplicate primitive correctness logic, but map-domain behavior remains
-owned by this repository and must not be routed through `viz-engine` or a new
+owned by this repository and must not be routed through `2d-lab` or a new
 generic visualization layer.
 
 ## Distributable WASM Validation
@@ -60,7 +60,9 @@ graph, generates version-matched browser glue with the pinned wasm-bindgen CLI,
 then installs the tarball into a temporary Vite consumer and initializes the
 persistent Rust point index in Chromium. Normal `bun run build` stays JS-only;
 `bun run build:package` is the package/release build that also emits
-`dist/wasm/`.
+`dist/wasm/`. The WASM build also refreshes the ignored `public/wasm/`
+assets consumed by the demo and browser evidence, so rebuilding Rust cannot
+leave those consumers on an older local artifact.
 
 ## Agent TDD Harness
 

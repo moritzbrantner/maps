@@ -16,12 +16,10 @@ unavailable; measurements have no pass/fail performance verdict.
 
 ## Projection workload
 
-Run `bun run bench:engine` after building WASM and preparing the browser assets:
+Run `bun run bench:engine` after building WASM, which also refreshes the browser assets:
 
 ```sh
 bun run build:wasm
-mkdir -p public/wasm
-cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
 bun run bench:engine
 ```
 
@@ -213,3 +211,31 @@ the candidate. `verify:fast` passed all 497 tests (including the earlier failing
 editor case) and the package build, then failed the unchanged 227,692-byte entry
 bundle against the 222,600-byte budget. That outstanding gate remains visible;
 the editor's earlier failure has not been diagnosed or claimed fixed.
+
+## Evidence tooling repair — September 30
+
+The build now copies its optimized WASM and matching glue to `public/wasm`, so
+local browser evidence consumes the same artifact as the package. Vite scans the
+browser fixture entry points before serving acceptance pages. A cold dependency
+scan previously discovered Leaflet during the journey, allowing a reload to
+detach elements while assertions were running.
+
+The runtime acceptance page uses the existing deterministic comparison fixture.
+Its unrelated live comparison previously prepared about 89,000 primitives while
+the runtime assertions were waiting. The kinetic test advances browser time
+between input events and after release, including a separate coalesced-drag frame,
+so it observes continued inertia before allowing the journey to settle. Editor
+tests wait for the observable editing mode as well as runtime readiness; runtime
+readiness alone precedes registration of the editor's interaction capabilities.
+
+Syntax minification reduces the largest shared JavaScript chunk from 227,692 to
+218,704 bytes against the unchanged 222,600-byte limit. API and packed-consumer
+checks pass. The 497-test agent gate and all 35 Chromium smoke tests pass with
+the repaired fixtures. Validation uses the pinned Bun 1.3.14, wasm-bindgen 0.2.128,
+Rust 1.98.1 and Binaryen 132.0.0; convention sourceRevision is recorded above.
+
+Full package validation still fails: compressed package 398,222 bytes exceeds
+384,000; unpacked package 1,606,230 exceeds 1,566,000; WASM 519,947 exceeds 488,000.
+Those limits remain intact. This repairs part of #168; native execution of the
+renderer helper tests, broader shader validation, and package-size convergence
+remain open. No complete Fast verdict follows from these repairs.
