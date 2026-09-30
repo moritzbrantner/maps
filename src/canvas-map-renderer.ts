@@ -38,10 +38,80 @@ export function createCanvasMapScene<TFeature = unknown>(
   project: MapRenderProject,
   size: { height: number; width: number },
 ): CanvasMapScene<TFeature> {
+  const primitives: Array<CanvasMapScenePrimitive<TFeature>> = [];
+  for (const primitive of frame.primitives) {
+    const projected = projectPrimitive(primitive, project);
+    if (projected) primitives.push(projected);
+  }
   return {
     height: Math.max(0, size.height),
-    primitives: frame.primitives.flatMap((primitive) => projectPrimitive(primitive, project)),
+    primitives,
     width: Math.max(0, size.width),
+  };
+}
+
+/**
+ * Internal projector for immutable Maps-owned render primitives. A new camera
+ * callback, explicit camera revision or viewport size invalidates screen coordinates,
+ * not source geometry. Camera presentation does not need a React render.
+ * Weak keys do not retain primitives belonging to removed/replaced layers.
+ */
+export function createCanvasMapSceneProjector<TFeature = unknown>() {
+  let previousProject: MapRenderProject | undefined;
+  let previousWidth: number | undefined;
+  let previousHeight: number | undefined;
+  let previousRevision: number | undefined;
+  let coordinates = new WeakMap<readonly [number, number][], MapScreenPoint[] | null>();
+  let points = new WeakMap<[number, number], MapScreenPoint | null>();
+  const projectCoordinate: MapRenderProject = (coordinate) => {
+    if (points.has(coordinate)) return points.get(coordinate)!;
+    const point = projectPoint(previousProject!, coordinate);
+    points.set(coordinate, point);
+    return point;
+  };
+  let projected = new WeakMap<
+    MapVectorRenderPrimitive<TFeature>,
+    CanvasMapScenePrimitive<TFeature> | null
+  >();
+
+  return (
+    frame: MapVectorRenderFrame<TFeature>,
+    project: MapRenderProject,
+    size: { height: number; width: number },
+    projectionRevision = 0,
+  ): CanvasMapScene<TFeature> => {
+    if (
+      previousRevision !== projectionRevision ||
+      previousProject !== project ||
+      previousWidth !== size.width ||
+      previousHeight !== size.height
+    ) {
+      projected = new WeakMap();
+      coordinates = new WeakMap();
+      points = new WeakMap();
+      previousRevision = projectionRevision;
+      previousProject = project;
+      previousWidth = size.width;
+      previousHeight = size.height;
+    }
+    preprojectPackedCoordinates(frame.primitives, project, points, coordinates);
+
+    const primitives: Array<CanvasMapScenePrimitive<TFeature>> = [];
+    for (const primitive of frame.primitives) {
+      let result: CanvasMapScenePrimitive<TFeature> | null;
+      if (projected.has(primitive)) {
+        result = projected.get(primitive) ?? null;
+      } else {
+        result = projectPrimitive(primitive, projectCoordinate, coordinates);
+        projected.set(primitive, result);
+      }
+      if (result) primitives.push(result);
+    }
+    return {
+      height: Math.max(0, size.height),
+      primitives,
+      width: Math.max(0, size.width),
+    };
   };
 }
 
@@ -99,45 +169,106 @@ export function drawCanvasMapLabels<TFeature = unknown>(
   }
 }
 
+function preprojectPackedCoordinates<TFeature>(
+  primitives: readonly MapVectorRenderPrimitive<TFeature>[],
+  project: MapRenderProject,
+  points: WeakMap<[number, number], MapScreenPoint | null>,
+  coordinateArrays: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
+) {
+  const projectPacked = project.projectPacked;
+  if (!projectPacked) return;
+
+  const pending: Array<[number, number]> = [];
+  const seen = new Set<[number, number]>();
+  const queuePoint = (coordinate: [number, number]) => {
+    if (points.has(coordinate) || seen.has(coordinate)) return;
+    seen.add(coordinate);
+    pending.push(coordinate);
+  };
+  const queueCoordinates = (values: readonly [number, number][]) => {
+    if (coordinateArrays.has(values)) return;
+    for (const coordinate of values) queuePoint(coordinate);
+  };
+
+  for (const primitive of primitives) {
+    switch (primitive.kind) {
+      case "circle":
+        queuePoint(primitive.center);
+        break;
+      case "direction-marker":
+        queuePoint(primitive.anchor);
+        queuePoint(primitive.previous);
+        break;
+      case "line":
+        queueCoordinates(primitive.coordinates);
+        break;
+      case "polygon":
+        for (const ring of primitive.rings) queueCoordinates(ring);
+        break;
+    }
+  }
+  if (pending.length === 0) return;
+
+  const packed = new Float64Array(pending.length * 2);
+  for (let index = 0; index < pending.length; index += 1) {
+    const coordinate = pending[index]!;
+    packed[index * 2] = coordinate[0];
+    packed[index * 2 + 1] = coordinate[1];
+  }
+
+  let result: Float64Array | null;
+  try {
+    result = projectPacked(packed);
+  } catch {
+    // Preserve the scalar path as a correctness fallback if an older/custom
+    // projector exposes a broken packed implementation.
+    return;
+  }
+  if (!result || result.length !== packed.length) return;
+
+  for (let index = 0; index < pending.length; index += 1) {
+    const x = result[index * 2]!;
+    const y = result[index * 2 + 1]!;
+    points.set(pending[index]!, Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null);
+  }
+}
+
 function projectPrimitive<TFeature>(
   primitive: MapVectorRenderPrimitive<TFeature>,
   project: MapRenderProject,
-): Array<CanvasMapScenePrimitive<TFeature>> {
+  cache?: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
+): CanvasMapScenePrimitive<TFeature> | null {
   switch (primitive.kind) {
     case "circle": {
       const center = projectPoint(project, primitive.center);
-      if (!isFinitePoint(center)) return [];
-      return [{ kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y }];
+      if (!isFinitePoint(center)) return null;
+      return { kind: "circle", renderPrimitive: primitive, x: center.x, y: center.y };
     }
     case "direction-marker": {
       const anchor = projectPoint(project, primitive.anchor);
       const previous = projectPoint(project, primitive.previous);
-      if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return [];
-      return [
-        {
-          angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
-          kind: "direction-marker",
-          renderPrimitive: primitive,
-          x: anchor.x,
-          y: anchor.y,
-        },
-      ];
+      if (!isFinitePoint(anchor) || !isFinitePoint(previous)) return null;
+      return {
+        angle: Math.atan2(anchor.y - previous.y, anchor.x - previous.x),
+        kind: "direction-marker",
+        renderPrimitive: primitive,
+        x: anchor.x,
+        y: anchor.y,
+      };
     }
     case "line": {
-      const points = projectCoordinates(primitive.coordinates, project);
-      if (!points || points.length < 2) return [];
-      return [{ kind: "line", points, renderPrimitive: primitive }];
+      const points = projectCoordinates(primitive.coordinates, project, cache);
+      if (!points || points.length < 2) return null;
+      return { kind: "line", points, renderPrimitive: primitive };
     }
     case "polygon": {
-      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project));
-      if (rings.some((ring) => !ring || ring.length < 3)) return [];
-      return [
-        {
-          kind: "polygon",
-          renderPrimitive: primitive,
-          rings: rings as MapScreenPoint[][],
-        },
-      ];
+      const rings = primitive.rings.map((ring) => projectCoordinates(ring, project, cache));
+      if (rings.some((ring) => !ring || ring.length < 3)) return null;
+      return {
+        kind: "polygon",
+        renderPrimitive: primitive,
+        rings: rings as MapScreenPoint[][],
+      };
     }
   }
 }
@@ -145,13 +276,19 @@ function projectPrimitive<TFeature>(
 function projectCoordinates(
   coordinates: readonly [number, number][],
   project: MapRenderProject,
+  cache?: WeakMap<readonly [number, number][], MapScreenPoint[] | null>,
 ): MapScreenPoint[] | null {
+  if (cache?.has(coordinates)) return cache.get(coordinates)!;
   const points: MapScreenPoint[] = [];
   for (const coordinate of coordinates) {
-    const point = projectPoint(project, [coordinate[0], coordinate[1]]);
-    if (!isFinitePoint(point)) return null;
+    const point = projectPoint(project, coordinate);
+    if (!isFinitePoint(point)) {
+      cache?.set(coordinates, null);
+      return null;
+    }
     points.push(point);
   }
+  cache?.set(coordinates, points);
   return points;
 }
 
@@ -185,14 +322,16 @@ function drawPrimitive<TFeature>(
 
   switch (scenePrimitive.kind) {
     case "circle":
-      drawCircle(context, scenePrimitive, primitive as MapRenderCircle<TFeature>, selected, hovered);
-      return;
-    case "direction-marker":
-      drawDirectionMarker(
+      drawCircle(
         context,
         scenePrimitive,
-        primitive as MapRenderDirectionMarker<TFeature>,
+        primitive as MapRenderCircle<TFeature>,
+        selected,
+        hovered,
       );
+      return;
+    case "direction-marker":
+      drawDirectionMarker(context, scenePrimitive, primitive as MapRenderDirectionMarker<TFeature>);
       return;
     case "line":
       drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, selected, hovered);
@@ -286,11 +425,15 @@ function drawPolygon<TFeature>(
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill("evenodd");
-  context.globalAlpha = primitive.strokeOpacity;
-  context.lineJoin = "round";
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
-  context.strokeStyle = primitive.strokeColor;
-  context.stroke();
+  const strokeWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  // Canvas ignores lineWidth = 0 and would reuse the previous shape's width.
+  if (strokeWidth > 0) {
+    context.globalAlpha = primitive.strokeOpacity;
+    context.lineJoin = "round";
+    context.lineWidth = strokeWidth;
+    context.strokeStyle = primitive.strokeColor;
+    context.stroke();
+  }
   context.globalAlpha = 1;
 }
 
@@ -322,7 +465,9 @@ function hitPrimitive<TFeature>(
   switch (primitive.kind) {
     case "circle": {
       const radius = Math.max(8, (primitive.renderPrimitive as MapRenderCircle<TFeature>).radius);
-      return squaredDistance(point, { x: primitive.x, y: primitive.y }) <= radius * radius;
+      const dx = point.x - primitive.x;
+      const dy = point.y - primitive.y;
+      return dx * dx + dy * dy <= radius * radius;
     }
     case "direction-marker":
       return false;
@@ -331,14 +476,14 @@ function hitPrimitive<TFeature>(
         4,
         (primitive.renderPrimitive as MapRenderLine<TFeature>).strokeWidth / 2 + 2,
       );
-      return squaredDistanceToPolyline(point, primitive.points) <= tolerance * tolerance;
+      return isWithinPolylineTolerance(point, primitive.points, tolerance * tolerance);
     }
     case "polygon": {
       const renderPrimitive = primitive.renderPrimitive as MapRenderPolygon<TFeature>;
       if (pointInRings(point, primitive.rings)) return true;
       const tolerance = Math.max(4, renderPrimitive.strokeWidth / 2 + 2);
-      return primitive.rings.some(
-        (ring) => squaredDistanceToClosedPolyline(point, ring) <= tolerance * tolerance,
+      return primitive.rings.some((ring) =>
+        isWithinPolylineTolerance(point, ring, tolerance * tolerance, true),
       );
     }
   }
@@ -365,23 +510,31 @@ function pointInRing(point: MapScreenPoint, ring: readonly MapScreenPoint[]) {
   return inside;
 }
 
-function squaredDistanceToClosedPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
-  if (points.length < 2) return Number.POSITIVE_INFINITY;
-  return Math.min(
-    squaredDistanceToPolyline(point, points),
-    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!),
+/** Picking needs any matching segment, not the minimum distance over the whole path. */
+function isWithinPolylineTolerance(
+  point: MapScreenPoint,
+  points: readonly MapScreenPoint[],
+  squaredTolerance: number,
+  closed = false,
+) {
+  for (let index = 1; index < points.length; index += 1) {
+    if (squaredDistanceToSegment(point, points[index - 1]!, points[index]!) <= squaredTolerance) {
+      return true;
+    }
+  }
+  // Canvas closes polygon rings even when the source does not repeat the first point.
+  return (
+    closed &&
+    points.length >= 2 &&
+    squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!) <= squaredTolerance
   );
 }
 
-function squaredDistanceToPolyline(point: MapScreenPoint, points: readonly MapScreenPoint[]) {
-  let minimum = Number.POSITIVE_INFINITY;
-  for (let index = 1; index < points.length; index += 1) {
-    minimum = Math.min(minimum, squaredDistanceToSegment(point, points[index - 1]!, points[index]!));
-  }
-  return minimum;
-}
-
-function squaredDistanceToSegment(point: MapScreenPoint, start: MapScreenPoint, end: MapScreenPoint) {
+function squaredDistanceToSegment(
+  point: MapScreenPoint,
+  start: MapScreenPoint,
+  end: MapScreenPoint,
+) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   if (dx === 0 && dy === 0) return squaredDistance(point, start);
@@ -389,7 +542,10 @@ function squaredDistanceToSegment(point: MapScreenPoint, start: MapScreenPoint, 
     0,
     Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)),
   );
-  return squaredDistance(point, { x: start.x + t * dx, y: start.y + t * dy });
+  // Preserve the distance arithmetic without allocating a closest-point object per segment.
+  const offsetX = point.x - (start.x + t * dx);
+  const offsetY = point.y - (start.y + t * dy);
+  return offsetX * offsetX + offsetY * offsetY;
 }
 
 function squaredDistance(left: MapScreenPoint, right: MapScreenPoint) {

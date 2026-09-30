@@ -37,7 +37,9 @@ pub use scenario::{
     VisibleBoundsObservation, execute_engine_scenario, execute_engine_scenario_json,
 };
 pub use vector_tile::{
-    VectorBasemapLine, VectorBasemapLineKind, VectorTileError, decode_shortbread_basemap_lines,
+    VectorBasemapLine, VectorBasemapLineKind, VectorBasemapPolygon, VectorBasemapPolygonKind,
+    VectorBasemapTile, VectorTileError, VectorTilePixel, decode_shortbread_basemap,
+    decode_shortbread_basemap_lines, decode_shortbread_tile_pixels,
 };
 
 /// Numeric metrics attached to native map points.

@@ -2,15 +2,13 @@
 
 import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef } from "react";
 
-import {
-  type IndexedMapPoint,
-  type MapPoint,
-  type MapPointFilter,
-} from "./aggregation";
+import { type IndexedMapPoint, type MapPoint, type MapPointFilter } from "./aggregation";
 import { joinClassNames, toLatLng, type MapViewportProps } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 import type { FlatLayer } from "./maplibre-compat";
+import { createPointLayerFeatures, createBubbleLayerFeatures } from "./point-layer-data";
+export { createPointLayerFeatures, createBubbleLayerFeatures } from "./point-layer-data";
 import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
 
 export type PointLayerFeature<TProperties = Record<string, unknown>> = {
@@ -18,26 +16,27 @@ export type PointLayerFeature<TProperties = Record<string, unknown>> = {
   point: IndexedMapPoint<TProperties>;
 };
 
-export type PointLayerProps<TProperties = Record<string, unknown>> =
-  MapFeatureInteractionProps<PointLayerFeature<TProperties>> & {
-    draggable?: boolean | ((feature: PointLayerFeature<TProperties>) => boolean);
-    filterPoint?: MapPointFilter<TProperties>;
-    getPointColor?: (feature: PointLayerFeature<TProperties>) => string;
-    getPointRadius?: (feature: PointLayerFeature<TProperties>) => number;
-    layerId?: string;
-    onFeatureDrag?: (
-      feature: PointLayerFeature<TProperties>,
-      coordinates: [longitude: number, latitude: number],
-    ) => void;
-    onFeatureDragEnd?: (
-      feature: PointLayerFeature<TProperties>,
-      coordinates: [longitude: number, latitude: number],
-    ) => void;
-    onFeatureSelect?: (feature: PointLayerFeature<TProperties> | null) => void;
-    points: readonly MapPoint<TProperties>[];
-    pointColor?: string;
-    pointRadius?: number;
-  };
+export type PointLayerProps<TProperties = Record<string, unknown>> = MapFeatureInteractionProps<
+  PointLayerFeature<TProperties>
+> & {
+  draggable?: boolean | ((feature: PointLayerFeature<TProperties>) => boolean);
+  filterPoint?: MapPointFilter<TProperties>;
+  getPointColor?: (feature: PointLayerFeature<TProperties>) => string;
+  getPointRadius?: (feature: PointLayerFeature<TProperties>) => number;
+  layerId?: string;
+  onFeatureDrag?: (
+    feature: PointLayerFeature<TProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
+  onFeatureDragEnd?: (
+    feature: PointLayerFeature<TProperties>,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
+  onFeatureSelect?: (feature: PointLayerFeature<TProperties> | null) => void;
+  points: readonly MapPoint<TProperties>[];
+  pointColor?: string;
+  pointRadius?: number;
+};
 
 export type BubbleLayerFeature<TProperties = Record<string, unknown>> =
   PointLayerFeature<TProperties> & {
@@ -50,37 +49,36 @@ export type BubbleLayerWeightAccessor<TProperties = Record<string, unknown>> = (
   point: IndexedMapPoint<TProperties>,
 ) => number;
 
-export type BubbleLayerProps<TProperties = Record<string, unknown>> =
-  Omit<
-    PointLayerProps<TProperties>,
-    | "draggable"
-    | "getPointColor"
-    | "getPointRadius"
-    | "onFeatureDrag"
-    | "onFeatureDragEnd"
-    | "onFeatureSelect"
-    | "pointColor"
-    | "pointRadius"
-  > &
+export type BubbleLayerProps<TProperties = Record<string, unknown>> = Omit<
+  PointLayerProps<TProperties>,
+  | "draggable"
+  | "getPointColor"
+  | "getPointRadius"
+  | "onFeatureDrag"
+  | "onFeatureDragEnd"
+  | "onFeatureSelect"
+  | "pointColor"
+  | "pointRadius"
+> &
   MapFeatureInteractionProps<BubbleLayerFeature<TProperties>> & {
-      bubbleColor?: string;
-      draggable?: boolean | ((feature: BubbleLayerFeature<TProperties>) => boolean);
-      getBubbleColor?: (feature: BubbleLayerFeature<TProperties>) => string;
-      getWeight?: BubbleLayerWeightAccessor<TProperties>;
-      maxRadius?: number;
-      maxWeight?: number;
-      minRadius?: number;
-      onFeatureDrag?: (
-        feature: BubbleLayerFeature<TProperties>,
-        coordinates: [longitude: number, latitude: number],
-      ) => void;
-      onFeatureDragEnd?: (
-        feature: BubbleLayerFeature<TProperties>,
-        coordinates: [longitude: number, latitude: number],
-      ) => void;
-      onFeatureSelect?: (feature: BubbleLayerFeature<TProperties> | null) => void;
-      weightMetric?: string;
-    };
+    bubbleColor?: string;
+    draggable?: boolean | ((feature: BubbleLayerFeature<TProperties>) => boolean);
+    getBubbleColor?: (feature: BubbleLayerFeature<TProperties>) => string;
+    getWeight?: BubbleLayerWeightAccessor<TProperties>;
+    maxRadius?: number;
+    maxWeight?: number;
+    minRadius?: number;
+    onFeatureDrag?: (
+      feature: BubbleLayerFeature<TProperties>,
+      coordinates: [longitude: number, latitude: number],
+    ) => void;
+    onFeatureDragEnd?: (
+      feature: BubbleLayerFeature<TProperties>,
+      coordinates: [longitude: number, latitude: number],
+    ) => void;
+    onFeatureSelect?: (feature: BubbleLayerFeature<TProperties> | null) => void;
+    weightMetric?: string;
+  };
 
 export function PointLayer<TProperties = Record<string, unknown>>({
   filterPoint,
@@ -173,7 +171,10 @@ function PointFeatureLayer<
   getPointRadius?: (feature: TFeature) => number;
   layerId?: string;
   onFeatureDrag?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
-  onFeatureDragEnd?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
+  onFeatureDragEnd?: (
+    feature: TFeature,
+    coordinates: [longitude: number, latitude: number],
+  ) => void;
   onFeatureSelect?: (feature: TFeature | null) => void;
   pointColor: string;
   pointRadius: number;
@@ -208,8 +209,16 @@ function PointFeatureLayer<
           cache: flatMarkerCacheRef.current,
           layer,
           plans: features.map((feature) => {
-            const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
-            const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
+            const selected = currentSurface.isFeatureSelected(
+              feature,
+              selectedFeatureId,
+              getFeatureId,
+            );
+            const hovered = currentSurface.isFeatureHovered(
+              feature,
+              hoveredFeatureId,
+              getFeatureId,
+            );
             const featureDraggable = isFeatureDraggable(feature, draggable);
             const featureKey = getFlatPointFeatureKey(feature, getFeatureId);
             const coordinatesKey = createFlatPointCoordinatesKey(feature.coordinates);
@@ -251,18 +260,21 @@ function PointFeatureLayer<
                     signature,
                   };
 
-                  marker.on("click", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-                    currentSurface.handleFeatureClick(
-                      feature,
-                      getFlatFeaturePosition(map, feature.coordinates, event),
-                      {
-                        getFeatureId,
-                        onFeatureSelect,
-                        onSelectedFeatureIdChange,
-                        renderFeaturePopup,
-                      },
-                    );
-                  });
+                  marker.on(
+                    "click",
+                    (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                      currentSurface.handleFeatureClick(
+                        feature,
+                        getFlatFeaturePosition(map, feature.coordinates, event),
+                        {
+                          getFeatureId,
+                          onFeatureSelect,
+                          onSelectedFeatureIdChange,
+                          renderFeaturePopup,
+                        },
+                      );
+                    },
+                  );
                   marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
                     suppressNativeContextMenu(event);
                     currentSurface.handleFeatureContextMenu(
@@ -288,31 +300,37 @@ function PointFeatureLayer<
                       onFeatureDragEnd,
                     });
                   }
-                  marker.on("mouseover", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-                    map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
-                    currentSurface.handleFeatureHover(
-                      feature,
-                      getFlatFeaturePosition(map, feature.coordinates, event),
-                      {
-                        getFeatureId,
-                        onHoveredFeatureIdChange,
-                        onFeatureHover,
-                        renderFeatureTooltip,
-                      },
-                    );
-                  });
-                  marker.on("mousemove", (event: { containerPoint?: { x: number; y: number } } = {}) => {
-                    currentSurface.handleFeatureHover(
-                      feature,
-                      getFlatFeaturePosition(map, feature.coordinates, event),
-                      {
-                        getFeatureId,
-                        onHoveredFeatureIdChange,
-                        onFeatureHover,
-                        renderFeatureTooltip,
-                      },
-                    );
-                  });
+                  marker.on(
+                    "mouseover",
+                    (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                      map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
+                      currentSurface.handleFeatureHover(
+                        feature,
+                        getFlatFeaturePosition(map, feature.coordinates, event),
+                        {
+                          getFeatureId,
+                          onHoveredFeatureIdChange,
+                          onFeatureHover,
+                          renderFeatureTooltip,
+                        },
+                      );
+                    },
+                  );
+                  marker.on(
+                    "mousemove",
+                    (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                      currentSurface.handleFeatureHover(
+                        feature,
+                        getFlatFeaturePosition(map, feature.coordinates, event),
+                        {
+                          getFeatureId,
+                          onHoveredFeatureIdChange,
+                          onFeatureHover,
+                          renderFeatureTooltip,
+                        },
+                      );
+                    },
+                  );
                   marker.on("mouseout", () => {
                     map.getContainer().style.cursor = "";
                     currentSurface.handleFeatureHover(null, null, {
@@ -431,59 +449,6 @@ export function BubbleLayer<TProperties = Record<string, unknown>>({
   );
 }
 
-export function createPointLayerFeatures<TProperties = Record<string, unknown>>(
-  points: readonly MapPoint<TProperties>[],
-  options: {
-    filterPoint?: MapPointFilter<TProperties>;
-  } = {},
-): Array<PointLayerFeature<TProperties>> {
-  return points
-    .map(toIndexedMapPoint)
-    .filter(isValidPoint)
-    .filter((point) => options.filterPoint?.(point) ?? true)
-    .map((point) => ({
-      coordinates: [point.longitude, point.latitude],
-      point,
-    }));
-}
-
-export function createBubbleLayerFeatures<TProperties = Record<string, unknown>>(
-  points: readonly MapPoint<TProperties>[],
-  options: {
-    filterPoint?: MapPointFilter<TProperties>;
-    getWeight?: BubbleLayerWeightAccessor<TProperties>;
-    maxRadius?: number;
-    maxWeight?: number;
-    minRadius?: number;
-    weightMetric?: string;
-  } = {},
-): Array<BubbleLayerFeature<TProperties>> {
-  const baseFeatures = createPointLayerFeatures(points, { filterPoint: options.filterPoint });
-  const weightedFeatures = baseFeatures
-    .map((feature) => ({
-      feature,
-      rawValue: resolveBubblePointWeight(feature.point, options),
-    }))
-    .filter((entry) => entry.rawValue > 0);
-  const effectiveMaxWeight =
-    Number.isFinite(options.maxWeight) && (options.maxWeight ?? 0) > 0
-      ? options.maxWeight!
-      : Math.max(1, ...weightedFeatures.map((entry) => entry.rawValue));
-  const minRadius = Math.max(0, options.minRadius ?? 5);
-  const maxRadius = Math.max(minRadius, options.maxRadius ?? 32);
-
-  return weightedFeatures.map(({ feature, rawValue }) => {
-    const value = clamp(rawValue / effectiveMaxWeight, 0, 1);
-
-    return {
-      ...feature,
-      rawValue,
-      radius: minRadius + Math.sqrt(value) * (maxRadius - minRadius),
-      value,
-    };
-  });
-}
-
 function getFlatFeaturePosition(
   map: { latLngToContainerPoint?: (latLng: [number, number]) => { x: number; y: number } },
   coordinates: [number, number],
@@ -503,23 +468,25 @@ function bindFlatPointDrag<TFeature>(
     feature: TFeature;
     map: FlatDragMap;
     onFeatureDrag?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
-    onFeatureDragEnd?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
+    onFeatureDragEnd?: (
+      feature: TFeature,
+      coordinates: [longitude: number, latitude: number],
+    ) => void;
   },
 ) {
-  let dragStart:
-    | {
-        active: boolean;
-        coordinates: [number, number];
-        pointer: [number, number];
-      }
-    | null = null;
+  let dragStart: {
+    active: boolean;
+    coordinates: [number, number];
+    pointer: [number, number];
+  } | null = null;
   let lastCoordinates: [number, number] | null = null;
 
   const handleMove = (event: FlatDragEvent = {}) => {
     const pointerCoordinates = getFlatDragCoordinates(options.map, event);
-    const coordinates = dragStart && pointerCoordinates
-      ? getOffsetDragCoordinates(dragStart, pointerCoordinates)
-      : pointerCoordinates;
+    const coordinates =
+      dragStart && pointerCoordinates
+        ? getOffsetDragCoordinates(dragStart, pointerCoordinates)
+        : pointerCoordinates;
 
     if (!coordinates) {
       return;
@@ -555,7 +522,7 @@ function bindFlatPointDrag<TFeature>(
     const coordinates =
       dragStart && pointerCoordinates
         ? getOffsetDragCoordinates(dragStart, pointerCoordinates)
-        : pointerCoordinates ?? lastCoordinates;
+        : (pointerCoordinates ?? lastCoordinates);
 
     document.removeEventListener("mousemove", handleDocumentMove);
     document.removeEventListener("mouseup", handleDocumentUp);
@@ -714,44 +681,6 @@ type FlatFeaturePointerEvent = {
 function suppressNativeContextMenu(event: FlatFeaturePointerEvent) {
   event.originalEvent?.preventDefault?.();
   event.originalEvent?.stopPropagation?.();
-}
-
-function resolveBubblePointWeight<TProperties>(
-  point: IndexedMapPoint<TProperties>,
-  options: {
-    getWeight?: BubbleLayerWeightAccessor<TProperties>;
-    weightMetric?: string;
-  },
-) {
-  const rawWeight = options.getWeight
-    ? options.getWeight(point)
-    : options.weightMetric
-      ? point.metrics[options.weightMetric] ?? 0
-      : point.metrics.weight ?? 1;
-
-  return Number.isFinite(rawWeight) ? Math.max(0, rawWeight) : 0;
-}
-
-function toIndexedMapPoint<TProperties>(
-  point: MapPoint<TProperties>,
-  index: number,
-): IndexedMapPoint<TProperties> {
-  return {
-    id: String(point.id ?? index),
-    label: point.label ?? "",
-    latitude: point.latitude,
-    longitude: point.longitude,
-    metrics: point.metrics ?? {},
-    properties: point.properties ?? ({} as TProperties),
-  };
-}
-
-function isValidPoint<TProperties>(point: IndexedMapPoint<TProperties>) {
-  return Number.isFinite(point.latitude) && Number.isFinite(point.longitude);
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
 }
 
 function getFlatPointFeatureKey<TFeature>(

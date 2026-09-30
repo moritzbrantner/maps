@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
   MapDisplayMode,
@@ -8,11 +8,7 @@ import type {
   MapViewStateChangeReason,
   MapViewportProps,
 } from "./map-display";
-import {
-  constrainMapViewState,
-  normalizeMapMaxZoom,
-  normalizeMapMinZoom,
-} from "./map-display";
+import { constrainMapViewState, normalizeMapMaxZoom, normalizeMapMinZoom } from "./map-display";
 
 const fallbackViewState: MapViewState = {
   center: [12, 25],
@@ -37,10 +33,11 @@ export function useControllableMapViewState({
   const controlled = viewState !== undefined;
   const initial = useMemo(
     () =>
-      constrainMapViewState(
-        defaultViewState ?? initialViewState ?? fallback ?? fallbackViewState,
-        { maxBounds, maxZoom, minZoom },
-      ),
+      constrainMapViewState(defaultViewState ?? initialViewState ?? fallback ?? fallbackViewState, {
+        maxBounds,
+        maxZoom,
+        minZoom,
+      }),
     [],
   );
   const [uncontrolledViewState, setUncontrolledViewState] = useState<MapViewState>(initial);
@@ -70,7 +67,7 @@ export function useControllableMapViewState({
   const lastEmissionRef = useRef<string | null>(null);
   const onViewStateChangeRef = useRef(onViewStateChange);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onViewStateChangeRef.current = onViewStateChange;
   }, [onViewStateChange]);
 
@@ -84,11 +81,9 @@ export function useControllableMapViewState({
 
   const setViewState = useCallback(
     (next: MapViewState, reason: MapViewStateChangeReason = "programmatic") => {
-      const canCarryRuntimeConstraint = ![
-        "cluster-expand",
-        "fly-to",
-        "programmatic",
-      ].includes(reason);
+      const canCarryRuntimeConstraint = !["cluster-expand", "fly-to", "programmatic"].includes(
+        reason,
+      );
       const nextRuntimeMinZoom =
         canCarryRuntimeConstraint &&
         normalizedMaxZoom !== undefined &&

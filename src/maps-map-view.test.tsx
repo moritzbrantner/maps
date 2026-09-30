@@ -20,12 +20,15 @@ vi.mock("./canvas-flat-runtime", async () => {
       bounds: [number, number, number, number],
       options?: { maxZoom?: number; reason?: Reason },
     ) => void;
+    getViewState: () => ViewState;
     getVisibleBounds: () => [number, number, number, number];
     project: (coordinates: [number, number]) => { x: number; y: number };
+    projectPacked: (coordinates: Float64Array) => Float64Array;
     setViewState: (viewState: ViewState, reason?: Reason) => void;
     unproject: (x: number, y: number) => [number, number];
   };
   type Props = {
+    viewState: ViewState;
     maxBounds?: [number, number, number, number];
     onContextMenu?: (context: {
       coordinates: [number, number];
@@ -38,7 +41,11 @@ vi.mock("./canvas-flat-runtime", async () => {
 
   function MockMapsCanvasFlatRuntime(props: Props) {
     React.useEffect(() => {
+      let currentViewState = props.viewState;
       const controller: Controller = {
+        getViewState() {
+          return currentViewState;
+        },
         fitBounds(bounds, options = {}) {
           props.onViewStateChange(
             {
@@ -57,7 +64,16 @@ vi.mock("./canvas-flat-runtime", async () => {
             y: 300 - coordinates[1] * 5,
           };
         },
+        projectPacked(coordinates) {
+          const projected = new Float64Array(coordinates.length);
+          for (let index = 0; index < coordinates.length; index += 2) {
+            projected[index] = 400 + coordinates[index]! * 10;
+            projected[index + 1] = 300 - coordinates[index + 1]! * 5;
+          }
+          return projected;
+        },
         setViewState(next, reason = "programmatic") {
+          currentViewState = next;
           props.onViewStateChange(next, reason);
         },
         unproject() {
@@ -234,7 +250,7 @@ describe("Maps-owned MapView runtime", () => {
     await waitFor(() => {
       expect(screen.getByText("Projected Berlin")).toBeTruthy();
     });
-    expect(map.querySelector("svg[data-map-overlay-runtime=\"maps\"]")).toBeNull();
+    expect(map.querySelector('svg[data-map-overlay-runtime="maps"]')).toBeNull();
   });
 
   test("normalizes GeoJSON point, line, and polygon geometry into one Canvas overlay", async () => {
@@ -358,7 +374,9 @@ describe("Maps-owned MapView runtime", () => {
       pointerType: "mouse",
     });
     await waitFor(() => {
-      expect(onFeatureHover).toHaveBeenCalledWith(expect.objectContaining({ point: expect.anything() }));
+      expect(onFeatureHover).toHaveBeenCalledWith(
+        expect.objectContaining({ point: expect.anything() }),
+      );
       expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
         "stable-berlin",
         expect.objectContaining({ featureId: "stable-berlin", source: "hover" }),
@@ -368,7 +386,9 @@ describe("Maps-owned MapView runtime", () => {
 
     clickSurface(baseCanvas, 534.05, 37.4);
     await waitFor(() => {
-      expect(onFeatureSelect).toHaveBeenCalledWith(expect.objectContaining({ point: expect.anything() }));
+      expect(onFeatureSelect).toHaveBeenCalledWith(
+        expect.objectContaining({ point: expect.anything() }),
+      );
       expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
         "stable-berlin",
         expect.objectContaining({ featureId: "stable-berlin", source: "click" }),
@@ -516,10 +536,7 @@ describe("Maps-owned MapView runtime", () => {
           mapLabel="Unsupported draggable point"
           mapStyle={{ tiles: false }}
         >
-          <PointLayer
-            draggable
-            points={[{ id: "berlin", latitude: 52.52, longitude: 13.405 }]}
-          />
+          <PointLayer draggable points={[{ id: "berlin", latitude: 52.52, longitude: 13.405 }]} />
         </MapView>,
       ),
     ).toThrow(/does not support draggable PointLayer features/);

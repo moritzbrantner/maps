@@ -73,6 +73,24 @@ Runtime phases:
 - decode/upload where applicable;
 - warm-cache revisit.
 
+Raster failure and cancellation regressions additionally run through the public
+Rust runtime in `crates/maps-core/tests/raster_tile_lifecycle.rs` and the real
+Rust/WASM Map View in `e2e/maps-runtime.spec.ts`. A failed tile releases its load
+slot and is suppressed while continuously visible; leaving and revisiting the
+cover makes it eligible again. Failed tiles are never marked ready. The browser
+must ignore late callbacks from superseded requests without removing replacement
+loads, and cancelled completions must not populate the runtime cache. These are
+correctness checks, not runtime-performance evidence.
+
+Directional prefetch extends the same lifecycle scenario. After a small eastward
+pan, request tiles two columns ahead before they enter the viewport, then verify
+their reuse. Reverse with requests still pending, ignore late cancelled results,
+cross the antimeridian, and exercise polar coverage and small caches. The public
+Rust tests remain in `raster_tile_lifecycle.rs`; `e2e/maps-engine-tiles.spec.ts`
+checks early requests and reuse through the real worker/WASM Map View. Neither
+prediction nor idle completion frames may grow the original ring's request-cover
+budget. Visible demand preempts speculative work.
+
 ### `dense-points-100k-v1`
 
 Purpose: measure the already-authoritative Rust point index together with render preparation and interaction.
@@ -127,6 +145,28 @@ Runtime phases:
 ### `vector-city-style-v1`
 
 Purpose: become the primary MapLibre reference scenario for Milestones D/E.
+
+The current Shortbread foundation ([#138](https://github.com/moritzbrantner/maps/issues/138))
+decodes ocean, water, land, site and building polygons in Rust, preserving interior rings,
+multiple exterior rings and the source `kind` property. Ring grouping follows the
+[MVT 2.1 polygon contract](https://github.com/mapbox/vector-tile-spec/blob/master/2.1/README.md);
+layer classification follows the [Shortbread schema](https://shortbread-tiles.org/schema/1.0/).
+The comparison demo paints these fills before linework and application features using its
+fixed palette. Polygon frames use the existing Canvas fallback; line-only frames retain
+their wgpu path. This is not yet a general style evaluator or GPU polygon pipeline.
+
+Focused evidence lives in the Rust vector-tile tests and
+`e2e/maps-wgpu-stroke-runtime.spec.ts`: deterministic MVT bytes exercise forest beneath
+water, island holes, source classification, paint order and visible application points.
+Malformed polygon command streams are rejected. The standalone fixed-style journey is now executable through
+`bench:engine:interaction`, using `engine-scenarios/vector-city-style-v1.json` and
+`e2e/fixtures/shortbread-tile.mjs`. Browser checks cover retained tile pixels,
+water holes, style order, warm reuse and worker lifecycle. This scoped fixture
+and journey do not establish full MapLibre style/cartographic parity.
+
+The same browser suite verifies that Canvas base and overlay surfaces redraw after
+`contextrestored`, and that a polygon with zero stroke width paints only its fill. Restoration
+uses the retained frame/data and does not advance the tile request scheduler.
 
 Fixture:
 

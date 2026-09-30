@@ -11,6 +11,10 @@ describe("2d-lab Maps fixture exporter", () => {
       height: 720,
       schema: "maps-2d-lab-screen-frame/v1",
       width: 1200,
+      provenance: {
+        projection: "synthetic-equirectangular",
+        runtimeEquivalent: false,
+      },
     });
     expect(snapshot.primitives).toHaveLength(13);
     expect(snapshot.primitives.filter((primitive) => primitive.kind === "polygon")).toHaveLength(5);

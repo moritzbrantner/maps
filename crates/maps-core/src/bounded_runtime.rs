@@ -98,6 +98,11 @@ impl BoundedFlatRasterRuntime {
         self.apply_camera_constraint()
     }
 
+    /// Presentation-only surface margin; see [`FlatRasterRuntime::set_render_margin`].
+    pub fn set_render_margin(&mut self, margin: f64) -> Result<(), FlatRasterRuntimeError> {
+        self.inner.set_render_margin(margin)
+    }
+
     pub fn resize(&mut self, width: f64, height: f64) -> Result<(), FlatRasterRuntimeError> {
         self.inner.resize(width, height)?;
         self.apply_camera_constraint()
@@ -133,6 +138,19 @@ impl BoundedFlatRasterRuntime {
         self.apply_camera_constraint()
     }
 
+    /// Bounded cameras are north-up/zero-pitch, so rotation is rejected there.
+    pub fn rotate_about(
+        &mut self,
+        delta_bearing: f64,
+        screen: ScreenCoordinate,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        if self.max_bounds.is_some() && delta_bearing != 0.0 {
+            return Err(FlatRasterRuntimeError::UnsupportedCamera);
+        }
+        self.inner.rotate_about(delta_bearing, screen)?;
+        self.apply_camera_constraint()
+    }
+
     pub fn fit_bounds(
         &mut self,
         west: f64,
@@ -153,6 +171,13 @@ impl BoundedFlatRasterRuntime {
         latitude: f64,
     ) -> Result<ScreenCoordinate, FlatRasterRuntimeError> {
         self.inner.project_screen(longitude, latitude)
+    }
+
+    pub fn project_screen_batch<'a>(
+        &'a self,
+        coordinates: &'a [[f64; 2]],
+    ) -> impl Iterator<Item = Option<ScreenCoordinate>> + 'a {
+        self.inner.project_screen_batch(coordinates)
     }
 
     pub fn unproject_screen(
@@ -428,6 +453,14 @@ mod tests {
             runtime.set_camera_state(14.0, 53.0, 7.0, 30.0, 35.0),
             Err(FlatRasterRuntimeError::UnsupportedCamera)
         ));
+        assert!(matches!(
+            runtime.rotate_about(15.0, ScreenCoordinate { x: 480.0, y: 310.0 }),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        ));
+        assert_eq!(runtime.camera(), before);
+        runtime
+            .rotate_about(0.0, ScreenCoordinate { x: 480.0, y: 310.0 })
+            .unwrap();
         assert_eq!(runtime.camera(), before);
     }
 

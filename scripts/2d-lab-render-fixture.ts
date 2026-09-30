@@ -39,12 +39,14 @@ const graticuleStroke = cssColorWithOpacity(
 const graticuleStrokeWidth = paintNumber("demo-graticule", "line-width");
 
 export function create2dLabRenderFixture() {
-    const snapshot = {
+  const snapshot = {
     schema: "maps-2d-lab-screen-frame/v1",
     provenance: {
       generatedBy: "scripts/export-2d-lab-render-fixture.ts",
       sourceFixture: "demo/data/map-style.ts#e2eMapStyle",
       sourceRepository: "moritzbrantner/maps",
+      projection: "synthetic-equirectangular",
+      runtimeEquivalent: false,
     },
     width: WIDTH,
     height: HEIGHT,
@@ -65,8 +67,7 @@ export function create2dLabRenderFixture() {
       })),
     ],
   };
-  
-  
+
   validateSnapshot(snapshot);
   return snapshot;
 }
@@ -123,7 +124,7 @@ function cssColorWithOpacity(color: string, opacity: number) {
   return `rgba(${Number.parseInt(red!, 16)}, ${Number.parseInt(green!, 16)}, ${Number.parseInt(blue!, 16)}, ${opacity})`;
 }
 
-function validateSnapshot(value: typeof snapshot) {
+function validateSnapshot(value: ReturnType<typeof create2dLabRenderFixture>) {
   if (value.width <= 0 || value.height <= 0) throw new Error("snapshot extent must be positive");
   if (value.primitives.length === 0) throw new Error("snapshot must contain render primitives");
 
