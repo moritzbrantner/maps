@@ -406,6 +406,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Line editor").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Line editor").classList.contains("mb-maps--editing")).toBe(true);
     });
 
     const map = flatMock.getMaps()[0];
@@ -452,6 +453,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Polygon editor").getAttribute("data-map-ready")).toBe("true");
+      expect(screen.getByLabelText("Polygon editor").classList.contains("mb-maps--editing")).toBe(true);
     });
 
     const map = flatMock.getMaps()[0];
@@ -950,6 +952,9 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(screen.getByLabelText("Move selection editor").getAttribute("data-map-ready")).toBe(
         "true",
       );
+      expect(
+        screen.getByLabelText("Move selection editor").classList.contains("mb-maps--editing"),
+      ).toBe(true);
     });
 
     const map = flatMock.getMaps()[0];

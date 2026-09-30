@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,13 @@ run("wasm-opt", [
   optimizedWasmOutput,
 ]);
 renameSync(optimizedWasmOutput, wasmOutput);
+
+// The demo and browser evidence must consume this build, never an older local copy.
+const browserDir = path.join(rootDir, "public", "wasm");
+mkdirSync(browserDir, { recursive: true });
+for (const fileName of ["maps_wasm.js", "maps_wasm_bg.wasm"]) {
+  copyFileSync(path.join(outDir, fileName), path.join(browserDir, fileName));
+}
 
 console.log(`Built Maps WASM package artifact in ${path.relative(rootDir, outDir)}.`);
 
