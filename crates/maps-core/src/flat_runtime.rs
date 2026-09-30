@@ -134,6 +134,7 @@ pub struct RasterFramePlan {
     pub visible_bounds: MapViewportBounds,
     pub surface_margin: f64,
     pub overscan: bool,
+    /// Loaded fallback tiles precede the requested cover so replacements draw on top.
     pub placements: Vec<RasterTilePlacement>,
     pub requests: Vec<TileId>,
     pub cancellations: Vec<TileId>,
@@ -731,7 +732,11 @@ impl FlatRasterRuntime {
         });
         self.visible.clone_from(&visible_tiles);
 
-        let evictions = self.prune_cache(&request_tiles);
+        let mut fallback = self.fallback_placements(&placements)?;
+        let mut protected = request_tiles.clone();
+        protected.extend(fallback.iter().map(|placement| placement.tile));
+        let evictions = self.prune_cache(&protected);
+        fallback.retain(|placement| self.ready.contains(&placement.tile));
         let missing_visible = visible_tiles
             .iter()
             .filter(|tile| {
@@ -796,14 +801,20 @@ impl FlatRasterRuntime {
         for tile in &request_candidates {
             self.pending.insert(*tile);
         }
-        touch_ready_tiles(&mut self.ready_lru, &self.ready, &visible_tiles);
+        let drawn_tiles = fallback
+            .iter()
+            .map(|placement| placement.tile)
+            .chain(visible_tiles.iter().copied())
+            .collect();
+        touch_ready_tiles(&mut self.ready_lru, &self.ready, &drawn_tiles);
+        fallback.extend(placements);
 
         Ok(RasterFramePlan {
             render_camera,
             visible_bounds,
             surface_margin: margin,
             overscan,
-            placements,
+            placements: fallback,
             requests: request_candidates,
             cancellations,
             evictions,
@@ -885,6 +896,60 @@ impl FlatRasterRuntime {
         }
     }
 
+    /// Reuse only resident pyramid relatives. Full parent quads form a backdrop;
+    /// resident descendants preserve detail when zooming out. The requested cover
+    /// draws last, so a fallback can never obscure an available replacement.
+    fn fallback_placements(
+        &self,
+        placements: &[RasterTilePlacement],
+    ) -> Result<Vec<RasterTilePlacement>, FlatRasterRuntimeError> {
+        let mut tiles = BTreeMap::new();
+        for placement in placements {
+            let tile = placement.tile;
+            if self.ready.contains(&tile) {
+                continue;
+            }
+            for z in (self.source.min_zoom..tile.z).rev() {
+                let shift = tile.z - z;
+                let parent = TileId {
+                    z,
+                    x: tile.x >> shift,
+                    y: tile.y >> shift,
+                };
+                if self.ready.contains(&parent) {
+                    tiles
+                        .entry((parent, placement.world_copy))
+                        .and_modify(|visible| *visible |= placement.visible)
+                        .or_insert(placement.visible);
+                    break;
+                }
+            }
+            for descendant in &self.ready {
+                if descendant.z > tile.z
+                    && descendant.x >> (descendant.z - tile.z) == tile.x
+                    && descendant.y >> (descendant.z - tile.z) == tile.y
+                {
+                    tiles
+                        .entry((*descendant, placement.world_copy))
+                        .and_modify(|visible| *visible |= placement.visible)
+                        .or_insert(placement.visible);
+                }
+            }
+        }
+        let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        let size = self
+            .camera
+            .world_size()
+            .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        Ok(tiles
+            .into_iter()
+            .map(|((tile, world_copy), visible)| {
+                raster_tile_placement(self.camera, center, size, tile, world_copy, visible)
+            })
+            .collect())
+    }
+
     fn prune_cache(&mut self, protected: &BTreeSet<TileId>) -> Vec<TileId> {
         let mut evictions = Vec::new();
 
@@ -893,6 +958,13 @@ impl FlatRasterRuntime {
                 .ready_lru
                 .iter()
                 .position(|tile| !protected.contains(tile))
+                // When fallback plus new tiles exceed capacity, retire fallback
+                // before an exact visible replacement. The hard bound still wins.
+                .or_else(|| {
+                    self.ready_lru
+                        .iter()
+                        .position(|tile| !self.visible.contains(tile))
+                })
                 .unwrap_or(0);
             if let Some(tile) = self.ready_lru.remove(candidate_index) {
                 self.ready.remove(&tile);
@@ -1090,7 +1162,6 @@ fn visible_tile_placements(
         return Err(FlatRasterRuntimeError::TileCoverOverflow { required, limit });
     }
 
-    let tile_screen_size = size / dimension as f64;
     let mut placements = Vec::with_capacity(required);
 
     for y in min_y..=max_y {
@@ -1104,27 +1175,39 @@ fn visible_tile_placements(
                 u32::try_from(y).map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
             )
             .ok_or(FlatRasterRuntimeError::InvalidSource)?;
-            let tile_world_x = unwrapped_x as f64 / dimension as f64;
-            let tile_world_y = y as f64 / dimension as f64;
-            let local_west = (tile_world_x - center.x) * size;
-            let local_north = (center.y - tile_world_y) * size;
-
-            placements.push(RasterTilePlacement {
-                tile,
-                world_copy,
-                local_west,
-                local_north,
-                local_size: tile_screen_size,
-                screen_x: camera.viewport.width / 2.0 + local_west,
-                screen_y: camera.viewport.height / 2.0 - local_north,
-                screen_width: tile_screen_size,
-                screen_height: tile_screen_size,
-                visible: true,
-            });
+            placements.push(raster_tile_placement(
+                camera, center, size, tile, world_copy, true,
+            ));
         }
     }
 
     Ok(placements)
+}
+
+fn raster_tile_placement(
+    camera: MapCamera,
+    center: WorldCoordinate,
+    size: f64,
+    tile: TileId,
+    world_copy: i32,
+    visible: bool,
+) -> RasterTilePlacement {
+    let dimension = 2.0_f64.powi(i32::from(tile.z));
+    let tile_screen_size = size / dimension;
+    let local_west = (f64::from(tile.x) / dimension + f64::from(world_copy) - center.x) * size;
+    let local_north = (center.y - f64::from(tile.y) / dimension) * size;
+    RasterTilePlacement {
+        tile,
+        world_copy,
+        local_west,
+        local_north,
+        local_size: tile_screen_size,
+        screen_x: camera.viewport.width / 2.0 + local_west,
+        screen_y: camera.viewport.height / 2.0 - local_north,
+        screen_width: tile_screen_size,
+        screen_height: tile_screen_size,
+        visible,
+    }
 }
 
 fn buffered_request_cover(
@@ -1222,6 +1305,189 @@ fn touch_ready_tiles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_keeps_loaded_parent_tiles_until_replacements_are_ready() {
+        let mut runtime = runtime([10.0, 10.0], 3.0, 640.0, 480.0);
+        let warm = runtime.frame_plan().unwrap();
+        let loaded = warm.requests.iter().copied().collect::<BTreeSet<_>>();
+        for tile in &loaded {
+            runtime.mark_loaded(*tile);
+        }
+        runtime.set_view_state(10.0, 10.0, 4.0).unwrap();
+        let waiting = runtime.frame_plan().unwrap();
+        assert!(waiting.requests.iter().any(|tile| tile.z == 4));
+        let fallback = waiting
+            .placements
+            .iter()
+            .find(|placement| placement.tile.z == 3 && loaded.contains(&placement.tile))
+            .expect("loaded parent must remain drawable during zoom");
+        assert_eq!(fallback.local_size, 1024.0);
+        assert!(fallback.visible);
+        let replacement = waiting
+            .requests
+            .iter()
+            .find(|tile| {
+                waiting
+                    .placements
+                    .iter()
+                    .any(|placement| placement.tile == **tile && placement.visible)
+            })
+            .copied()
+            .unwrap();
+        runtime.mark_loaded(replacement);
+        let partial = runtime.frame_plan().unwrap();
+        let child_index = partial
+            .placements
+            .iter()
+            .position(|placement| placement.tile == replacement)
+            .unwrap();
+        assert!(
+            partial.placements[..child_index]
+                .iter()
+                .any(|placement| placement.tile.z == 3)
+        );
+        for tile in waiting.requests {
+            runtime.mark_loaded(tile);
+        }
+        let ready = runtime.frame_plan().unwrap();
+        assert!(
+            ready
+                .placements
+                .iter()
+                .all(|placement| placement.tile.z == 4)
+        );
+    }
+
+    #[test]
+    fn zoom_out_reuses_loaded_children_and_failed_replacements_keep_coverage() {
+        let mut runtime = runtime([10.0, 10.0], 4.0, 640.0, 480.0);
+        let warm = runtime.frame_plan().unwrap();
+        let loaded = warm.requests.iter().copied().collect::<BTreeSet<_>>();
+        for tile in &loaded {
+            runtime.mark_loaded(*tile);
+        }
+        runtime.set_view_state(10.0, 10.0, 3.0).unwrap();
+        let waiting = runtime.frame_plan().unwrap();
+        assert!(
+            waiting
+                .placements
+                .iter()
+                .any(|placement| placement.tile.z == 4)
+        );
+        for tile in &waiting.requests {
+            runtime.mark_failed(*tile);
+        }
+        let failed = runtime.frame_plan().unwrap();
+        assert!(
+            failed
+                .requests
+                .iter()
+                .all(|tile| !waiting.requests.contains(tile))
+        );
+        assert!(
+            failed
+                .placements
+                .iter()
+                .any(|placement| loaded.contains(&placement.tile))
+        );
+        for placement in failed
+            .placements
+            .iter()
+            .filter(|placement| placement.tile.z == 4)
+        {
+            assert_eq!(placement.local_size, 256.0);
+        }
+        runtime.set_view_state(10.0, 10.0, 4.0).unwrap();
+        let returned = runtime.frame_plan().unwrap();
+        assert!(
+            returned
+                .placements
+                .iter()
+                .all(|placement| placement.tile.z == 4)
+        );
+        assert!(returned.requests.iter().all(|tile| !loaded.contains(tile)));
+    }
+
+    #[test]
+    fn fallback_is_deduplicated_and_reprojected_for_world_copies_and_oriented_cameras() {
+        for (bearing, pitch) in [(0.0, 0.0), (30.0, 35.0)] {
+            let mut runtime = runtime_with_camera([179.9, 0.0], 1.0, bearing, pitch, 1200.0, 400.0);
+            for tile in runtime.frame_plan().unwrap().requests {
+                runtime.mark_loaded(tile);
+            }
+            runtime.set_view_state(179.9, 0.0, 2.0).unwrap();
+            let plan = runtime.frame_plan().unwrap();
+            let fallbacks = plan
+                .placements
+                .iter()
+                .filter(|placement| placement.tile.z == 1)
+                .collect::<Vec<_>>();
+            assert!(!fallbacks.is_empty());
+            let unique = fallbacks
+                .iter()
+                .map(|placement| (placement.tile, placement.world_copy))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(unique.len(), fallbacks.len());
+            assert!(fallbacks.iter().any(|placement| placement.world_copy == 1));
+            for placement in fallbacks {
+                // Independent XYZ bounds, transformed into the current local frame.
+                let center = project_web_mercator(179.9, 0.0).unwrap();
+                let world_x = f64::from(placement.tile.x) / 2.0 + f64::from(placement.world_copy);
+                assert!((placement.local_west - (world_x - center.x) * 2048.0).abs() < 1e-9);
+                assert_eq!(placement.local_size, 1024.0);
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_cache_pressure_preserves_exact_tiles_and_the_hard_capacity() {
+        let camera = MapCamera::new(
+            10.0,
+            10.0,
+            3.0,
+            0.0,
+            0.0,
+            ViewportSize::new(640.0, 480.0).unwrap(),
+        )
+        .unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(0, 19, 512).unwrap(),
+            FlatRasterRuntimeLimits::new(8, 8, 8).unwrap(),
+        )
+        .unwrap();
+        for tile in runtime.frame_plan().unwrap().requests {
+            runtime.mark_loaded(tile);
+        }
+        runtime.set_view_state(10.0, 10.0, 4.0).unwrap();
+        let waiting = runtime.frame_plan().unwrap();
+        assert!(
+            waiting
+                .placements
+                .iter()
+                .any(|placement| placement.tile.z == 3)
+        );
+        let exact = waiting
+            .placements
+            .iter()
+            .filter(|placement| placement.tile.z == 4 && placement.visible)
+            .map(|placement| placement.tile)
+            .collect::<BTreeSet<_>>();
+        for tile in waiting.requests {
+            runtime.mark_loaded(tile);
+        }
+        let ready = runtime.frame_plan().unwrap();
+        assert!(!ready.evictions.is_empty());
+        assert!(runtime.ready.len() <= 8);
+        assert!(exact.is_subset(&runtime.ready));
+        assert!(
+            ready
+                .placements
+                .iter()
+                .all(|placement| placement.tile.z == 4)
+        );
+    }
 
     fn runtime(center: [f64; 2], zoom: f64, width: f64, height: f64) -> FlatRasterRuntime {
         runtime_with_camera(center, zoom, 0.0, 0.0, width, height)
