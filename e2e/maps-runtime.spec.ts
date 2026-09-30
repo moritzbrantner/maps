@@ -218,6 +218,91 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
 });
 
+for (const backend of ["canvas2d", "default"] as const) {
+  test(`zoom keeps old raster coverage while replacement downloads wait (${backend}) @smoke`, async ({
+    page,
+  }, testInfo) => {
+    if (backend === "canvas2d") {
+      await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+    }
+    let hold = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let delayed = 0;
+    await page.route("https://tiles.example.test/**", async (route) => {
+      if (hold) {
+        delayed += 1;
+        await gate;
+      }
+      await route.fulfill({
+        body: VISIBLE_RASTER_TILE,
+        contentType: "image/png",
+        headers: { "Access-Control-Allow-Origin": "*" },
+      });
+    });
+    try {
+      await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
+      const map = page.getByLabel("Maps Rust runtime acceptance");
+      const canvas = map.locator('canvas[data-flat-runtime="maps"]');
+      await expect
+        .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
+        .toBeGreaterThan(0);
+      await expect(canvas).toHaveAttribute("data-map-base-pending-tiles", "0");
+      await expect(canvas).toHaveAttribute("data-map-base-renderer", /^(wgpu|canvas2d)$/);
+      if (backend === "canvas2d") {
+        await expect(canvas).toHaveAttribute("data-map-base-renderer", "canvas2d");
+      }
+      hold = true;
+      const box = (await canvas.boundingBox())!;
+      await canvas.dispatchEvent("wheel", {
+        clientX: box.x + box.width / 2,
+        clientY: box.y + box.height / 2,
+        deltaY: -400,
+        deltaMode: 0,
+      });
+      await expect.poll(() => delayed).toBeGreaterThan(0);
+      await expect(page.getByTestId("maps-runtime-view-state")).not.toContainText("zoom 6.0000");
+      await expect
+        .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
+        .toBeGreaterThan(0);
+      if (backend === "canvas2d") {
+        const samples = await map
+          .locator('canvas[data-map-base-fallback="canvas2d"]')
+          .evaluate((element) => {
+            const image = element as HTMLCanvasElement;
+            const context = image.getContext("2d")!;
+            return [0.25, 0.5, 0.75].map((fraction) =>
+              Array.from(
+                context.getImageData(
+                  Math.floor(image.width * fraction),
+                  Math.floor(image.height / 2),
+                  1,
+                  1,
+                ).data,
+              ),
+            );
+          });
+        expect(samples.every((pixel) => pixel[3] === 255 && pixel[0]! < 200)).toBe(true);
+      }
+      await testInfo.attach(`zoom-fallback-${backend}`, {
+        body: await map.screenshot({ path: testInfo.outputPath(`zoom-fallback-${backend}.png`) }),
+        contentType: "image/png",
+      });
+      hold = false;
+      release();
+      await expect(canvas).toHaveAttribute("data-map-base-pending-tiles", "0");
+      await expect
+        .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
+        .toBeGreaterThan(0);
+    } finally {
+      hold = false;
+      release();
+    }
+  });
+}
+
 test("first-party raster loader requests image tiles and renders them @smoke", async ({ page }) => {
   const acceptedHeaders: string[] = [];
 
