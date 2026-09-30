@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "vector-city-style-v1",
+  "fixture": {
+    "generator": "shortbread-forest-water-island-streets-v1",
+    "streetRows": 128,
+    "pointsPerStreet": 256,
+    "applicationPoints": 1000
+  },
+  "viewport": { "width": 1700, "height": 1312, "devicePixelRatio": 1 },
+  "initialCamera": { "longitude": 10.3, "latitude": 50.4, "zoom": 4.4 },
+  "journey": [
+    { "kind": "pan", "pixelsX": -288, "steps": 24, "intervalMs": 16 },
+    { "kind": "wheel", "deltaY": -160 },
+    { "kind": "wheel", "deltaY": 160 }
+  ],
+  "observations": [
+    "tile-pixels",
+    "water-hole",
+    "paint-order",
+    "application-feature-presence",
+    "loaded-tile-reuse"
+  ],
+  "runtimePhases": ["tile-decode-paint", "warm-pan-zoom", "frame-presentation"]
+}

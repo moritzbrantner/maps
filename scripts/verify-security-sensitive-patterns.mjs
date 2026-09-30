@@ -51,18 +51,6 @@ const allowlist = [
     rationale: "FlatDivIconOptions.html is a documented trusted-markup compatibility path.",
   },
   {
-    path: "src/scalar-field.ts",
-    ruleId: "function-constructor",
-    text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
-    rationale: "Optional runtime-module dynamic import avoids bundling optional integrations into the core entry.",
-  },
-  {
-    path: "src/kernels/wasm-kernels.ts",
-    ruleId: "function-constructor",
-    text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",
-    rationale: "Optional WASM kernel dynamic import avoids bundling optional runtime modules.",
-  },
-  {
     path: "src/aggregation-wasm.ts",
     ruleId: "function-constructor",
     text: "const dynamicImport = new Function(\"specifier\", \"return import(specifier)\")",

@@ -5,6 +5,17 @@ const VISIBLE_RASTER_TILE = Buffer.from(
   "base64",
 );
 
+declare global {
+  // Declaration merging types the browser-only fault-injection probe.
+  interface Window {
+    rasterLoadProbe: {
+      requests: { url: string; signal: AbortSignal }[];
+      releaseCancelled: () => void;
+      settled: number;
+    };
+  }
+}
+
 test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ page }) => {
   await page.goto("/?acceptance=maps-runtime");
 
@@ -224,6 +235,130 @@ test("first-party raster loader requests image tiles and renders them @smoke", a
   expect(acceptedHeaders.length).toBeGreaterThan(0);
   expect(acceptedHeaders.every((header) => header.includes("image/"))).toBe(true);
   await expect(canvas).not.toHaveAttribute("data-map-base-tile-error", /.+/);
+});
+
+test("raster failures release slots for the remaining visible tiles @smoke", async ({ page }) => {
+  const requests = new Map<string, number>();
+  await page.route("https://tiles.example.test/**", async (route) => {
+    const url = route.request().url();
+    requests.set(url, (requests.get(url) ?? 0) + 1);
+    // The first full concurrency batch fails. The rest of the cover is healthy.
+    const failed = [...requests.keys()].indexOf(url) < 8;
+    await route.fulfill({
+      status: failed ? 404 : 200,
+      contentType: failed ? "text/plain" : "image/png",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: failed ? "Missing tile" : VISIBLE_RASTER_TILE,
+    });
+  });
+
+  await page.goto("/?acceptance=maps-runtime-raster-fetch");
+  const map = page.getByLabel("Maps Rust runtime acceptance");
+  const canvas = map.locator('canvas[data-flat-runtime="maps"]');
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await expect
+    .poll(async () => Number(await canvas.getAttribute("data-map-base-tiles")))
+    .toBeGreaterThan(0);
+  expect(requests.size).toBeGreaterThan(8);
+  expect([...requests.values()].every((count) => count === 1)).toBe(true);
+});
+
+test("late raster cancellations preserve replacement request ownership @smoke", async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    let releaseCancelled = () => {};
+    const cancellationGate = new Promise<void>((resolve) => {
+      releaseCancelled = resolve;
+    });
+    const probe: Window["rasterLoadProbe"] = {
+      requests: [],
+      releaseCancelled,
+      settled: 0,
+    };
+    window.rasterLoadProbe = probe;
+    window.fetch = async (input, init) => {
+      if (typeof input !== "string" || !input.startsWith("https://tiles.example.test/")) {
+        return nativeFetch(input, init);
+      }
+      const signal = init?.signal;
+      if (!signal) throw new Error("Raster fetch must be cancellable");
+      probe.requests.push({ url: input, signal });
+      try {
+        return await nativeFetch(input, init);
+      } catch (error) {
+        // Network cancellation is real; delay its promise settlement until the
+        // camera has returned and started a replacement for the same tile.
+        if (signal.aborted) await cancellationGate;
+        probe.settled += 1;
+        throw error;
+      }
+    };
+  });
+  // Hold actual requests in flight until cancelled by the Map View.
+  await page.route("https://tiles.example.test/**", () => {});
+  await page.goto("/?acceptance=maps-runtime-raster-fetch");
+  const map = page.getByLabel("Maps Rust runtime acceptance");
+  const canvas = map.locator('canvas[data-flat-runtime="maps"]');
+  const viewState = page.getByTestId("maps-runtime-view-state");
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await expect
+    .poll(() => page.evaluate(() => window.rasterLoadProbe.requests.length))
+    .toBe(8);
+  const zoom = async (deltaY: number) => {
+    const box = await canvas.boundingBox();
+    expect(box).toBeTruthy();
+    await canvas.dispatchEvent("wheel", {
+      clientX: box!.x + box!.width / 2,
+      clientY: box!.y + box!.height / 2,
+      deltaY,
+    });
+  };
+  await zoom(-400);
+  await expect(viewState).toContainText("zoom 7.0000");
+  await zoom(400);
+  await expect(viewState).toContainText("zoom 6.0000");
+  await expect
+    .poll(() => page.evaluate(() => {
+      const requests = window.rasterLoadProbe.requests;
+      return requests.filter((request, index) =>
+        !request.signal.aborted &&
+        requests.some((old, oldIndex) => oldIndex < index && old.url === request.url),
+      ).length;
+    }))
+    .toBe(8);
+
+  await page.evaluate(() => window.rasterLoadProbe.releaseCancelled());
+  await expect
+    .poll(() => page.evaluate(() => window.rasterLoadProbe.settled))
+    .toBe(16);
+  await zoom(-400);
+  await expect(viewState).toContainText("zoom 7.0000");
+  // All requests from the previous zoom must be aborted, including replacements.
+  await expect
+    .poll(() => page.evaluate(() => window.rasterLoadProbe.requests
+      .filter((request) => new URL(request.url).pathname.startsWith("/7/"))
+      .every((request) => request.signal.aborted)))
+    .toBe(true);
+});
+
+test("wheel zoom keeps the surrounding page stationary @smoke", async ({ page }) => {
+  await page.goto("/?acceptance=maps-runtime");
+  const map = page.getByLabel("Maps Rust runtime acceptance");
+  const canvas = map.locator('canvas[data-flat-runtime="maps"]');
+  const viewState = page.getByTestId("maps-runtime-view-state");
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = await canvas.boundingBox();
+  expect(box).toBeTruthy();
+  const scrollBefore = await page.evaluate(() => window.scrollY);
+  await page.mouse.move(box!.x + box!.width * 0.8, box!.y + box!.height * 0.7);
+  await page.mouse.wheel(0, 400);
+  // Let the browser apply the default wheel action before checking the page.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+  await expect(viewState).toContainText("zoom 5.0000");
 });
 
 test("ClusterLayer uses Rust aggregation and shared picking @smoke", async ({ page }) => {

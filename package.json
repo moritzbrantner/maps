@@ -84,6 +84,7 @@
     "bench:heat-layer": "bun run ./scripts/benchmark-heat-layer.mjs",
     "bench:scalar-field": "bun run ./scripts/benchmark-scalar-field.mjs",
     "bench:performance": "bun run ./scripts/benchmark-performance.mjs",
+    "bench:engine": "node ./scripts/benchmark-engine.mjs",
     "bench:geojson-transition": "bun run ./scripts/benchmark-geojson-transition.mjs",
     "bench:temporal-geojson": "bun run ./scripts/benchmark-temporal-geojson.mjs",
     "dev": "vite --host 0.0.0.0",
@@ -116,8 +117,9 @@
     "verify:package-size": "node ./scripts/verify-package-size.mjs",
     "pack:dry": "npm pack --dry-run --ignore-scripts --json",
     "verify:agent": "bun run verify:engine-scenarios && bun run check-types && bun run lint && bun run test:tdd:run",
-    "verify:fast": "bun run verify:engine-scenarios && bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
-    "verify:release": "bun run verify:rust && bun run verify:fast && bun run verify:wasm-package && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance"
+    "verify:fast": "bun run verify:engine-scenarios && bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build:package && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
+    "verify:release": "bun run verify:rust && bun run verify:fast && bun run verify:wasm-package && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance",
+    "bench:engine:interaction": "node ./scripts/benchmark-engine-interaction.mjs"
   },
   "dependencies": {
     "@turf/boolean-clockwise": "^7.3.5",
@@ -138,6 +140,7 @@
     "@testing-library/react": "^16.3.2",
     "@types/d3-delaunay": "^6.0.4",
     "@types/geojson": "^7946.0.16",
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^26.0.1",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
@@ -146,6 +149,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "binaryen": "132.0.0",
     "jsdom": "^29.1.1",
+    "leaflet": "1.9.4",
     "oxfmt": "^0.56.0",
     "oxlint": "^1.67.0",
     "react": "^19.2.6",

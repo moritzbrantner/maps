@@ -28,6 +28,8 @@ verifyMissingImports("core", [
   "three",
   "@moritzbrantner/ui",
   "@moritzbrantner/timeline-editor",
+  "@moritzbrantner/viz-engine",
+  "@moritzbrantner/2d-lab",
   "2d-lab",
 ]);
 verifyMissingImports("flat", [

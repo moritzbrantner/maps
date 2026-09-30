@@ -158,3 +158,15 @@ filenames change.
 
 Update `CHANGELOG.md`, ensure `bun run verify:release` passes, and publish via
 the existing tag or workflow process.
+
+
+## Nix Development Environment
+
+Linux development can use the repository-local tool environment:
+
+```sh
+nix develop
+bun install --frozen-lockfile
+```
+
+The shell provides Bun 1.3.14, wasm-bindgen CLI 0.2.128, Binaryen/`wasm-opt`, Node 24, and the Rustup proxy. `rust-toolchain.toml` remains the Rust compiler/target authority, while `bun.lock` and `Cargo.lock` remain the dependency authorities. Existing verification commands are unchanged; for example, `bun run verify:agent`, `bun run verify:rust`, and `bun run verify:fast`.

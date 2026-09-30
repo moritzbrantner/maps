@@ -1,4 +1,5 @@
 import type { IndexedMapPoint, MapPoint, MapPointFilter } from "./aggregation";
+import { DEFAULT_MAPS_WASM_PACKAGE, importMapsWasmModule } from "./aggregation-wasm";
 
 const EARTH_RADIUS_METERS = 6_371_008.8;
 const DEFAULT_FIELD_COLUMNS = 256;
@@ -8,7 +9,6 @@ const DEFAULT_DOMAIN_PADDING_RATIO = 0.08;
 const DEFAULT_EPSILON_METERS = 1;
 const MAX_EXPLICIT_FIELD_SIZE = 2_048;
 const MAX_FAST_GRID_VALUE_POINTS = 256;
-const DEFAULT_MAPS_WASM_PACKAGE = "@moritzbrantner/maps/wasm";
 
 export type HeatFieldInterpolation = "idw";
 
@@ -116,8 +116,7 @@ let scalarFieldWasmLoadError: unknown = null;
 
 export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_MAPS_WASM_PACKAGE) {
   try {
-    const wasmModule = await importOptionalMapsWasmModule(packageName);
-    await wasmModule.default?.();
+    const wasmModule = await importMapsWasmModule<MapsScalarFieldWasmModule>(packageName);
     const createGrid = wasmModule.createScalarFieldGrid;
 
     if (!createGrid) {
@@ -1056,15 +1055,26 @@ function resolveValueDomain<TProperties>(
       : [valueDomain[1], valueDomain[0]];
   }
 
-  const values = gridValues.some((value) => value !== null)
-    ? gridValues.filter((value): value is number => value !== null && Number.isFinite(value))
-    : valuePoints.map((entry) => entry.value).filter(Number.isFinite);
-
-  if (values.length === 0) {
-    return null;
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  let hasGridValue = false;
+  for (const value of gridValues) {
+    if (value === null) continue;
+    hasGridValue = true;
+    if (!Number.isFinite(value)) continue;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
   }
 
-  return [Math.min(...values), Math.max(...values)];
+  if (!hasGridValue) {
+    for (const { value } of valuePoints) {
+      if (!Number.isFinite(value)) continue;
+      min = Math.min(min, value);
+      max = Math.max(max, value);
+    }
+  }
+
+  return min === Number.POSITIVE_INFINITY ? null : [min, max];
 }
 
 function toIndexedMapPoint<TProperties>(
@@ -1142,14 +1152,4 @@ function isScalarFieldGrid(value: unknown): value is ScalarFieldGrid {
     Array.isArray(candidate.values) &&
     candidate.values.length === (candidate.columns ?? 0) * (candidate.rows ?? 0)
   );
-}
-
-async function importOptionalMapsWasmModule(
-  packageName: string,
-): Promise<MapsScalarFieldWasmModule> {
-  const dynamicImport = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<MapsScalarFieldWasmModule>;
-
-  return dynamicImport(packageName);
 }

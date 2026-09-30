@@ -43,6 +43,9 @@ export default defineConfig({
   snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}{ext}",
   timeout: 60_000,
   testDir: "e2e",
+  // Software GPU rendering shares the CI runner's CPU with browser assertions.
+  // One worker prevents independent GPU contexts from starving each other.
+  workers: process.env.CI ? 1 : undefined,
   use: {
     baseURL: "http://127.0.0.1:5181",
     screenshot: "only-on-failure",

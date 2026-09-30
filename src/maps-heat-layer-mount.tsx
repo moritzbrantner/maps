@@ -110,13 +110,14 @@ export function MapsHeatLayerMount({
   );
   const heatIndex = useMemo(
     () =>
-      createHeatLayerSourceIndex(deferredPoints, {
+      // Field mode prepares scalar values below; density features are unused.
+      createHeatLayerSourceIndex(heatmapSurfaceMode === "field" ? [] : deferredPoints, {
         filterPoint,
         getWeight,
         maxWeight,
         weightMetric,
       }),
-    [deferredPoints, filterPoint, getWeight, maxWeight, weightMetric],
+    [deferredPoints, filterPoint, getWeight, heatmapSurfaceMode, maxWeight, weightMetric],
   );
   const domainBoundsKey = createHeatLayerNumberArrayKey(domainBounds);
   const fieldValueDomainKey = createHeatLayerNumberArrayKey(fieldValueDomain);

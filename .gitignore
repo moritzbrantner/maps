@@ -5,8 +5,10 @@ packages/*/dist/
 coverage/
 packages/*/coverage/
 playwright-report/
+playwright-report-hosted/
 packages/*/playwright-report/
 test-results/
+test-results-hosted/
 benchmark-results/
 packages/*/test-results/
 packages/*/benchmark-results/
@@ -18,3 +20,6 @@ target/
 crates/*/pkg/
 
 /backups/
+public/wasm/
+public/evidence/
+.github-pages-template/
