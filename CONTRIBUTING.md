@@ -60,7 +60,9 @@ graph, generates version-matched browser glue with the pinned wasm-bindgen CLI,
 then installs the tarball into a temporary Vite consumer and initializes the
 persistent Rust point index in Chromium. Normal `bun run build` stays JS-only;
 `bun run build:package` is the package/release build that also emits
-`dist/wasm/`.
+`dist/wasm/`. The WASM build also refreshes the ignored `public/wasm/`
+assets consumed by the demo and browser evidence, so rebuilding Rust cannot
+leave those consumers on an older local artifact.
 
 ## Agent TDD Harness
 
