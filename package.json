@@ -119,7 +119,8 @@
     "verify:agent": "bun run verify:engine-scenarios && bun run check-types && bun run lint && bun run test:tdd:run",
     "verify:fast": "bun run verify:engine-scenarios && bun run check-types && bun run lint && bun run verify:api-surface && bun run test && bun run build:package && bun run verify:entry-bundles && bun run verify:package-consumer && bun run verify:package-size && bun run pack:dry",
     "verify:release": "bun run verify:rust && bun run verify:fast && bun run verify:wasm-package && bun run test:browser && bun run verify:benchmarks && bun run bench:temporal-geojson && bun run bench:performance",
-    "bench:engine:interaction": "node ./scripts/benchmark-engine-interaction.mjs"
+    "bench:engine:interaction": "node ./scripts/benchmark-engine-interaction.mjs",
+    "fixture:2d-lab": "bun run ./scripts/export-2d-lab-render-fixture.ts"
   },
   "dependencies": {
     "@turf/boolean-clockwise": "^7.3.5",
