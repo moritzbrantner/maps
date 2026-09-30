@@ -1,10 +1,10 @@
 use maps_core::{
     BoundedFlatRasterRuntime as CoreBoundedFlatRasterRuntime, EngineImplementationIdentity,
     FlatRasterRuntime as CoreFlatRasterRuntime, FlatRasterRuntimeLimits,
-    MapBounds as CoreMapBounds, MapCamera, RasterFramePlan, RasterSourceSpec, RasterTilePlacement,
-    ScreenCoordinate, TileId, ViewportSize, execute_engine_scenario,
+    MapBounds as CoreMapBounds, MapCamera, RasterFramePlan, RasterSourceSpec, ScreenCoordinate,
+    TileId, ViewportSize, execute_engine_scenario,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
 use crate::{encode_json_compatible, to_js_error};
@@ -36,6 +36,9 @@ struct WasmFlatRasterRuntimeConfig {
     limits: Option<WasmFlatRasterRuntimeLimits>,
     #[serde(default)]
     max_bounds: Option<[f64; 4]>,
+    /// Presentation-only render-surface margin (CSS px per side).
+    #[serde(default)]
+    render_margin: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,91 +57,86 @@ struct WasmFlatRasterRuntimeLimits {
     load_concurrency: usize,
 }
 
-#[derive(Debug, Serialize)]
-struct WasmTileId {
-    z: u8,
-    x: u32,
-    y: u32,
-}
+/// Packed flat-raster frame transport shared with `src/flat-runtime-wasm.ts`.
+///
+/// One `Float64Array` per frame replaces per-field object serialization across
+/// the WASM boundary. Layout (all values `f64`):
+///
+/// - header, [`PACKED_FRAME_HEADER_LENGTH`] values: camera longitude, latitude,
+///   zoom, bearing, pitch, width, height; 16 view-projection elements; visible
+///   bounds west, south, east, north, crosses-antimeridian (0/1), spans-full-world
+///   (0/1); placement, request, cancellation and eviction counts; surface margin;
+///   overscan (0/1);
+/// - placements, [`PACKED_PLACEMENT_STRIDE`] values each: z, x, y, world copy,
+///   local west, local north, local size, screen x, screen y, screen width,
+///   screen height, visible (0/1);
+/// - requests, cancellations and evictions, [`PACKED_TILE_STRIDE`] values each: z, x, y.
+pub const PACKED_FRAME_HEADER_LENGTH: usize = 35;
+pub const PACKED_PLACEMENT_STRIDE: usize = 12;
+pub const PACKED_TILE_STRIDE: usize = 3;
 
-impl From<TileId> for WasmTileId {
-    fn from(tile: TileId) -> Self {
-        Self {
-            z: tile.z,
-            x: tile.x,
-            y: tile.y,
-        }
+fn pack_frame_plan(camera: MapCamera, plan: &RasterFramePlan) -> Vec<f64> {
+    let tile_count = plan.requests.len() + plan.cancellations.len() + plan.evictions.len();
+    let mut packed = Vec::with_capacity(
+        PACKED_FRAME_HEADER_LENGTH
+            + plan.placements.len() * PACKED_PLACEMENT_STRIDE
+            + tile_count * PACKED_TILE_STRIDE,
+    );
+    packed.extend_from_slice(&[
+        camera.longitude,
+        camera.latitude,
+        camera.zoom,
+        camera.bearing,
+        camera.pitch,
+        camera.viewport.width,
+        camera.viewport.height,
+    ]);
+    packed.extend(
+        plan.render_camera
+            .view_projection
+            .iter()
+            .map(|&value| f64::from(value)),
+    );
+    let bounds = plan.visible_bounds;
+    packed.extend_from_slice(&[
+        bounds.west,
+        bounds.south,
+        bounds.east,
+        bounds.north,
+        f64::from(u8::from(bounds.crosses_antimeridian)),
+        f64::from(u8::from(bounds.spans_full_world)),
+        plan.placements.len() as f64,
+        plan.requests.len() as f64,
+        plan.cancellations.len() as f64,
+        plan.evictions.len() as f64,
+        plan.surface_margin,
+        f64::from(u8::from(plan.overscan)),
+    ]);
+    for placement in &plan.placements {
+        packed.extend_from_slice(&[
+            f64::from(placement.tile.z),
+            f64::from(placement.tile.x),
+            f64::from(placement.tile.y),
+            f64::from(placement.world_copy),
+            placement.local_west,
+            placement.local_north,
+            placement.local_size,
+            placement.screen_x,
+            placement.screen_y,
+            placement.screen_width,
+            placement.screen_height,
+            f64::from(u8::from(placement.visible)),
+        ]);
     }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmRasterTilePlacement {
-    tile: WasmTileId,
-    world_copy: i32,
-    local_west: f64,
-    local_north: f64,
-    local_size: f64,
-    screen_x: f64,
-    screen_y: f64,
-    screen_width: f64,
-    screen_height: f64,
-}
-
-impl From<RasterTilePlacement> for WasmRasterTilePlacement {
-    fn from(placement: RasterTilePlacement) -> Self {
-        Self {
-            tile: placement.tile.into(),
-            world_copy: placement.world_copy,
-            local_west: placement.local_west,
-            local_north: placement.local_north,
-            local_size: placement.local_size,
-            screen_x: placement.screen_x,
-            screen_y: placement.screen_y,
-            screen_width: placement.screen_width,
-            screen_height: placement.screen_height,
-        }
+    for tile in plan
+        .requests
+        .iter()
+        .chain(&plan.cancellations)
+        .chain(&plan.evictions)
+    {
+        packed.extend_from_slice(&[f64::from(tile.z), f64::from(tile.x), f64::from(tile.y)]);
     }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmRasterRenderCamera {
-    view_projection: [f32; 16],
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmCameraState {
-    center: [f64; 2],
-    zoom: f64,
-    bearing: f64,
-    pitch: f64,
-    width: f64,
-    height: f64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmVisibleBounds {
-    west: f64,
-    south: f64,
-    east: f64,
-    north: f64,
-    crosses_antimeridian: bool,
-    spans_full_world: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmRasterFramePlan {
-    camera: WasmCameraState,
-    render_camera: WasmRasterRenderCamera,
-    visible_bounds: WasmVisibleBounds,
-    placements: Vec<WasmRasterTilePlacement>,
-    requests: Vec<WasmTileId>,
-    cancellations: Vec<WasmTileId>,
-    evictions: Vec<WasmTileId>,
+    packed
 }
 
 /// Stateful WASM transport over the Maps-owned flat raster runtime.
@@ -185,7 +183,11 @@ impl MapsFlatRasterRuntime {
         };
         let runtime = CoreFlatRasterRuntime::new(camera, source, limits).map_err(to_js_error)?;
         let max_bounds = config.max_bounds.map(normalize_max_bounds).transpose()?;
-        let inner = CoreBoundedFlatRasterRuntime::new(runtime, max_bounds).map_err(to_js_error)?;
+        let mut inner =
+            CoreBoundedFlatRasterRuntime::new(runtime, max_bounds).map_err(to_js_error)?;
+        inner
+            .set_render_margin(config.render_margin)
+            .map_err(to_js_error)?;
 
         Ok(Self { inner })
     }
@@ -259,6 +261,24 @@ impl MapsFlatRasterRuntime {
             .map_err(to_js_error)
     }
 
+    #[wasm_bindgen(js_name = rotateAbout)]
+    pub fn rotate_about(
+        &mut self,
+        delta_bearing: f64,
+        screen_x: f64,
+        screen_y: f64,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .rotate_about(
+                delta_bearing,
+                ScreenCoordinate {
+                    x: screen_x,
+                    y: screen_y,
+                },
+            )
+            .map_err(to_js_error)
+    }
+
     #[wasm_bindgen(js_name = fitBounds)]
     pub fn fit_bounds(
         &mut self,
@@ -308,13 +328,13 @@ impl MapsFlatRasterRuntime {
         }
 
         let mut projected = Vec::with_capacity(coordinates.len());
-        for coordinate in coordinate_pairs {
-            match self.inner.project_screen(coordinate[0], coordinate[1]) {
-                Ok(screen) => {
+        for screen in self.inner.project_screen_batch(coordinate_pairs) {
+            match screen {
+                Some(screen) => {
                     projected.push(screen.x);
                     projected.push(screen.y);
                 }
-                Err(_) => {
+                None => {
                     // Preserve scalar-project fail-closed behavior per coordinate
                     // without turning one invalid point into a failed whole batch.
                     projected.push(f64::NAN);
@@ -336,10 +356,11 @@ impl MapsFlatRasterRuntime {
         encode_json_compatible(&[coordinate.longitude, coordinate.latitude])
     }
 
-    pub fn frame(&mut self) -> Result<JsValue, JsValue> {
+    /// Advances scheduling and returns the packed frame (see [`pack_frame_plan`]).
+    #[wasm_bindgen(js_name = framePacked)]
+    pub fn frame_packed(&mut self) -> Result<Vec<f64>, JsValue> {
         let plan = self.inner.frame_plan().map_err(to_js_error)?;
-        let camera = self.inner.camera();
-        encode_json_compatible(&wasm_frame_plan(camera, plan))
+        Ok(pack_frame_plan(self.inner.camera(), &plan))
     }
 }
 
@@ -357,38 +378,83 @@ fn normalize_max_bounds(values: [f64; 4]) -> Result<CoreMapBounds, JsValue> {
         .ok_or_else(|| JsValue::from_str("invalid flat raster max bounds"))
 }
 
-fn wasm_frame_plan(camera: MapCamera, plan: RasterFramePlan) -> WasmRasterFramePlan {
-    WasmRasterFramePlan {
-        camera: WasmCameraState {
-            center: [camera.longitude, camera.latitude],
-            zoom: camera.zoom,
-            bearing: camera.bearing,
-            pitch: camera.pitch,
-            width: camera.viewport.width,
-            height: camera.viewport.height,
-        },
-        render_camera: WasmRasterRenderCamera {
-            view_projection: plan.render_camera.view_projection,
-        },
-        visible_bounds: WasmVisibleBounds {
-            west: plan.visible_bounds.west,
-            south: plan.visible_bounds.south,
-            east: plan.visible_bounds.east,
-            north: plan.visible_bounds.north,
-            crosses_antimeridian: plan.visible_bounds.crosses_antimeridian,
-            spans_full_world: plan.visible_bounds.spans_full_world,
-        },
-        placements: plan
-            .placements
-            .into_iter()
-            .map(WasmRasterTilePlacement::from)
-            .collect(),
-        requests: plan.requests.into_iter().map(WasmTileId::from).collect(),
-        cancellations: plan
-            .cancellations
-            .into_iter()
-            .map(WasmTileId::from)
-            .collect(),
-        evictions: plan.evictions.into_iter().map(WasmTileId::from).collect(),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_frame_carries_the_authoritative_plan_without_loss() {
+        let viewport = ViewportSize::new(800.0, 600.0).unwrap();
+        let camera = MapCamera::new(179.9, 52.5, 3.25, 30.0, 0.0, viewport).unwrap();
+        let mut runtime = CoreFlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(0, 19, 256).unwrap(),
+            FlatRasterRuntimeLimits::default(),
+        )
+        .unwrap();
+        runtime.set_render_margin(96.0).unwrap();
+        let plan = runtime.frame_plan().unwrap();
+        assert!(plan.overscan);
+        assert!(plan.placements.iter().any(|placement| !placement.visible));
+        assert!(!plan.placements.is_empty());
+        assert!(!plan.requests.is_empty());
+        let packed = pack_frame_plan(runtime.camera(), &plan);
+
+        assert_eq!(&packed[..7], &[179.9, 52.5, 3.25, 30.0, 0.0, 800.0, 600.0]);
+        for (index, value) in plan.render_camera.view_projection.iter().enumerate() {
+            assert_eq!(packed[7 + index] as f32, *value);
+        }
+        let bounds = plan.visible_bounds;
+        assert_eq!(
+            &packed[23..29],
+            &[
+                bounds.west,
+                bounds.south,
+                bounds.east,
+                bounds.north,
+                f64::from(u8::from(bounds.crosses_antimeridian)),
+                f64::from(u8::from(bounds.spans_full_world)),
+            ]
+        );
+        let counts = [
+            plan.placements.len(),
+            plan.requests.len(),
+            plan.cancellations.len(),
+            plan.evictions.len(),
+        ];
+        assert_eq!(&packed[29..33], &counts.map(|count| count as f64));
+        assert_eq!(&packed[33..35], &[96.0, 1.0]);
+        let tiles_start = PACKED_FRAME_HEADER_LENGTH + counts[0] * PACKED_PLACEMENT_STRIDE;
+        assert_eq!(
+            packed.len(),
+            tiles_start + (counts[1] + counts[2] + counts[3]) * PACKED_TILE_STRIDE
+        );
+        for (index, placement) in plan.placements.iter().enumerate() {
+            let offset = PACKED_FRAME_HEADER_LENGTH + index * PACKED_PLACEMENT_STRIDE;
+            assert_eq!(
+                &packed[offset..offset + PACKED_PLACEMENT_STRIDE],
+                &[
+                    f64::from(placement.tile.z),
+                    f64::from(placement.tile.x),
+                    f64::from(placement.tile.y),
+                    f64::from(placement.world_copy),
+                    placement.local_west,
+                    placement.local_north,
+                    placement.local_size,
+                    placement.screen_x,
+                    placement.screen_y,
+                    placement.screen_width,
+                    placement.screen_height,
+                    f64::from(u8::from(placement.visible)),
+                ]
+            );
+        }
+        for (index, tile) in plan.requests.iter().enumerate() {
+            let offset = tiles_start + index * PACKED_TILE_STRIDE;
+            assert_eq!(
+                &packed[offset..offset + PACKED_TILE_STRIDE],
+                &[f64::from(tile.z), f64::from(tile.x), f64::from(tile.y)]
+            );
+        }
     }
 }

@@ -23,7 +23,7 @@ export function MapsCanvasFlatRuntime(props: MapsBrowserRuntimeOptions) {
       hostRef.current = null;
       host.dispose();
     };
-  }, [identity]);
+  }, [identity, props.createTileImageLoader]);
 
   useLayoutEffect(() => {
     hostRef.current?.update(props);
@@ -36,6 +36,7 @@ export function MapsCanvasFlatRuntime(props: MapsBrowserRuntimeOptions) {
         data-flat-runtime="maps"
         data-map-base-renderer="pending"
         data-map-base-tiles="0"
+        data-map-base-pending-tiles="0"
         ref={canvasRef}
         style={{ touchAction: "none" }}
       />

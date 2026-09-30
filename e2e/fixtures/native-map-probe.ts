@@ -74,21 +74,21 @@ export async function observeNativeMap() {
   configureMapsWasmPackage("/wasm/maps_wasm.js");
   const wasm = await importMapsWasmModule<{
     default(): Promise<unknown>;
-    MapsFlatRasterRuntime: { prototype: MapsFlatRasterRuntime };
+    MapsFlatRasterRuntime: { prototype: MapsFlatRasterRuntime & { framePacked(): Float64Array } };
     MapsWgpuBaseMapRenderer: {
       prototype: {
-        render(tiles: unknown, camera: unknown, frame: MapsWgpuApplicationFrame | null): number;
+        renderPacked(tileDraws: Float64Array, frame: MapsWgpuApplicationFrame | null): number;
       };
     };
   }>();
   await wasm.default();
   const runtime = wasm.MapsFlatRasterRuntime.prototype;
-  const originalFrame = runtime.frame;
+  const originalFrame = runtime.framePacked;
   const originalProject = runtime.project;
   const originalProjectPacked = runtime.projectPacked;
   let active: MapsFlatRasterRuntime;
   let started: number | null = null;
-  runtime.frame = function () {
+  runtime.framePacked = function () {
     // oxlint-disable-next-line typescript/no-this-alias -- Observe the actual Rust instance.
     active = this;
     started = performance.now();
@@ -106,15 +106,15 @@ export async function observeNativeMap() {
   };
   probe.position = () => originalProject.call(active, ...anchor);
   const renderer = wasm.MapsWgpuBaseMapRenderer.prototype;
-  const originalRender = renderer.render;
-  renderer.render = function (tiles, camera, frame) {
+  const originalRender = renderer.renderPacked;
+  renderer.renderPacked = function (tileDraws, frame) {
     const circle = frame?.circles[0];
     if (active)
       probe.samples.push({
         actual: circle ? [circle.x, circle.y] : null,
         expected: probe.position(),
       });
-    const result = originalRender.call(this, tiles, camera, frame);
+    const result = originalRender.call(this, tileDraws, frame);
     // Synchronous camera preparation + submission only, not GPU completion or FPS.
     if (started !== null && circle) probe.cameraCpuMs.push(performance.now() - started);
     started = null;

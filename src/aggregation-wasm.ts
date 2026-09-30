@@ -15,6 +15,8 @@ export type MapsWasmModuleBase = {
   default?: (moduleOrPath?: unknown) => Promise<unknown>;
 };
 
+const initializedModules = new Map<string, Promise<MapsWasmModuleBase>>();
+
 type MapsAggregationWasmIndex = {
   free?: () => void;
   getClusterExpansionZoom(clusterId: number): number;
@@ -40,7 +42,6 @@ export async function loadMapsAggregationWasmRuntime(
   packageName?: string,
 ): Promise<MapsAggregationWasmRuntime> {
   const wasmModule = await importMapsWasmModule<MapsAggregationWasmModule>(packageName);
-  await wasmModule.default?.();
   const Constructor = wasmModule.MapsPointAggregationIndex;
 
   if (!Constructor) {
@@ -85,16 +86,32 @@ export async function loadMapsAggregationWasmRuntime(
  * additional constructor-based import sites or independent package resolution.
  * Hosted applications can configure one exact module URL for all Maps runtime
  * loaders while published consumers keep the package self-reference default.
+ * Initialization is shared even while pending; failed attempts can be retried.
  */
 export async function importMapsWasmModule<TModule extends MapsWasmModuleBase>(
   packageName?: string,
 ): Promise<TModule> {
-  const dynamicImport = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<TModule>;
   const resolvedPackage = packageName ?? configuredMapsWasmPackage ?? DEFAULT_MAPS_WASM_PACKAGE;
+  let initialized = initializedModules.get(resolvedPackage);
 
-  return dynamicImport(resolvedPackage);
+  if (!initialized) {
+    const dynamicImport = new Function("specifier", "return import(specifier)") as (
+      specifier: string,
+    ) => Promise<MapsWasmModuleBase>;
+    initialized = dynamicImport(resolvedPackage)
+      .then(async (module) => {
+        await module.default?.();
+        return module;
+      })
+      .catch((error: unknown) => {
+        initializedModules.delete(resolvedPackage);
+        throw error;
+      });
+    initializedModules.set(resolvedPackage, initialized);
+  }
+
+  // Each runtime loader validates the capability it needs on this module.
+  return (await initialized) as TModule;
 }
 
 function assertLive(disposed: boolean) {

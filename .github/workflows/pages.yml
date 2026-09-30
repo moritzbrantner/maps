@@ -24,7 +24,7 @@ jobs:
     uses: moritzbrantner/reusable-workflows/.github/workflows/build-artifact.yml@680d4f7bda61361b10865d8835bc7ef69a24061b
     with:
       source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      artifact_key: maps-example-pages-v2
+      artifact_key: maps-example-pages-v4
       rust_toolchain: "1.98.1"
       rust_targets: wasm32-unknown-unknown
       bun_version: "1.3.14"
@@ -34,6 +34,7 @@ jobs:
       use_environment_v1: false
       setup_command: |
         bun install --frozen-lockfile
+        bunx playwright install --with-deps chromium
         cargo install wasm-bindgen-cli --version 0.2.128 --locked
         rm -rf .github-pages-template
         git init .github-pages-template
@@ -45,7 +46,9 @@ jobs:
         rm -rf public/wasm
         mkdir -p public/wasm
         cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
+        bun run bench:engine -- --output public/evidence/engine-benchmark.json
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
+        bun run bench:engine:interaction -- --output dist/evidence/engine-interaction.json
         node .github-pages-template/bin/github-pages-template.mjs build --config ./pages.config.json --out ./dist --augment
       artifact_paths: dist
       reuse_across_runs: true

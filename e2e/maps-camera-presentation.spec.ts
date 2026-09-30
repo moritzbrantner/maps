@@ -7,6 +7,12 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     if (backend === "canvas2d") {
       await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
     }
+    // WebGPU validation failures surface only as console warnings: an invalid
+    // pipeline silently drops every frame that uses it.
+    const gpuValidation: string[] = [];
+    page.on("console", (message) => {
+      if (/WGSL|\[Invalid [A-Za-z]+/.test(message.text())) gpuValidation.push(message.text());
+    });
     const external: string[] = [];
     await page.route("**/*", (route) => {
       if (new URL(route.request().url()).hostname === "127.0.0.1") return route.continue();
@@ -22,6 +28,8 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
       "data-map-overlay-primitives",
       "1000",
     );
+    // Shaders and pipelines are created at renderer initialization.
+    expect(gpuValidation).toEqual([]);
     const work = await canvas.evaluate(async (element) => {
       // Let initial canvas sizing settle; the measured burst has no tile/network work.
       await new Promise(requestAnimationFrame);

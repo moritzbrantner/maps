@@ -82,6 +82,15 @@ must ignore late callbacks from superseded requests without removing replacement
 loads, and cancelled completions must not populate the runtime cache. These are
 correctness checks, not runtime-performance evidence.
 
+Directional prefetch extends the same lifecycle scenario. After a small eastward
+pan, request tiles two columns ahead before they enter the viewport, then verify
+their reuse. Reverse with requests still pending, ignore late cancelled results,
+cross the antimeridian, and exercise polar coverage and small caches. The public
+Rust tests remain in `raster_tile_lifecycle.rs`; `e2e/maps-engine-tiles.spec.ts`
+checks early requests and reuse through the real worker/WASM Map View. Neither
+prediction nor idle completion frames may grow the original ring's request-cover
+budget. Visible demand preempts speculative work.
+
 ### `dense-points-100k-v1`
 
 Purpose: measure the already-authoritative Rust point index together with render preparation and interaction.
@@ -149,8 +158,11 @@ their wgpu path. This is not yet a general style evaluator or GPU polygon pipeli
 Focused evidence lives in the Rust vector-tile tests and
 `e2e/maps-wgpu-stroke-runtime.spec.ts`: deterministic MVT bytes exercise forest beneath
 water, island holes, source classification, paint order and visible application points.
-Malformed polygon command streams are rejected. These checks do not yet make this named
-scenario executable or establish full MapLibre cartographic/performance parity.
+Malformed polygon command streams are rejected. The standalone fixed-style journey is now executable through
+`bench:engine:interaction`, using `engine-scenarios/vector-city-style-v1.json` and
+`e2e/fixtures/shortbread-tile.mjs`. Browser checks cover retained tile pixels,
+water holes, style order, warm reuse and worker lifecycle. This scoped fixture
+and journey do not establish full MapLibre style/cartographic parity.
 
 The same browser suite verifies that Canvas base and overlay surfaces redraw after
 `contextrestored`, and that a polygon with zero stroke width paints only its fill. Restoration

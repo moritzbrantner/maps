@@ -289,6 +289,13 @@ pub fn decode_shortbread_basemap_for_js(
     encode_json_compatible(&basemap)
 }
 
+/// Tile-local paths for retained fixed-style basemap pixels. Runs in a browser worker.
+#[wasm_bindgen(js_name = decodeShortbreadTilePixels)]
+pub fn decode_shortbread_tile_pixels_for_js(bytes: &[u8], size: u32) -> Result<JsValue, JsValue> {
+    let tile = maps_core::decode_shortbread_tile_pixels(bytes, size).map_err(to_js_error)?;
+    encode_json_compatible(&tile)
+}
+
 /// Normalizes native map points using the Maps-owned Rust contract.
 #[wasm_bindgen(js_name = normalizeMapPoints)]
 pub fn normalize_map_points_for_js(points: JsValue) -> Result<JsValue, JsValue> {

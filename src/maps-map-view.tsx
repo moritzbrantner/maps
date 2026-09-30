@@ -43,15 +43,19 @@ import {
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-surface-context";
 import { useControllableMapViewState } from "./map-view-state";
 import { getFeatureCoordinate, isBlockedHoverPosition } from "./map-view-utils";
+import type { MapsTileImageLoader } from "./maps-browser-runtime";
 import type { MapViewProps as LegacyMapViewProps } from "./map-view-maplibre";
 
 export type MapsMapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   flatRuntime?: "maps";
+  /** Decoder for tile pixels, scoped to this Map View runtime. */
+  createTileImageLoader?: () => MapsTileImageLoader;
 };
 
 export function MapsMapView({
   children,
   className,
+  createTileImageLoader,
   dataBounds = null,
   defaultViewState,
   fitBoundsPadding = 56,
@@ -601,6 +605,7 @@ export function MapsMapView({
         }}
       >
         <MapsCanvasFlatRuntime
+          createTileImageLoader={createTileImageLoader}
           mapStyle={resolvedMapStyle}
           maxBounds={maxBounds}
           maxZoom={resolvedMaxZoom}
