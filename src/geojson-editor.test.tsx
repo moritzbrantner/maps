@@ -918,6 +918,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Move editor").getAttribute("data-map-ready")).toBe("true");
+      expect(flatMock.getLayerGroups()[0]?.layers[0]?.handlers.get("mousedown")).toHaveLength(1);
     });
 
     const map = flatMock.getMaps()[0];
@@ -961,6 +962,8 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       expect(
         screen.getByLabelText("Move selection editor").classList.contains("mb-maps--editing"),
       ).toBe(true);
+      expect(flatMock.getLayerGroups()[0]?.layers).toHaveLength(2);
+      expect(flatMock.getLayerGroups()[0]?.layers[0]?.handlers.get("mousedown")).toHaveLength(1);
     });
 
     const map = flatMock.getMaps()[0];

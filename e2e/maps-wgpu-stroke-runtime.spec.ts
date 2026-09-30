@@ -111,10 +111,7 @@ test("Maps wgpu accepts the existing projected GeoJSON polygon frame @smoke", as
   const page = await browser.newPage();
 
   try {
-    const url = new URL(
-      "/?e2e=1&acceptance=maps-runtime",
-      baseURL ?? "http://127.0.0.1:5181",
-    );
+    const url = new URL("/?e2e=1&acceptance=maps-runtime", baseURL ?? "http://127.0.0.1:5181");
     await page.goto(url.toString());
 
     const map = page.getByLabel("Maps Rust runtime acceptance");
@@ -342,6 +339,112 @@ test("Shortbread fills preserve forest islands beneath application points @smoke
   });
   await expectTerrain();
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+});
+
+test("WebGPU Shortbread fills preserve island holes and application painter order @smoke", async ({
+  baseURL,
+}, testInfo) => {
+  const browser = await chromium.launch({ args: WEBGPU_SWIFTSHADER_ARGS });
+  const page = await browser.newPage();
+  const tiles: Array<{ x: number; y: number; z: number }> = [];
+  const gpuValidation: string[] = [];
+  page.on("console", (message) => {
+    if (/WGSL|\[Invalid [A-Za-z]+/.test(message.text())) gpuValidation.push(message.text());
+  });
+  const fixture = createShortbreadWaterFixture();
+  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
+    const coordinates = new URL(route.request().url()).pathname.match(
+      /\/(\d+)\/(\d+)\/(\d+)\.mvt$/,
+    );
+    if (!coordinates) throw new Error("Expected an XYZ vector tile URL");
+    tiles.push({ z: Number(coordinates[1]), x: Number(coordinates[2]), y: Number(coordinates[3]) });
+    await route.fulfill({
+      body: fixture,
+      contentType: "application/vnd.mapbox-vector-tile",
+      headers: { "Access-Control-Allow-Origin": "*" },
+    });
+  });
+
+  try {
+    await page.goto(
+      new URL("/?e2e=1&vectorTiles=fixture", baseURL ?? "http://127.0.0.1:5181").toString(),
+    );
+    const comparison = page.getByTestId("renderer-comparison");
+    const map = comparison.getByLabel("Renderer parity map");
+    const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+    await map.scrollIntoViewIfNeeded();
+    await expect(map).toHaveAttribute("data-map-ready", "true");
+    await expect(comparison.locator("[data-shortbread-state]")).toHaveAttribute(
+      "data-shortbread-state",
+      "ready",
+    );
+    await expect(overlay).toHaveAttribute("data-map-overlay-backend", "wgpu");
+
+    let screenshot = Buffer.alloc(0);
+    await expect
+      .poll(async () => {
+        screenshot = await map.screenshot({
+          path: testInfo.outputPath("wgpu-island-and-painter-order.png"),
+        });
+        return page.evaluate(
+          async ({ png, requestedTiles }) => {
+            const image = new Image();
+            image.src = `data:image/png;base64,${png}`;
+            await image.decode();
+            const canvas = document.createElement("canvas");
+            canvas.width = image.width;
+            canvas.height = image.height;
+            const context = canvas.getContext("2d")!;
+            context.drawImage(image, 0, 0);
+            // Independent Mercator reference for the fixture's declared initial camera.
+            const worldSize = 512 * 2 ** 4.4;
+            const centerX = (10.3 + 180) / 360;
+            const centerY = (1 - Math.asinh(Math.tan((50.4 * Math.PI) / 180)) / Math.PI) / 2;
+            const sample = (x: number, y: number) => {
+              const screenX = canvas.width / 2 + (x - centerX) * worldSize;
+              const screenY = canvas.height / 2 + (y - centerY) * worldSize;
+              if (
+                screenX < 1 ||
+                screenY < 1 ||
+                screenX >= canvas.width - 1 ||
+                screenY >= canvas.height - 1
+              )
+                return null;
+              return Array.from(
+                context.getImageData(Math.floor(screenX), Math.floor(screenY), 1, 1).data,
+              );
+            };
+            const hasIsland = requestedTiles.some((tile) => {
+              const dimension = 2 ** tile.z;
+              const water = sample((tile.x + 0.125) / dimension, (tile.y + 0.5) / dimension);
+              const island = sample((tile.x + 0.5) / dimension, (tile.y + 0.5) / dimension);
+              return (
+                water?.join(",") === "168,204,224,255" && island?.join(",") === "196,216,180,255"
+              );
+            });
+            const berlin = sample(
+              (13.405 + 180) / 360,
+              (1 - Math.asinh(Math.tan((52.52 * Math.PI) / 180)) / Math.PI) / 2,
+            );
+            return {
+              hasIsland,
+              pointAboveWater: berlin?.[3] === 255 && berlin.join(",") !== "168,204,224,255",
+            };
+          },
+          { png: screenshot.toString("base64"), requestedTiles: tiles },
+        );
+      })
+      .toEqual({ hasIsland: true, pointAboveWater: true });
+
+    await testInfo.attach("wgpu-island-and-painter-order", {
+      body: screenshot,
+      contentType: "image/png",
+    });
+    expect(gpuValidation).toEqual([]);
+    await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+  } finally {
+    await browser.close();
+  }
 });
 
 test("Canvas fill-only polygons do not inherit a previous stroke width @smoke", async ({

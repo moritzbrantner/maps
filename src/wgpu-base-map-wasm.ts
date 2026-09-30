@@ -11,6 +11,10 @@ import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 const PACKED_TILE_DRAW_HEADER_LENGTH = 19;
 const PACKED_TILE_DRAW_STRIDE = 6;
 
+// Async hosts can overlap while replacing a renderer on the same DOM canvas.
+// Only the latest request may change that canvas or submit work to its surface.
+const rendererOwners = new WeakMap<HTMLCanvasElement, object>();
+
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
   evictTile(tile: MapsRasterTileId): void;
@@ -49,6 +53,8 @@ export async function loadMapsWgpuBaseMapRenderer(
   canvas: HTMLCanvasElement,
   packageName?: string,
 ): Promise<MapsWgpuBaseMapRenderer> {
+  const owner = {};
+  rendererOwners.set(canvas, owner);
   canvas.style.opacity = "0";
 
   try {
@@ -62,23 +68,26 @@ export async function loadMapsWgpuBaseMapRenderer(
     const renderer = await createRenderer(canvas);
     let disposed = false;
     let tileDraws = new Float64Array(PACKED_TILE_DRAW_HEADER_LENGTH);
-    canvas.style.opacity = "1";
+    if (rendererOwners.get(canvas) === owner) canvas.style.opacity = "1";
 
     return {
       dispose() {
         if (disposed) return;
         disposed = true;
-        canvas.style.opacity = "0";
+        if (rendererOwners.get(canvas) === owner) {
+          canvas.style.opacity = "0";
+          rendererOwners.delete(canvas);
+        }
         renderer.free?.();
       },
       evictTile(tile) {
-        runRendererOperation(canvas, () => {
+        runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           renderer.evictTile(tile.z, tile.x, tile.y);
         });
       },
       isDeviceLost() {
-        return runRendererOperation(canvas, () => {
+        return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           return renderer.isDeviceLost();
         });
@@ -90,7 +99,7 @@ export async function loadMapsWgpuBaseMapRenderer(
         surfaceMargin = 0,
         viewportClip = null,
       ) {
-        return runRendererOperation(canvas, () => {
+        return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           const capacity =
             PACKED_TILE_DRAW_HEADER_LENGTH + placements.length * PACKED_TILE_DRAW_STRIDE;
@@ -115,29 +124,32 @@ export async function loadMapsWgpuBaseMapRenderer(
         });
       },
       resize(width, height) {
-        runRendererOperation(canvas, () => {
+        runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           renderer.resize(width, height);
         });
       },
       uploadTile(tile, image) {
-        runRendererOperation(canvas, () => {
+        runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           renderer.uploadTile(tile.z, tile.x, tile.y, image);
         });
       },
     };
   } catch (error) {
-    canvas.style.opacity = "0";
+    if (rendererOwners.get(canvas) === owner) canvas.style.opacity = "0";
     throw error;
   }
 }
 
-function runRendererOperation<T>(canvas: HTMLCanvasElement, operation: () => T): T {
+function runRendererOperation<T>(canvas: HTMLCanvasElement, owner: object, operation: () => T): T {
   try {
+    if (rendererOwners.get(canvas) !== owner) {
+      throw new Error("Maps wgpu base-map renderer has been superseded.");
+    }
     return operation();
   } catch (error) {
-    canvas.style.opacity = "0";
+    if (rendererOwners.get(canvas) === owner) canvas.style.opacity = "0";
     throw error;
   }
 }

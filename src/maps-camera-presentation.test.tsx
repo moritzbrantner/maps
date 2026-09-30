@@ -8,6 +8,8 @@ import type { MapSurfaceController, MapViewState } from "./map-display";
 import type { MapsFlatRasterFrame, MapsFlatRasterRuntime } from "./flat-runtime-wasm";
 import { loadMapsFlatRasterRuntime } from "./flat-runtime-wasm";
 import { loadMapsWgpuBaseMapRenderer, type MapsWgpuBaseMapRenderer } from "./wgpu-base-map-wasm";
+import { createMapsBrowserRuntime } from "./maps-browser-runtime";
+import type { MapScreenRenderFrame } from "./map-screen-render-frame";
 
 // Replace only the WASM/device boundary. The Map View, input host, layer
 // preparation, projection cache and application-frame packing are real.
@@ -349,6 +351,69 @@ function pointer(
 }
 
 describe("Maps camera presentation", () => {
+  it("repaints polygon-only application changes prepared during a retained camera pan", async () => {
+    surface = { margin: 128, overscan: true };
+    const canvas = document.createElement("canvas");
+    const fallback = document.createElement("canvas");
+    const frame: MapScreenRenderFrame = {
+      width: 600,
+      height: 400,
+      primitives: [
+        {
+          kind: "polygon",
+          rings: [
+            [
+              { x: 200, y: 100 },
+              { x: 300, y: 100 },
+              { x: 250, y: 200 },
+            ],
+          ],
+          renderPrimitive: {
+            kind: "polygon",
+            feature: null,
+            featureId: "area",
+            primitiveId: "area",
+            rings: [
+              [
+                [0, 0],
+                [1, 0],
+                [0, 1],
+                [0, 0],
+              ],
+            ],
+            fillColor: "#336699",
+            fillOpacity: 1,
+            interactive: true,
+            strokeColor: "#ffffff",
+            strokeOpacity: 1,
+            strokeWidth: 0,
+          },
+        },
+      ],
+    };
+    const host = createMapsBrowserRuntime(canvas, fallback, {
+      mapStyle: { tiles: false },
+      viewState: { center: [0, 0], zoom: 4 },
+      onViewStateChange: () => {},
+      onCameraFrame: () =>
+        host.controller?.renderApplicationFrame(frame, {
+          selectedPrimitiveIds: new Set(["area"]),
+        }),
+    });
+    try {
+      await host.ready;
+      expect(host.controller?.renderApplicationFrame(frame)).toBe(true);
+      vi.mocked(renderer.render).mockClear();
+
+      host.controller?.setViewState({ center: [1, 0], zoom: 4 });
+
+      expect(renderer.render).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(renderer.render).mock.calls[0]?.[2]?.polygons).toHaveLength(1);
+      expect(canvas.style.transform).toBe("");
+    } finally {
+      host.dispose();
+    }
+  });
   it("coalesces wheel paints without dropping ordered, differently anchored Rust zoom commands", async () => {
     const { canvas, changed } = await mountMap();
     for (let index = 0; index < 8; index += 1) {
