@@ -17,7 +17,7 @@ declare global {
 }
 
 test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ page }) => {
-  await page.goto("/?acceptance=maps-runtime");
+  await page.goto("/?e2e=1&acceptance=maps-runtime");
 
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
@@ -96,6 +96,11 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
 
   const zoomedViewState = await viewState.textContent();
   const zoomedPointPosition = await overlayPointPosition(page);
+  // Control presentation time so a busy runner cannot finish the whole kinetic
+  // journey before the post-release assertion gets to observe it.
+  const kineticClockStart = Date.now();
+  await page.clock.install({ time: kineticClockStart });
+  await page.clock.pauseAt(kineticClockStart + 50);
   const cdp = await page.context().newCDPSession(page);
   const dragStart = {
     x: box!.x + box!.width * 0.8,
@@ -115,6 +120,7 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     y: dragStart.y,
     timestamp: dragTimestamp,
   });
+  await page.clock.runFor(16);
   await cdp.send("Input.dispatchMouseEvent", {
     type: "mousePressed",
     x: dragStart.x,
@@ -125,6 +131,7 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     timestamp: dragTimestamp + 0.016,
   });
   for (let step = 1; step <= 4; step += 1) {
+    await page.clock.runFor(16);
     await cdp.send("Input.dispatchMouseEvent", {
       type: "mouseMoved",
       x: dragStart.x + ((dragEnd.x - dragStart.x) * step) / 4,
@@ -134,6 +141,7 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
       timestamp: dragTimestamp + 0.016 * (step + 1),
     });
   }
+  await page.clock.runFor(16);
   await cdp.send("Input.dispatchMouseEvent", {
     type: "mouseReleased",
     x: dragEnd.x,
@@ -143,11 +151,14 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
     clickCount: 1,
     timestamp: dragTimestamp + 0.096,
   });
+  await page.clock.runFor(32);
   const releasedViewState = await viewState.textContent();
+  await page.clock.runFor(64);
 
   await expect.poll(async () => viewState.textContent()).not.toBe(zoomedViewState);
   await expect.poll(async () => overlayPointPosition(page)).not.toEqual(zoomedPointPosition);
   await expect.poll(async () => viewState.textContent()).not.toBe(releasedViewState);
+  await page.clock.resume();
 
   await page.waitForTimeout(850);
   const settledViewState = await viewState.textContent();
@@ -223,7 +234,7 @@ test("first-party raster loader requests image tiles and renders them @smoke", a
     });
   });
 
-  await page.goto("/?acceptance=maps-runtime-raster-fetch");
+  await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
 
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
@@ -252,7 +263,7 @@ test("raster failures release slots for the remaining visible tiles @smoke", asy
     });
   });
 
-  await page.goto("/?acceptance=maps-runtime-raster-fetch");
+  await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   await expect(map).toHaveAttribute("data-map-ready", "true");
@@ -296,7 +307,7 @@ test("late raster cancellations preserve replacement request ownership @smoke", 
   });
   // Hold actual requests in flight until cancelled by the Map View.
   await page.route("https://tiles.example.test/**", () => {});
-  await page.goto("/?acceptance=maps-runtime-raster-fetch");
+  await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   const viewState = page.getByTestId("maps-runtime-view-state");
@@ -342,7 +353,7 @@ test("late raster cancellations preserve replacement request ownership @smoke", 
 });
 
 test("wheel zoom keeps the surrounding page stationary @smoke", async ({ page }) => {
-  await page.goto("/?acceptance=maps-runtime");
+  await page.goto("/?e2e=1&acceptance=maps-runtime");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   const viewState = page.getByTestId("maps-runtime-view-state");
@@ -362,7 +373,7 @@ test("wheel zoom keeps the surrounding page stationary @smoke", async ({ page })
 });
 
 test("ClusterLayer uses Rust aggregation and shared picking @smoke", async ({ page }) => {
-  await page.goto("/?acceptance=maps-runtime");
+  await page.goto("/?e2e=1&acceptance=maps-runtime");
 
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');

@@ -1,6 +1,6 @@
 import type { RasterMapStyle } from "@moritzbrantner/maps";
 
-const e2eMapStyle = {
+export const e2eMapStyle = {
   layers: [
     {
       id: "demo-ocean",

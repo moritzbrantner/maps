@@ -13,6 +13,9 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    // Scan browser fixtures up front; late reference imports can otherwise reload
+    // an already-ready acceptance page while assertions are in flight.
+    entries: ["index.html", "engine/index.html", "e2e/fixtures/*.html"],
     exclude: ["maplibre-gl"],
   },
   plugins: [react(), tailwindcss()],
