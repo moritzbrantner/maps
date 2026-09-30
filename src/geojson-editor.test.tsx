@@ -102,6 +102,12 @@ const flatMock = vi.hoisted(() => {
       };
     }
 
+    emit(event: string, ...args: unknown[]) {
+      for (const handler of [...(this.handlers.get(event) ?? [])]) {
+        handler(...args);
+      }
+    }
+
     off(event: string, handler: Handler) {
       const handlers = this.handlers.get(event) ?? [];
 
@@ -277,7 +283,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({
+      map?.emit("click", {
         latlng: { lat: 52, lng: 13 },
       });
     });
@@ -327,7 +333,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0.05, lng: 0.05 } });
+      map?.emit("click", { latlng: { lat: 0.05, lng: 0.05 } });
     });
 
     await waitFor(() => {
@@ -366,7 +372,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     act(() => {
-      map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 0.02, lng: 5.03 } });
+      map?.emit("mousemove", { latlng: { lat: 0.02, lng: 5.03 } });
     });
 
     await waitFor(() => {
@@ -384,7 +390,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     act(() => {
-      map?.handlers.get("mouseout")?.at(-1)?.({});
+      map?.emit("mouseout", {});
     });
 
     expect(onSnapTargetChange).toHaveBeenLastCalledWith(null);
@@ -410,13 +416,17 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     const map = flatMock.getMaps()[0];
+    // A consumer registering another click observer must not steal editor input.
+    const onMapClick = vi.fn();
+    map?.on("click", onMapClick);
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 1, lng: 2 } });
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 3, lng: 4 } });
+      map?.emit("click", { latlng: { lat: 1, lng: 2 } });
+      map?.emit("click", { latlng: { lat: 3, lng: 4 } });
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     });
 
+    expect(onMapClick).toHaveBeenCalledTimes(2);
     expect(onFeatureCollectionChange).toHaveBeenCalledWith(
       expect.objectContaining({
         features: [
@@ -459,9 +469,9 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     const map = flatMock.getMaps()[0];
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0, lng: 0 } });
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0, lng: 10 } });
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 10, lng: 10 } });
+      map?.emit("click", { latlng: { lat: 0, lng: 0 } });
+      map?.emit("click", { latlng: { lat: 0, lng: 10 } });
+      map?.emit("click", { latlng: { lat: 10, lng: 10 } });
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     });
 
@@ -541,7 +551,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     const map = flatMock.getMaps()[0];
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 1, lng: 2 } });
+      map?.emit("click", { latlng: { lat: 1, lng: 2 } });
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     });
@@ -572,7 +582,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     const map = flatMock.getMaps()[0];
 
     act(() => {
-      map?.handlers.get("mousemove")?.at(-1)?.({ latlng: { lat: 52, lng: 13 } });
+      map?.emit("mousemove", { latlng: { lat: 52, lng: 13 } });
     });
 
     await waitFor(() => {
@@ -613,12 +623,8 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     });
 
     act(() => {
-      for (const handler of map?.handlers.get("click") ?? []) {
-        handler({ latlng: { lat: 1, lng: 2 } });
-      }
-      for (const handler of map?.handlers.get("mousemove") ?? []) {
-        handler({ latlng: { lat: 3, lng: 4 } });
-      }
+      map?.emit("click", { latlng: { lat: 1, lng: 2 } });
+      map?.emit("mousemove", { latlng: { lat: 3, lng: 4 } });
     });
 
     await waitFor(() => {
@@ -922,7 +928,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
         latlng: { lat: 0, lng: 0 },
         originalEvent: { preventDefault() {}, stopPropagation() {} },
       });
-      map?.handlers.get("mouseup")?.[0]?.({
+      map?.emit("mouseup", {
         latlng: { lat: 2, lng: 3 },
       });
     });
@@ -965,7 +971,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
         latlng: { lat: 0, lng: 0 },
         originalEvent: { preventDefault() {}, stopPropagation() {} },
       });
-      map?.handlers.get("mouseup")?.[0]?.({
+      map?.emit("mouseup", {
         latlng: { lat: 2, lng: 3 },
       });
     });
@@ -1096,7 +1102,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
         latlng: { lat: 0, lng: 0 },
         originalEvent: { preventDefault() {}, stopPropagation() {} },
       });
-      map?.handlers.get("mouseup")?.[0]?.({
+      map?.emit("mouseup", {
         latlng: { lat: 5, lng: 6 },
       });
     });
@@ -1145,7 +1151,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
         latlng: { lat: 0, lng: 0 },
         originalEvent: { preventDefault() {}, stopPropagation() {} },
       });
-      map?.handlers.get("mouseup")?.[0]?.({
+      map?.emit("mouseup", {
         latlng: { lat: 1.02, lng: 20.03 },
       });
     });
@@ -1180,7 +1186,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     const map = flatMock.getMaps()[0];
 
     act(() => {
-      map?.handlers.get("click")?.at(-1)?.({ latlng: { lat: 0.4, lng: 0.6 } });
+      map?.emit("click", { latlng: { lat: 0.4, lng: 0.6 } });
     });
 
     expect(onFeatureCollectionChange.mock.calls[0]?.[0].features[0].geometry).toEqual({
