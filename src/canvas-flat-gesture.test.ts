@@ -48,6 +48,7 @@ describe("createMapsPointerGesture", () => {
       deltaX: 10,
       deltaY: 0,
       deltaZoom: 1,
+      deltaBearing: 0,
       previousX: 50,
       previousY: 50,
       x: 60,
@@ -100,10 +101,54 @@ describe("createMapsPointerGesture", () => {
       deltaX: 10,
       deltaY: 0,
       deltaZoom: 0,
+      deltaBearing: 0,
       previousX: 50,
       previousY: 50,
       x: 60,
       y: 50,
+    });
+  });
+
+  test("two-finger rotation starts after the arc threshold and follows the fingers", () => {
+    const gesture = createMapsPointerGesture();
+    gesture.pointerDown(1, { x: 100, y: 100 });
+    gesture.pointerDown(2, { x: 300, y: 100 });
+    const at = (degrees: number) => {
+      const radians = (degrees * Math.PI) / 180;
+      return { x: 200 + Math.cos(radians) * 100, y: 100 + Math.sin(radians) * 100 };
+    };
+    const rotate = (degrees: number) => {
+      const left = at(180 + degrees);
+      gesture.pointerMove(1, left);
+      return gesture.pointerMove(2, at(degrees));
+    };
+
+    // 10° of a 100px radius is a ~17px arc per finger: below the 25px threshold.
+    expect(rotate(5)).toMatchObject({ deltaBearing: 0 });
+    // Crossing the threshold arms rotation without a jump.
+    expect(rotate(15)).toMatchObject({ deltaBearing: 0 });
+    // Clockwise finger rotation (y down) turns content clockwise: bearing decreases.
+    const step = rotate(25);
+    expect(step?.type).toBe("pinch");
+    expect(step && "deltaBearing" in step ? step.deltaBearing : NaN).toBeCloseTo(-5, 9);
+    // One finger moves at a time, so the pair distance wobbles slightly.
+    expect(step && "deltaZoom" in step ? step.deltaZoom : NaN).toBeCloseTo(0, 1);
+    expect(step?.x).toBeCloseTo(200, 9);
+    expect(step?.y).toBeCloseTo(100, 9);
+  });
+
+  test("rotation threshold re-arms for each new pointer pair", () => {
+    const gesture = createMapsPointerGesture();
+    gesture.pointerDown(1, { x: 100, y: 100 });
+    gesture.pointerDown(2, { x: 300, y: 100 });
+    gesture.pointerMove(2, { x: 300, y: 160 });
+    gesture.pointerMove(2, { x: 300, y: 220 });
+    gesture.pointerUp(2);
+    gesture.pointerDown(3, { x: 300, y: 100 });
+
+    expect(gesture.pointerMove(3, { x: 300, y: 110 })).toMatchObject({
+      type: "pinch",
+      deltaBearing: 0,
     });
   });
 

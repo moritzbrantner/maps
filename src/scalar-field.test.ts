@@ -88,6 +88,19 @@ describe("scalar-field IDW interpolation", () => {
     expect(normalizeScalarFieldValue(grid.valueDomain![1], grid.valueDomain)).toBe(1);
   });
 
+  test("infers the value domain of a large field without materializing function arguments", () => {
+    const grid = createScalarFieldGrid([point("constant", 0, 0, 12)], {
+      domainBounds: [0, 0, 1, 1],
+      fieldColumns: 512,
+      fieldRows: 512,
+      valueMetric: "temperature",
+    });
+
+    expect(grid.values).toHaveLength(512 * 512);
+    expect(grid.valueDomain?.[0]).toBeCloseTo(12, 10);
+    expect(grid.valueDomain?.[1]).toBeCloseTo(12, 10);
+  });
+
   test("returns a null field gracefully for empty points", () => {
     const grid = createScalarFieldGrid([], {
       domainBounds: [0, 0, 1, 1],

@@ -13,8 +13,9 @@ const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
 const CAMERA_UNIFORM_SIZE: u64 = 64;
 const VERTEX_SIZE: u64 = 16;
 const APPLICATION_VERTEX_SIZE: u64 = 24;
+const APPLICATION_CIRCLE_INSTANCE_SIZE: u64 = 56;
+const APPLICATION_CIRCLE_VERTEX_COUNT: u32 = 6;
 const VERTICES_PER_TILE: u32 = 4;
-const CIRCLE_SEGMENTS: usize = 24;
 const LINE_CAP_SEGMENTS: usize = 12;
 const MAX_LINE_MITER_SCALE: f64 = 4.0;
 const GEOMETRY_EPSILON: f64 = 1.0e-9;
@@ -90,24 +91,186 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WgpuRasterRenderCamera {
-    view_projection: [f32; 16],
+const APPLICATION_CIRCLE_SHADER: &str = r#"
+struct CircleInput {
+  @location(0) center_clip: vec2<f32>,
+  @location(1) outer_clip: vec2<f32>,
+  @location(2) fill_ratio: f32,
+  @location(3) stroke_inner_ratio: f32,
+  @location(4) fill_color: vec4<f32>,
+  @location(5) stroke_color: vec4<f32>,
+};
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) local: vec2<f32>,
+  @location(1) fill_ratio: f32,
+  @location(2) stroke_inner_ratio: f32,
+  @location(3) fill_color: vec4<f32>,
+  @location(4) stroke_color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32, input: CircleInput) -> VertexOutput {
+  let corners = array<vec2<f32>, 6>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(1.0, -1.0),
+    vec2<f32>(-1.0, 1.0),
+    vec2<f32>(-1.0, 1.0),
+    vec2<f32>(1.0, -1.0),
+    vec2<f32>(1.0, 1.0),
+  );
+  let local = corners[vertex_index];
+  var output: VertexOutput;
+  output.position = vec4<f32>(input.center_clip + local * input.outer_clip, 0.0, 1.0);
+  output.local = local;
+  output.fill_ratio = input.fill_ratio;
+  output.stroke_inner_ratio = input.stroke_inner_ratio;
+  output.fill_color = input.fill_color;
+  output.stroke_color = input.stroke_color;
+  return output;
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+fn premultiplied(color: vec4<f32>) -> vec4<f32> {
+  return vec4<f32>(color.rgb * color.a, color.a);
+}
+
+fn over(foreground: vec4<f32>, background: vec4<f32>) -> vec4<f32> {
+  return foreground + background * (1.0 - foreground.a);
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  let distance = length(input.local);
+  if distance > 1.0 {
+    discard;
+  }
+
+  let fill = premultiplied(input.fill_color);
+  if distance < input.stroke_inner_ratio {
+    return fill;
+  }
+
+  if input.stroke_inner_ratio <= 1.0 {
+    let stroke = premultiplied(input.stroke_color);
+    if input.fill_ratio > 0.0 && distance <= input.fill_ratio {
+      return over(stroke, fill);
+    }
+    return stroke;
+  }
+
+  // Browsers (Tint) reject a function ending in `discard`: end with a return.
+  if distance > input.fill_ratio {
+    discard;
+  }
+  return fill;
+}
+"#;
+
+/// Packed tile draw input shared with `src/wgpu-base-map-wasm.ts`: 16
+/// view-projection elements, the render-surface margin (CSS px per side) and the
+/// viewport clip width/height (CSS px; 0 draws the whole surface), followed by one
+/// [`PACKED_TILE_DRAW_STRIDE`] record per placement
+/// (z, x, y, local west, local north, local size).
+const PACKED_TILE_DRAW_HEADER_LENGTH: usize = 19;
+const PACKED_TILE_DRAW_STRIDE: usize = 6;
+
 struct WgpuRasterTilePlacement {
-    tile: WgpuRasterTileId,
+    key: Option<RasterTileKey>,
     local_west: f64,
     local_north: f64,
     local_size: f64,
 }
 
-#[derive(Debug, Deserialize)]
-struct WgpuRasterTileId {
-    key: String,
+fn packed_tile_key(z: f64, x: f64, y: f64) -> Option<RasterTileKey> {
+    let integral = |value: f64, max: f64| value.fract() == 0.0 && (0.0..=max).contains(&value);
+    (integral(z, f64::from(u8::MAX))
+        && integral(x, f64::from(u32::MAX))
+        && integral(y, f64::from(u32::MAX)))
+    .then_some((z as u8, x as u32, y as u32))
+}
+
+/// Where the render surface (viewport grown by `margin`) needs pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SurfaceClip {
+    margin: f64,
+    /// Viewport CSS size when only the viewport is drawn (continuous motion).
+    viewport: Option<(f64, f64)>,
+}
+
+impl SurfaceClip {
+    /// Physical-pixel scissor (x, y, width, height) covering the viewport inside a
+    /// `surface_width` x `surface_height` target, rounded outward; `None` draws all.
+    fn scissor(self, surface_width: u32, surface_height: u32) -> Option<(u32, u32, u32, u32)> {
+        let (width, height) = self.viewport?;
+        let axis = |css: f64, physical: u32| {
+            let scale = f64::from(physical) / (css + 2.0 * self.margin);
+            let start = (self.margin * scale)
+                .floor()
+                .clamp(0.0, f64::from(physical)) as u32;
+            let end = ((self.margin + css) * scale)
+                .ceil()
+                .clamp(f64::from(start), f64::from(physical)) as u32;
+            (start, end - start)
+        };
+        let (x, scissor_width) = axis(width, surface_width);
+        let (y, scissor_height) = axis(height, surface_height);
+        Some((x, y, scissor_width, scissor_height))
+    }
+}
+
+fn unpack_tile_draws(
+    packed: &[f64],
+) -> Result<
+    (
+        [f32; 16],
+        SurfaceClip,
+        impl Iterator<Item = WgpuRasterTilePlacement> + '_,
+    ),
+    JsValue,
+> {
+    if packed.len() < PACKED_TILE_DRAW_HEADER_LENGTH
+        || !(packed.len() - PACKED_TILE_DRAW_HEADER_LENGTH).is_multiple_of(PACKED_TILE_DRAW_STRIDE)
+    {
+        return Err(JsValue::from_str("invalid packed wgpu raster tile draws"));
+    }
+    let (header, records) = packed.split_at(PACKED_TILE_DRAW_HEADER_LENGTH);
+    let mut view_projection = [0.0_f32; 16];
+    for (target, value) in view_projection.iter_mut().zip(header) {
+        *target = *value as f32;
+    }
+    let margin = header[16];
+    if !margin.is_finite() || margin < 0.0 {
+        return Err(JsValue::from_str("invalid wgpu render-surface margin"));
+    }
+    let (clip_width, clip_height) = (header[17], header[18]);
+    let viewport = match (clip_width, clip_height) {
+        (0.0, 0.0) => None,
+        (width, height)
+            if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 =>
+        {
+            Some((width, height))
+        }
+        _ => return Err(JsValue::from_str("invalid wgpu viewport clip")),
+    };
+    Ok((
+        view_projection,
+        SurfaceClip { margin, viewport },
+        records
+            .as_chunks::<PACKED_TILE_DRAW_STRIDE>()
+            .0
+            .iter()
+            .map(unpack_tile_draw),
+    ))
+}
+
+fn unpack_tile_draw(record: &[f64; PACKED_TILE_DRAW_STRIDE]) -> WgpuRasterTilePlacement {
+    WgpuRasterTilePlacement {
+        key: packed_tile_key(record[0], record[1], record[2]),
+        local_west: record[3],
+        local_north: record[4],
+        local_size: record[5],
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,6 +282,32 @@ struct WgpuApplicationFrame {
     lines: Vec<WgpuApplicationLine>,
     order: Vec<[u32; 2]>,
     width: f64,
+}
+
+impl WgpuApplicationFrame {
+    /// Moves viewport CSS-pixel geometry into the render surface, which extends
+    /// the viewport by `margin` on every side. Sizes (radii, strokes) are unchanged.
+    fn offset_into_surface(&mut self, margin: f64) {
+        if margin == 0.0 {
+            return;
+        }
+        self.width += 2.0 * margin;
+        self.height += 2.0 * margin;
+        for circle in &mut self.circles {
+            circle.x += margin;
+            circle.y += margin;
+        }
+        for marker in &mut self.direction_markers {
+            marker.x += margin;
+            marker.y += margin;
+        }
+        for line in &mut self.lines {
+            for point in &mut line.points {
+                point.x += margin;
+                point.y += margin;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +351,25 @@ struct TileTexture {
     bind_group: wgpu::BindGroup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApplicationDraw {
+    Circles {
+        first_instance: u32,
+        instance_count: u32,
+    },
+    Triangles {
+        first_vertex: u32,
+        vertex_count: u32,
+    },
+}
+
+#[derive(Default)]
+struct ApplicationGeometry {
+    circle_instances: Vec<u8>,
+    triangle_vertices: Vec<u8>,
+    draws: Vec<ApplicationDraw>,
+}
+
 #[wasm_bindgen]
 pub struct MapsWgpuBaseMapRenderer {
     surface: wgpu::Surface<'static>,
@@ -181,8 +389,17 @@ pub struct MapsWgpuBaseMapRenderer {
     application_pipeline: wgpu::RenderPipeline,
     application_vertex_buffer: wgpu::Buffer,
     application_vertex_capacity: u64,
-    tiles: HashMap<String, TileTexture>,
+    application_circle_pipeline: wgpu::RenderPipeline,
+    application_circle_instance_buffer: wgpu::Buffer,
+    application_circle_instance_capacity: u64,
+    tiles: HashMap<RasterTileKey, TileTexture>,
+    /// Reused per-frame scratch space; avoids allocating on the render path.
+    frame_vertices: Vec<u8>,
+    frame_placements: Vec<WgpuRasterTilePlacement>,
 }
+
+/// Raster tile identity (z, x, y) shared with the host's tile lifecycle.
+type RasterTileKey = (u8, u32, u32);
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
 pub async fn create_wgpu_base_map_renderer(
@@ -389,18 +606,6 @@ impl MapsWgpuBaseMapRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &application_attributes,
         })];
-        let premultiplied_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
         let application_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Maps application geometry pipeline"),
             layout: Some(&application_pipeline_layout),
@@ -422,7 +627,7 @@ impl MapsWgpuBaseMapRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_view_format,
-                    blend: Some(premultiplied_blend),
+                    blend: Some(premultiplied_blend_state()),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -431,6 +636,79 @@ impl MapsWgpuBaseMapRenderer {
         });
         let application_vertex_buffer =
             create_application_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
+
+        let application_circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Maps application instanced circle shader"),
+            source: wgpu::ShaderSource::Wgsl(APPLICATION_CIRCLE_SHADER.into()),
+        });
+        let application_circle_attributes = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 8,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 16,
+                shader_location: 2,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 20,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 24,
+                shader_location: 4,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 40,
+                shader_location: 5,
+            },
+        ];
+        let application_circle_vertex_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: APPLICATION_CIRCLE_INSTANCE_SIZE,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &application_circle_attributes,
+        })];
+        let application_circle_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Maps application instanced circle pipeline"),
+                layout: Some(&application_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &application_circle_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &application_circle_vertex_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &application_circle_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_view_format,
+                        blend: Some(premultiplied_blend_state()),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        let application_circle_instance_buffer =
+            create_application_circle_instance_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
         Ok(Self {
             surface,
@@ -450,7 +728,12 @@ impl MapsWgpuBaseMapRenderer {
             application_pipeline,
             application_vertex_buffer,
             application_vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
+            application_circle_pipeline,
+            application_circle_instance_buffer,
+            application_circle_instance_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             tiles: HashMap::new(),
+            frame_vertices: Vec::new(),
+            frame_placements: Vec::new(),
         })
     }
 
@@ -471,7 +754,13 @@ impl MapsWgpuBaseMapRenderer {
     }
 
     #[wasm_bindgen(js_name = uploadTile)]
-    pub fn upload_tile(&mut self, key: String, image: ImageBitmap) -> Result<(), JsValue> {
+    pub fn upload_tile(
+        &mut self,
+        z: u8,
+        x: u32,
+        y: u32,
+        image: ImageBitmap,
+    ) -> Result<(), JsValue> {
         let width = image.width();
         let height = image.height();
         if width == 0 || height == 0 {
@@ -532,7 +821,7 @@ impl MapsWgpuBaseMapRenderer {
             ],
         });
         self.tiles.insert(
-            key,
+            (z, x, y),
             TileTexture {
                 _texture: texture,
                 _view: view,
@@ -543,36 +832,61 @@ impl MapsWgpuBaseMapRenderer {
     }
 
     #[wasm_bindgen(js_name = evictTile)]
-    pub fn evict_tile(&mut self, key: &str) {
-        self.tiles.remove(key);
+    pub fn evict_tile(&mut self, z: u8, x: u32, y: u32) {
+        self.tiles.remove(&(z, x, y));
     }
 
-    pub fn render(
+    /// Renders one map frame from packed tile draws (see [`unpack_tile_draws`]).
+    #[wasm_bindgen(js_name = renderPacked)]
+    pub fn render_packed(
         &mut self,
-        placements: JsValue,
-        render_camera: JsValue,
+        tile_draws: &[f64],
         application_frame: JsValue,
     ) -> Result<usize, JsValue> {
-        let placements = serde_wasm_bindgen::from_value::<Vec<WgpuRasterTilePlacement>>(placements)
-            .map_err(|error| js_error("invalid wgpu raster placements", error))?;
-        let render_camera = serde_wasm_bindgen::from_value::<WgpuRasterRenderCamera>(render_camera)
-            .map_err(|error| js_error("invalid wgpu raster render camera", error))?;
-        let application_frame =
-            serde_wasm_bindgen::from_value::<Option<WgpuApplicationFrame>>(application_frame)
-                .map_err(|error| js_error("invalid wgpu application frame", error))?;
-        if render_camera
-            .view_projection
-            .into_iter()
-            .any(|value| !value.is_finite())
-        {
+        let (view_projection, clip, placements) = unpack_tile_draws(tile_draws)?;
+        let application_frame = if application_frame.is_null() || application_frame.is_undefined() {
+            None
+        } else {
+            let mut frame =
+                serde_wasm_bindgen::from_value::<WgpuApplicationFrame>(application_frame)
+                    .map_err(|error| js_error("invalid wgpu application frame", error))?;
+            frame.offset_into_surface(clip.margin);
+            Some(frame)
+        };
+        if view_projection.into_iter().any(|value| !value.is_finite()) {
             return Err(JsValue::from_str(
                 "wgpu raster render camera contains non-finite matrix values",
             ));
         }
 
-        let mut vertices = Vec::with_capacity(placements.len() * 4 * VERTEX_SIZE as usize);
-        for placement in &placements {
-            append_tile_vertices(&mut vertices, placement)?;
+        let mut placements_buffer = std::mem::take(&mut self.frame_placements);
+        placements_buffer.clear();
+        placements_buffer.extend(placements);
+        let mut vertices = std::mem::take(&mut self.frame_vertices);
+        vertices.clear();
+        let result = self.render_frame(
+            &placements_buffer,
+            &mut vertices,
+            application_frame,
+            view_projection,
+            clip,
+        );
+        self.frame_placements = placements_buffer;
+        self.frame_vertices = vertices;
+        result
+    }
+
+    fn render_frame(
+        &mut self,
+        placements: &[WgpuRasterTilePlacement],
+        vertices: &mut Vec<u8>,
+        application_frame: Option<WgpuApplicationFrame>,
+        view_projection: [f32; 16],
+        clip: SurfaceClip,
+    ) -> Result<usize, JsValue> {
+        vertices.reserve(placements.len() * 4 * VERTEX_SIZE as usize);
+        for placement in placements {
+            append_tile_vertices(vertices, placement)?;
         }
 
         let required = vertices.len() as u64;
@@ -582,19 +896,20 @@ impl MapsWgpuBaseMapRenderer {
             self.vertex_capacity = capacity;
         }
         if !vertices.is_empty() {
-            self.queue.write_buffer(&self.vertex_buffer, 0, &vertices);
+            self.queue.write_buffer(&self.vertex_buffer, 0, vertices);
         }
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            &camera_uniform_bytes(render_camera.view_projection),
+            &camera_uniform_bytes(view_projection),
         );
 
-        let mut application_vertices = Vec::new();
-        if let Some(frame) = application_frame.as_ref() {
-            append_application_vertices(&mut application_vertices, frame)?;
-        }
-        let application_required = application_vertices.len() as u64;
+        let application_geometry = application_frame
+            .as_ref()
+            .map(prepare_application_geometry)
+            .transpose()?
+            .unwrap_or_default();
+        let application_required = application_geometry.triangle_vertices.len() as u64;
         if application_required > self.application_vertex_capacity {
             let capacity = application_required
                 .next_power_of_two()
@@ -603,12 +918,29 @@ impl MapsWgpuBaseMapRenderer {
                 create_application_vertex_buffer(&self.device, capacity);
             self.application_vertex_capacity = capacity;
         }
-        if !application_vertices.is_empty() {
-            self.queue
-                .write_buffer(&self.application_vertex_buffer, 0, &application_vertices);
+        if !application_geometry.triangle_vertices.is_empty() {
+            self.queue.write_buffer(
+                &self.application_vertex_buffer,
+                0,
+                &application_geometry.triangle_vertices,
+            );
         }
-        let application_vertex_count =
-            (application_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+        let circle_required = application_geometry.circle_instances.len() as u64;
+        if circle_required > self.application_circle_instance_capacity {
+            let capacity = circle_required
+                .next_power_of_two()
+                .max(INITIAL_VERTEX_BUFFER_SIZE);
+            self.application_circle_instance_buffer =
+                create_application_circle_instance_buffer(&self.device, capacity);
+            self.application_circle_instance_capacity = capacity;
+        }
+        if !application_geometry.circle_instances.is_empty() {
+            self.queue.write_buffer(
+                &self.application_circle_instance_buffer,
+                0,
+                &application_geometry.circle_instances,
+            );
+        }
 
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
@@ -616,15 +948,14 @@ impl MapsWgpuBaseMapRenderer {
         let view = surface_frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor {
-                label: Some("Maps base-map sRGB surface view"),
+                // Per-frame objects stay unlabeled: labels cost JS crossings every frame.
+                label: None,
                 format: Some(self.surface_view_format),
                 ..Default::default()
             });
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Maps map-frame command encoder"),
-            });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             depth_slice: None,
@@ -642,19 +973,24 @@ impl MapsWgpuBaseMapRenderer {
         let mut drawn_tiles = 0;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Maps raster and application render pass"),
+                label: None,
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some((x, y, width, height)) = clip.scissor(self.config.width, self.config.height)
+            {
+                // Continuous motion: the margin would be replaced before it is shown.
+                pass.set_scissor_rect(x, y, width, height);
+            }
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             for (index, placement) in placements.iter().enumerate() {
-                let Some(tile) = self.tiles.get(&placement.tile.key) else {
+                let Some(tile) = placement.key.and_then(|key| self.tiles.get(&key)) else {
                     continue;
                 };
                 pass.set_bind_group(1, &tile.bind_group, &[]);
@@ -663,10 +999,31 @@ impl MapsWgpuBaseMapRenderer {
                 drawn_tiles += 1;
             }
 
-            if application_vertex_count > 0 {
-                pass.set_pipeline(&self.application_pipeline);
-                pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
-                pass.draw(0..application_vertex_count, 0..1);
+            for draw in &application_geometry.draws {
+                match *draw {
+                    ApplicationDraw::Circles {
+                        first_instance,
+                        instance_count,
+                    } => {
+                        pass.set_pipeline(&self.application_circle_pipeline);
+                        pass.set_vertex_buffer(
+                            0,
+                            self.application_circle_instance_buffer.slice(..),
+                        );
+                        pass.draw(
+                            0..APPLICATION_CIRCLE_VERTEX_COUNT,
+                            first_instance..first_instance + instance_count,
+                        );
+                    }
+                    ApplicationDraw::Triangles {
+                        first_vertex,
+                        vertex_count,
+                    } => {
+                        pass.set_pipeline(&self.application_pipeline);
+                        pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
+                        pass.draw(first_vertex..first_vertex + vertex_count, 0..1);
+                    }
+                }
             }
         }
 
@@ -725,6 +1082,15 @@ fn create_application_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::B
     })
 }
 
+fn create_application_circle_instance_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Maps application circle instances"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn append_tile_vertices(
     output: &mut Vec<u8>,
     placement: &WgpuRasterTilePlacement,
@@ -764,10 +1130,9 @@ fn append_tile_vertices(
     Ok(())
 }
 
-fn append_application_vertices(
-    output: &mut Vec<u8>,
+fn prepare_application_geometry(
     frame: &WgpuApplicationFrame,
-) -> Result<(), JsValue> {
+) -> Result<ApplicationGeometry, JsValue> {
     if !frame.width.is_finite()
         || !frame.height.is_finite()
         || frame.width <= 0.0
@@ -776,42 +1141,114 @@ fn append_application_vertices(
         return Err(JsValue::from_str("invalid wgpu application frame extent"));
     }
 
+    let mut geometry = ApplicationGeometry::default();
     for [kind, index] in &frame.order {
         let index = *index as usize;
         match *kind {
-            APPLICATION_CIRCLE => append_application_circle(
-                output,
-                frame.width,
-                frame.height,
-                frame
-                    .circles
-                    .get(index)
-                    .ok_or_else(|| JsValue::from_str("invalid wgpu circle order index"))?,
-            )?,
-            APPLICATION_LINE => append_application_line(
-                output,
-                frame.width,
-                frame.height,
-                frame
-                    .lines
-                    .get(index)
-                    .ok_or_else(|| JsValue::from_str("invalid wgpu line order index"))?,
-            )?,
-            APPLICATION_DIRECTION_MARKER => append_application_direction_marker(
-                output,
-                frame.width,
-                frame.height,
-                frame.direction_markers.get(index).ok_or_else(|| {
-                    JsValue::from_str("invalid wgpu direction marker order index")
-                })?,
-            )?,
+            APPLICATION_CIRCLE => {
+                let first_instance = (geometry.circle_instances.len() as u64
+                    / APPLICATION_CIRCLE_INSTANCE_SIZE) as u32;
+                append_application_circle_instance(
+                    &mut geometry.circle_instances,
+                    frame.width,
+                    frame.height,
+                    frame
+                        .circles
+                        .get(index)
+                        .ok_or_else(|| JsValue::from_str("invalid wgpu circle order index"))?,
+                )?;
+                append_application_draw(
+                    &mut geometry.draws,
+                    ApplicationDraw::Circles {
+                        first_instance,
+                        instance_count: 1,
+                    },
+                );
+            }
+            APPLICATION_LINE => {
+                let first_vertex =
+                    (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+                append_application_line(
+                    &mut geometry.triangle_vertices,
+                    frame.width,
+                    frame.height,
+                    frame
+                        .lines
+                        .get(index)
+                        .ok_or_else(|| JsValue::from_str("invalid wgpu line order index"))?,
+                )?;
+                let vertex_count = (geometry.triangle_vertices.len() as u64
+                    / APPLICATION_VERTEX_SIZE) as u32
+                    - first_vertex;
+                if vertex_count > 0 {
+                    append_application_draw(
+                        &mut geometry.draws,
+                        ApplicationDraw::Triangles {
+                            first_vertex,
+                            vertex_count,
+                        },
+                    );
+                }
+            }
+            APPLICATION_DIRECTION_MARKER => {
+                let first_vertex =
+                    (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+                append_application_direction_marker(
+                    &mut geometry.triangle_vertices,
+                    frame.width,
+                    frame.height,
+                    frame.direction_markers.get(index).ok_or_else(|| {
+                        JsValue::from_str("invalid wgpu direction marker order index")
+                    })?,
+                )?;
+                let vertex_count = (geometry.triangle_vertices.len() as u64
+                    / APPLICATION_VERTEX_SIZE) as u32
+                    - first_vertex;
+                append_application_draw(
+                    &mut geometry.draws,
+                    ApplicationDraw::Triangles {
+                        first_vertex,
+                        vertex_count,
+                    },
+                );
+            }
             _ => return Err(JsValue::from_str("invalid wgpu application order kind")),
         }
     }
-    Ok(())
+    Ok(geometry)
 }
 
-fn append_application_circle(
+fn append_application_draw(draws: &mut Vec<ApplicationDraw>, draw: ApplicationDraw) {
+    match (draws.last_mut(), draw) {
+        (
+            Some(ApplicationDraw::Circles {
+                first_instance,
+                instance_count,
+            }),
+            ApplicationDraw::Circles {
+                first_instance: next_first,
+                instance_count: next_count,
+            },
+        ) if *first_instance + *instance_count == next_first => {
+            *instance_count += next_count;
+        }
+        (
+            Some(ApplicationDraw::Triangles {
+                first_vertex,
+                vertex_count,
+            }),
+            ApplicationDraw::Triangles {
+                first_vertex: next_first,
+                vertex_count: next_count,
+            },
+        ) if *first_vertex + *vertex_count == next_first => {
+            *vertex_count += next_count;
+        }
+        (_, draw) => draws.push(draw),
+    }
+}
+
+fn append_application_circle_instance(
     output: &mut Vec<u8>,
     width: f64,
     height: f64,
@@ -828,40 +1265,46 @@ fn append_application_circle(
         return Err(JsValue::from_str("invalid wgpu application circle"));
     }
 
-    for segment in 0..CIRCLE_SEGMENTS {
-        let angle_a = std::f64::consts::TAU * segment as f64 / CIRCLE_SEGMENTS as f64;
-        let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
-        let a = point_on_circle(circle.x, circle.y, circle.radius, angle_a);
-        let b = point_on_circle(circle.x, circle.y, circle.radius, angle_b);
-        append_application_vertex(output, width, height, circle.x, circle.y, circle.fill_color)?;
-        append_application_vertex(output, width, height, a.0, a.1, circle.fill_color)?;
-        append_application_vertex(output, width, height, b.0, b.1, circle.fill_color)?;
+    let outer_radius = circle.radius + circle.stroke_width / 2.0;
+    let center_clip = [
+        (circle.x / width * 2.0 - 1.0) as f32,
+        (1.0 - circle.y / height * 2.0) as f32,
+    ];
+    let outer_clip = [
+        (outer_radius / width * 2.0) as f32,
+        (outer_radius / height * 2.0) as f32,
+    ];
+    if center_clip
+        .into_iter()
+        .chain(outer_clip)
+        .any(|value| !value.is_finite())
+    {
+        return Err(JsValue::from_str(
+            "wgpu application circle is not representable as f32",
+        ));
     }
+    let (fill_ratio, stroke_inner_ratio) = if outer_radius > 0.0 {
+        (
+            (circle.radius / outer_radius) as f32,
+            if circle.stroke_width > 0.0 {
+                ((circle.radius - circle.stroke_width / 2.0).max(0.0) / outer_radius) as f32
+            } else {
+                2.0
+            },
+        )
+    } else {
+        (0.0, 2.0)
+    };
 
-    if circle.stroke_width > 0.0 {
-        let inner_radius = (circle.radius - circle.stroke_width / 2.0).max(0.0);
-        let outer_radius = circle.radius + circle.stroke_width / 2.0;
-        for segment in 0..CIRCLE_SEGMENTS {
-            let angle_a = std::f64::consts::TAU * segment as f64 / CIRCLE_SEGMENTS as f64;
-            let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / CIRCLE_SEGMENTS as f64;
-            let inner_a = point_on_circle(circle.x, circle.y, inner_radius, angle_a);
-            let inner_b = point_on_circle(circle.x, circle.y, inner_radius, angle_b);
-            let outer_a = point_on_circle(circle.x, circle.y, outer_radius, angle_a);
-            let outer_b = point_on_circle(circle.x, circle.y, outer_radius, angle_b);
-
-            for point in [inner_a, outer_a, outer_b, inner_a, outer_b, inner_b] {
-                append_application_vertex(
-                    output,
-                    width,
-                    height,
-                    point.0,
-                    point.1,
-                    circle.stroke_color,
-                )?;
-            }
-        }
+    for value in center_clip
+        .into_iter()
+        .chain(outer_clip)
+        .chain([fill_ratio, stroke_inner_ratio])
+        .chain(circle.fill_color)
+        .chain(circle.stroke_color)
+    {
+        output.extend_from_slice(&value.to_le_bytes());
     }
-
     Ok(())
 }
 
@@ -1119,17 +1562,25 @@ fn append_application_vertex(
     Ok(())
 }
 
-fn point_on_circle(center_x: f64, center_y: f64, radius: f64, angle: f64) -> (f64, f64) {
-    (
-        center_x + angle.cos() * radius,
-        center_y + angle.sin() * radius,
-    )
-}
-
 fn valid_color(color: [f32; 4]) -> bool {
     color
         .into_iter()
         .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
+}
+
+fn premultiplied_blend_state() -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
 }
 
 fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
@@ -1141,6 +1592,142 @@ fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
     bytes
 }
 
+#[cfg(test)]
+mod application_geometry_tests {
+    use super::*;
+
+    fn circle(x: f64) -> WgpuApplicationCircle {
+        WgpuApplicationCircle {
+            fill_color: [0.1, 0.2, 0.8, 1.0],
+            radius: 6.0,
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            stroke_width: 2.0,
+            x,
+            y: 50.0,
+        }
+    }
+
+    fn line() -> WgpuApplicationLine {
+        WgpuApplicationLine {
+            color: [0.2, 0.3, 0.4, 1.0],
+            points: vec![
+                WgpuApplicationPoint { x: 10.0, y: 10.0 },
+                WgpuApplicationPoint { x: 20.0, y: 20.0 },
+            ],
+            stroke_width: 2.0,
+        }
+    }
+
+    #[test]
+    fn dense_circles_use_one_instanced_draw_without_triangle_tessellation() {
+        let count = 10_000_u32;
+        let frame = WgpuApplicationFrame {
+            circles: (0..count).map(|index| circle(f64::from(index))).collect(),
+            direction_markers: Vec::new(),
+            height: 100.0,
+            lines: Vec::new(),
+            order: (0..count)
+                .map(|index| [APPLICATION_CIRCLE, index])
+                .collect(),
+            width: 100.0,
+        };
+
+        let geometry = prepare_application_geometry(&frame).unwrap();
+
+        assert!(geometry.triangle_vertices.is_empty());
+        assert_eq!(
+            geometry.circle_instances.len() as u64,
+            u64::from(count) * APPLICATION_CIRCLE_INSTANCE_SIZE
+        );
+        assert_eq!(
+            geometry.draws,
+            vec![ApplicationDraw::Circles {
+                first_instance: 0,
+                instance_count: count,
+            }]
+        );
+    }
+
+    #[test]
+    fn interleaved_circle_and_line_batches_preserve_painter_order() {
+        let frame = WgpuApplicationFrame {
+            circles: vec![circle(10.0), circle(30.0), circle(40.0)],
+            direction_markers: Vec::new(),
+            height: 100.0,
+            lines: vec![line()],
+            order: vec![
+                [APPLICATION_CIRCLE, 0],
+                [APPLICATION_CIRCLE, 1],
+                [APPLICATION_LINE, 0],
+                [APPLICATION_CIRCLE, 2],
+            ],
+            width: 100.0,
+        };
+
+        let geometry = prepare_application_geometry(&frame).unwrap();
+        let line_vertices =
+            (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+
+        assert!(line_vertices > 0);
+        assert_eq!(
+            geometry.draws,
+            vec![
+                ApplicationDraw::Circles {
+                    first_instance: 0,
+                    instance_count: 2,
+                },
+                ApplicationDraw::Triangles {
+                    first_vertex: 0,
+                    vertex_count: line_vertices,
+                },
+                ApplicationDraw::Circles {
+                    first_instance: 2,
+                    instance_count: 1,
+                },
+            ]
+        );
+    }
+}
+
 fn js_error(context: &str, error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&format!("{context}: {error}"))
+}
+
+#[cfg(test)]
+mod surface_clip_tests {
+    use super::*;
+
+    #[test]
+    fn viewport_scissor_covers_exactly_the_viewport_inside_the_margin() {
+        let clip = SurfaceClip {
+            margin: 128.0,
+            viewport: Some((1024.0, 768.0)),
+        };
+        // 1x: the surface is 1280 x 1024 physical pixels.
+        assert_eq!(clip.scissor(1280, 1024), Some((128, 128, 1024, 768)));
+        // 2x device pixels scale the scissor with the surface.
+        assert_eq!(clip.scissor(2560, 2048), Some((256, 256, 2048, 1536)));
+    }
+
+    #[test]
+    fn fractional_scissors_round_outward_and_stay_inside_the_surface() {
+        let clip = SurfaceClip {
+            margin: 10.5,
+            viewport: Some((99.3, 50.0)),
+        };
+        let (x, y, width, height) = clip.scissor(241, 142).unwrap();
+        let scale_x = 241.0 / (99.3 + 21.0);
+        assert!(f64::from(x) <= 10.5 * scale_x);
+        assert!(f64::from(x + width) >= (10.5 + 99.3) * scale_x);
+        assert!(x + width <= 241 && y + height <= 142);
+    }
+
+    #[test]
+    fn a_full_surface_render_has_no_scissor() {
+        let clip = SurfaceClip {
+            margin: 128.0,
+            viewport: None,
+        };
+        assert_eq!(clip.scissor(1280, 1024), None);
+    }
 }

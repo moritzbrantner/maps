@@ -24,9 +24,9 @@ pub enum VectorBasemapLineKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct VectorBasemapLine {
+pub struct VectorBasemapLine<C = [f64; 2]> {
     pub kind: VectorBasemapLineKind,
-    pub coordinates: Vec<[f64; 2]>,
+    pub coordinates: Vec<C>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -41,17 +41,24 @@ pub enum VectorBasemapPolygonKind {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VectorBasemapPolygon {
+pub struct VectorBasemapPolygon<C = [f64; 2]> {
     pub kind: VectorBasemapPolygonKind,
     pub source_kind: Option<String>,
     /// One exterior ring followed by its interior rings, all explicitly closed.
-    pub rings: Vec<Vec<[f64; 2]>>,
+    pub rings: Vec<Vec<C>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct VectorBasemapTile {
-    pub lines: Vec<VectorBasemapLine>,
-    pub polygons: Vec<VectorBasemapPolygon>,
+pub struct VectorBasemapTile<C = [f64; 2]> {
+    pub lines: Vec<VectorBasemapLine<C>>,
+    pub polygons: Vec<VectorBasemapPolygon<C>>,
+}
+
+/// Tile-local pixel position, including buffered geometry outside the tile bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct VectorTilePixel {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +66,7 @@ pub enum VectorTileError {
     InvalidProtobuf,
     InvalidGeometry,
     InvalidUtf8,
+    InvalidTileSize,
 }
 
 impl fmt::Display for VectorTileError {
@@ -66,6 +74,7 @@ impl fmt::Display for VectorTileError {
         match self {
             Self::InvalidProtobuf => write!(formatter, "invalid MVT protobuf payload"),
             Self::InvalidGeometry => write!(formatter, "invalid MVT geometry command stream"),
+            Self::InvalidTileSize => write!(formatter, "tile pixel size must be in 1..=4096"),
             Self::InvalidUtf8 => write!(formatter, "invalid UTF-8 in MVT text"),
         }
     }
@@ -87,14 +96,44 @@ pub fn decode_shortbread_basemap(
     bytes: &[u8],
     tile: TileId,
 ) -> Result<VectorBasemapTile, VectorTileError> {
+    decode_with_coordinates(bytes, |extent, x, y| {
+        tile_coordinate_to_lon_lat(tile, extent, x, y)
+    })
+}
+
+/// Prepares fixed-style tile rendering without materializing geographic coordinates.
+/// The same decoder owns feature classification, winding and interior-ring grouping.
+pub fn decode_shortbread_tile_pixels(
+    bytes: &[u8],
+    size: u32,
+) -> Result<VectorBasemapTile<VectorTilePixel>, VectorTileError> {
+    if !(1..=4096).contains(&size) {
+        return Err(VectorTileError::InvalidTileSize);
+    }
+    decode_with_coordinates(bytes, |extent, x, y| {
+        let scale = f64::from(size) / f64::from(extent);
+        Ok(VectorTilePixel {
+            x: f64::from(x) * scale,
+            y: f64::from(y) * scale,
+        })
+    })
+}
+
+fn decode_with_coordinates<C: Clone>(
+    bytes: &[u8],
+    project: impl Fn(u32, i32, i32) -> Result<C, VectorTileError>,
+) -> Result<VectorBasemapTile<C>, VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
-    let mut output = VectorBasemapTile::default();
+    let mut output = VectorBasemapTile {
+        lines: Vec::new(),
+        polygons: Vec::new(),
+    };
 
     while !cursor.is_finished() {
         let (field, wire_type) = cursor.read_key()?;
         if field == 3 && wire_type == 2 {
             let layer = cursor.read_length_delimited()?;
-            decode_layer(layer, tile, &mut output)?;
+            decode_layer(layer, &project, &mut output)?;
         } else {
             cursor.skip(wire_type)?;
         }
@@ -103,10 +142,10 @@ pub fn decode_shortbread_basemap(
     Ok(output)
 }
 
-fn decode_layer(
+fn decode_layer<C: Clone>(
     bytes: &[u8],
-    tile: TileId,
-    output: &mut VectorBasemapTile,
+    project: &impl Fn(u32, i32, i32) -> Result<C, VectorTileError>,
+    output: &mut VectorBasemapTile<C>,
 ) -> Result<(), VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut name: Option<&str> = None;
@@ -151,7 +190,7 @@ fn decode_layer(
     for feature in features {
         decode_feature(
             feature,
-            tile,
+            project,
             extent,
             line_layer,
             polygon_kind,
@@ -232,14 +271,14 @@ fn shortbread_line_layer(name: &str) -> Option<(VectorBasemapLineKind, bool)> {
     }
 }
 
-fn decode_feature(
+fn decode_feature<C: Clone>(
     bytes: &[u8],
-    tile: TileId,
+    project: &impl Fn(u32, i32, i32) -> Result<C, VectorTileError>,
     extent: u32,
     line_layer: Option<(VectorBasemapLineKind, bool)>,
     polygon_kind: Option<VectorBasemapPolygonKind>,
     properties: &LayerProperties<'_>,
-    output: &mut VectorBasemapTile,
+    output: &mut VectorBasemapTile<C>,
 ) -> Result<(), VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut geometry_type = 0_u32;
@@ -285,14 +324,14 @@ fn decode_feature(
 
     let source_kind = properties.source_kind(&tags)?;
     let paths = decode_geometry_paths(&geometry, geometry_type == 3)?;
-    let mut polygons: Vec<VectorBasemapPolygon> = Vec::new();
+    let mut polygons: Vec<VectorBasemapPolygon<C>> = Vec::new();
     for path in paths {
         if path.len() < 2 {
             continue;
         }
         let coordinates = path
             .iter()
-            .map(|[x, y]| tile_coordinate_to_lon_lat(tile, extent, *x, *y))
+            .map(|[x, y]| project(extent, *x, *y))
             .collect::<Result<Vec<_>, _>>()?;
         if let Some((kind, accepts_polygon)) = line_layer
             && (geometry_type == 2 || accepts_polygon)
@@ -592,6 +631,31 @@ mod tests {
         layer.extend(field_varint(15, 2));
 
         field_bytes(3, &layer)
+    }
+
+    #[test]
+    fn tile_pixels_preserve_holes_and_buffered_coordinates_without_geographic_roundtrips() {
+        let geometry = polygon_commands(&[
+            &[[-128, -128], [4224, -128], [4224, 4224], [-128, 4224]],
+            &[[1024, 1024], [1024, 3072], [3072, 3072], [3072, 1024]],
+        ]);
+        let bytes = tiny_tagged_tile("water_polygons", 3, &geometry, &[("kind", "glacier")]);
+        let pixels = decode_shortbread_tile_pixels(&bytes, 512).unwrap();
+        assert_eq!(pixels.polygons.len(), 1);
+        assert_eq!(pixels.polygons[0].source_kind.as_deref(), Some("glacier"));
+        assert_eq!(pixels.polygons[0].rings.len(), 2);
+        assert_eq!(
+            pixels.polygons[0].rings[0][0],
+            VectorTilePixel { x: -16.0, y: -16.0 }
+        );
+        assert_eq!(
+            pixels.polygons[0].rings[1][0],
+            VectorTilePixel { x: 128.0, y: 128.0 }
+        );
+        assert_eq!(pixels.lines.len(), 2);
+        assert!(decode_shortbread_tile_pixels(&bytes, 0).is_err());
+        assert!(decode_shortbread_tile_pixels(&bytes, 4097).is_err());
+        assert!(decode_shortbread_tile_pixels(&[255], 512).is_err());
     }
 
     #[test]

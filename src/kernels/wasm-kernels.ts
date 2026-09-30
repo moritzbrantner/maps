@@ -1,3 +1,4 @@
+import { importMapsWasmModule } from "../aggregation-wasm";
 import type { MapsKernelRuntime } from "./runtime";
 
 type MapsKernelsWasmModule = {
@@ -12,9 +13,7 @@ export async function loadMapsWasmKernelRuntime(packageName?: string): Promise<M
     throw new Error("No public WASM kernel package configured.");
   }
 
-  const wasmModule = await importOptionalWasmModule(packageName);
-
-  await wasmModule.default?.();
+  const wasmModule = await importMapsWasmModule<MapsKernelsWasmModule>(packageName);
 
   return {
     backend: "wasm",
@@ -25,12 +24,4 @@ export async function loadMapsWasmKernelRuntime(packageName?: string): Promise<M
       return new Float64Array(wasmModule.resampleRingFlat(coordinates, coordinateCount));
     },
   };
-}
-
-async function importOptionalWasmModule(packageName: string): Promise<MapsKernelsWasmModule> {
-  const dynamicImport = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<MapsKernelsWasmModule>;
-
-  return dynamicImport(packageName);
 }

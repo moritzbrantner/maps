@@ -9,6 +9,10 @@
   },
   "links": [
     {
+      "label": "Engine",
+      "href": "/maps/engine/"
+    },
+    {
       "label": "Demo",
       "href": "/maps/"
     },
@@ -22,6 +26,20 @@
     }
   ],
   "evidenceSources": [
+    {
+      "id": "engine-interaction",
+      "label": "Full map interaction benchmark",
+      "kind": "project-evidence-v1",
+      "producer": "maps-engine-interaction",
+      "url": "/maps/evidence/engine-interaction.json"
+    },
+    {
+      "id": "engine-benchmark",
+      "label": "Rust/WASM engine benchmark",
+      "kind": "project-evidence-v1",
+      "producer": "maps-engine-benchmark",
+      "url": "/maps/evidence/engine-benchmark.json"
+    },
     {
       "id": "coding-tooling",
       "label": "Repository verification",

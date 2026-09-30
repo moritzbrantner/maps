@@ -15,5 +15,6 @@ serde.workspace = true
 serde-json.workspace = true
 supercluster.workspace = true
 three-d-camera.workspace = true
+three-d-animation.workspace = true
 three-d-core.workspace = true
 three-d-projective.workspace = true

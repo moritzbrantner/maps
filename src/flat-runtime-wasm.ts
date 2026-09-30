@@ -8,8 +8,6 @@ export type MapsRasterTileId = {
   z: number;
 };
 
-type MapsRasterTileCoordinates = Omit<MapsRasterTileId, "key">;
-
 export type MapsRasterRenderCamera = {
   viewProjection: [
     number,
@@ -41,6 +39,8 @@ export type MapsRasterTilePlacement = {
   screenY: number;
   screenWidth: number;
   screenHeight: number;
+  /** False for placements that only fill the render-surface margin. */
+  visible?: boolean;
 };
 
 export type MapsFlatRasterFrame = {
@@ -55,8 +55,14 @@ export type MapsFlatRasterFrame = {
   cancellations: MapsRasterTileId[];
   evictions: MapsRasterTileId[];
   placements: MapsRasterTilePlacement[];
+  /** The render camera maps into the viewport grown by `surface.margin` per side. */
   renderCamera: MapsRasterRenderCamera;
   requests: MapsRasterTileId[];
+  /**
+   * Render-surface geometry. With `overscan`, the margin holds map content, so a pure
+   * screen translation of this frame is a valid presentation of a panned camera.
+   */
+  surface?: { margin: number; overscan: boolean };
   visibleBounds: {
     crossesAntimeridian: boolean;
     east: number;
@@ -65,16 +71,6 @@ export type MapsFlatRasterFrame = {
     spansFullWorld: boolean;
     west: number;
   };
-};
-
-type MapsFlatRasterWasmFrame = {
-  camera: MapsFlatRasterFrame["camera"];
-  cancellations: MapsRasterTileCoordinates[];
-  evictions: MapsRasterTileCoordinates[];
-  placements: Array<Omit<MapsRasterTilePlacement, "tile"> & { tile: MapsRasterTileCoordinates }>;
-  renderCamera: MapsRasterRenderCamera;
-  requests: MapsRasterTileCoordinates[];
-  visibleBounds: MapsFlatRasterFrame["visibleBounds"];
 };
 
 export type MapsFlatRasterRuntimeConfig = {
@@ -88,6 +84,8 @@ export type MapsFlatRasterRuntimeConfig = {
   };
   maxBounds?: MapBounds;
   pitch?: number;
+  /** Presentation-only render-surface margin, CSS px per side (default 0). */
+  renderMargin?: number;
   source: {
     maxZoom: number;
     minZoom: number;
@@ -109,6 +107,8 @@ export type MapsFlatRasterRuntime = {
   project(longitude: number, latitude: number): [x: number, y: number];
   projectPacked(coordinates: Float64Array): Float64Array;
   resize(width: number, height: number): void;
+  /** Rotates by `deltaBearing` degrees keeping the ground point under (x, y) fixed. */
+  rotateAbout(deltaBearing: number, x: number, y: number): void;
   setViewState(viewState: MapViewState): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
   zoomAbout(deltaZoom: number, x: number, y: number, minZoom: number, maxZoom: number): void;
@@ -123,7 +123,8 @@ type MapsFlatRasterWasmRuntime = {
     padding: number,
     maxZoom: number,
   ): void;
-  frame(): MapsFlatRasterWasmFrame;
+  /** Packed frame; layout documented with `pack_frame_plan` in maps-wasm. */
+  framePacked(): Float64Array;
   free?: () => void;
   markFailed(z: number, x: number, y: number): void;
   markLoaded(z: number, x: number, y: number): void;
@@ -132,6 +133,7 @@ type MapsFlatRasterWasmRuntime = {
   project(longitude: number, latitude: number): [x: number, y: number];
   projectPacked(coordinates: Float64Array): Float64Array;
   resize(width: number, height: number): void;
+  rotateAbout(deltaBearing: number, x: number, y: number): void;
   setViewState(
     longitude: number,
     latitude: number,
@@ -156,7 +158,6 @@ export async function loadMapsFlatRasterRuntime(
   packageName?: string,
 ): Promise<MapsFlatRasterRuntime> {
   const wasmModule = await importMapsWasmModule<MapsFlatRasterWasmModule>(packageName);
-  await wasmModule.default?.();
   const Constructor = wasmModule.MapsFlatRasterRuntime;
 
   if (!Constructor) {
@@ -178,7 +179,7 @@ export async function loadMapsFlatRasterRuntime(
     },
     frame() {
       assertLive(disposed);
-      return addRasterTileKeys(runtime.frame());
+      return decodePackedRasterFrame(runtime.framePacked());
     },
     markFailed(tile) {
       assertLive(disposed);
@@ -208,6 +209,10 @@ export async function loadMapsFlatRasterRuntime(
       assertLive(disposed);
       runtime.resize(width, height);
     },
+    rotateAbout(deltaBearing, x, y) {
+      assertLive(disposed);
+      runtime.rotateAbout(deltaBearing, x, y);
+    },
     setViewState(viewState) {
       assertLive(disposed);
       runtime.setViewState(
@@ -229,24 +234,88 @@ export async function loadMapsFlatRasterRuntime(
   };
 }
 
-function addRasterTileKeys(frame: MapsFlatRasterWasmFrame): MapsFlatRasterFrame {
+// Mirrors PACKED_FRAME_HEADER_LENGTH / PACKED_PLACEMENT_STRIDE / PACKED_TILE_STRIDE
+// in crates/maps-wasm/src/engine_scenario.rs.
+const PACKED_FRAME_HEADER_LENGTH = 35;
+const PACKED_PLACEMENT_STRIDE = 12;
+const PACKED_TILE_STRIDE = 3;
+
+/** Decodes one packed Rust frame. JS object construction here replaces per-field WASM crossings. */
+export function decodePackedRasterFrame(packed: Float64Array): MapsFlatRasterFrame {
+  if (packed.length < PACKED_FRAME_HEADER_LENGTH) {
+    throw new Error("Maps WASM returned a truncated raster frame.");
+  }
+  const placementCount = packed[29]!;
+  const requestCount = packed[30]!;
+  const cancellationCount = packed[31]!;
+  const evictionCount = packed[32]!;
+  const tilesStart = PACKED_FRAME_HEADER_LENGTH + placementCount * PACKED_PLACEMENT_STRIDE;
+  if (
+    packed.length !==
+    tilesStart + (requestCount + cancellationCount + evictionCount) * PACKED_TILE_STRIDE
+  ) {
+    throw new Error("Maps WASM returned a malformed raster frame.");
+  }
+
+  const placements: MapsRasterTilePlacement[] = new Array(placementCount);
+  for (let index = 0; index < placementCount; index += 1) {
+    const offset = PACKED_FRAME_HEADER_LENGTH + index * PACKED_PLACEMENT_STRIDE;
+    placements[index] = {
+      tile: rasterTileAt(packed, offset),
+      worldCopy: packed[offset + 3]!,
+      localWest: packed[offset + 4]!,
+      localNorth: packed[offset + 5]!,
+      localSize: packed[offset + 6]!,
+      screenX: packed[offset + 7]!,
+      screenY: packed[offset + 8]!,
+      screenWidth: packed[offset + 9]!,
+      screenHeight: packed[offset + 10]!,
+      visible: packed[offset + 11] === 1,
+    };
+  }
+  const tiles = (start: number, count: number) => {
+    const result: MapsRasterTileId[] = new Array(count);
+    for (let index = 0; index < count; index += 1) {
+      result[index] = rasterTileAt(packed, tilesStart + (start + index) * PACKED_TILE_STRIDE);
+    }
+    return result;
+  };
+
   return {
-    ...frame,
-    cancellations: frame.cancellations.map(addRasterTileKey),
-    evictions: frame.evictions.map(addRasterTileKey),
-    placements: frame.placements.map((placement) => ({
-      ...placement,
-      tile: addRasterTileKey(placement.tile),
-    })),
-    requests: frame.requests.map(addRasterTileKey),
+    camera: {
+      center: [packed[0]!, packed[1]!],
+      zoom: packed[2]!,
+      bearing: packed[3]!,
+      pitch: packed[4]!,
+      width: packed[5]!,
+      height: packed[6]!,
+    },
+    renderCamera: {
+      viewProjection: Array.from(
+        packed.subarray(7, 23),
+      ) as MapsRasterRenderCamera["viewProjection"],
+    },
+    visibleBounds: {
+      west: packed[23]!,
+      south: packed[24]!,
+      east: packed[25]!,
+      north: packed[26]!,
+      crossesAntimeridian: packed[27] === 1,
+      spansFullWorld: packed[28] === 1,
+    },
+    placements,
+    surface: { margin: packed[33]!, overscan: packed[34] === 1 },
+    requests: tiles(0, requestCount),
+    cancellations: tiles(requestCount, cancellationCount),
+    evictions: tiles(requestCount + cancellationCount, evictionCount),
   };
 }
 
-function addRasterTileKey(tile: MapsRasterTileCoordinates): MapsRasterTileId {
-  return {
-    ...tile,
-    key: `${tile.z}/${tile.x}/${tile.y}`,
-  };
+function rasterTileAt(packed: Float64Array, offset: number): MapsRasterTileId {
+  const z = packed[offset]!;
+  const x = packed[offset + 1]!;
+  const y = packed[offset + 2]!;
+  return { key: `${z}/${x}/${y}`, x, y, z };
 }
 
 function assertLive(disposed: boolean) {

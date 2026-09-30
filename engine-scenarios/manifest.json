@@ -21,6 +21,13 @@
       "reference": "maplibre",
       "capabilities": ["rust-wasm", "browser"],
       "runtimePhases": ["index-build", "aggregation", "render-frame", "paint", "picking"]
+    },
+    {
+      "id": "vector-city-style-v1",
+      "family": "vector-tiles",
+      "reference": "maplibre",
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": ["tile-decode-paint", "warm-pan-zoom", "frame-presentation"]
     }
   ]
 }

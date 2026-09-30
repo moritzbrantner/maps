@@ -34,7 +34,8 @@ const host = createMapsBrowserRuntime(base, fallback, {
   onCameraFrame() {
     const controller = host.controller;
     if (!controller) return;
-    const rect = base.getBoundingClientRect();
+    // The host owns the base canvas geometry (overscan); the container is the viewport.
+    const rect = map.getBoundingClientRect();
     const ratio = devicePixelRatio;
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
@@ -68,7 +69,7 @@ await host.ready;
 probe.command = (state) => host.controller!.setViewState(state);
 base.addEventListener("pointermove", (event) => {
   if (!scene || base.hasPointerCapture(event.pointerId)) return;
-  const rect = base.getBoundingClientRect();
+  const rect = map.getBoundingClientRect();
   const pick = hitTestCanvasMapScene(scene, {
     x: event.clientX - rect.left,
     y: event.clientY - rect.top,

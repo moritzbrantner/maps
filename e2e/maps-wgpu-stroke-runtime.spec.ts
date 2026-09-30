@@ -110,6 +110,12 @@ test("Pages first-party engine decodes Shortbread vector tiles into wgpu linewor
   const browser = await chromium.launch({ args: WEBGPU_SWIFTSHADER_ARGS });
   const page = await browser.newPage();
   const acceptedHeaders: string[] = [];
+  // WebGPU validation failures surface only as console warnings: an invalid
+  // pipeline silently drops every frame that uses it.
+  const gpuValidation: string[] = [];
+  page.on("console", (message) => {
+    if (/WGSL|\[Invalid [A-Za-z]+/.test(message.text())) gpuValidation.push(message.text());
+  });
   const fixture = createShortbreadStreetFixture();
 
   await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
@@ -146,6 +152,7 @@ test("Pages first-party engine decodes Shortbread vector tiles into wgpu linewor
       .poll(async () => Number(await overlay.getAttribute("data-map-overlay-primitives")))
       .toBeGreaterThan(1);
     await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+    expect(gpuValidation).toEqual([]);
     expect(acceptedHeaders.length).toBeGreaterThan(0);
     expect(
       acceptedHeaders.every((header) => header.includes("application/vnd.mapbox-vector-tile")),
