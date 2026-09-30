@@ -7,7 +7,10 @@ import type {
   MapRenderPolygon,
 } from "./map-render-frame";
 import type { MapScreenRenderFrame } from "./map-screen-render-frame";
-import { createMapsWgpuApplicationFrame } from "./wgpu-application-frame";
+import {
+  createMapsWgpuApplicationFrame,
+  MAPS_WGPU_APPLICATION_POLYGON,
+} from "./wgpu-application-frame";
 
 describe("wgpu application frame", () => {
   test("packs a complete labeled circle frame with interaction-adjusted stroke width", () => {
@@ -56,6 +59,7 @@ describe("wgpu application frame", () => {
       height: 480,
       lines: [],
       order: [[0, 0]],
+      polygons: [],
       width: 640,
     });
   });
@@ -168,11 +172,12 @@ describe("wgpu application frame", () => {
         [1, 0],
         [2, 0],
       ],
+      polygons: [],
       width: 640,
     });
   });
 
-  test("fails closed for polygons until even-odd GPU filling is supported", () => {
+  test("packs projected polygon rings for WebGPU without asserting correctness parity", () => {
     const polygon: MapRenderPolygon = {
       feature: null,
       featureId: "polygon-a",
@@ -184,9 +189,17 @@ describe("wgpu application frame", () => {
       rings: [
         [
           [0, 0],
-          [1, 0],
+          [4, 0],
+          [4, 4],
+          [0, 4],
+          [0, 0],
+        ],
+        [
           [1, 1],
-          [0, 1],
+          [1, 3],
+          [3, 3],
+          [3, 1],
+          [1, 1],
         ],
       ],
       strokeColor: "#ffffff",
@@ -202,14 +215,173 @@ describe("wgpu application frame", () => {
           rings: [
             [
               { x: 10, y: 10 },
-              { x: 20, y: 10 },
+              { x: 50, y: 10 },
+              { x: 50, y: 50 },
+              { x: 10, y: 50 },
+              { x: 10, y: 10 },
+            ],
+            [
               { x: 20, y: 20 },
-              { x: 10, y: 20 },
+              { x: 20, y: 40 },
+              { x: 40, y: 40 },
+              { x: 40, y: 20 },
+              { x: 20, y: 20 },
             ],
           ],
         },
       ],
       width: 640,
+    };
+
+    const packed = createMapsWgpuApplicationFrame(frame, {
+      selectedPrimitiveIds: new Set(["polygon-a"]),
+    });
+
+    expect(packed).not.toBeNull();
+    expect(packed?.order).toEqual([[MAPS_WGPU_APPLICATION_POLYGON, 0]]);
+    expect(packed?.polygons).toHaveLength(1);
+    expect(packed?.polygons[0]).toMatchObject({
+      fillColor: [0.033104766570885055, 0.13286832155381798, 0.31854677812509186, 0.4],
+      rings: [
+        [
+          { x: 10, y: 10 },
+          { x: 50, y: 10 },
+          { x: 50, y: 50 },
+          { x: 10, y: 50 },
+        ],
+        [
+          { x: 20, y: 20 },
+          { x: 20, y: 40 },
+          { x: 40, y: 40 },
+          { x: 40, y: 20 },
+        ],
+      ],
+      strokeColor: [1, 1, 1, 1],
+      strokeWidth: 3.5,
+    });
+    expect(packed?.polygons[0]?.fillPoints.length).toBeGreaterThan(0);
+    expect((packed?.polygons[0]?.fillPoints.length ?? 0) % 3).toBe(0);
+  });
+
+  test("keeps polygon entries in source painter order", () => {
+    const circle: MapRenderCircle = {
+      center: [0, 0],
+      feature: null,
+      featureId: "point-a",
+      fillColor: "#ffffff",
+      fillOpacity: 1,
+      interactive: true,
+      kind: "circle",
+      label: null,
+      primitiveId: "circle-a",
+      radius: 4,
+      strokeColor: "#000000",
+      strokeOpacity: 1,
+      strokeWidth: 1,
+    };
+    const polygon: MapRenderPolygon = {
+      feature: null,
+      featureId: "polygon-a",
+      fillColor: "#336699",
+      fillOpacity: 1,
+      interactive: true,
+      kind: "polygon",
+      primitiveId: "polygon-a",
+      rings: [
+        [
+          [0, 0],
+          [1, 0],
+          [0, 1],
+          [0, 0],
+        ],
+      ],
+      strokeColor: "#ffffff",
+      strokeOpacity: 1,
+      strokeWidth: 1,
+    };
+    const line: MapRenderLine = {
+      coordinates: [
+        [0, 0],
+        [1, 1],
+      ],
+      feature: null,
+      featureId: "line-a",
+      interactive: true,
+      kind: "line",
+      primitiveId: "line-a",
+      strokeColor: "#000000",
+      strokeOpacity: 1,
+      strokeWidth: 1,
+    };
+    const frame: MapScreenRenderFrame = {
+      height: 100,
+      primitives: [
+        { kind: "circle", renderPrimitive: circle, x: 10, y: 10 },
+        {
+          kind: "polygon",
+          renderPrimitive: polygon,
+          rings: [
+            [
+              { x: 20, y: 20 },
+              { x: 40, y: 20 },
+              { x: 20, y: 40 },
+              { x: 20, y: 20 },
+            ],
+          ],
+        },
+        {
+          kind: "line",
+          points: [
+            { x: 50, y: 50 },
+            { x: 70, y: 70 },
+          ],
+          renderPrimitive: line,
+        },
+      ],
+      width: 100,
+    };
+
+    expect(createMapsWgpuApplicationFrame(frame)?.order).toEqual([
+      [0, 0],
+      [MAPS_WGPU_APPLICATION_POLYGON, 0],
+      [1, 0],
+    ]);
+  });
+
+  test("fails closed for polygon rings without three vertices", () => {
+    const polygon: MapRenderPolygon = {
+      feature: null,
+      featureId: "polygon-a",
+      fillColor: "#336699",
+      fillOpacity: 1,
+      interactive: true,
+      kind: "polygon",
+      primitiveId: "polygon-a",
+      rings: [
+        [
+          [0, 0],
+          [1, 1],
+        ],
+      ],
+      strokeColor: "#ffffff",
+      strokeOpacity: 1,
+      strokeWidth: 1,
+    };
+    const frame: MapScreenRenderFrame = {
+      height: 100,
+      primitives: [
+        {
+          kind: "polygon",
+          renderPrimitive: polygon,
+          rings: [
+            [
+              { x: 10, y: 10 },
+              { x: 20, y: 20 },
+            ],
+          ],
+        },
+      ],
+      width: 100,
     };
 
     expect(createMapsWgpuApplicationFrame(frame)).toBeNull();

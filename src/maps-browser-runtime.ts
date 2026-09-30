@@ -1172,6 +1172,7 @@ function createFrameSynchronizer({
       !frame ||
       (frame.circles.length === 0 &&
         frame.lines.length === 0 &&
+        frame.polygons.length === 0 &&
         frame.directionMarkers.length === 0)
     );
   }
