@@ -2,20 +2,7 @@
 
 This repository uses red/green development, but substantial engine work is organized around durable subsystem foundations rather than a micro-slice treadmill. Keep iterations testable and reviewable while ensuring each implementation body connects to a coherent runtime/evidence outcome.
 
-## Agent skills
-
-This repository is configured for the Matt Pocock workflow skills and the agent-loop control plane.
-
-- Issue tracker: `docs/agents/issue-tracker.md`
-- Triage labels: `docs/agents/triage-labels.md`
-- Domain context: `docs/agents/domain.md`
-- Planning workflow: `docs/agents/planning-workflow.md`
-
-### Planning workflow
-
-Substantial new work should be planned into GitHub PRD/milestone issues instead of implemented as unconnected edits. See `docs/agents/planning-workflow.md`.
-
-### First-party engine program
+## First-party engine program
 
 Read `docs/engine-roadmap.md` before changing camera, projection, tiles/sources, rendering, vector-tile/style, cartography, or engine evidence infrastructure. ADR 0006 records the first-party Maps decision. ADR 0007 records how that decision composes existing lower-level workspace foundations. `docs/engine-scenarios.md` and `docs/engine-evidence.md` define the shared evidence model.
 
@@ -31,7 +18,7 @@ For this program:
 - authority transfer requires representative parity/evidence and convergence/removal of the superseded path.
 - every first-party feature follows `Developed → Correct → Fast`; do not optimize unresolved semantics, and do not call a feature complete until all three gates pass; see `docs/feature-completion.md`.
 
-#### Foundation seam check
+### Foundation seam check
 
 Before adding a new engine subsystem or generic helper layer, classify the work before implementation:
 
