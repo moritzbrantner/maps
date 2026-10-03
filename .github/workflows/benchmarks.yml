@@ -27,5 +27,3 @@ jobs:
       api_report_command: bun run verify:api-surface
       artifact_paths: benchmark-results
       upload_artifacts_on: always
-    secrets:
-      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}

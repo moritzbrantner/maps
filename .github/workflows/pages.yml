@@ -55,8 +55,6 @@ jobs:
       artifact_paths: dist
       reuse_across_runs: true
       artifact_retention_days: 7
-    secrets:
-      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
   verify-hosted-example:
     name: Verify hosted Example
@@ -86,8 +84,6 @@ jobs:
         test-results-hosted
       artifact_name_suffix: "-hosted-pages"
       upload_artifacts_on: failure
-    secrets:
-      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
   deploy-example:
     name: Deploy Example

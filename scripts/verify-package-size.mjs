@@ -17,14 +17,10 @@ const budgets = {
   wasmRuntimeSize: 488_000,
 };
 
-const pack = spawnSync(
-  "npm",
-  ["pack", "--dry-run", "--ignore-scripts", "--json"],
-  {
-    cwd: rootDir,
-    encoding: "utf8",
-  },
-);
+const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
+  cwd: rootDir,
+  encoding: "utf8",
+});
 
 if (pack.status !== 0) {
   process.stderr.write(pack.stderr);
@@ -34,7 +30,8 @@ if (pack.status !== 0) {
 let packageInfo;
 
 try {
-  const parsed = JSON.parse(pack.stdout);
+  // npm 10 runs `prepare` despite --ignore-scripts; its output precedes the JSON report.
+  const parsed = JSON.parse(pack.stdout.slice(pack.stdout.lastIndexOf("\n[") + 1));
   packageInfo = parsed[0];
 } catch (error) {
   console.error("Package size verification failed: could not parse npm pack JSON output.");
@@ -76,7 +73,9 @@ console.log(`- unpacked size: ${formatBytes(packageInfo?.unpackedSize)}`);
 console.log(`- entry count: ${files.length}`);
 console.log(`- stylesheet size: ${formatBytes(stylesheet?.size)}`);
 console.log(`- full stylesheet size: ${formatBytes(fullStylesheet?.size)}`);
-console.log(`- MapLibre fallback stylesheet size (reported only): ${formatBytes(mapLibreStylesheet?.size)}`);
+console.log(
+  `- MapLibre fallback stylesheet size (reported only): ${formatBytes(mapLibreStylesheet?.size)}`,
+);
 console.log(`- Maps WASM runtime size: ${formatBytes(wasmRuntime?.size)}`);
 
 if (errors.length > 0) {

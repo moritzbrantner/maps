@@ -39,4 +39,3 @@ jobs:
       upload_artifacts_on: always
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}

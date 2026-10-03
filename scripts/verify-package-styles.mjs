@@ -65,12 +65,19 @@ for (const packageDir of packageDirs) {
     errors.push(`${packageName}: styles.css must include package map component styles`);
   }
 
-  if (packageName === "@moritzbrantner/maps" && !/@import\s+"\.\/maplibre\.css";/.test(stylesheet)) {
-    errors.push(`${packageName}: styles.css must reference the packaged MapLibre fallback stylesheet`);
+  if (
+    packageName === "@moritzbrantner/maps" &&
+    !/@import\s+"\.\/maplibre\.css";/.test(stylesheet)
+  ) {
+    errors.push(
+      `${packageName}: styles.css must reference the packaged MapLibre fallback stylesheet`,
+    );
   }
 
   if (hasTailwindPreflight(stylesheet)) {
-    errors.push(`${packageName}: styles.css must not include Tailwind preflight/global reset output`);
+    errors.push(
+      `${packageName}: styles.css must not include Tailwind preflight/global reset output`,
+    );
   }
 
   if (!existsSync(fullStylesPath)) {
@@ -81,7 +88,9 @@ for (const packageDir of packageDirs) {
   const fullStylesheet = readFileSync(fullStylesPath, "utf8");
 
   if (!/^\/\* Generated from src\/styles\.full\.css\./.test(fullStylesheet)) {
-    errors.push(`${packageName}: styles.full.css must be the compiled output from src/styles.full.css`);
+    errors.push(
+      `${packageName}: styles.full.css must be the compiled output from src/styles.full.css`,
+    );
   }
 
   if (/@import\s+"tailwindcss";|@source\s+|@apply\s+/.test(fullStylesheet)) {
@@ -102,7 +111,9 @@ for (const packageDir of packageDirs) {
   }
 
   if (!hasTailwindPreflight(fullStylesheet)) {
-    errors.push(`${packageName}: styles.full.css must preserve Tailwind preflight/global reset output`);
+    errors.push(
+      `${packageName}: styles.full.css must preserve Tailwind preflight/global reset output`,
+    );
   }
 
   if (packageName === "@moritzbrantner/maps") {
@@ -111,8 +122,14 @@ for (const packageDir of packageDirs) {
     } else {
       const mapLibreStylesheet = readFileSync(mapLibreStylesPath, "utf8");
 
-      if (!/^\/\* Generated from the pinned maplibre-gl fallback dependency\./.test(mapLibreStylesheet)) {
-        errors.push(`${packageName}: maplibre.css must be generated from the pinned fallback dependency`);
+      if (
+        !/^\/\* Generated from the pinned maplibre-gl fallback dependency\./.test(
+          mapLibreStylesheet,
+        )
+      ) {
+        errors.push(
+          `${packageName}: maplibre.css must be generated from the pinned fallback dependency`,
+        );
       }
 
       if (!/\.maplibregl-/.test(mapLibreStylesheet)) {
