@@ -83,5 +83,3 @@ jobs:
         playwright-report
         test-results
       upload_artifacts_on: failure
-    secrets:
-      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
