@@ -93,7 +93,7 @@
     "lint": "bun run lint:static && node ./scripts/verify-package-imports.mjs ./src @/ next/ && node ./scripts/verify-package-styles.mjs . && bun run verify:security-sensitive",
     "lint:static": "oxlint src demo e2e",
     "prepack": "bun run build:package",
-    "prepare": "bun install --frozen-lockfile --ignore-scripts && bun ./scripts/prepare-git-install.ts",
+    "prepare": "bun ./scripts/prepare-git-install.ts",
     "verify:git-install": "bun ./scripts/verify-git-install.ts",
     "check-types": "tsc --noEmit",
     "test": "vitest run",

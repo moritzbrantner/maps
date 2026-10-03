@@ -40,14 +40,17 @@ try {
   run("git", ["-c", "advice.detachedHead=false", "checkout", "--quiet", head], cloneDir);
 
   const manifest = JSON.parse(readFileSync(path.join(cloneDir, "package.json"), "utf8"));
-  const prepare: unknown = manifest.scripts?.prepare;
-  if (typeof prepare !== "string" || !prepare.includes("--ignore-scripts")) {
-    throw new Error(
-      "package.json must define a prepare script that installs with --ignore-scripts",
-    );
+  if (manifest.scripts?.prepare !== "bun ./scripts/prepare-git-install.ts") {
+    throw new Error("package.json prepare must run ./scripts/prepare-git-install.ts");
   }
 
   run("bun", ["run", "prepare"], cloneDir);
+
+  if (existsSync(path.join(cloneDir, "node_modules"))) {
+    throw new Error(
+      "prepare must remove its build-only node_modules so peers resolve to the consumer",
+    );
+  }
 
   const targets: string[] = [];
   collectTargets(manifest.main, targets);
