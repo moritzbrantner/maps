@@ -17,8 +17,8 @@ const manifest = JSON.parse(readFileSync(path.join(packageRoot, "package.json"),
 const packageName: string = manifest.name;
 const consumerDir = mkdtempSync(path.join(tmpdir(), "git-install-consumer-"));
 
-function run(args: string[]) {
-  execFileSync("bun", args, { cwd: consumerDir, stdio: "inherit" });
+function run(args: string[], cwd = consumerDir) {
+  execFileSync("bun", args, { cwd, stdio: "inherit" });
 }
 
 function collectTargets(value: unknown, targets: string[]) {
@@ -34,7 +34,12 @@ function collectTargets(value: unknown, targets: string[]) {
 try {
   // Push candidate commits before running this consumer acceptance check.
   // Bun 1.3.x cannot resolve SHA-pinned git+file URLs.
-  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: packageRoot }).toString().trim();
+  const head =
+    Bun.argv[2] ??
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: packageRoot }).toString().trim();
+  if (!/^[0-9a-f]{40}$/.test(head)) {
+    throw new Error("Provide a full published Git commit SHA");
+  }
   writeFileSync(
     path.join(consumerDir, "package.json"),
     JSON.stringify({
@@ -67,20 +72,29 @@ try {
   // This detects a prepare path that builds fresh CSS but leaves checked-in CSS installed.
   for (const stylesheet of ["styles.css", "styles.full.css"]) {
     const source = path.join(installedDir, "src", stylesheet);
-    writeFileSync(source, `${readFileSync(source, "utf8")}\n.git-install-style-probe { --git-install-probe: 1; }\n`);
+    writeFileSync(
+      source,
+      `${readFileSync(source, "utf8")}\n.git-install-style-probe { --git-install-probe: 1; }\n`,
+    );
   }
   for (const stylesheet of ["styles.css", "styles.full.css", "maplibre.css"]) {
     writeFileSync(path.join(installedDir, stylesheet), "/* stale consumer stylesheet */\n");
   }
-  run(["--cwd", installedDir, "run", "prepare"]);
+  run(["run", "prepare"], installedDir);
   for (const stylesheet of ["styles.css", "styles.full.css"]) {
     const css = readFileSync(path.join(installedDir, stylesheet), "utf8");
     if (!css.includes(".git-install-style-probe") || !/--git-install-probe:\s*1/.test(css)) {
       throw new Error(`Git install did not publish newly generated ${stylesheet}`);
     }
   }
-  const maplibreSource = readFileSync(path.join(installedDir, "node_modules", "maplibre-gl", "dist", "maplibre-gl.css"), "utf8");
-  if (readFileSync(path.join(installedDir, "maplibre.css"), "utf8") !== `/* Generated from the pinned maplibre-gl fallback dependency. */\n${maplibreSource}`) {
+  const maplibreSource = readFileSync(
+    path.join(installedDir, "node_modules", "maplibre-gl", "dist", "maplibre-gl.css"),
+    "utf8",
+  );
+  if (
+    readFileSync(path.join(installedDir, "maplibre.css"), "utf8") !==
+    `/* Generated from the pinned maplibre-gl fallback dependency. */\n${maplibreSource}`
+  ) {
     throw new Error("Git install did not publish its pinned MapLibre stylesheet");
   }
 
