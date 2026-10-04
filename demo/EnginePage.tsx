@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { type ChangeEvent, useCallback, useMemo, useState } from "react";
 import { Button, NativeSelect } from "@moritzbrantner/ui";
 import { MapsMapView } from "../src/maps-map-view";
 import { ClusterLayer } from "../src/cluster-layer";
@@ -66,7 +66,7 @@ export function EnginePage() {
             <NativeSelect
               aria-label="Point count"
               value={count}
-              onChange={(event) => {
+              onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                 const next = Number(event.target.value);
                 if (!counts.includes(next)) return;
                 setCount(next);
