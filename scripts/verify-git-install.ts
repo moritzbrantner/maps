@@ -72,12 +72,12 @@ try {
   // This detects a prepare path that builds fresh CSS but leaves checked-in CSS installed.
   for (const stylesheet of ["styles.css", "styles.full.css"]) {
     const source = path.join(installedDir, "src", stylesheet);
-    writeFileSync(
-      source,
-      `${readFileSync(source, "utf8")}\n.git-install-style-probe { --git-install-probe: 1; }\n`,
-    );
+    const original = readFileSync(source, "utf8");
+    rmSync(source);
+    writeFileSync(source, `${original}\n.git-install-style-probe { --git-install-probe: 1; }\n`);
   }
   for (const stylesheet of ["styles.css", "styles.full.css", "maplibre.css"]) {
+    rmSync(path.join(installedDir, stylesheet));
     writeFileSync(path.join(installedDir, stylesheet), "/* stale consumer stylesheet */\n");
   }
   run(["run", "prepare"], installedDir);
