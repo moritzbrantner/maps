@@ -88,7 +88,7 @@ try {
     }
   }
   const maplibreSource = readFileSync(
-    path.join(installedDir, "node_modules", "maplibre-gl", "dist", "maplibre-gl.css"),
+    path.join(packageRoot, "node_modules", "maplibre-gl", "dist", "maplibre-gl.css"),
     "utf8",
   );
   if (
