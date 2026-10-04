@@ -70,9 +70,9 @@ jobs:
         bun install --frozen-lockfile
       pre_command: |
         bunx playwright install --with-deps chromium
-        rustup toolchain install 1.98.1 --profile minimal --target wasm32-unknown-unknown
-        rustup default 1.98.1
-        cargo install wasm-bindgen-cli --version 0.2.128 --locked
+        rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown
+        rustup default 1.99.0
+        cargo install wasm-bindgen-cli --version 0.2.129 --locked
         bun run build:wasm
         rm -rf public/wasm
         mkdir -p public/wasm
