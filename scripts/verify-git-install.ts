@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 // Proves that a commit-pinned git dependency on this package works through bun's real install
-// path: a scratch consumer depends on `git+file://<this repo>#<HEAD>` with the package in
+// path: a scratch consumer depends on the published GitHub source at HEAD with the package in
 // `trustedDependencies` (bun runs a dependency's lifecycle scripts only for trusted packages),
 // installs it, re-installs it with --frozen-lockfile, and every main/types/exports target of
 // the installed package must exist.
@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
@@ -32,13 +32,15 @@ function collectTargets(value: unknown, targets: string[]) {
 }
 
 try {
+  // Push candidate commits before running this consumer acceptance check.
+  // Bun 1.3.x cannot resolve SHA-pinned git+file URLs.
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: packageRoot }).toString().trim();
   writeFileSync(
     path.join(consumerDir, "package.json"),
     JSON.stringify({
       name: "git-install-consumer",
       private: true,
-      dependencies: { [packageName]: `git+${pathToFileURL(packageRoot).href}#${head}` },
+      dependencies: { [packageName]: `git+https://github.com/moritzbrantner/maps.git#${head}` },
       trustedDependencies: [packageName],
     }),
   );
