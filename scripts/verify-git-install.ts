@@ -12,9 +12,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// The ./wasm export needs a Rust/wasm-bindgen toolchain; a git install builds only JS and CSS.
-const gitInstallOmits = new Set<string>(["./dist/wasm/maps_wasm.d.ts", "./dist/wasm/maps_wasm.js"]);
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
 const packageName: string = manifest.name;
@@ -54,15 +51,37 @@ try {
   collectTargets(manifest.main, targets);
   collectTargets(manifest.types, targets);
   collectTargets(manifest.exports, targets);
+  targets.push("./dist/wasm/maps_wasm_bg.wasm");
 
   const missing = targets
-    .filter((target) => !gitInstallOmits.has(target))
     .map((target) => (target.includes("*") ? path.dirname(target) : target))
     .filter((target) => !existsSync(path.join(installedDir, target)));
 
   if (missing.length > 0) {
     throw new Error(`Export targets missing after a git install:\n- ${missing.join("\n- ")}`);
   }
+
+  // Exercise the public WASM runtime with the installed bytes, not a checkout build.
+  writeFileSync(
+    path.join(consumerDir, "verify-runtime.ts"),
+    `import { readFileSync } from "node:fs";
+import { initSync, MapsFlatRasterRuntime } from "@moritzbrantner/maps/wasm";
+initSync({ module: readFileSync(${JSON.stringify(path.join(installedDir, "dist/wasm/maps_wasm_bg.wasm"))}) });
+const runtime = new MapsFlatRasterRuntime({
+  center: [13.405, 52.52], zoom: 4, width: 800, height: 600,
+  source: { minZoom: 0, maxZoom: 18, tileSize: 256 },
+});
+try {
+  const center = runtime.project(13.405, 52.52);
+  if (Math.abs(center[0] - 400) > 0.001 || Math.abs(center[1] - 300) > 0.001) {
+    throw new Error("Installed Flat Map runtime projects the center incorrectly");
+  }
+} finally {
+  runtime.free();
+}
+`,
+  );
+  run(["./verify-runtime.ts"]);
 
   process.stdout.write(
     `git install of ${head} builds via prepare; ${targets.length} export targets present\n`,

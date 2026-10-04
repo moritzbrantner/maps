@@ -13,6 +13,15 @@ bun add @moritzbrantner/maps @moritzbrantner/ui react react-dom
 npm install @moritzbrantner/maps @moritzbrantner/ui react react-dom
 ```
 
+For a commit-pinned Git dependency, list `@moritzbrantner/maps` in your app's
+`trustedDependencies` so Bun runs its `prepare` script. That script builds JS,
+CSS, and the WASM runtime from the pinned source. The install environment needs
+Rust 1.98.1 with the `wasm32-unknown-unknown` target and `wasm-bindgen` 0.2.128.
+Binaryen is installed as part of the build dependencies. The repository's
+`nix develop` shell supplies the pinned tooling. Missing tooling fails the
+install instead of producing an incomplete package. Ordinary checkout installs
+and packing existing build output do not run this build.
+
 Import the stylesheet once in your app shell:
 
 ```ts
@@ -35,17 +44,17 @@ See [engine performance evidence](docs/engine-performance.md) for workload and m
 
 ## Which Map Should I Use?
 
-| Need | Use |
-| --- | --- |
-| Plain point markers | `PointMap` |
-| Proportional point markers | `BubbleMap` |
-| Dense point aggregation and clusters | `ClusteredMap` |
-| Point density or scalar field surfaces | `HeatMap` / `HeatFieldMap` |
-| Origin-destination connections | `FlowMap` |
-| Mixed GeoJSON display | `GeoJsonMap` |
-| Moving point tracks | `TemporalClusteredMap` / `TemporalHeatMap` |
-| Multiple coordinated layers | `MapView` with `MapLayers` |
-| Create, reshape, group, or delete GeoJSON | `EditableGeoJsonMap` |
+| Need                                      | Use                                        |
+| ----------------------------------------- | ------------------------------------------ |
+| Plain point markers                       | `PointMap`                                 |
+| Proportional point markers                | `BubbleMap`                                |
+| Dense point aggregation and clusters      | `ClusteredMap`                             |
+| Point density or scalar field surfaces    | `HeatMap` / `HeatFieldMap`                 |
+| Origin-destination connections            | `FlowMap`                                  |
+| Mixed GeoJSON display                     | `GeoJsonMap`                               |
+| Moving point tracks                       | `TemporalClusteredMap` / `TemporalHeatMap` |
+| Multiple coordinated layers               | `MapView` with `MapLayers`                 |
+| Create, reshape, group, or delete GeoJSON | `EditableGeoJsonMap`                       |
 
 ## Minimal Example
 
@@ -74,11 +83,7 @@ Compose overlays with the built-in legend components and keep feature state
 controlled when the surrounding app owns side panels, tables, or detail views.
 
 ```tsx
-import {
-  ClusteredMap,
-  MapColorRampLegend,
-  type MapSurfaceController,
-} from "@moritzbrantner/maps";
+import { ClusteredMap, MapColorRampLegend, type MapSurfaceController } from "@moritzbrantner/maps";
 
 let controller: MapSurfaceController | null = null;
 
@@ -91,7 +96,10 @@ let controller: MapSurfaceController | null = null;
   selectedFeatureId={selectedId}
 >
   <MapColorRampLegend
-    stops={[[0, "#67e8f9"], [1, "#dc2626"]]}
+    stops={[
+      [0, "#67e8f9"],
+      [1, "#dc2626"],
+    ]}
     title="Demand"
   />
 </ClusteredMap>;

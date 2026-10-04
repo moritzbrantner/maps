@@ -5,7 +5,7 @@
 // bun does not install a git dependency's devDependencies, and below node_modules esbuild
 // ignores tsconfig.json and TypeScript emits no declarations. So the build runs in a copy
 // outside node_modules with its own frozen install, and only the build output is copied back.
-// `bun run build` builds JS and CSS only; the ./wasm export needs a Rust/wasm-bindgen toolchain.
+// Build the complete package, including the WASM runtime used by Flat Maps.
 // The dependency's own node_modules, which bun resolved for the consumer, is left untouched.
 // In a normal checkout it does nothing: `bun install` and `npm pack` (npm 10 runs prepare
 // despite --ignore-scripts) must stay side-effect free there.
@@ -35,7 +35,7 @@ if (packageRoot.split(path.sep).includes("node_modules")) {
       filter: (source) => !skipped.has(source),
     });
     run(["install", "--frozen-lockfile", "--ignore-scripts"], buildRoot);
-    run(["run", "build"], buildRoot);
+    run(["run", "build:package"], buildRoot);
 
     for (const output of buildOutputs) {
       rmSync(path.join(packageRoot, output), { recursive: true, force: true });

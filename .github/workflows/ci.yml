@@ -49,6 +49,8 @@ jobs:
             cargo --version
             bun run verify:rust
             bun run build:wasm
+            bun install --frozen-lockfile
+            bun run verify:git-install
           '
 
   build-package:
@@ -163,7 +165,6 @@ jobs:
         bun run verify:entry-bundles
         bun run verify:package-consumer
         bun run verify:package-size
-        bun run verify:git-install
         bun run pack:dry
 
   browser-smoke:
