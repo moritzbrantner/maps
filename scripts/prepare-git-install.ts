@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const buildOutputs = ["dist"];
+const buildOutputs = ["dist", "styles.css", "styles.full.css", "maplibre.css"];
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function run(args: string[], cwd: string) {
