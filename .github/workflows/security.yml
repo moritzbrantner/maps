@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   dependency-audit:
@@ -18,11 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
-    env:
-      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
-      GITHUB_TOKEN: ${{ github.token }}
-      NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
