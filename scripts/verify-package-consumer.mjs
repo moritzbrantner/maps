@@ -13,7 +13,8 @@ let tarballPath = null;
 
 try {
   const pack = run("npm", ["pack", "--ignore-scripts", "--json"], rootDir);
-  const packInfo = JSON.parse(pack.stdout)[0];
+  // npm 10 runs `prepare` despite --ignore-scripts; its output precedes the JSON report.
+  const packInfo = JSON.parse(pack.stdout.slice(pack.stdout.lastIndexOf("\n[") + 1))[0];
 
   tarballPath = path.join(rootDir, packInfo.filename);
 
@@ -264,7 +265,11 @@ function writePackage(directory, dependencies) {
 
 function writeViteShell(directory) {
   writeTsConfig(directory);
-  writeFile(directory, "index.html", `<div id="root"></div><script type="module" src="/src/main.tsx"></script>\n`);
+  writeFile(
+    directory,
+    "index.html",
+    `<div id="root"></div><script type="module" src="/src/main.tsx"></script>\n`,
+  );
   writeFile(
     directory,
     "vite.config.ts",

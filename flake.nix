@@ -54,19 +54,19 @@
             if system == "x86_64-linux" then
               {
                 target = "x86_64-unknown-linux-musl";
-                hash = "sha256-tR8CCP3/g1FaeHvYq5rFhl7YTau2bQxwmVe7WXk8ZF8=";
+                hash = "sha256-gtEruUDi1OcuDVYFOH/BuMoXkETgErYg8M5OdEDoMg4=";
               }
             else
               {
                 target = "aarch64-unknown-linux-musl";
-                hash = "sha256-B5cx3RvHeYwe+k8I/MRRMIJ8vMn/YKC0xgR9ZPxv0lw=";
+                hash = "sha256-LtQ1HDXdlEAwi7sCdn1H6ieO/oUaUkZTAPPJT1tsKoc=";
               };
 
           wasmBindgen = pkgs.stdenvNoCC.mkDerivation {
             pname = "wasm-bindgen-cli";
-            version = "0.2.128";
+            version = "0.2.129";
             src = pkgs.fetchurl {
-              url = "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.128/wasm-bindgen-0.2.128-${wasmBindgenAsset.target}.tar.gz";
+              url = "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-${wasmBindgenAsset.target}.tar.gz";
               inherit (wasmBindgenAsset) hash;
             };
             nativeBuildInputs = [
@@ -77,7 +77,7 @@
             installPhase = ''
               mkdir -p "$out/bin"
               tar -xzf "$src"
-              install -m755 "wasm-bindgen-0.2.128-${wasmBindgenAsset.target}/wasm-bindgen" "$out/bin/wasm-bindgen"
+              install -m755 "wasm-bindgen-0.2.129-${wasmBindgenAsset.target}/wasm-bindgen" "$out/bin/wasm-bindgen"
             '';
           };
         in

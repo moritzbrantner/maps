@@ -15,7 +15,8 @@ let preview;
 
 try {
   const pack = run("npm", ["pack", "--ignore-scripts", "--json"], rootDir);
-  const packInfo = JSON.parse(pack.stdout)[0];
+  // npm 10 runs `prepare` despite --ignore-scripts; its output precedes the JSON report.
+  const packInfo = JSON.parse(pack.stdout.slice(pack.stdout.lastIndexOf("\n[") + 1))[0];
   tarballPath = path.join(rootDir, packInfo.filename);
   const packedFiles = new Set(packInfo.files.map((file) => file.path));
   const requiredFiles = [
@@ -566,7 +567,9 @@ async function waitForHttp(url) {
 
   for (let attempt = 0; attempt < 80; attempt += 1) {
     if (preview?.exitCode !== null) {
-      throw new Error(`Vite preview exited before serving the WASM consumer (code ${preview.exitCode})`);
+      throw new Error(
+        `Vite preview exited before serving the WASM consumer (code ${preview.exitCode})`,
+      );
     }
 
     try {
