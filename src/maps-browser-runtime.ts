@@ -1357,7 +1357,7 @@ function createFrameSynchronizer({
     retainedPoints = null;
     if (owner !== renderer()) return;
     try {
-      owner.evictRetainedPoints(RETAINED_APPLICATION_POINT_GROUP);
+      owner.evictRetainedPoints?.(RETAINED_APPLICATION_POINT_GROUP);
     } catch {
       // A failed renderer already released its resources.
     }
@@ -1385,6 +1385,10 @@ function createFrameSynchronizer({
         releaseRetainedPoints();
         return false;
       }
+      if (!currentRenderer.setRetainedPoints) {
+        releaseRetainedPoints();
+        return false;
+      }
       try {
         currentRenderer.setRetainedPoints(
           RETAINED_APPLICATION_POINT_GROUP,
@@ -1392,7 +1396,10 @@ function createFrameSynchronizer({
           points.paint,
         );
       } catch {
+        // The renderer hid its canvas on the failed operation: retire it like any other
+        // renderer failure so the Canvas fallback draws the map and the layers.
         retainedPoints = null;
+        failRenderer();
         return false;
       }
       retainedPoints = {

@@ -465,8 +465,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
     /**
      * Retained points are drawn in every visible world copy, while the lazily projected
-     * picking scene places each point in its nearest copy. Retry the hit one world to
-     * either side, using the screen vector of one world at the viewport centre.
+     * picking scene places each point in its nearest copy. Retry the hit whole worlds to
+     * either side, as far as the viewport can show copies, using the screen vector of one
+     * world at the viewport centre.
      */
     const hitTestRetainedWorldCopies = (
       scene: CanvasMapScene<unknown>,
@@ -480,13 +481,18 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       if (!east || !west) return null;
       const scale = 360 / 359.8;
       const world = { x: (east.x - west.x) * scale, y: (east.y - west.y) * scale };
-      if (Math.hypot(world.x, world.y) > 4 * Math.max(size.width, size.height)) return null;
-      for (const direction of [1, -1]) {
-        const hit = hitTestCanvasMapScene(scene, {
-          x: position.x + direction * world.x,
-          y: position.y + direction * world.y,
-        });
-        if (hit) return hit;
+      const worldLength = Math.hypot(world.x, world.y);
+      if (!(worldLength > 1)) return null;
+      // Every copy that can be on screen: the viewport diagonal in worlds, plus one.
+      const copies = Math.ceil(Math.hypot(size.width, size.height) / worldLength) + 1;
+      for (let distance = 1; distance <= copies; distance += 1) {
+        for (const direction of [distance, -distance]) {
+          const hit = hitTestCanvasMapScene(scene, {
+            x: position.x + direction * world.x,
+            y: position.y + direction * world.y,
+          });
+          if (hit) return hit;
+        }
       }
       return null;
     };

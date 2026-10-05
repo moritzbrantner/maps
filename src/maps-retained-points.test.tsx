@@ -215,7 +215,7 @@ describe("GPU-retained application points (#155)", () => {
     const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
 
     expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
-    const [group, lonLat, paint] = vi.mocked(renderer.setRetainedPoints).mock.calls[0]!;
+    const [group, lonLat, paint] = vi.mocked(renderer.setRetainedPoints!).mock.calls[0]!;
     expect(group).toBe(1);
     expect(lonLat).toHaveLength(20_000);
     expect(paint).toHaveLength(100_000);
@@ -242,20 +242,19 @@ describe("GPU-retained application points (#155)", () => {
     expect(runtime.project).not.toHaveBeenCalled();
   });
 
-  it("re-lowers on data changes and releases the group for the screen path", async () => {
+  it("re-lowers on data changes and falls back to Canvas when the device rejects a group", async () => {
     const { rerenderPoints } = await mountPoints(createPoints(100));
 
     rerenderPoints(createPoints(100, 1));
     await waitFor(() => expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(2));
 
-    // A labeled or non-circle frame is not retained: the group is released and the frame
-    // is projected and transported as screen geometry.
-    vi.mocked(renderer.setRetainedPoints).mockImplementationOnce(() => {
+    // A group the device rejects retires the renderer: the Canvas fallback draws the map
+    // and the points, instead of a hidden WebGPU canvas.
+    vi.mocked(renderer.setRetainedPoints!).mockImplementationOnce(() => {
       throw new Error("device rejected the group");
     });
     rerenderPoints(createPoints(100, 2));
-    await waitFor(() => expect(paints.at(-1)?.circles).toBe(100));
-    expect(paints.at(-1)?.order).toEqual([0, 0, 100]);
+    await waitFor(() => expect(renderer.dispose).toHaveBeenCalled());
   });
 });
 

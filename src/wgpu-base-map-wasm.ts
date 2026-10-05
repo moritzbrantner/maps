@@ -61,9 +61,10 @@ export type MapsWgpuBaseMapRenderer = {
    * Retains an application point group on the GPU (#155): `[longitude, latitude]` pairs
    * (lowered once by Rust) and `MAPS_RETAINED_POINT_PAINT_STRIDE` paint values per point.
    * Frames reference the group from their painter order; camera frames do not re-upload it.
+   * Absent on renderers without retained point support; frames are then projected.
    */
-  setRetainedPoints(group: number, lonLat: Float64Array, paint: Float32Array): number;
-  evictRetainedPoints(group: number): void;
+  setRetainedPoints?(group: number, lonLat: Float64Array, paint: Float32Array): number;
+  evictRetainedPoints?(group: number): void;
   /** Style table from `createMapsVectorBasemapStyleTable`. */
   setVectorStyle(table: Float32Array): void;
   setVectorMaxZoom(maxZoom: number): void;
