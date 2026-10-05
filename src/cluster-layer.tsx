@@ -82,6 +82,19 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
     // The runtime version rebuilds the index once Rust clustering becomes available.
     [aggregationRuntimeVersion, clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
   );
+  const committedIndexRef = useRef<typeof index | null>(null);
+
+  // Replaced and unmounted indexes release their WASM memory. Disposal waits a microtask so
+  // a Strict Mode effect replay, which re-commits the same index, keeps it alive.
+  useEffect(() => {
+    committedIndexRef.current = index;
+    return () => {
+      committedIndexRef.current = null;
+      queueMicrotask(() => {
+        if (committedIndexRef.current !== index) index.dispose();
+      });
+    };
+  }, [index]);
 
   useEffect(() => {
     surfaceRef.current = surface;

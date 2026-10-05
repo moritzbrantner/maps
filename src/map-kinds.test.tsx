@@ -537,6 +537,42 @@ function createMockMockRenderLayer(
 }
 
 describe("@moritzbrantner/maps additional map kinds", () => {
+  test("disposes replaced and unmounted ClusteredMap aggregation indexes", async () => {
+    const grid = createGridAggregationRuntimeForTests();
+    const disposed: string[] = [];
+    setMapsAggregationWasmRuntimeForTests({
+      createIndex(points, options) {
+        const index = grid.createIndex(points, options);
+        return {
+          ...index,
+          dispose() {
+            disposed.push(points.map((point) => point.id).join(","));
+          },
+        };
+      },
+    });
+    const view = (ids: string[]) => (
+      <ClusteredMap
+        defaultViewState={{ center: [-74, 40], zoom: 3 }}
+        fitToData={false}
+        mapLabel="Disposed cluster indexes"
+        points={ids.map((id, index) => ({ id, latitude: 40 + index * 0.01, longitude: -74 }))}
+        showAttributionControl={false}
+      />
+    );
+
+    const { rerender, unmount } = render(view(["a", "b"]));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    rerender(view(["a", "b", "c"]));
+    await waitFor(() => expect(disposed).toContain("a,b"));
+    expect(disposed).not.toContain("a,b,c");
+
+    unmount();
+    await waitFor(() => expect(disposed).toContain("a,b,c"));
+  });
+
   test("clusters a ClusteredMap once the Rust aggregation runtime becomes ready", async () => {
     resetMapsAggregationRuntimeForTests();
     const onViewportAggregationChange = vi.fn();
