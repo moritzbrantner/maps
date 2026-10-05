@@ -237,6 +237,11 @@ export function ClientMap({ points }: { points: MapPoint[] }) {
 }
 
 function writePackage(directory, dependencies) {
+  const compactDependencies = compactObject(dependencies);
+  // Bun runs the prepare build of a git dependency only when the consumer trusts it.
+  const trustedDependencies = (rootPackageJson.trustedDependencies ?? []).filter(
+    (name) => name in compactDependencies,
+  );
   mkdirSync(directory, { recursive: true });
   writeFileSync(
     path.join(directory, "package.json"),
@@ -247,8 +252,9 @@ function writePackage(directory, dependencies) {
           build: "vite build",
         },
         type: "module",
-        dependencies: compactObject(dependencies),
+        dependencies: compactDependencies,
         devDependencies: {},
+        ...(trustedDependencies.length > 0 ? { trustedDependencies } : {}),
       },
       null,
       2,
