@@ -61,7 +61,13 @@ jobs:
           node scripts/build-benchmark-history.mjs --run=benchmark-results/interactions.json --previous="$history_url" --out=dist/benchmarks/history.json
         else
           echo "::warning::Interaction benchmark failed; republishing the previous benchmark history."
-          curl -fsSL "$history_url" -o dist/benchmarks/history.json || rm -f dist/benchmarks/history.json
+          # Republish the previous history; only a missing history (first run) may be absent.
+          status=$(curl -sSL -o dist/benchmarks/history.json -w "%{http_code}" "$history_url" || echo 000)
+          case "$status" in
+            200) ;;
+            404) rm -f dist/benchmarks/history.json ;;
+            *) echo "::error::Could not read the published benchmark history (HTTP $status)."; exit 1 ;;
+          esac
         fi
       artifact_paths: dist
       reuse_across_runs: true

@@ -71,6 +71,7 @@ export function useShortbreadBasemap(
   const uploadedRef = useRef(
     new Map<string, { buildMs: number; features: number; tile: MapsRasterTileId }>(),
   );
+  const retainedOwnerRef = useRef<MapsRetainedVectorBasemap | null>(null);
   const inflightRef = useRef(new Map<string, AbortController>());
   const [cacheVersion, setCacheVersion] = useState(0);
   const [decodedVersion, setDecodedVersion] = useState(0);
@@ -153,13 +154,22 @@ export function useShortbreadBasemap(
   // tile leaves the cache. No GeoJSON, no per-frame projection or path stroking.
   useEffect(() => {
     const uploaded = uploadedRef.current;
-    if (!retained) {
-      if (uploaded.size > 0) {
-        uploaded.clear();
-        setUploadedVersion((version) => version + 1);
+    const previous = retainedOwnerRef.current;
+    retainedOwnerRef.current = retained;
+    if (previous && previous !== retained && uploaded.size > 0) {
+      // Switching to the overlay or another renderer: the previous handle must stop drawing
+      // its tiles, or they would be composited under the replacement.
+      for (const entry of uploaded.values()) {
+        try {
+          previous.evictTile(entry.tile);
+        } catch {
+          // A disposed renderer already released its tiles.
+        }
       }
-      return;
+      uploaded.clear();
+      setUploadedVersion((version) => version + 1);
     }
+    if (!retained) return;
     let changed = false;
     for (const [key, entry] of uploaded) {
       if (!bytesRef.current.has(key)) {
