@@ -7,8 +7,8 @@ import {
   useDeferredValue,
   useEffect,
   useId,
-  useMemo,
   useRef,
+  useState,
   type MutableRefObject,
 } from "react";
 
@@ -17,6 +17,7 @@ import {
   type AggregatedMapFeature,
   type MapPoint,
   type MapPointFilter,
+  type PointAggregationIndex,
   type PointAggregationIndexOptions,
   type VisibleAggregationSummary,
 } from "./aggregation";
@@ -71,30 +72,27 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   const surfaceRef = useRef(surface);
   const flatFeatureCacheRef = useRef<Map<string, FlatClusterCacheEntry>>(new Map());
   const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
-  const index = useMemo(
-    () =>
-      createPointAggregationIndex(deferredPoints, {
-        filterPoint,
-        maxZoom,
-        minZoom,
-        radius: clusterRadius,
-      }),
-    // The runtime version rebuilds the index once Rust clustering becomes available.
-    [aggregationRuntimeVersion, clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
-  );
-  const committedIndexRef = useRef<typeof index | null>(null);
+  const indexRef = useRef<PointAggregationIndex<TProperties> | null>(null);
+  const [indexVersion, setIndexVersion] = useState(0);
 
-  // Replaced and unmounted indexes release their WASM memory. Disposal waits a microtask so
-  // a Strict Mode effect replay, which re-commits the same index, keeps it alive.
+  // The index is created and disposed in one effect (never in render), so Strict Mode
+  // replays and replaced options release their WASM memory, and layer callbacks only
+  // ever read the committed index. The runtime version rebuilds it once Rust clustering
+  // becomes available.
   useEffect(() => {
-    committedIndexRef.current = index;
+    const index = createPointAggregationIndex(deferredPoints, {
+      filterPoint,
+      maxZoom,
+      minZoom,
+      radius: clusterRadius,
+    });
+    indexRef.current = index;
+    setIndexVersion((version) => version + 1);
     return () => {
-      committedIndexRef.current = null;
-      queueMicrotask(() => {
-        if (committedIndexRef.current !== index) index.dispose();
-      });
+      if (indexRef.current === index) indexRef.current = null;
+      index.dispose();
     };
-  }, [index]);
+  }, [aggregationRuntimeVersion, clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom]);
 
   useEffect(() => {
     surfaceRef.current = surface;
@@ -110,8 +108,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
         const currentSurface = surfaceRef.current;
+        const index = indexRef.current;
 
-        if (!currentSurface) {
+        if (!currentSurface || !index) {
           return;
         }
 
@@ -363,7 +362,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   }, [
     getFeatureId,
     hoveredFeatureId,
-    index,
+    indexVersion,
     resolvedLayerId,
     onFeatureContextMenu,
     onFeatureHover,

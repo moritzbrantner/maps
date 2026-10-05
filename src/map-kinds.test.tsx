@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -571,6 +572,43 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     unmount();
     await waitFor(() => expect(disposed).toContain("a,b,c"));
+  });
+
+  test("disposes every aggregation index a Strict Mode ClusteredMap creates", async () => {
+    const grid = createGridAggregationRuntimeForTests();
+    let created = 0;
+    let disposedCount = 0;
+    setMapsAggregationWasmRuntimeForTests({
+      createIndex(points, options) {
+        created += 1;
+        return {
+          ...grid.createIndex(points, options),
+          dispose() {
+            disposedCount += 1;
+          },
+        };
+      },
+    });
+
+    const { unmount } = render(
+      <StrictMode>
+        <ClusteredMap
+          defaultViewState={{ center: [-74, 40], zoom: 3 }}
+          fitToData={false}
+          mapLabel="Strict cluster indexes"
+          points={[{ id: "a", latitude: 40, longitude: -74 }]}
+          showAttributionControl={false}
+        />
+      </StrictMode>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(created).toBeGreaterThan(0);
+    expect(disposedCount).toBe(created - 1);
+
+    unmount();
+    await waitFor(() => expect(disposedCount).toBe(created));
   });
 
   test("clusters a ClusteredMap once the Rust aggregation runtime becomes ready", async () => {
