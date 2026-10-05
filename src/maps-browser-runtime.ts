@@ -28,7 +28,11 @@ import {
   type MapsFlatRasterRuntimeConfig,
   type MapsRasterTileId,
 } from "./flat-runtime-wasm";
-import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
+import type { MapVectorRenderFrame } from "./map-render-frame";
+import type {
+  MapsRetainedApplicationPoints,
+  MapsWgpuApplicationFrame,
+} from "./wgpu-application-frame";
 import {
   loadMapsWgpuBaseMapRenderer,
   type MapsWgpuBaseMapRenderer,
@@ -73,6 +77,18 @@ type MapsWgpuApplicationFrameFactory = (
   interaction: MapScreenInteractionState,
 ) => MapsWgpuApplicationFrame | null;
 
+/** Builders of the GPU-retained point path (#155), loaded with the wgpu transport. */
+type MapsRetainedPointTransport = {
+  points: (
+    frame: MapVectorRenderFrame<unknown>,
+    interaction: MapScreenInteractionState,
+  ) => MapsRetainedApplicationPoints | null;
+  frame: (group: number, width: number, height: number) => MapsWgpuApplicationFrame;
+};
+
+/** The single retained application point group a Map View currently owns. */
+const RETAINED_APPLICATION_POINT_GROUP = 1;
+
 export type MapsBaseRenderer = "pending" | "wgpu" | "canvas2d";
 
 /**
@@ -115,6 +131,18 @@ export type MapsCanvasFlatRuntimeController = {
     frame: MapScreenRenderFrame<unknown>,
     interaction?: MapScreenInteractionState,
   ): boolean;
+  /**
+   * Draws a vector frame of unlabeled circles from GPU-retained points (#155): Rust lowers
+   * longitude/latitude once and camera frames only update uniforms. Returns `false` when
+   * the frame or backend cannot use the retained path; the caller then projects it.
+   */
+  renderRetainedApplicationPoints(
+    frame: MapVectorRenderFrame<unknown>,
+    interaction: MapScreenInteractionState,
+    size: { width: number; height: number },
+  ): boolean;
+  /** Whether retained points are drawn by the live renderer; camera frames then need no layer work. */
+  isRetainedApplicationPointsActive(): boolean;
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
   /** Called when the base renderer changes, e.g. WebGPU device loss falls back to Canvas. */
   subscribeBaseRenderer(listener: (renderer: MapsBaseRenderer) => void): () => void;
@@ -431,17 +459,24 @@ export function createMapsBrowserRuntime(
     activeRuntime = runtime;
     let renderer: MapsWgpuBaseMapRenderer | null = null;
     let packApplicationFrame: MapsWgpuApplicationFrameFactory | null = null;
+    let retainedPointTransport: MapsRetainedPointTransport | null = null;
     try {
       renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
+      const transport = await import("./wgpu-application-frame");
       // One packer per renderer: it reuses its typed transport buffers and paint cache.
-      const packer = (await import("./wgpu-application-frame")).createMapsWgpuApplicationFramePacker();
+      const packer = transport.createMapsWgpuApplicationFramePacker();
       packApplicationFrame = (frame, interaction) => packer.pack(frame, interaction);
+      retainedPointTransport = {
+        frame: transport.createMapsWgpuRetainedPointsFrame,
+        points: transport.createMapsRetainedApplicationPoints,
+      };
       delete canvas.dataset.mapBaseRendererError;
     } catch (error) {
       canvas.dataset.mapBaseRendererError = error instanceof Error ? error.message : String(error);
       renderer?.dispose();
       renderer = null;
       packApplicationFrame = null;
+      retainedPointTransport = null;
     }
 
     if (cancelled) {
@@ -481,6 +516,7 @@ export function createMapsBrowserRuntime(
       images: images,
       loads: loads,
       packApplicationFrame,
+      retainedPointTransport,
       renderer: () => activeRenderer,
       renderMargin,
       runtime,
@@ -577,6 +613,13 @@ export function createMapsBrowserRuntime(
       renderApplicationFrame(frame, interaction = {}) {
         if (cancelled) return false;
         return frameSynchronizer.setApplicationFrame(frame, interaction);
+      },
+      renderRetainedApplicationPoints(frame, interaction, viewport) {
+        if (cancelled) return false;
+        return frameSynchronizer.setRetainedApplicationPoints(frame, interaction, viewport);
+      },
+      isRetainedApplicationPointsActive() {
+        return !cancelled && frameSynchronizer.retainedApplicationPointsActive();
       },
       setViewState(next, reason = "programmatic") {
         assertActive();
@@ -949,6 +992,7 @@ function createFrameSynchronizer({
   images,
   loads,
   packApplicationFrame,
+  retainedPointTransport,
   renderer,
   renderMargin,
   runtime,
@@ -964,6 +1008,7 @@ function createFrameSynchronizer({
   images: Map<string, ImageBitmap>;
   loads: Map<string, ActiveTileLoad>;
   packApplicationFrame: MapsWgpuApplicationFrameFactory | null;
+  retainedPointTransport: MapsRetainedPointTransport | null;
   renderer: () => MapsWgpuBaseMapRenderer | null;
   renderMargin: number;
   runtime: MapsFlatRasterRuntime;
@@ -978,6 +1023,14 @@ function createFrameSynchronizer({
   let deviceLossMonitorTimer: number | null = null;
   let lastFrame: MapsFlatRasterFrame | null = null;
   let applicationFrame: MapsWgpuApplicationFrame | null = null;
+  // What the retained point group on `retainedRenderer` was built from; `null` when no
+  // group is retained. Camera frames never rebuild it.
+  let retainedPoints: {
+    hovered: ReadonlySet<string>;
+    primitives: readonly unknown[];
+    renderer: MapsWgpuBaseMapRenderer;
+    selected: ReadonlySet<string>;
+  } | null = null;
   let preparingCameraFrame = false;
   // The last full render: its camera, whether its margin holds content (so pure
   // pans can be presented by translation), and the tiles it placed. Pixels are only
@@ -1298,6 +1351,73 @@ function createFrameSynchronizer({
     );
   }
 
+  function releaseRetainedPoints() {
+    if (!retainedPoints) return;
+    const owner = retainedPoints.renderer;
+    retainedPoints = null;
+    if (owner !== renderer()) return;
+    try {
+      owner.evictRetainedPoints(RETAINED_APPLICATION_POINT_GROUP);
+    } catch {
+      // A failed renderer already released its resources.
+    }
+  }
+
+  function setRetainedApplicationPoints(
+    frame: MapVectorRenderFrame<unknown>,
+    interaction: MapScreenInteractionState,
+    size: { width: number; height: number },
+  ) {
+    const currentRenderer = renderer();
+    if (!currentRenderer || !retainedPointTransport) return false;
+
+    const current = retainedPoints;
+    const unchanged =
+      current !== null &&
+      current.renderer === currentRenderer &&
+      current.primitives.length === frame.primitives.length &&
+      current.primitives.every((primitive, index) => primitive === frame.primitives[index]) &&
+      sameIdSet(current.hovered, interaction.hoveredPrimitiveIds) &&
+      sameIdSet(current.selected, interaction.selectedPrimitiveIds);
+    if (!unchanged) {
+      const points = retainedPointTransport.points(frame, interaction);
+      if (!points) {
+        releaseRetainedPoints();
+        return false;
+      }
+      try {
+        currentRenderer.setRetainedPoints(
+          RETAINED_APPLICATION_POINT_GROUP,
+          points.lonLat,
+          points.paint,
+        );
+      } catch {
+        retainedPoints = null;
+        return false;
+      }
+      retainedPoints = {
+        hovered: new Set(interaction.hoveredPrimitiveIds ?? []),
+        primitives: frame.primitives.slice(),
+        renderer: currentRenderer,
+        selected: new Set(interaction.selectedPrimitiveIds ?? []),
+      };
+    }
+
+    if (!unchanged || !applicationFrame || applicationFrame.circleCount !== 0) {
+      applicationFrame = retainedPointTransport.frame(
+        RETAINED_APPLICATION_POINT_GROUP,
+        size.width,
+        size.height,
+      );
+      invalidateRendered();
+    }
+    if (!preparingCameraFrame) {
+      if (lastFrame) renderFrame(lastFrame);
+      else syncFrame();
+    }
+    return renderer() !== null;
+  }
+
   function setApplicationFrame(
     frame: MapScreenRenderFrame<unknown>,
     interaction: MapScreenInteractionState,
@@ -1308,6 +1428,7 @@ function createFrameSynchronizer({
       return false;
     }
 
+    releaseRetainedPoints();
     const next = packApplicationFrame(frame, interaction);
     if (!isEmptyApplicationFrame(applicationFrame) || !isEmptyApplicationFrame(next)) {
       invalidateRendered();
@@ -1441,8 +1562,18 @@ function createFrameSynchronizer({
     },
     requestRender,
     setApplicationFrame,
+    setRetainedApplicationPoints,
+    retainedApplicationPointsActive: () =>
+      retainedPoints !== null && retainedPoints.renderer === renderer(),
     syncFrame,
   };
+}
+
+function sameIdSet(left: ReadonlySet<string>, right: ReadonlySet<string> | undefined) {
+  const other = right ?? new Set<string>();
+  if (left.size !== other.size) return false;
+  for (const id of left) if (!other.has(id)) return false;
+  return true;
 }
 
 /** Equal apart from the center: the cameras differ at most by a screen translation. */

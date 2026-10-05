@@ -2,8 +2,9 @@
 //!
 //! One mechanism for geometry that stays on the GPU across camera frames:
 //!
-//! - [`RetainedSet`] owns retained GPU buffers by key (a vector tile, or for #155 a point
-//!   frame) and is the single place where they are uploaded, replaced and evicted;
+//! - [`RetainedSet`] owns retained GPU buffers by key (a vector tile, or a retained
+//!   application point group) and is the single place where they are uploaded, replaced
+//!   and evicted;
 //! - [`FrameUniforms`] writes one [`FRAME_UNIFORM_SIZE`] uniform per drawn frame into a
 //!   dynamic-offset buffer that grows on demand; camera motion only rewrites these;
 //! - frame placement and rebasing are the target-independent `retained_frame` math.
@@ -78,6 +79,11 @@ impl<K: Eq + Hash, V: RetainedResource> RetainedSet<K, V> {
 
     pub(crate) fn get(&self, key: &K) -> Option<&V> {
         self.entries.get(key)
+    }
+
+    /// Mutable access for consumers that rebuild an entry's buffers in place (rebases).
+    pub(crate) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.entries.get_mut(key)
     }
 
     pub(crate) fn contains(&self, key: &K) -> bool {

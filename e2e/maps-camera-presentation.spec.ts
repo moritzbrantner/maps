@@ -73,14 +73,22 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     // No-raster scheduling may drain synthetic tile requests; rendering and
     // projection counts are the deterministic hot-path acceptance boundary.
     expect(work.samples).toHaveLength(1);
-    expect(work.projected).toBe(1000);
-    expect(work.projectionBatches).toBe(1);
     expect(work.scalarProjections).toBe(0);
     expect(work.changes).toBe(1);
-    for (const sample of work.samples) {
-      expect(sample.actual).not.toBeNull();
-      expect(sample.actual![0]).toBeCloseTo(sample.expected[0], 4);
-      expect(sample.actual![1]).toBeCloseTo(sample.expected[1], 4);
+    if (backend === "wgpu") {
+      // GPU-retained points (#155): the camera paint projects nothing in JS and sends no
+      // screen circles; their placement is covered by maps-retained-points.spec.ts.
+      expect(work.projected).toBe(0);
+      expect(work.projectionBatches).toBe(0);
+      expect(work.samples[0]!.actual).toBeNull();
+    } else {
+      expect(work.projected).toBe(1000);
+      expect(work.projectionBatches).toBe(1);
+      for (const sample of work.samples) {
+        expect(sample.actual).not.toBeNull();
+        expect(sample.actual![0]).toBeCloseTo(sample.expected[0], 4);
+        expect(sample.actual![1]).toBeCloseTo(sample.expected[1], 4);
+      }
     }
     const box = await map.boundingBox();
     expect(box).not.toBeNull();

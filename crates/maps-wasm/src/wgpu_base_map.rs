@@ -18,6 +18,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, ImageBitmap};
 
 use crate::retained_frame::LocalFrame;
+use crate::retained_points::{RETAINED_POINT_INSTANCE_SIZE, RetainedPoints, RetainedView};
 use crate::vector_basemap_layout::{
     FILL_VERTEX_SIZE, LINE_QUAD_INDICES, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes,
     fill_vertex_bytes, line_index_bytes, line_vertex_bytes, style_table_bytes,
@@ -44,6 +45,33 @@ const APPLICATION_SHADER: &str = include_str!("shaders/application.wgsl");
 const APPLICATION_CIRCLE_SHADER: &str = include_str!("shaders/application_circle.wgsl");
 
 const VECTOR_SHADER: &str = include_str!("shaders/vector_basemap.wgsl");
+
+const RETAINED_POINTS_SHADER: &str = include_str!("shaders/retained_points.wgsl");
+
+/// One retained application point group (#155): `f64` world truth in Rust, `f32` anchor
+/// offsets on the GPU. Camera frames only move the anchor's frame uniform.
+struct RetainedPointGroup {
+    points: RetainedPoints,
+    anchor: Option<[f64; 2]>,
+    instances: Option<wgpu::Buffer>,
+}
+
+impl RetainedResource for RetainedPointGroup {
+    fn byte_size(&self) -> u64 {
+        retained_bytes([&self.instances])
+    }
+}
+
+/// Cumulative retained-point work, for O(1)-camera evidence.
+#[derive(Clone, Copy, Default)]
+struct RetainedPointCounters {
+    /// Points lowered from longitude/latitude (data changes only).
+    prepared: u64,
+    /// Anchor rebuilds of offsets (first draw and deterministic rebases).
+    rebases: u64,
+    /// Instance bytes written to GPU buffers.
+    upload_bytes: u64,
+}
 
 /// One vector tile's retained GPU buckets (see `maps_core::build_shortbread_buckets`).
 struct VectorTileBuffers {
@@ -75,6 +103,7 @@ struct FrameStats {
     draw_calls: u32,
     /// Application circle instances and triangle vertices written to GPU buffers.
     application_upload_bytes: u64,
+    retained_point_frames: u32,
 }
 
 struct TileTexture {
@@ -113,6 +142,10 @@ pub struct MapsWgpuBaseMapRenderer {
     vector_style_buffer: wgpu::Buffer,
     vector_style_bind_group: wgpu::BindGroup,
     vector_tiles: RetainedSet<RasterTileKey, VectorTileBuffers>,
+    retained_points: RetainedSet<u32, RetainedPointGroup>,
+    retained_point_pipeline: wgpu::RenderPipeline,
+    retained_point_uniforms: FrameUniforms,
+    retained_point_counters: RetainedPointCounters,
     vector_max_zoom: u8,
     frame_stats: FrameStats,
     /// Reused per-frame scratch space; avoids allocating on the render path.
@@ -546,6 +579,79 @@ impl MapsWgpuBaseMapRenderer {
             },
         );
 
+        let retained_point_uniforms =
+            FrameUniforms::new(&device, "Maps retained point frame layout");
+        let retained_point_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Maps retained point shader"),
+            source: wgpu::ShaderSource::Wgsl(RETAINED_POINTS_SHADER.into()),
+        });
+        let retained_point_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Maps retained point pipeline layout"),
+                bind_group_layouts: &[Some(retained_point_uniforms.layout())],
+                immediate_size: 0,
+            });
+        let retained_point_attributes = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 8,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 12,
+                shader_location: 2,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 16,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 32,
+                shader_location: 4,
+            },
+        ];
+        let retained_point_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Maps retained point pipeline"),
+                layout: Some(&retained_point_layout),
+                vertex: wgpu::VertexState {
+                    module: &retained_point_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: RETAINED_POINT_INSTANCE_SIZE,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &retained_point_attributes,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &retained_point_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_view_format,
+                        blend: Some(premultiplied_blend_state()),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+
         Ok(Self {
             surface,
             device,
@@ -574,6 +680,10 @@ impl MapsWgpuBaseMapRenderer {
             vector_style_buffer,
             vector_style_bind_group,
             vector_tiles: RetainedSet::new(),
+            retained_points: RetainedSet::new(),
+            retained_point_pipeline,
+            retained_point_uniforms,
+            retained_point_counters: RetainedPointCounters::default(),
             vector_max_zoom: DEFAULT_VECTOR_MAX_ZOOM,
             frame_stats: FrameStats::default(),
             frame_vertices: Vec::new(),
@@ -733,6 +843,36 @@ impl MapsWgpuBaseMapRenderer {
         Ok(buckets.feature_count)
     }
 
+    /// Retains an application point group: `[longitude, latitude]` pairs, lowered once by
+    /// `maps-core`, and one paint record per point (radius and stroke width in CSS px,
+    /// fill RGBA, stroke RGBA). Replaces the group's previous content. Returns the count.
+    #[wasm_bindgen(js_name = setRetainedPoints)]
+    pub fn set_retained_points(
+        &mut self,
+        group: u32,
+        lon_lat: &[f64],
+        paint: &[f32],
+    ) -> Result<u32, JsValue> {
+        let points = RetainedPoints::lower(lon_lat, paint).map_err(JsValue::from_str)?;
+        let count = u32::try_from(points.len())
+            .map_err(|_| JsValue::from_str("too many retained points"))?;
+        self.retained_point_counters.prepared += u64::from(count);
+        self.retained_points.insert(
+            group,
+            RetainedPointGroup {
+                points,
+                anchor: None,
+                instances: None,
+            },
+        );
+        Ok(count)
+    }
+
+    #[wasm_bindgen(js_name = evictRetainedPoints)]
+    pub fn evict_retained_points(&mut self, group: u32) {
+        self.retained_points.evict(&group);
+    }
+
     #[wasm_bindgen(js_name = evictVectorTile)]
     pub fn evict_vector_tile(&mut self, z: u8, x: u32, y: u32) {
         self.vector_tiles.evict(&(z, x, y));
@@ -756,7 +896,9 @@ impl MapsWgpuBaseMapRenderer {
 
     /// Last frame and retained-resource counters: raster tiles drawn, vector tiles
     /// drawn, draw calls, then retained vector tiles, features, fill triangles, line
-    /// segments and GPU bytes, then application GPU upload bytes of the last frame.
+    /// segments and GPU bytes, then application GPU upload bytes of the last frame, then
+    /// retained points, cumulative retained point preparations, rebases and instance
+    /// upload bytes, and the retained point frames (world copies) drawn last frame.
     #[wasm_bindgen(js_name = frameStats)]
     pub fn frame_stats(&self) -> Vec<f64> {
         let (mut features, mut triangles, mut segments) = (0_u64, 0_u64, 0_u64);
@@ -783,6 +925,14 @@ impl MapsWgpuBaseMapRenderer {
             segments as f64,
             self.vector_tiles.byte_size() as f64,
             self.frame_stats.application_upload_bytes as f64,
+            self.retained_points
+                .values()
+                .map(|group| group.points.len())
+                .sum::<usize>() as f64,
+            self.retained_point_counters.prepared as f64,
+            self.retained_point_counters.rebases as f64,
+            self.retained_point_counters.upload_bytes as f64,
+            f64::from(self.frame_stats.retained_point_frames),
         ]
     }
 
@@ -900,6 +1050,12 @@ impl MapsWgpuBaseMapRenderer {
         }
 
         let vector_draws = self.prepare_vector_draws(placements, view_projection, clip);
+        let retained_point_draws = self.prepare_retained_point_draws(
+            &application_geometry.draws,
+            placements,
+            view_projection,
+            clip,
+        );
 
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
@@ -988,6 +1144,10 @@ impl MapsWgpuBaseMapRenderer {
                         pass.draw(first_vertex..first_vertex + vertex_count, 0..1);
                         draw_calls += 1;
                     }
+                    ApplicationDraw::RetainedPoints { group } => {
+                        draw_calls +=
+                            self.draw_retained_points(&mut pass, group, &retained_point_draws);
+                    }
                 }
             }
         }
@@ -1001,6 +1161,7 @@ impl MapsWgpuBaseMapRenderer {
             application_upload_bytes: (application_geometry.circle_instances.len()
                 + application_geometry.triangle_vertices.len())
                 as u64,
+            retained_point_frames: retained_point_draws.len() as u32,
         };
         Ok(drawn_tiles)
     }
@@ -1046,6 +1207,107 @@ impl MapsWgpuBaseMapRenderer {
             view_projection,
             surface,
         )
+    }
+
+    /// Places every retained point group drawn this frame: rebuilds a group's anchor
+    /// offsets only on its first draw or after a deterministic rebase, then writes one
+    /// frame uniform per world copy. Returns (group, uniform offset) pairs.
+    fn prepare_retained_point_draws(
+        &mut self,
+        draws: &[ApplicationDraw],
+        placements: &[WgpuRasterTilePlacement],
+        view_projection: [f32; 16],
+        clip: SurfaceClip,
+    ) -> Vec<(u32, u32)> {
+        let groups: Vec<u32> = draws
+            .iter()
+            .filter_map(|draw| match *draw {
+                ApplicationDraw::RetainedPoints { group } => Some(group),
+                _ => None,
+            })
+            .collect();
+        if groups.is_empty() {
+            return Vec::new();
+        }
+        let surface_width = f64::from(self.config.width) / clip.pixel_ratio.max(f64::MIN_POSITIVE);
+        let Some(view) = RetainedView::from_placements(
+            placements.iter().filter_map(|placement| {
+                let (z, x, y) = placement.key?;
+                Some((
+                    z,
+                    x,
+                    y,
+                    placement.local_west,
+                    placement.local_north,
+                    placement.local_size,
+                ))
+            }),
+            view_projection,
+            surface_width,
+        ) else {
+            return Vec::new();
+        };
+        let mut frames = Vec::new();
+        for group_key in groups {
+            let Some(group) = self.retained_points.get_mut(&group_key) else {
+                continue;
+            };
+            if view.needs_rebase(group.anchor) || group.instances.is_none() {
+                let anchor = view.center;
+                let bytes = group.points.instance_bytes(anchor);
+                group.instances = upload_retained_buffer(
+                    &self.device,
+                    &self.queue,
+                    "Maps retained point instances",
+                    wgpu::BufferUsages::VERTEX,
+                    &bytes,
+                );
+                group.anchor = Some(anchor);
+                self.retained_point_counters.rebases += 1;
+                self.retained_point_counters.upload_bytes += bytes.len() as u64;
+            }
+            if let Some(anchor) = group.anchor {
+                frames.extend(view.anchor_frames(anchor).map(|frame| (group_key, frame)));
+            }
+        }
+        let surface = [
+            self.config.width as f32,
+            self.config.height as f32,
+            clip.pixel_ratio as f32,
+            0.0,
+        ];
+        self.retained_point_uniforms.write(
+            &self.device,
+            &self.queue,
+            frames,
+            view_projection,
+            surface,
+        )
+    }
+
+    /// Draws one retained group once per visible world copy. Returns the draw calls.
+    fn draw_retained_points(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        group_key: u32,
+        draws: &[(u32, u32)],
+    ) -> u32 {
+        let Some(group) = self.retained_points.get(&group_key) else {
+            return 0;
+        };
+        let Some(instances) = &group.instances else {
+            return 0;
+        };
+        let count = group.points.len() as u32;
+        let mut calls = 0;
+        pass.set_pipeline(&self.retained_point_pipeline);
+        pass.set_vertex_buffer(0, instances.slice(..));
+        for (_, offset) in draws.iter().filter(|(key, _)| *key == group_key) {
+            pass.set_bind_group(0, self.retained_point_uniforms.bind_group(), &[*offset]);
+            pass.draw(0..APPLICATION_CIRCLE_VERTEX_COUNT, 0..count);
+            calls += 1;
+        }
+        calls
     }
 
     /// Paints fills group-major across tiles (style order spans tiles), then building

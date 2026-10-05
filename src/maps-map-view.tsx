@@ -39,6 +39,7 @@ import type { MapScreenInteractionState, MapScreenRenderFrame } from "./map-scre
 import {
   MapsOverlayLayers,
   type MapsOverlayLayersController,
+  type MapsOverlayRetainedPoints,
   type MapsProjectCoordinate,
 } from "./maps-overlay-layers";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-surface-context";
@@ -221,6 +222,16 @@ export function MapsMapView({
   const renderApplicationFrame = useCallback(
     (frame: MapScreenRenderFrame<unknown>, interaction: MapScreenInteractionState) =>
       runtimeControllerRef.current?.renderApplicationFrame?.(frame, interaction) ?? false,
+    [],
+  );
+
+  const retainedPoints = useMemo<MapsOverlayRetainedPoints>(
+    () => ({
+      active: () => runtimeControllerRef.current?.isRetainedApplicationPointsActive?.() ?? false,
+      render: (frame, interaction, size) =>
+        runtimeControllerRef.current?.renderRetainedApplicationPoints?.(frame, interaction, size) ??
+        false,
+    }),
     [],
   );
 
@@ -643,6 +654,7 @@ export function MapsMapView({
           getViewport={getViewportAggregationQuery}
           project={projectCoordinate}
           renderApplicationFrame={renderApplicationFrame}
+          retainedPoints={retainedPoints}
           surface={interactionSurface}
           unproject={unprojectCoordinate}
         >

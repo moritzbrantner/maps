@@ -5,6 +5,7 @@
 
 mod engine_scenario;
 mod retained_frame;
+mod retained_points;
 mod vector_basemap_layout;
 #[cfg(all(
     target_arch = "wasm32",

@@ -13,6 +13,9 @@ const APPLICATION_CIRCLE: u32 = 0;
 const APPLICATION_LINE: u32 = 1;
 const APPLICATION_DIRECTION_MARKER: u32 = 2;
 const APPLICATION_POLYGON: u32 = 3;
+/// A retained point group (#155), drawn at this painter-order position: run
+/// (kind, group key, 1).
+const APPLICATION_RETAINED_POINTS: u32 = 4;
 
 /// Raster tile identity (z, x, y) shared with the host's tile lifecycle.
 pub(super) type RasterTileKey = (u8, u32, u32);
@@ -289,6 +292,8 @@ pub(super) enum ApplicationDraw {
         first_vertex: u32,
         vertex_count: u32,
     },
+    /// A retained point group by key; its instances stay on the GPU across frames.
+    RetainedPoints { group: u32 },
 }
 
 #[derive(Default)]
@@ -449,6 +454,12 @@ pub(super) fn prepare_application_geometry(
                         },
                     );
                 }
+            }
+            APPLICATION_RETAINED_POINTS => {
+                let group = u32::try_from(index).map_err(|_| "invalid retained point group")?;
+                geometry
+                    .draws
+                    .push(ApplicationDraw::RetainedPoints { group });
             }
             _ => return Err("invalid wgpu application order kind"),
         }

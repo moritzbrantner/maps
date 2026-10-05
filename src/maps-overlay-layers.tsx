@@ -120,6 +120,20 @@ type MapsOverlayInteractionSurface = Pick<
   | "setViewState"
 >;
 
+/**
+ * The GPU-retained point path of the Maps runtime (#155). `render` hands it a vector frame
+ * of unlabeled circles; `active` reports whether the live renderer still draws it, so
+ * camera frames can skip layer work entirely.
+ */
+export type MapsOverlayRetainedPoints = {
+  active(): boolean;
+  render(
+    frame: MapVectorRenderFrame<unknown>,
+    interaction: MapScreenInteractionState,
+    size: { width: number; height: number },
+  ): boolean;
+};
+
 type MapsOverlayLayersProps = {
   children: ReactNode;
   getViewport: (width: number, height: number) => ViewportAggregationQuery | null;
@@ -128,6 +142,7 @@ type MapsOverlayLayersProps = {
     frame: CanvasMapScene<unknown>,
     interaction: MapScreenInteractionState,
   ) => boolean;
+  retainedPoints?: MapsOverlayRetainedPoints;
   surface: MapsOverlayInteractionSurface;
   unproject: MapsUnprojectCoordinate;
 };
@@ -234,7 +249,7 @@ const LazyMapsHeatLayerMount = lazy(async () => {
 
 export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
   function MapsOverlayLayers(
-    { children, getViewport, project, renderApplicationFrame, surface, unproject },
+    { children, getViewport, project, renderApplicationFrame, retainedPoints, surface, unproject },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -262,6 +277,12 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     /** Layout size of the last draw; resize notifications without a change are ignored. */
     const drawnLayoutSizeRef = useRef<string | null>(null);
     const applicationFrameVisibleRef = useRef(false);
+    // Retained points (#155): the runtime draws the last snapshot's circles from GPU
+    // buffers, so camera frames need no snapshot, projection or upload. Picking projects
+    // lazily, once per camera revision that is actually queried.
+    const retainedModeRef = useRef(false);
+    const retainedSizeRef = useRef<{ height: number; width: number } | null>(null);
+    const sceneRevisionRef = useRef(-1);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
     const clusterRuntimesRef = useRef<Map<string, MapsClusterRuntime>>(new Map());
@@ -441,8 +462,23 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
     const pickInternal = (clientX: number, clientY: number): InternalPick | null => {
       const canvas = canvasRef.current;
-      const scene = sceneRef.current;
       const renderedSnapshot = renderedSnapshotRef.current;
+      const retainedSize = retainedSizeRef.current;
+      if (
+        retainedModeRef.current &&
+        renderedSnapshot &&
+        retainedSize &&
+        sceneRevisionRef.current !== projectionRevisionRef.current
+      ) {
+        sceneRef.current = projectScene(
+          renderedSnapshot.frame,
+          project,
+          retainedSize,
+          projectionRevisionRef.current,
+        );
+        sceneRevisionRef.current = projectionRevisionRef.current;
+      }
+      const scene = sceneRef.current;
       if (!canvas || !scene || !renderedSnapshot) return null;
 
       const matrix = motionMatrixRef.current;
@@ -473,6 +509,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       () => ({
         redraw() {
           projectionRevisionRef.current += 1;
+          if (retainedModeRef.current && retainedPoints?.active()) return;
           if (presentMotion()) return;
           drawRef.current?.();
         },
@@ -525,11 +562,13 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
       const clearApplicationFrame = () => {
         if (!applicationFrameVisibleRef.current) return;
-        const scene = sceneRef.current;
-        if (scene && renderApplicationFrame) {
-          renderApplicationFrame({ ...scene, primitives: [] }, {});
+        const size = retainedModeRef.current ? retainedSizeRef.current : sceneRef.current;
+        if (size && renderApplicationFrame) {
+          // Also releases a retained point group.
+          renderApplicationFrame({ height: size.height, primitives: [], width: size.width }, {});
         }
         applicationFrameVisibleRef.current = false;
+        retainedModeRef.current = false;
       };
       clearApplicationFrameRef.current = clearApplicationFrame;
 
@@ -563,11 +602,37 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           heatRuntime,
           requestHeatRender,
         );
-        const scene = projectScene(snapshot.frame, project, size, projectionRevisionRef.current);
         const interaction: MapScreenInteractionState = {
           hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
           selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
         };
+        if (
+          retainedPoints &&
+          entries.every((entry) => entry.kind === "point" || entry.kind === "geojson") &&
+          !snapshot.renderSteps.some((step) => step.kind === "raster") &&
+          retainedPoints.render(snapshot.frame, interaction, size)
+        ) {
+          retainedModeRef.current = true;
+          retainedSizeRef.current = { height: size.height, width: size.width };
+          applicationFrameVisibleRef.current = true;
+          renderedSnapshotRef.current = snapshot;
+          sceneRef.current = null;
+          sceneRevisionRef.current = -1;
+          lastDrawRef.current = null;
+          canvas.dataset.mapOverlayPrimitives = String(snapshot.frame.primitives.length);
+          canvas.dataset.mapOverlayHeatLayers = "0";
+          canvas.dataset.mapOverlayBackend = "wgpu-retained";
+          const context = getCanvasContext(canvas);
+          context?.setTransform(1, 0, 0, 1, 0, 0);
+          context?.clearRect(0, 0, canvas.width, canvas.height);
+          return;
+        }
+        if (retainedModeRef.current) {
+          // Leaving the retained path: the screen frame below replaces (and releases) it.
+          retainedModeRef.current = false;
+          lastDrawRef.current = null;
+        }
+        const scene = projectScene(snapshot.frame, project, size, projectionRevisionRef.current);
         sceneRef.current = scene;
         renderedSnapshotRef.current = snapshot;
         canvas.dataset.mapOverlayPrimitives = String(snapshot.frame.primitives.length);
@@ -682,6 +747,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       projectScene,
       renderApplicationFrame,
       requestHeatRender,
+      retainedPoints,
       surface,
       unproject,
     ]);
