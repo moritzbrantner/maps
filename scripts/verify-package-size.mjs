@@ -5,16 +5,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Milestone D includes filled Shortbread polygons, ring validation and source kinds
-// (#138). Measured: 486,433-byte WASM, 382,013-byte compressed package and
-// 1,562,484 bytes unpacked. Keep a small margin for artifact metadata variation.
+// Re-measured on main 1740615 after Milestone D (#138, 486,433-byte WASM) for #187:
+// 532,422-byte WASM, 403,498-byte compressed package, 1,622,346 bytes unpacked. WASM growth per
+// PR (wasm-opt -O1): #151 tile prefetch +25,560; #153 instanced circles +4,293; #163 overscan
+// pans -6,930; Shortbread tile-pixel retention (289765e) +7,548; camera-ahead prefetch (8e32e7f) +3,550;
+// #162 WebGPU polygons +7,015; #180 tile zoom fallback +8,143; Rust 1.99/wasm-bindgen 0.2.129
+// -2,683; smaller steps net -507. The package budgets grow by about the same amount.
+// Keep a small margin for artifact metadata variation.
 const budgets = {
-  compressedSize: 384_000,
+  compressedSize: 405_500,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_566_000,
-  wasmRuntimeSize: 488_000,
+  unpackedSize: 1_626_000,
+  wasmRuntimeSize: 534_000,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {

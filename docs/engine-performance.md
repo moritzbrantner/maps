@@ -239,3 +239,8 @@ Full package validation still fails: compressed package 398,222 bytes exceeds
 Those limits remain intact. This repairs part of #168; native execution of the
 renderer helper tests, broader shader validation, and package-size convergence
 remain open. No complete Fast verdict follows from these repairs.
+
+#187 later raised the package budgets to the values measured on main `1740615`: WASM
+532,422 bytes (budget 534,000), compressed package 403,498 (405,500), unpacked
+1,622,346 (1,626,000). This was the owner's decision. The per-PR WASM attribution is in
+`scripts/verify-package-size.mjs`; the largest step is #151's tile prefetch (+25,560 bytes).
