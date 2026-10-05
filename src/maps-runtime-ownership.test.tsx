@@ -154,6 +154,7 @@ beforeEach(() => {
       retainedVectorLineSegments: 0,
       retainedVectorTiles: 0,
       retainedVectorTriangles: 0,
+      applicationUploadBytes: 0,
       vectorTiles: 0,
     })),
     isDeviceLost: vi.fn(() => false),
@@ -163,7 +164,7 @@ beforeEach(() => {
     uploadTile: vi.fn(),
     uploadVectorTile: vi.fn(() => 0),
     render: vi.fn((_tiles, matrix, application) => {
-      paints.push({ zoom: matrix.viewProjection[0], x: application?.circles[0]?.x });
+      paints.push({ zoom: matrix.viewProjection[0], x: application?.circleCount ? application.circleData[0] : undefined });
       return 0;
     }),
   };

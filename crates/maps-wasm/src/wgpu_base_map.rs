@@ -73,6 +73,8 @@ struct FrameStats {
     raster_tiles: u32,
     vector_tiles: u32,
     draw_calls: u32,
+    /// Application circle instances and triangle vertices written to GPU buffers.
+    application_upload_bytes: u64,
 }
 
 struct TileTexture {
@@ -754,7 +756,7 @@ impl MapsWgpuBaseMapRenderer {
 
     /// Last frame and retained-resource counters: raster tiles drawn, vector tiles
     /// drawn, draw calls, then retained vector tiles, features, fill triangles, line
-    /// segments and GPU bytes.
+    /// segments and GPU bytes, then application GPU upload bytes of the last frame.
     #[wasm_bindgen(js_name = frameStats)]
     pub fn frame_stats(&self) -> Vec<f64> {
         let (mut features, mut triangles, mut segments) = (0_u64, 0_u64, 0_u64);
@@ -780,6 +782,7 @@ impl MapsWgpuBaseMapRenderer {
             triangles as f64,
             segments as f64,
             self.vector_tiles.byte_size() as f64,
+            self.frame_stats.application_upload_bytes as f64,
         ]
     }
 
@@ -789,6 +792,8 @@ impl MapsWgpuBaseMapRenderer {
         &mut self,
         tile_draws: &[f64],
         application_frame: JsValue,
+        circle_data: &[f32],
+        order: &[u32],
     ) -> Result<usize, JsValue> {
         let (view_projection, clip, placements) =
             unpack_tile_draws(tile_draws).map_err(JsValue::from_str)?;
@@ -798,6 +803,9 @@ impl MapsWgpuBaseMapRenderer {
             let mut frame =
                 serde_wasm_bindgen::from_value::<WgpuApplicationFrame>(application_frame)
                     .map_err(|error| js_error("invalid wgpu application frame", error))?;
+            frame
+                .attach_packed(circle_data, order)
+                .map_err(JsValue::from_str)?;
             frame.offset_into_surface(clip.margin);
             Some(frame)
         };
@@ -990,6 +998,9 @@ impl MapsWgpuBaseMapRenderer {
             raster_tiles: drawn_tiles as u32,
             vector_tiles: vector_draws.len() as u32,
             draw_calls,
+            application_upload_bytes: (application_geometry.circle_instances.len()
+                + application_geometry.triangle_vertices.len())
+                as u64,
         };
         Ok(drawn_tiles)
     }

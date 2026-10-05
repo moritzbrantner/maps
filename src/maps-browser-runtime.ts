@@ -433,8 +433,9 @@ export function createMapsBrowserRuntime(
     let packApplicationFrame: MapsWgpuApplicationFrameFactory | null = null;
     try {
       renderer = await loadMapsWgpuBaseMapRenderer(canvas, wasmPackage);
-      packApplicationFrame = (await import("./wgpu-application-frame"))
-        .createMapsWgpuApplicationFrame;
+      // One packer per renderer: it reuses its typed transport buffers and paint cache.
+      const packer = (await import("./wgpu-application-frame")).createMapsWgpuApplicationFramePacker();
+      packApplicationFrame = (frame, interaction) => packer.pack(frame, interaction);
       delete canvas.dataset.mapBaseRendererError;
     } catch (error) {
       canvas.dataset.mapBaseRendererError = error instanceof Error ? error.message : String(error);
@@ -1290,7 +1291,7 @@ function createFrameSynchronizer({
   function isEmptyApplicationFrame(frame: MapsWgpuApplicationFrame | null) {
     return (
       !frame ||
-      (frame.circles.length === 0 &&
+      (frame.circleCount === 0 &&
         frame.lines.length === 0 &&
         frame.polygons.length === 0 &&
         frame.directionMarkers.length === 0)

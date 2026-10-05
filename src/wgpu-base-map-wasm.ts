@@ -16,6 +16,8 @@ const PACKED_TILE_DRAW_STRIDE = 6;
 const rendererOwners = new WeakMap<HTMLCanvasElement, object>();
 /** Counters of the last rendered frame and of retained vector resources. */
 export type MapsWgpuFrameStats = {
+  /** Application geometry bytes written to GPU buffers by the last frame. */
+  applicationUploadBytes: number;
   drawCalls: number;
   rasterTiles: number;
   retainedVectorBytes: number;
@@ -63,7 +65,17 @@ type MapsWgpuBaseMapWasmRenderer = {
   free?: () => void;
   isDeviceLost(): boolean;
   /** Packed tile draws; layout documented with `unpack_tile_draws` in maps-wasm. */
-  renderPacked(tileDraws: Float64Array, applicationFrame: MapsWgpuApplicationFrame | null): number;
+  /**
+   * Packed tile draws (layout documented with `unpack_tile_draws` in maps-wasm), the
+   * object part of the application frame (lines, polygons, markers), and the typed
+   * circle records and painter-order runs of `createMapsWgpuApplicationFramePacker`.
+   */
+  renderPacked(
+    tileDraws: Float64Array,
+    applicationFrame: MapsWgpuApplicationObjectFrame | null,
+    circleData: Float32Array,
+    order: Uint32Array,
+  ): number;
   resize(width: number, height: number): void;
   setVectorMaxZoom(maxZoom: number): void;
   setVectorStyle(table: Float32Array): void;
@@ -130,6 +142,7 @@ export async function loadMapsWgpuBaseMapRenderer(
           retainedVectorTriangles: stats[5] ?? 0,
           retainedVectorLineSegments: stats[6] ?? 0,
           retainedVectorBytes: stats[7] ?? 0,
+          applicationUploadBytes: stats[8] ?? 0,
         };
       },
       isDeviceLost() {
@@ -168,7 +181,12 @@ export async function loadMapsWgpuBaseMapRenderer(
             tileDraws[length + 5] = placement.localSize;
             length += PACKED_TILE_DRAW_STRIDE;
           }
-          return renderer.renderPacked(tileDraws.subarray(0, length), applicationFrame);
+          return renderer.renderPacked(
+            tileDraws.subarray(0, length),
+            applicationFrame ? applicationObjectFrame(applicationFrame) : null,
+            applicationFrame?.circleData ?? EMPTY_CIRCLES,
+            applicationFrame?.order ?? EMPTY_ORDER,
+          );
         });
       },
       resize(width, height) {
@@ -219,4 +237,33 @@ function assertLive(disposed: boolean) {
   if (disposed) {
     throw new Error("Maps wgpu base-map renderer has been disposed.");
   }
+}
+
+/** The application frame without its typed arrays, which cross WASM as typed slices. */
+type MapsWgpuApplicationObjectFrame = Pick<
+  MapsWgpuApplicationFrame,
+  "directionMarkers" | "height" | "lines" | "polygons" | "width"
+>;
+
+const EMPTY_CIRCLES = new Float32Array(0);
+const EMPTY_ORDER = new Uint32Array(0);
+// Camera-only frames re-render the same application frame; keep its object part stable.
+const applicationObjectFrames = new WeakMap<
+  MapsWgpuApplicationFrame,
+  MapsWgpuApplicationObjectFrame
+>();
+
+function applicationObjectFrame(frame: MapsWgpuApplicationFrame) {
+  let objectFrame = applicationObjectFrames.get(frame);
+  if (!objectFrame) {
+    objectFrame = {
+      directionMarkers: frame.directionMarkers,
+      height: frame.height,
+      lines: frame.lines,
+      polygons: frame.polygons,
+      width: frame.width,
+    };
+    applicationObjectFrames.set(frame, objectFrame);
+  }
+  return objectFrame;
 }

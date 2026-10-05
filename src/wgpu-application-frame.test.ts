@@ -9,8 +9,24 @@ import type {
 import type { MapScreenRenderFrame } from "./map-screen-render-frame";
 import {
   createMapsWgpuApplicationFrame,
+  createMapsWgpuApplicationFramePacker,
+  MAPS_WGPU_APPLICATION_CIRCLE,
   MAPS_WGPU_APPLICATION_POLYGON,
+  readMapsWgpuApplicationCircles,
+  type MapsWgpuApplicationFrame,
 } from "./wgpu-application-frame";
+
+/** The packed frame with its typed transport decoded, for structural comparison. */
+function decoded(frame: MapsWgpuApplicationFrame | null) {
+  if (!frame) return frame;
+  const { circleCount: _count, circleData: _data, order, ...rest } = frame;
+  const circles = readMapsWgpuApplicationCircles(frame).map((circle) => ({
+    ...circle,
+    fillColor: circle.fillColor.map((value) => Number(value.toFixed(6))),
+    strokeColor: circle.strokeColor.map((value) => Number(value.toFixed(6))),
+  }));
+  return { ...rest, circles, order: Array.from(order) };
+}
 
 describe("wgpu application frame", () => {
   test("packs a complete labeled circle frame with interaction-adjusted stroke width", () => {
@@ -36,20 +52,17 @@ describe("wgpu application frame", () => {
     };
 
     expect(
-      createMapsWgpuApplicationFrame(frame, {
-        selectedPrimitiveIds: new Set(["circle-a"]),
-      }),
+      decoded(
+        createMapsWgpuApplicationFrame(frame, {
+          selectedPrimitiveIds: new Set(["circle-a"]),
+        }),
+      ),
     ).toEqual({
       circles: [
         {
-          fillColor: [
-            0.033104766570885055,
-            0.13286832155381798,
-            0.31854677812509186,
-            0.5,
-          ],
+          fillColor: [0.033105, 0.132868, 0.318547, 0.5],
           radius: 7,
-          strokeColor: [1, 1, 1, 0.6000000000000001],
+          strokeColor: [1, 1, 1, 0.6],
           strokeWidth: 3.5,
           x: 120,
           y: 80,
@@ -58,7 +71,7 @@ describe("wgpu application frame", () => {
       directionMarkers: [],
       height: 480,
       lines: [],
-      order: [[0, 0]],
+      order: [MAPS_WGPU_APPLICATION_CIRCLE, 0, 1],
       polygons: [],
       width: 640,
     });
@@ -132,9 +145,11 @@ describe("wgpu application frame", () => {
     };
 
     expect(
-      createMapsWgpuApplicationFrame(frame, {
-        hoveredPrimitiveIds: new Set(["line-a"]),
-      }),
+      decoded(
+        createMapsWgpuApplicationFrame(frame, {
+          hoveredPrimitiveIds: new Set(["line-a"]),
+        }),
+      ),
     ).toEqual({
       circles: [
         {
@@ -167,11 +182,7 @@ describe("wgpu application frame", () => {
           strokeWidth: 3,
         },
       ],
-      order: [
-        [0, 0],
-        [1, 0],
-        [2, 0],
-      ],
+      order: [0, 0, 1, 1, 0, 1, 2, 0, 1],
       polygons: [],
       width: 640,
     });
@@ -238,7 +249,7 @@ describe("wgpu application frame", () => {
     });
 
     expect(packed).not.toBeNull();
-    expect(packed?.order).toEqual([[MAPS_WGPU_APPLICATION_POLYGON, 0]]);
+    expect(Array.from(packed?.order ?? [])).toEqual([MAPS_WGPU_APPLICATION_POLYGON, 0, 1]);
     expect(packed?.polygons).toHaveLength(1);
     expect(packed?.polygons[0]).toMatchObject({
       fillColor: [0.033104766570885055, 0.13286832155381798, 0.31854677812509186, 0.4],
@@ -341,10 +352,16 @@ describe("wgpu application frame", () => {
       width: 100,
     };
 
-    expect(createMapsWgpuApplicationFrame(frame)?.order).toEqual([
-      [0, 0],
-      [MAPS_WGPU_APPLICATION_POLYGON, 0],
-      [1, 0],
+    expect(Array.from(createMapsWgpuApplicationFrame(frame)?.order ?? [])).toEqual([
+      0,
+      0,
+      1,
+      MAPS_WGPU_APPLICATION_POLYGON,
+      0,
+      1,
+      1,
+      0,
+      1,
     ]);
   });
 
@@ -443,5 +460,53 @@ describe("wgpu application frame", () => {
     };
 
     expect(createMapsWgpuApplicationFrame(frame)).toBeNull();
+  });
+
+  test("packs dense circles into reused typed buffers with cached paint and one order run", () => {
+    const circles = (count: number, offset = 0) => ({
+      height: 600,
+      primitives: Array.from({ length: count }, (_, index) => ({
+        kind: "circle" as const,
+        renderPrimitive: {
+          center: [0, 0],
+          feature: null,
+          featureId: `point-${index}`,
+          fillColor: index % 2 ? "#336699" : "#ffffff",
+          fillOpacity: 1,
+          interactive: true,
+          kind: "circle" as const,
+          label: null,
+          primitiveId: `circle-${index}`,
+          radius: 4,
+          strokeColor: "#000000",
+          strokeOpacity: 1,
+          strokeWidth: 1,
+        } satisfies MapRenderCircle,
+        x: (index % 800) + offset,
+        y: Math.floor(index / 800),
+      })),
+      width: 800,
+    });
+    const packer = createMapsWgpuApplicationFramePacker();
+    const dense = circles(10_000);
+
+    const first = packer.pack(dense)!;
+    const afterFirst = packer.stats();
+    // A camera-only frame: same primitives at new screen positions.
+    const moved = circles(10_000, 3);
+    const second = packer.pack(moved)!;
+    const afterSecond = packer.stats();
+
+    expect(first.circleCount).toBe(10_000);
+    expect(Array.from(second.order)).toEqual([MAPS_WGPU_APPLICATION_CIRCLE, 0, 10_000]);
+    // Three distinct paint values, parsed once across both frames.
+    expect(afterFirst.paintParses).toBe(3);
+    expect(afterSecond.paintParses).toBe(3);
+    // The second frame reuses the grown buffers.
+    expect(afterSecond.bufferAllocations).toBe(afterFirst.bufferAllocations);
+    expect(second.circleData.buffer).toBe(first.circleData.buffer);
+    // Bridge bytes: 12 f32 per circle plus one 3 x u32 order run per frame.
+    expect(afterSecond.transportBytes - afterFirst.transportBytes).toBe(10_000 * 12 * 4 + 12);
+    expect(readMapsWgpuApplicationCircles(second)[0]).toMatchObject({ x: 3, y: 0 });
   });
 });

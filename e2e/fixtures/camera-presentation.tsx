@@ -5,7 +5,6 @@ import { GeoJsonLayer, type GeoJsonLayerProps } from "../../src/geojson-layer";
 import { MapsMapView } from "../../src/maps-map-view";
 import type { MapSurfaceController, MapViewState } from "../../src/map-display";
 import type { MapsFlatRasterRuntime } from "../../src/flat-runtime-wasm";
-import type { MapsWgpuApplicationFrame } from "../../src/wgpu-application-frame";
 
 // Keep the entire grid, including the first entity used for picking, inside
 // the viewport both before and after the measured zoom burst.
@@ -74,7 +73,12 @@ type WasmModule = {
   };
   MapsWgpuBaseMapRenderer: {
     prototype: {
-      renderPacked(tileDraws: Float64Array, application: MapsWgpuApplicationFrame | null): number;
+      renderPacked(
+        tileDraws: Float64Array,
+        application: object | null,
+        circleData: Float32Array,
+        order: Uint32Array,
+      ): number;
     };
   };
 };
@@ -104,12 +108,13 @@ runtimePrototype.projectPacked = function (packed) {
 const expected = (): [number, number] => originalProject.call(activeRuntime!, ...coordinates);
 const rendererPrototype = wasm.MapsWgpuBaseMapRenderer.prototype;
 const originalRender = rendererPrototype.renderPacked;
-rendererPrototype.renderPacked = function (tileDraws, application) {
+rendererPrototype.renderPacked = function (tileDraws, application, circleData, order) {
   if (activeRuntime) {
-    const circle = application?.circles[0];
+    // Packed circle record: x, y first (see MAPS_WGPU_APPLICATION_CIRCLE_STRIDE).
+    const circle = circleData.length > 0 ? { x: circleData[0]!, y: circleData[1]! } : null;
     probe.samples.push({ actual: circle ? [circle.x, circle.y] : null, expected: expected() });
   }
-  return originalRender.call(this, tileDraws, application);
+  return originalRender.call(this, tileDraws, application, circleData, order);
 };
 // Canvas fallback uses the identical acceptance check, at its actual draw edge.
 const originalClear = CanvasRenderingContext2D.prototype.clearRect;

@@ -54,175 +54,290 @@ export const MAPS_WGPU_APPLICATION_LINE = 1;
 export const MAPS_WGPU_APPLICATION_DIRECTION_MARKER = 2;
 export const MAPS_WGPU_APPLICATION_POLYGON = 3;
 
-export type MapsWgpuApplicationOrderEntry = [
-  kind:
-    | typeof MAPS_WGPU_APPLICATION_CIRCLE
-    | typeof MAPS_WGPU_APPLICATION_LINE
-    | typeof MAPS_WGPU_APPLICATION_DIRECTION_MARKER
-    | typeof MAPS_WGPU_APPLICATION_POLYGON,
-  index: number,
-];
+/**
+ * Packed circle record shared with `maps-wasm` (`APPLICATION_CIRCLE_RECORD_LENGTH`): x, y,
+ * radius, stroke width (viewport CSS px), fill RGBA, stroke RGBA (linear light).
+ */
+export const MAPS_WGPU_APPLICATION_CIRCLE_STRIDE = 12;
+/** Painter-order runs: (kind, first index, count) per run of consecutive same-kind entries. */
+export const MAPS_WGPU_APPLICATION_ORDER_STRIDE = 3;
 
 export type MapsWgpuApplicationFrame = {
-  circles: MapsWgpuApplicationCircle[];
+  /** `circleCount` packed circle records; a view into the packer's reused buffer. */
+  circleData: Float32Array;
+  circleCount: number;
   directionMarkers: MapsWgpuApplicationDirectionMarker[];
   height: number;
   lines: MapsWgpuApplicationLine[];
-  order: MapsWgpuApplicationOrderEntry[];
+  /** Painter-order runs over all kinds; a view into the packer's reused buffer. */
+  order: Uint32Array;
   polygons: MapsWgpuApplicationPolygon[];
   width: number;
 };
+
+/** Deterministic work and bridge counters of one packer, for transport evidence. */
+export type MapsWgpuApplicationTransportStats = {
+  /** Frames packed. */
+  frames: number;
+  /** Circles packed into typed records (no per-circle transport objects). */
+  circles: number;
+  /** CSS colors parsed; repeated paint values reuse the cached linear RGBA. */
+  paintParses: number;
+  /** Typed bytes handed to the WASM bridge for circles and painter order. */
+  transportBytes: number;
+  /** Typed-buffer (re)allocations; steady frames reuse the grown buffers. */
+  bufferAllocations: number;
+};
+
+export type MapsWgpuApplicationFramePacker = {
+  pack(
+    frame: MapScreenRenderFrame<unknown>,
+    interaction?: MapScreenInteractionState,
+  ): MapsWgpuApplicationFrame | null;
+  stats(): MapsWgpuApplicationTransportStats;
+};
+
+const PAINT_CACHE_LIMIT = 4096;
 
 /**
  * Packs first-party application geometry for the existing Rust/wgpu backend.
  *
  * Projection has already happened through the Maps-owned runtime. This transport only resolves
- * renderer-side colors and interaction stroke widths. Per-kind arrays keep WASM deserialization
- * simple and compact; `order` preserves the exact Maps render order across circles, lines, polygons,
- * and flow direction markers. Projected line and polygon points are reused directly until the
- * unavoidable WASM boundary. Polygon fills use Earcut only as renderer-side screen-space
- * tessellation; Maps remains authoritative for geographic projection, ring semantics, identity and
- * interaction state. Labels remain a thin Canvas annotation pass above wgpu geometry.
+ * renderer-side colors and interaction stroke widths. Circles, the dense case, cross the WASM
+ * boundary as one reused `Float32Array` of fixed records rather than one object per circle, and
+ * painter order as run-length `Uint32Array` runs; resolved paint is cached by CSS value, so
+ * camera-only frames do not reparse colors. Lines, polygons and direction markers keep the
+ * object transport until their retained representation (#155) replaces it. Polygon fills use
+ * Earcut only as renderer-side screen-space tessellation; Maps remains authoritative for
+ * geographic projection, ring semantics, identity and interaction state. Labels remain a thin
+ * Canvas annotation pass above wgpu geometry.
+ *
+ * A packed frame's typed arrays are views into the packer's buffers: they stay valid until the
+ * next `pack` call, which is when the host replaces its current frame.
  */
+export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFramePacker {
+  let circleBuffer = new Float32Array(0);
+  let orderBuffer = new Uint32Array(0);
+  const paintCache = new Map<string, MapsWgpuColor | null>();
+  const stats: MapsWgpuApplicationTransportStats = {
+    bufferAllocations: 0,
+    circles: 0,
+    frames: 0,
+    paintParses: 0,
+    transportBytes: 0,
+  };
+
+  const paint = (value: string, opacity: number) => {
+    const key = `${value}\u0000${opacity}`;
+    let color = paintCache.get(key);
+    if (color === undefined) {
+      if (paintCache.size >= PAINT_CACHE_LIMIT) paintCache.clear();
+      color = parseSupportedCssColor(value, opacity);
+      paintCache.set(key, color);
+      stats.paintParses += 1;
+    }
+    return color;
+  };
+
+  return {
+    pack(frame, interaction = {}) {
+      if (
+        !Number.isFinite(frame.width) ||
+        !Number.isFinite(frame.height) ||
+        frame.width <= 0 ||
+        frame.height <= 0
+      ) {
+        return null;
+      }
+
+      const circleCapacity = frame.primitives.length * MAPS_WGPU_APPLICATION_CIRCLE_STRIDE;
+      if (circleBuffer.length < circleCapacity) {
+        circleBuffer = new Float32Array(Math.max(circleCapacity, circleBuffer.length * 2));
+        stats.bufferAllocations += 1;
+      }
+      const orderCapacity = frame.primitives.length * MAPS_WGPU_APPLICATION_ORDER_STRIDE;
+      if (orderBuffer.length < orderCapacity) {
+        orderBuffer = new Uint32Array(Math.max(orderCapacity, orderBuffer.length * 2));
+        stats.bufferAllocations += 1;
+      }
+
+      let circleCount = 0;
+      let orderLength = 0;
+      const directionMarkers: MapsWgpuApplicationDirectionMarker[] = [];
+      const lines: MapsWgpuApplicationLine[] = [];
+      const polygons: MapsWgpuApplicationPolygon[] = [];
+      const pushOrder = (kind: number, index: number) => {
+        if (
+          orderLength > 0 &&
+          orderBuffer[orderLength - 3] === kind &&
+          orderBuffer[orderLength - 2]! + orderBuffer[orderLength - 1]! === index
+        ) {
+          orderBuffer[orderLength - 1]! += 1;
+          return;
+        }
+        orderBuffer[orderLength] = kind;
+        orderBuffer[orderLength + 1] = index;
+        orderBuffer[orderLength + 2] = 1;
+        orderLength += MAPS_WGPU_APPLICATION_ORDER_STRIDE;
+      };
+
+      for (const scenePrimitive of frame.primitives) {
+        switch (scenePrimitive.kind) {
+          case "circle": {
+            const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
+            const fillColor = paint(primitive.fillColor, primitive.fillOpacity);
+            const strokeColor = paint(primitive.strokeColor, primitive.strokeOpacity);
+            const strokeWidth = resolveStrokeWidth(
+              primitive.strokeWidth,
+              primitive.primitiveId,
+              interaction,
+            );
+
+            if (
+              !fillColor ||
+              !strokeColor ||
+              !Number.isFinite(scenePrimitive.x) ||
+              !Number.isFinite(scenePrimitive.y) ||
+              !Number.isFinite(primitive.radius) ||
+              primitive.radius < 0 ||
+              !Number.isFinite(strokeWidth)
+            ) {
+              return null;
+            }
+
+            pushOrder(MAPS_WGPU_APPLICATION_CIRCLE, circleCount);
+            const offset = circleCount * MAPS_WGPU_APPLICATION_CIRCLE_STRIDE;
+            circleBuffer[offset] = scenePrimitive.x;
+            circleBuffer[offset + 1] = scenePrimitive.y;
+            circleBuffer[offset + 2] = primitive.radius;
+            circleBuffer[offset + 3] = strokeWidth;
+            circleBuffer.set(fillColor, offset + 4);
+            circleBuffer.set(strokeColor, offset + 8);
+            circleCount += 1;
+            break;
+          }
+          case "direction-marker": {
+            const primitive = scenePrimitive.renderPrimitive as MapRenderDirectionMarker<unknown>;
+            const color = paint(primitive.color, primitive.opacity);
+            if (
+              !color ||
+              !Number.isFinite(scenePrimitive.x) ||
+              !Number.isFinite(scenePrimitive.y) ||
+              !Number.isFinite(scenePrimitive.angle) ||
+              !Number.isFinite(primitive.size) ||
+              primitive.size < 0
+            ) {
+              return null;
+            }
+
+            pushOrder(MAPS_WGPU_APPLICATION_DIRECTION_MARKER, directionMarkers.length);
+            directionMarkers.push({
+              angle: scenePrimitive.angle,
+              color,
+              size: primitive.size,
+              x: scenePrimitive.x,
+              y: scenePrimitive.y,
+            });
+            break;
+          }
+          case "line": {
+            const primitive = scenePrimitive.renderPrimitive as MapRenderLine<unknown>;
+            const color = paint(primitive.strokeColor, primitive.strokeOpacity);
+            const strokeWidth = resolveStrokeWidth(
+              primitive.strokeWidth,
+              primitive.primitiveId,
+              interaction,
+            );
+            const points = scenePrimitive.points;
+
+            if (
+              !color ||
+              points.length < 2 ||
+              !allFinitePoints(points) ||
+              !hasNonDegenerateSegment(points) ||
+              !Number.isFinite(strokeWidth)
+            ) {
+              return null;
+            }
+
+            pushOrder(MAPS_WGPU_APPLICATION_LINE, lines.length);
+            lines.push({ color, points, strokeWidth });
+            break;
+          }
+          case "polygon": {
+            const primitive = scenePrimitive.renderPrimitive as MapRenderPolygon<unknown>;
+            const fillColor = paint(primitive.fillColor, primitive.fillOpacity);
+            const strokeColor = paint(primitive.strokeColor, primitive.strokeOpacity);
+            const strokeWidth = resolveStrokeWidth(
+              primitive.strokeWidth,
+              primitive.primitiveId,
+              interaction,
+            );
+            const geometry = preparePolygonGeometry(scenePrimitive.rings);
+
+            if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth) || !geometry) {
+              return null;
+            }
+
+            pushOrder(MAPS_WGPU_APPLICATION_POLYGON, polygons.length);
+            polygons.push({
+              fillColor,
+              fillPoints: geometry.fillPoints,
+              rings: geometry.rings,
+              strokeColor,
+              strokeWidth,
+            });
+            break;
+          }
+        }
+      }
+
+      const circleData = circleBuffer.subarray(0, circleCount * MAPS_WGPU_APPLICATION_CIRCLE_STRIDE);
+      const order = orderBuffer.subarray(0, orderLength);
+      stats.frames += 1;
+      stats.circles += circleCount;
+      stats.transportBytes += circleData.byteLength + order.byteLength;
+      return {
+        circleCount,
+        circleData,
+        directionMarkers,
+        height: frame.height,
+        lines,
+        order,
+        polygons,
+        width: frame.width,
+      };
+    },
+    stats() {
+      return { ...stats };
+    },
+  };
+}
+
+/** One-off packing with a fresh packer (tests and probes); hosts keep one packer. */
 export function createMapsWgpuApplicationFrame(
   frame: MapScreenRenderFrame<unknown>,
   interaction: MapScreenInteractionState = {},
 ): MapsWgpuApplicationFrame | null {
-  if (
-    !Number.isFinite(frame.width) ||
-    !Number.isFinite(frame.height) ||
-    frame.width <= 0 ||
-    frame.height <= 0
-  ) {
-    return null;
-  }
+  return createMapsWgpuApplicationFramePacker().pack(frame, interaction);
+}
 
-  const circles: MapsWgpuApplicationCircle[] = [];
-  const directionMarkers: MapsWgpuApplicationDirectionMarker[] = [];
-  const lines: MapsWgpuApplicationLine[] = [];
-  const order: MapsWgpuApplicationOrderEntry[] = [];
-  const polygons: MapsWgpuApplicationPolygon[] = [];
-
-  for (const scenePrimitive of frame.primitives) {
-    switch (scenePrimitive.kind) {
-      case "circle": {
-        const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
-        const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
-        const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
-        const strokeWidth = resolveStrokeWidth(
-          primitive.strokeWidth,
-          primitive.primitiveId,
-          interaction,
-        );
-
-        if (
-          !fillColor ||
-          !strokeColor ||
-          !Number.isFinite(scenePrimitive.x) ||
-          !Number.isFinite(scenePrimitive.y) ||
-          !Number.isFinite(primitive.radius) ||
-          primitive.radius < 0 ||
-          !Number.isFinite(strokeWidth)
-        ) {
-          return null;
-        }
-
-        order.push([MAPS_WGPU_APPLICATION_CIRCLE, circles.length]);
-        circles.push({
-          fillColor,
-          radius: primitive.radius,
-          strokeColor,
-          strokeWidth,
-          x: scenePrimitive.x,
-          y: scenePrimitive.y,
-        });
-        break;
-      }
-      case "direction-marker": {
-        const primitive = scenePrimitive.renderPrimitive as MapRenderDirectionMarker<unknown>;
-        const color = parseSupportedCssColor(primitive.color, primitive.opacity);
-        if (
-          !color ||
-          !Number.isFinite(scenePrimitive.x) ||
-          !Number.isFinite(scenePrimitive.y) ||
-          !Number.isFinite(scenePrimitive.angle) ||
-          !Number.isFinite(primitive.size) ||
-          primitive.size < 0
-        ) {
-          return null;
-        }
-
-        order.push([MAPS_WGPU_APPLICATION_DIRECTION_MARKER, directionMarkers.length]);
-        directionMarkers.push({
-          angle: scenePrimitive.angle,
-          color,
-          size: primitive.size,
-          x: scenePrimitive.x,
-          y: scenePrimitive.y,
-        });
-        break;
-      }
-      case "line": {
-        const primitive = scenePrimitive.renderPrimitive as MapRenderLine<unknown>;
-        const color = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
-        const strokeWidth = resolveStrokeWidth(
-          primitive.strokeWidth,
-          primitive.primitiveId,
-          interaction,
-        );
-        const points = scenePrimitive.points;
-
-        if (
-          !color ||
-          points.length < 2 ||
-          !allFinitePoints(points) ||
-          !hasNonDegenerateSegment(points) ||
-          !Number.isFinite(strokeWidth)
-        ) {
-          return null;
-        }
-
-        order.push([MAPS_WGPU_APPLICATION_LINE, lines.length]);
-        lines.push({ color, points, strokeWidth });
-        break;
-      }
-      case "polygon": {
-        const primitive = scenePrimitive.renderPrimitive as MapRenderPolygon<unknown>;
-        const fillColor = parseSupportedCssColor(primitive.fillColor, primitive.fillOpacity);
-        const strokeColor = parseSupportedCssColor(primitive.strokeColor, primitive.strokeOpacity);
-        const strokeWidth = resolveStrokeWidth(
-          primitive.strokeWidth,
-          primitive.primitiveId,
-          interaction,
-        );
-        const geometry = preparePolygonGeometry(scenePrimitive.rings);
-
-        if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth) || !geometry) {
-          return null;
-        }
-
-        order.push([MAPS_WGPU_APPLICATION_POLYGON, polygons.length]);
-        polygons.push({
-          fillColor,
-          fillPoints: geometry.fillPoints,
-          rings: geometry.rings,
-          strokeColor,
-          strokeWidth,
-        });
-        break;
-      }
-    }
-  }
-
-  return {
-    circles,
-    directionMarkers,
-    height: frame.height,
-    lines,
-    order,
-    polygons,
-    width: frame.width,
-  };
+/** Decodes the packed circle records (tests and diagnostics). */
+export function readMapsWgpuApplicationCircles(
+  frame: MapsWgpuApplicationFrame,
+): MapsWgpuApplicationCircle[] {
+  return Array.from({ length: frame.circleCount }, (_, index) => {
+    const offset = index * MAPS_WGPU_APPLICATION_CIRCLE_STRIDE;
+    const data = frame.circleData;
+    return {
+      fillColor: [data[offset + 4]!, data[offset + 5]!, data[offset + 6]!, data[offset + 7]!],
+      radius: data[offset + 2]!,
+      strokeColor: [data[offset + 8]!, data[offset + 9]!, data[offset + 10]!, data[offset + 11]!],
+      strokeWidth: data[offset + 3]!,
+      x: data[offset]!,
+      y: data[offset + 1]!,
+    };
+  });
 }
 
 function allFinitePoints(points: readonly MapsWgpuApplicationPoint[]) {

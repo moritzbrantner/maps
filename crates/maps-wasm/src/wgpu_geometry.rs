@@ -137,19 +137,72 @@ fn unpack_tile_draw(record: &[f64; PACKED_TILE_DRAW_STRIDE]) -> WgpuRasterTilePl
     }
 }
 
+/// Packed circle record shared with `src/wgpu-application-frame.ts`
+/// (`MAPS_WGPU_APPLICATION_CIRCLE_STRIDE`): x, y, radius, stroke width (viewport CSS
+/// px), fill RGBA, stroke RGBA (linear light).
+pub(super) const APPLICATION_CIRCLE_RECORD_LENGTH: usize = 12;
+/// Painter-order run: (kind, first index, count).
+pub(super) const APPLICATION_ORDER_RUN_LENGTH: usize = 3;
+
+/// One application frame. Lines, polygons and direction markers arrive as a
+/// deserialized object; dense circles and the painter order arrive as typed slices
+/// ([`Self::attach_packed`]) and are read in place, never rebuilt as objects.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct WgpuApplicationFrame {
-    pub(super) circles: Vec<WgpuApplicationCircle>,
+    #[serde(skip)]
+    pub(super) circle_data: Vec<f32>,
+    /// Render-surface offset applied to packed circle centers when they are read.
+    #[serde(skip)]
+    pub(super) circle_offset: f64,
     pub(super) direction_markers: Vec<WgpuApplicationDirectionMarker>,
     pub(super) height: f64,
     pub(super) lines: Vec<WgpuApplicationLine>,
-    pub(super) order: Vec<[u32; 2]>,
+    /// Painter-order runs, [`APPLICATION_ORDER_RUN_LENGTH`] values each.
+    #[serde(skip)]
+    pub(super) order: Vec<u32>,
     pub(super) polygons: Vec<WgpuApplicationPolygon>,
     pub(super) width: f64,
 }
 
 impl WgpuApplicationFrame {
+    /// Attaches the typed circle records and painter-order runs of the frame.
+    pub(super) fn attach_packed(
+        &mut self,
+        circle_data: &[f32],
+        order: &[u32],
+    ) -> Result<(), &'static str> {
+        if !circle_data
+            .len()
+            .is_multiple_of(APPLICATION_CIRCLE_RECORD_LENGTH)
+            || !order.len().is_multiple_of(APPLICATION_ORDER_RUN_LENGTH)
+        {
+            return Err("invalid packed wgpu application circles or order");
+        }
+        self.circle_data.clear();
+        self.circle_data.extend_from_slice(circle_data);
+        self.order.clear();
+        self.order.extend_from_slice(order);
+        Ok(())
+    }
+
+    /// Reads one packed circle (render-surface coordinates) without allocating.
+    pub(super) fn circle(&self, index: usize) -> Option<WgpuApplicationCircle> {
+        let record = self
+            .circle_data
+            .as_chunks::<APPLICATION_CIRCLE_RECORD_LENGTH>()
+            .0
+            .get(index)?;
+        Some(WgpuApplicationCircle {
+            fill_color: [record[4], record[5], record[6], record[7]],
+            radius: f64::from(record[2]),
+            stroke_color: [record[8], record[9], record[10], record[11]],
+            stroke_width: f64::from(record[3]),
+            x: f64::from(record[0]) + self.circle_offset,
+            y: f64::from(record[1]) + self.circle_offset,
+        })
+    }
+
     /// Moves viewport CSS-pixel geometry into the render surface, which extends
     /// the viewport by `margin` on every side. Sizes (radii, strokes) are unchanged.
     pub(super) fn offset_into_surface(&mut self, margin: f64) {
@@ -158,10 +211,7 @@ impl WgpuApplicationFrame {
         }
         self.width += 2.0 * margin;
         self.height += 2.0 * margin;
-        for circle in &mut self.circles {
-            circle.x += margin;
-            circle.y += margin;
-        }
+        self.circle_offset += margin;
         for marker in &mut self.direction_markers {
             marker.x += margin;
             marker.y += margin;
@@ -185,8 +235,7 @@ impl WgpuApplicationFrame {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct WgpuApplicationCircle {
     pub(super) fill_color: [f32; 4],
     pub(super) radius: f64,
@@ -298,9 +347,17 @@ pub(super) fn prepare_application_geometry(
     }
 
     let mut geometry = ApplicationGeometry::default();
-    for [kind, index] in &frame.order {
-        let index = *index as usize;
-        match *kind {
+    let entries = frame
+        .order
+        .as_chunks::<APPLICATION_ORDER_RUN_LENGTH>()
+        .0
+        .iter()
+        .flat_map(|&[kind, first, count]| {
+            (u64::from(first)..u64::from(first) + u64::from(count)).map(move |index| (kind, index))
+        });
+    for (kind, index) in entries {
+        let index = usize::try_from(index).map_err(|_| "invalid wgpu order index")?;
+        match kind {
             APPLICATION_CIRCLE => {
                 let first_instance = (geometry.circle_instances.len() as u64
                     / APPLICATION_CIRCLE_INSTANCE_SIZE) as u32;
@@ -308,9 +365,8 @@ pub(super) fn prepare_application_geometry(
                     &mut geometry.circle_instances,
                     frame.width,
                     frame.height,
-                    frame
-                        .circles
-                        .get(index)
+                    &frame
+                        .circle(index)
                         .ok_or("invalid wgpu circle order index")?,
                 )?;
                 append_application_draw(
@@ -866,6 +922,50 @@ pub(super) fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
 mod application_geometry_tests {
     use super::*;
 
+    /// Builds a frame through the packed transport: one record per circle and one
+    /// painter-order run per entry (consecutive runs are not merged here, so tests also
+    /// cover the draw-batching of separate runs).
+    fn packed_frame(
+        circles: Vec<WgpuApplicationCircle>,
+        direction_markers: Vec<WgpuApplicationDirectionMarker>,
+        height: f64,
+        lines: Vec<WgpuApplicationLine>,
+        order: Vec<[u32; 2]>,
+        polygons: Vec<WgpuApplicationPolygon>,
+        width: f64,
+    ) -> WgpuApplicationFrame {
+        let circle_data: Vec<f32> = circles
+            .iter()
+            .flat_map(|circle| {
+                [
+                    circle.x as f32,
+                    circle.y as f32,
+                    circle.radius as f32,
+                    circle.stroke_width as f32,
+                ]
+                .into_iter()
+                .chain(circle.fill_color)
+                .chain(circle.stroke_color)
+            })
+            .collect();
+        let runs: Vec<u32> = order
+            .iter()
+            .flat_map(|&[kind, index]| [kind, index, 1])
+            .collect();
+        let mut frame = WgpuApplicationFrame {
+            circle_data: Vec::new(),
+            circle_offset: 0.0,
+            direction_markers,
+            height,
+            lines,
+            order: Vec::new(),
+            polygons,
+            width,
+        };
+        frame.attach_packed(&circle_data, &runs).unwrap();
+        frame
+    }
+
     fn circle(x: f64) -> WgpuApplicationCircle {
         WgpuApplicationCircle {
             fill_color: [0.1, 0.2, 0.8, 1.0],
@@ -912,30 +1012,28 @@ mod application_geometry_tests {
 
     #[test]
     fn render_surface_margin_offsets_every_primitive_without_changing_paint() {
-        let mut frame = WgpuApplicationFrame {
-            circles: vec![circle(10.0)],
-            direction_markers: vec![WgpuApplicationDirectionMarker {
+        let mut frame = packed_frame(
+            vec![circle(10.0)],
+            vec![WgpuApplicationDirectionMarker {
                 angle: 0.5,
                 color: [0.1, 0.2, 0.3, 1.0],
                 size: 6.0,
                 x: 20.0,
                 y: 30.0,
             }],
-            height: 100.0,
-            lines: vec![line()],
-            order: vec![],
-            polygons: vec![polygon()],
-            width: 200.0,
-        };
+            100.0,
+            vec![line()],
+            vec![],
+            vec![polygon()],
+            200.0,
+        );
 
         frame.offset_into_surface(128.0);
 
         assert_eq!((frame.width, frame.height), (456.0, 356.0));
-        assert_eq!((frame.circles[0].x, frame.circles[0].y), (138.0, 178.0));
-        assert_eq!(
-            (frame.circles[0].radius, frame.circles[0].stroke_width),
-            (6.0, 2.0)
-        );
+        let circle = frame.circle(0).unwrap();
+        assert_eq!((circle.x, circle.y), (138.0, 178.0));
+        assert_eq!((circle.radius, circle.stroke_width), (6.0, 2.0));
         assert_eq!(
             (frame.direction_markers[0].x, frame.direction_markers[0].y),
             (148.0, 158.0)
@@ -970,17 +1068,17 @@ mod application_geometry_tests {
     #[test]
     fn dense_circles_use_one_instanced_draw_without_triangle_tessellation() {
         let count = 10_000_u32;
-        let frame = WgpuApplicationFrame {
-            circles: (0..count).map(|index| circle(f64::from(index))).collect(),
-            direction_markers: Vec::new(),
-            height: 100.0,
-            lines: Vec::new(),
-            order: (0..count)
+        let frame = packed_frame(
+            (0..count).map(|index| circle(f64::from(index))).collect(),
+            Vec::new(),
+            100.0,
+            Vec::new(),
+            (0..count)
                 .map(|index| [APPLICATION_CIRCLE, index])
                 .collect(),
-            polygons: Vec::new(),
-            width: 100.0,
-        };
+            Vec::new(),
+            100.0,
+        );
 
         let geometry = prepare_application_geometry(&frame).unwrap();
 
@@ -1000,15 +1098,15 @@ mod application_geometry_tests {
 
     #[test]
     fn polygon_fill_and_closed_stroke_use_existing_triangle_path() {
-        let frame = WgpuApplicationFrame {
-            circles: Vec::new(),
-            direction_markers: Vec::new(),
-            height: 100.0,
-            lines: Vec::new(),
-            order: vec![[APPLICATION_POLYGON, 0]],
-            polygons: vec![polygon()],
-            width: 100.0,
-        };
+        let frame = packed_frame(
+            Vec::new(),
+            Vec::new(),
+            100.0,
+            Vec::new(),
+            vec![[APPLICATION_POLYGON, 0]],
+            vec![polygon()],
+            100.0,
+        );
 
         let geometry = prepare_application_geometry(&frame).unwrap();
         let vertex_count =
@@ -1026,19 +1124,19 @@ mod application_geometry_tests {
 
     #[test]
     fn polygon_between_circles_preserves_painter_order() {
-        let frame = WgpuApplicationFrame {
-            circles: vec![circle(10.0), circle(40.0)],
-            direction_markers: Vec::new(),
-            height: 100.0,
-            lines: Vec::new(),
-            order: vec![
+        let frame = packed_frame(
+            vec![circle(10.0), circle(40.0)],
+            Vec::new(),
+            100.0,
+            Vec::new(),
+            vec![
                 [APPLICATION_CIRCLE, 0],
                 [APPLICATION_POLYGON, 0],
                 [APPLICATION_CIRCLE, 1],
             ],
-            polygons: vec![polygon()],
-            width: 100.0,
-        };
+            vec![polygon()],
+            100.0,
+        );
 
         let geometry = prepare_application_geometry(&frame).unwrap();
         let polygon_vertices =
@@ -1065,20 +1163,20 @@ mod application_geometry_tests {
 
     #[test]
     fn interleaved_circle_and_line_batches_preserve_painter_order() {
-        let frame = WgpuApplicationFrame {
-            circles: vec![circle(10.0), circle(30.0), circle(40.0)],
-            direction_markers: Vec::new(),
-            height: 100.0,
-            lines: vec![line()],
-            order: vec![
+        let frame = packed_frame(
+            vec![circle(10.0), circle(30.0), circle(40.0)],
+            Vec::new(),
+            100.0,
+            vec![line()],
+            vec![
                 [APPLICATION_CIRCLE, 0],
                 [APPLICATION_CIRCLE, 1],
                 [APPLICATION_LINE, 0],
                 [APPLICATION_CIRCLE, 2],
             ],
-            polygons: Vec::new(),
-            width: 100.0,
-        };
+            Vec::new(),
+            100.0,
+        );
 
         let geometry = prepare_application_geometry(&frame).unwrap();
         let line_vertices =
@@ -1102,6 +1200,50 @@ mod application_geometry_tests {
                 },
             ]
         );
+    }
+    #[test]
+    fn one_painter_order_run_covers_a_dense_circle_batch() {
+        let count = 4_u32;
+        let mut frame = packed_frame(
+            (0..count).map(|index| circle(f64::from(index))).collect(),
+            Vec::new(),
+            100.0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100.0,
+        );
+        frame.order = vec![APPLICATION_CIRCLE, 0, count];
+
+        let geometry = prepare_application_geometry(&frame).unwrap();
+
+        assert_eq!(
+            geometry.draws,
+            vec![ApplicationDraw::Circles {
+                first_instance: 0,
+                instance_count: count,
+            }]
+        );
+    }
+
+    #[test]
+    fn malformed_packed_circles_and_order_fail_closed() {
+        let mut frame = packed_frame(
+            vec![circle(1.0)],
+            Vec::new(),
+            100.0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100.0,
+        );
+        assert!(frame.attach_packed(&[0.0; 11], &[]).is_err());
+        assert!(frame.attach_packed(&[0.0; 12], &[0, 0]).is_err());
+        // An order run beyond the packed circles is rejected, not read out of bounds.
+        frame
+            .attach_packed(&[0.0; 12], &[APPLICATION_CIRCLE, 0, 2])
+            .unwrap();
+        assert!(prepare_application_geometry(&frame).is_err());
     }
 }
 
