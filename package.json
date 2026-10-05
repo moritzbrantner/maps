@@ -134,8 +134,8 @@
     "three": "^0.185.0"
   },
   "devDependencies": {
-    "@moritzbrantner/timeline-editor": "^1.0.1",
-    "@moritzbrantner/ui": "^1.0.0",
+    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#9917ede5590e43a9f6ec39e3d420243f060098ac",
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#9892e374bfd760541b25c4480b5af03e87ee7e9d",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.0",
     "@tanstack/react-query": "^5.100.14",
@@ -163,7 +163,7 @@
     "vitest": "^4.1.8"
   },
   "peerDependencies": {
-    "@moritzbrantner/timeline-editor": "^1.0.1",
+    "@moritzbrantner/timeline-editor": "^1.0.0",
     "@moritzbrantner/ui": "^1.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -184,5 +184,9 @@
     "postcss": "8.5.28",
     "undici": "7.29.1"
   },
-  "packageManager": "bun@1.3.14"
+  "packageManager": "bun@1.3.14",
+  "trustedDependencies": [
+    "@moritzbrantner/timeline-editor",
+    "@moritzbrantner/ui"
+  ]
 }
