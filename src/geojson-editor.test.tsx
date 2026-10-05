@@ -2,8 +2,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { EditableGeoJsonMap } from "./entries/editor";
 import {
-  EditableGeoJsonMap,
   GeoJsonEditorLayer,
   GeoJsonLayer,
   MapView,

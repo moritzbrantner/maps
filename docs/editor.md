@@ -7,11 +7,8 @@ toolbar UI, persistence, undo, save, and cancel flows.
 
 ```tsx
 import { useState } from "react";
-import {
-  EditableGeoJsonMap,
-  type GeoJsonEditMode,
-  type TemporalGeoJsonGeometryFeatureCollection,
-} from "@moritzbrantner/maps";
+import { EditableGeoJsonMap, type GeoJsonEditMode } from "@moritzbrantner/maps/editor";
+import type { TemporalGeoJsonGeometryFeatureCollection } from "@moritzbrantner/maps/temporal";
 
 export function GeoJsonEditor({
   initialGeoJson,

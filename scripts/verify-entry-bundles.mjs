@@ -9,7 +9,7 @@ const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), 
 const errors = [];
 const entrySizeBudgets = {
   "core.js": 16_384,
-  "editor.js": 4_096,
+  "editor.js": 8_192,
   "flat.js": 8_192,
   "geojson.js": 4_096,
   "heat.js": 4_096,
@@ -36,6 +36,10 @@ verifyMissingImports("flat", [
   "three",
   "@moritzbrantner/timeline-editor",
 ]);
+// Bundlers (Rollup/Vite) resolve dynamically imported chunks too and fail on named imports from
+// a missing optional peer, so nothing the root entry reaches may import it.
+verifyMissingImports("index", ["@moritzbrantner/timeline-editor"], { transitive: true });
+verifyDefaultOnlyImports(["polygon-clipping"]);
 verifyBundleBudgets();
 
 for (const [exportPath, exportValue] of Object.entries(packageJson.exports ?? {})) {
@@ -67,7 +71,7 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-function verifyMissingImports(entryName, forbiddenPackages) {
+function verifyMissingImports(entryName, forbiddenPackages, { transitive = false } = {}) {
   const bundlePath = path.join(rootDir, "dist", `${entryName}.js`);
 
   if (!existsSync(bundlePath)) {
@@ -75,11 +79,63 @@ function verifyMissingImports(entryName, forbiddenPackages) {
     return;
   }
 
-  const contents = readFileSync(bundlePath, "utf8");
+  for (const filePath of (transitive ? collectBundleGraph(bundlePath) : [bundlePath])) {
+    const contents = readFileSync(filePath, "utf8");
+    const via = path.basename(filePath) === `${entryName}.js` ? "" : ` (via dist/${path.basename(filePath)})`;
 
-  for (const packageName of forbiddenPackages) {
-    if (hasRuntimeImport(contents, packageName)) {
-      errors.push(`dist/${entryName}.js must not import ${packageName}`);
+    for (const packageName of forbiddenPackages) {
+      if (hasRuntimeImport(contents, packageName)) {
+        errors.push(`dist/${entryName}.js must not import ${packageName}${via}`);
+      }
+    }
+  }
+}
+
+// An entry plus every local chunk it reaches through static or dynamic imports.
+function collectBundleGraph(entryPath) {
+  const seen = new Set();
+  const pending = [entryPath];
+  const localImportPattern = /(?:from\s*|import\s*\(?\s*)["'](\.\/[^"']+\.js)["']/g;
+
+  while (pending.length > 0) {
+    const filePath = pending.pop();
+
+    if (seen.has(filePath) || !existsSync(filePath)) {
+      continue;
+    }
+
+    seen.add(filePath);
+
+    for (const match of readFileSync(filePath, "utf8").matchAll(localImportPattern)) {
+      pending.push(path.join(path.dirname(filePath), match[1]));
+    }
+  }
+
+  return seen;
+}
+
+// Packages whose ESM build only has a default export: named imports fail under Rollup.
+function verifyDefaultOnlyImports(packageNames) {
+  const distDir = path.join(rootDir, "dist");
+
+  if (!existsSync(distDir)) {
+    return;
+  }
+
+  for (const fileName of readdirSync(distDir)) {
+    if (!fileName.endsWith(".js")) {
+      continue;
+    }
+
+    const contents = readFileSync(path.join(distDir, fileName), "utf8");
+
+    for (const packageName of packageNames) {
+      const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const namedImportPattern = new RegExp(`import\\s*(?:[\\w$]+\\s*,\\s*)?\\{[^}]*\\}\\s*from\\s*["']${escaped}["']`);
+
+      if (namedImportPattern.test(contents)) {
+        errors.push(`dist/${fileName} uses named imports from ${packageName}; import its default export`);
+      }
     }
   }
 }
@@ -87,7 +143,7 @@ function verifyMissingImports(entryName, forbiddenPackages) {
 function hasRuntimeImport(contents, packageName) {
   const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const importPattern = new RegExp(
-    `(?:from\\s+["']${escaped}(?:/[^"']*)?["']|import\\s*\\(\\s*["']${escaped}(?:/[^"']*)?["']\\s*\\))`,
+    `(?:from\\s*["']${escaped}(?:/[^"']*)?["']|import\\s*\\(\\s*["']${escaped}(?:/[^"']*)?["']\\s*\\))`,
   );
 
   return importPattern.test(contents);

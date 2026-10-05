@@ -1,5 +1,20 @@
 # @moritzbrantner/maps
 
+## Unreleased
+
+### Breaking Changes
+
+- The root entry no longer exports `EditableGeoJsonMap` or the GeoJSON
+  timeline exports (`GeoJsonTimelineEditor`, `createGeoJsonTimelineDocument`,
+  and related helpers and types). Import them from
+  `@moritzbrantner/maps/editor` and `@moritzbrantner/maps/timeline`; the root
+  entry now bundles without the optional `@moritzbrantner/timeline-editor` peer.
+
+### Patch Changes
+
+- Imported `polygon-clipping` through its default export so Rollup-based
+  bundlers (Vite 5) accept the package.
+
 ## 0.1.5
 
 ### Patch Changes

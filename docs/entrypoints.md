@@ -6,7 +6,7 @@ temporal helpers.
 
 | Entry point | Use when |
 | --- | --- |
-| `@moritzbrantner/maps` | You want the full public API from one import path. |
+| `@moritzbrantner/maps` | You want most of the public API from one import path. `EditableGeoJsonMap` and the GeoJSON timeline exports are only on `/editor` and `/timeline`, so the root entry bundles without the optional timeline editor peer. |
 | `@moritzbrantner/maps/core` | You only need transforms, aggregation, measurement, heat-field, or temporal helpers. |
 | `@moritzbrantner/maps/layers` | You compose layers inside `MapView`. |
 | `@moritzbrantner/maps/flat` | You only render flat MapLibre-backed wrappers. |
@@ -24,11 +24,11 @@ temporal helpers.
 | Entry point | React required | `@moritzbrantner/ui` required | Timeline editor required | Server-safe |
 | --- | --- | --- | --- | --- |
 | `@moritzbrantner/maps/core` | No | No | No | Yes |
-| `@moritzbrantner/maps` | Yes | Yes | Only for timeline editor exports | No |
+| `@moritzbrantner/maps` | Yes | Yes | No | No |
 | `@moritzbrantner/maps/layers` | Yes | Yes | No | No |
 | `@moritzbrantner/maps/flat` | Yes | Yes | No | No |
-| `@moritzbrantner/maps/editor` | Yes | Yes | Only when using timeline editor integration | No |
-| `@moritzbrantner/maps/timeline` | Yes | Yes | Yes for `GeoJsonTimelineEditor` | No |
+| `@moritzbrantner/maps/editor` | Yes | Yes | Yes | No |
+| `@moritzbrantner/maps/timeline` | Yes | Yes | Yes | No |
 | `@moritzbrantner/maps/geojson` | Yes | Yes | No | No |
 | `@moritzbrantner/maps/heat` | Yes | Yes | No | No |
 | `@moritzbrantner/maps/measurement` | Layer: Yes, helpers: No | Layer: Yes, helpers: No | No | Helper imports only |

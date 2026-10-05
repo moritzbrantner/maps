@@ -1,8 +1,5 @@
 import { Delaunay } from "d3-delaunay";
-import {
-  difference,
-  intersection,
-  union,
+import polygonClipping, {
   type MultiPolygon as ClippingMultiPolygon,
   type Ring as ClippingRing,
 } from "polygon-clipping";
@@ -13,6 +10,9 @@ import type {
   TemporalGeoJsonGeometryFeature,
   TemporalGeoJsonSupportedGeometry,
 } from "./temporal-geojson-types";
+
+// polygon-clipping's ESM build only has a default export; named imports break Rollup consumers.
+const { difference, intersection, union } = polygonClipping;
 
 export type PolygonLikeGeometry =
   | Extract<TemporalGeoJsonSupportedGeometry, { type: "Polygon" }>

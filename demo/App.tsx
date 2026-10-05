@@ -28,7 +28,6 @@ import {
   BubbleLayer,
   ClusterLayer,
   ClusteredMap,
-  EditableGeoJsonMap,
   FlowLayer,
   FlowMap,
   type GeoJsonLayerFeature,
@@ -66,6 +65,7 @@ import {
   type TemporalMapTrack,
   moveGeoJsonGeometry,
 } from "@moritzbrantner/maps";
+import { EditableGeoJsonMap } from "../src/entries/editor";
 import {
   FlowVolumeLegend,
   renderDemoFlowPopup,

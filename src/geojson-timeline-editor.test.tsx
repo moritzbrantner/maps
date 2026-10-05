@@ -1,7 +1,7 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
-import { GeoJsonTimelineEditor, createGeoJsonTimelineDocument } from ".";
+import { GeoJsonTimelineEditor, createGeoJsonTimelineDocument } from "./entries/timeline";
 import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
 vi.mock("@moritzbrantner/timeline-editor", async () => {

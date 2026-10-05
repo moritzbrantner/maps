@@ -204,7 +204,6 @@ export {
 } from "./geojson-operations";
 export { GeoJsonMap, type GeoJsonMapProps } from "./geojson-map";
 export {
-  EditableGeoJsonMap,
   GeoJsonEditorLayer,
   applyGeoJsonEditOperation,
   constrainGeoJsonGeometryToPolygon,
@@ -217,7 +216,6 @@ export {
   type GeoJsonEditorSnapMode,
   type GeoJsonEditorSnapOptions,
   type GeoJsonSnapTarget,
-  type EditableGeoJsonMapProps,
   type GeoJsonGeometryTransformOptions,
   type GeoJsonBatchEditReason,
   type GeoJsonEditorCommand,
@@ -252,25 +250,6 @@ export {
   type GeoJsonTopologyStrategy,
   type ResolvedGeoJsonTransitionOptions,
 } from "./geojson-transition";
-export {
-  GeoJsonTimelineEditor,
-  applyGeoJsonTimelineTransform,
-  createGeoJsonTimelineDocument,
-  getGeoJsonTimelineFeatureCollectionAtTime,
-  getGeoJsonTimelineSceneAtTime,
-  getGeoJsonTimelineItemId,
-  getGeoJsonTimelineTrackId,
-  setGeoJsonTimelineFeatureTransform,
-  type GeoJsonTimelineApplyOptions,
-  type GeoJsonTimelineDocument,
-  type GeoJsonTimelineEditorProps,
-  type GeoJsonTimelineItemData,
-  type GeoJsonTimelineOptions,
-  type GeoJsonTimelineSceneOptions,
-  type GeoJsonTimelineTransitionSpec,
-  type GeoJsonTimelineTrackData,
-  type GeoJsonTimelineTransformValues,
-} from "./geojson-timeline";
 export {
   BeeLineMeasurementLayer,
   type BeeLineMeasurementLayerProps,

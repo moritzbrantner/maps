@@ -12,7 +12,8 @@ bun add @moritzbrantner/maps @moritzbrantner/ui react react-dom
 npm install @moritzbrantner/maps @moritzbrantner/ui react react-dom
 ```
 
-For timeline editor components:
+For `EditableGeoJsonMap` (`@moritzbrantner/maps/editor`) and the GeoJSON
+timeline exports (`@moritzbrantner/maps/timeline`):
 
 ```sh
 bun add @moritzbrantner/timeline-editor
@@ -43,7 +44,7 @@ import "@moritzbrantner/maps/styles.full.css";
 
 React, React DOM, and `@moritzbrantner/ui` are required peers for rendered map
 components. The optional `@moritzbrantner/timeline-editor` peer is only required
-when using timeline editor components.
+when importing `@moritzbrantner/maps/editor` or `@moritzbrantner/maps/timeline`.
 
 ## Basic Clustered Map
 

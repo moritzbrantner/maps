@@ -5,6 +5,8 @@ import {
   getGeoJsonTimelineFeatureCollectionAtTime,
   getGeoJsonTimelineSceneAtTime,
   setGeoJsonTimelineFeatureTransform,
+} from "./entries/timeline";
+import {
   type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalGeoJsonSupportedGeometry,
 } from ".";
