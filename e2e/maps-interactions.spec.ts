@@ -126,7 +126,6 @@ test("interaction view switching preserves usable Map View state", async ({ page
 });
 
 test("selection interaction targets points, flows, and rendered GeoJSON", async ({ page }) => {
-  test.fixme(true, "Fails once the spec really renders through WebGPU (#198): #199");
   await openView(page, "Points");
   await clickFeatureCoordinate(page, "point", "berlin");
   await expect.poll(() => getSelectedPointId(page)).toBe("berlin");
@@ -146,7 +145,6 @@ test("selection interaction targets points, flows, and rendered GeoJSON", async 
 });
 
 test("wheel zoom works while hovering rendered GeoJSON features", async ({ page }) => {
-  test.fixme(true, "Fails once the spec really renders through WebGPU (#198): #199");
   await openView(page, "GeoJSON");
 
   const feature = await projectFeature(page, await getGeoJsonCenter(page, "geojson-polygon"));

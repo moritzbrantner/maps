@@ -6,7 +6,6 @@ const body = createShortbreadTileFixture({ dense: true });
 test("standalone dense vector basemap retains tile pixels during pan and zoom @smoke", async ({
   page,
 }) => {
-  test.fixme(true, "Fails once the spec really renders through WebGPU (#198): #199");
   // Exercise the pixel fallback too: WebGPU support must not decide whether the
   // basemap blocks input or retains coverage.
   await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
@@ -138,7 +137,6 @@ test("tile worker rejects malformed data and remains usable, then disposes pendi
 test("pan predicts vector tiles beyond the stationary ring and reuses them @smoke", async ({
   page,
 }) => {
-  test.fixme(true, "Fails once the spec really renders through WebGPU (#198): #199");
   await page.setViewportSize({ width: 512, height: 512 });
   const requests = new Map<string, number>();
   await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
