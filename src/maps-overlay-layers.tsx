@@ -465,36 +465,19 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
     /**
      * Retained points are drawn in every visible world copy, while the lazily projected
-     * picking scene places each point in its nearest copy. Retry the hit whole worlds to
-     * either side, as far as the viewport can show copies, using the screen vector of one
-     * world at the viewport centre.
+     * picking scene places each point in its nearest copy. A miss is retried at the Rust
+     * projection of the geographic location under the pointer, which lands on the copy
+     * the scene uses; this holds under any bearing and pitch.
      */
     const hitTestRetainedWorldCopies = (
       scene: CanvasMapScene<unknown>,
       position: { x: number; y: number },
-      size: { height: number; width: number },
     ) => {
-      const center = unproject(size.width / 2, size.height / 2);
-      if (!center) return null;
-      const east = project([center[0] + 179.9, center[1]]);
-      const west = project([center[0] - 179.9, center[1]]);
-      if (!east || !west) return null;
-      const scale = 360 / 359.8;
-      const world = { x: (east.x - west.x) * scale, y: (east.y - west.y) * scale };
-      const worldLength = Math.hypot(world.x, world.y);
-      if (!(worldLength > 1)) return null;
-      // Every copy that can be on screen: the viewport diagonal in worlds, plus one.
-      const copies = Math.ceil(Math.hypot(size.width, size.height) / worldLength) + 1;
-      for (let distance = 1; distance <= copies; distance += 1) {
-        for (const direction of [distance, -distance]) {
-          const hit = hitTestCanvasMapScene(scene, {
-            x: position.x + direction * world.x,
-            y: position.y + direction * world.y,
-          });
-          if (hit) return hit;
-        }
-      }
-      return null;
+      const location = unproject(position.x, position.y);
+      if (!location) return null;
+      const nearest = project(location);
+      if (!nearest || Math.hypot(nearest.x - position.x, nearest.y - position.y) < 0.5) return null;
+      return hitTestCanvasMapScene(scene, nearest);
     };
 
     const pickInternal = (clientX: number, clientY: number): InternalPick | null => {
@@ -528,7 +511,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       const hit =
         hitTestCanvasMapScene(scene, scenePosition) ??
         (retainedModeRef.current && retainedSizeRef.current
-          ? hitTestRetainedWorldCopies(scene, scenePosition, retainedSizeRef.current)
+          ? hitTestRetainedWorldCopies(scene, scenePosition)
           : null);
       if (!hit) return null;
       const primitive = hit.renderPrimitive;
