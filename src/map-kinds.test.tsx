@@ -1,5 +1,6 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   BubbleMap,
@@ -56,6 +57,11 @@ import {
 } from "./webgl-flat-runtime";
 import { createFlowPathCoordinates } from "./flow-layer";
 import type { FlowLayerFeature } from "./flow-layer";
+import {
+  resetMapsAggregationRuntimeForTests,
+  setMapsAggregationWasmRuntimeForTests,
+} from "./aggregation-runtime";
+import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -257,7 +263,13 @@ const flatMock = vi.hoisted(() => {
 
 vi.mock("flat", () => flatMock);
 
+// Clustering is owned by the Rust aggregation runtime; these tests use its grid test double.
+beforeEach(() => {
+  setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+});
+
 afterEach(() => {
+  resetMapsAggregationRuntimeForTests();
   flatMock.reset();
   vi.unstubAllGlobals();
 });
@@ -526,6 +538,114 @@ function createMockMockRenderLayer(
 }
 
 describe("@moritzbrantner/maps additional map kinds", () => {
+  test("disposes replaced and unmounted ClusteredMap aggregation indexes", async () => {
+    const grid = createGridAggregationRuntimeForTests();
+    const disposed: string[] = [];
+    setMapsAggregationWasmRuntimeForTests({
+      createIndex(points, options) {
+        const index = grid.createIndex(points, options);
+        return {
+          ...index,
+          dispose() {
+            disposed.push(points.map((point) => point.id).join(","));
+          },
+        };
+      },
+    });
+    const view = (ids: string[]) => (
+      <ClusteredMap
+        defaultViewState={{ center: [-74, 40], zoom: 3 }}
+        fitToData={false}
+        mapLabel="Disposed cluster indexes"
+        points={ids.map((id, index) => ({ id, latitude: 40 + index * 0.01, longitude: -74 }))}
+        showAttributionControl={false}
+      />
+    );
+
+    const { rerender, unmount } = render(view(["a", "b"]));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    rerender(view(["a", "b", "c"]));
+    await waitFor(() => expect(disposed).toContain("a,b"));
+    expect(disposed).not.toContain("a,b,c");
+
+    unmount();
+    await waitFor(() => expect(disposed).toContain("a,b,c"));
+  });
+
+  test("disposes every aggregation index a Strict Mode ClusteredMap creates", async () => {
+    const grid = createGridAggregationRuntimeForTests();
+    let created = 0;
+    let disposedCount = 0;
+    setMapsAggregationWasmRuntimeForTests({
+      createIndex(points, options) {
+        created += 1;
+        return {
+          ...grid.createIndex(points, options),
+          dispose() {
+            disposedCount += 1;
+          },
+        };
+      },
+    });
+
+    const { unmount } = render(
+      <StrictMode>
+        <ClusteredMap
+          defaultViewState={{ center: [-74, 40], zoom: 3 }}
+          fitToData={false}
+          mapLabel="Strict cluster indexes"
+          points={[{ id: "a", latitude: 40, longitude: -74 }]}
+          showAttributionControl={false}
+        />
+      </StrictMode>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(created).toBeGreaterThan(0);
+    expect(disposedCount).toBe(created - 1);
+
+    unmount();
+    await waitFor(() => expect(disposedCount).toBe(created));
+  });
+
+  test("clusters a ClusteredMap once the Rust aggregation runtime becomes ready", async () => {
+    resetMapsAggregationRuntimeForTests();
+    const onViewportAggregationChange = vi.fn();
+
+    render(
+      <ClusteredMap
+        defaultViewState={{ center: [-74, 40], zoom: 3 }}
+        fitToData={false}
+        mapLabel="Clusters after runtime readiness"
+        onViewportAggregationChange={onViewportAggregationChange}
+        points={[
+          { id: "store-1", latitude: 40, longitude: -74 },
+          { id: "store-2", latitude: 40.01, longitude: -74.01 },
+        ]}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onViewportAggregationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visibleClusterCount: 0, visibleUnclusteredCount: 2 }),
+      );
+    });
+
+    act(() => {
+      setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+    });
+
+    await waitFor(() => {
+      expect(onViewportAggregationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visibleClusterCount: 1, visiblePointCount: 2 }),
+      );
+    });
+  });
+
   test("creates point-map features from valid points", () => {
     const features = createPointMapFeatures([
       {

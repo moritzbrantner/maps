@@ -1,13 +1,14 @@
 "use client";
 
+import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
 import {
   startTransition,
   useContext,
   useDeferredValue,
   useEffect,
   useId,
-  useMemo,
   useRef,
+  useState,
   type MutableRefObject,
 } from "react";
 
@@ -16,6 +17,7 @@ import {
   type AggregatedMapFeature,
   type MapPoint,
   type MapPointFilter,
+  type PointAggregationIndex,
   type PointAggregationIndexOptions,
   type VisibleAggregationSummary,
 } from "./aggregation";
@@ -69,16 +71,28 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
   const surfaceRef = useRef(surface);
   const flatFeatureCacheRef = useRef<Map<string, FlatClusterCacheEntry>>(new Map());
-  const index = useMemo(
-    () =>
-      createPointAggregationIndex(deferredPoints, {
-        filterPoint,
-        maxZoom,
-        minZoom,
-        radius: clusterRadius,
-      }),
-    [clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
-  );
+  const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
+  const indexRef = useRef<PointAggregationIndex<TProperties> | null>(null);
+  const [indexVersion, setIndexVersion] = useState(0);
+
+  // The index is created and disposed in one effect (never in render), so Strict Mode
+  // replays and replaced options release their WASM memory, and layer callbacks only
+  // ever read the committed index. The runtime version rebuilds it once Rust clustering
+  // becomes available.
+  useEffect(() => {
+    const index = createPointAggregationIndex(deferredPoints, {
+      filterPoint,
+      maxZoom,
+      minZoom,
+      radius: clusterRadius,
+    });
+    indexRef.current = index;
+    setIndexVersion((version) => version + 1);
+    return () => {
+      if (indexRef.current === index) indexRef.current = null;
+      index.dispose();
+    };
+  }, [aggregationRuntimeVersion, clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom]);
 
   useEffect(() => {
     surfaceRef.current = surface;
@@ -94,8 +108,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       resolvedLayerId,
       ({ isMeasuring, layer, flat, map }) => {
         const currentSurface = surfaceRef.current;
+        const index = indexRef.current;
 
-        if (!currentSurface) {
+        if (!currentSurface || !index) {
           return;
         }
 
@@ -347,7 +362,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   }, [
     getFeatureId,
     hoveredFeatureId,
-    index,
+    indexVersion,
     resolvedLayerId,
     onFeatureContextMenu,
     onFeatureHover,

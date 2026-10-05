@@ -84,6 +84,23 @@ export type MapsAggregationLoaderOptions = {
 let configuredOptions: MapsAggregationLoaderOptions = {};
 let wasmRuntime: MapsAggregationWasmRuntime | null = null;
 let wasmLoadError: unknown = null;
+let pendingInitialization: Promise<boolean> | null = null;
+let runtimeVersion = 0;
+const runtimeListeners = new Set<() => void>();
+
+function setWasmRuntime(runtime: MapsAggregationWasmRuntime | null, loadError: unknown) {
+  const changed = runtime !== wasmRuntime;
+
+  wasmRuntime = runtime;
+  wasmLoadError = loadError;
+
+  if (changed) {
+    runtimeVersion += 1;
+    for (const listener of runtimeListeners) {
+      listener();
+    }
+  }
+}
 
 export function configureMapsAggregationRuntime(options: MapsAggregationLoaderOptions = {}) {
   configuredOptions = {
@@ -96,12 +113,10 @@ export async function initializeMapsAggregationWasm(options: MapsAggregationLoad
   configureMapsAggregationRuntime(options);
 
   try {
-    wasmRuntime = await loadMapsAggregationWasmRuntime(configuredOptions.wasmPackage);
-    wasmLoadError = null;
+    setWasmRuntime(await loadMapsAggregationWasmRuntime(configuredOptions.wasmPackage), null);
     return true;
   } catch (error) {
-    wasmRuntime = null;
-    wasmLoadError = error;
+    setWasmRuntime(null, error);
     configuredOptions.onDiagnostic?.({
       backend: "wasm",
       fallbackReason: getErrorMessage(error),
@@ -111,15 +126,43 @@ export async function initializeMapsAggregationWasm(options: MapsAggregationLoad
   }
 }
 
+/**
+ * Starts loading the aggregation WASM runtime unless one is installed or loading. Map Views
+ * call this on mount; until it loads, indexes are unclustered.
+ */
+export function ensureMapsAggregationWasm(): Promise<boolean> {
+  if (wasmRuntime) {
+    return Promise.resolve(true);
+  }
+
+  // A failed load is reported once per attempt; a later Map View mount may retry.
+  pendingInitialization ??= initializeMapsAggregationWasm().then((ready) => {
+    if (!ready) pendingInitialization = null;
+    return ready;
+  });
+  return pendingInitialization;
+}
+
+/** Changes whenever the installed aggregation runtime changes, so indexes can be rebuilt. */
+export function getMapsAggregationRuntimeVersion() {
+  return runtimeVersion;
+}
+
+export function subscribeMapsAggregationRuntime(listener: () => void) {
+  runtimeListeners.add(listener);
+  return () => {
+    runtimeListeners.delete(listener);
+  };
+}
+
 export function resetMapsAggregationRuntimeForTests() {
   configuredOptions = {};
-  wasmRuntime = null;
-  wasmLoadError = null;
+  pendingInitialization = null;
+  setWasmRuntime(null, null);
 }
 
 export function setMapsAggregationWasmRuntimeForTests(runtime: MapsAggregationWasmRuntime | null) {
-  wasmRuntime = runtime;
-  wasmLoadError = null;
+  setWasmRuntime(runtime, null);
 }
 
 export function getMapsAggregationWasmLoadError() {
@@ -128,7 +171,8 @@ export function getMapsAggregationWasmLoadError() {
 
 /**
  * Returns the Maps-owned Rust/WASM aggregation index when that runtime has been
- * initialized. A missing runtime is the explicit no-WASM/SSR fallback boundary.
+ * initialized. A missing runtime is the explicit no-WASM/SSR fallback boundary: it reports a
+ * `fallback` diagnostic and the caller returns points unclustered.
  * Once the Rust runtime is selected, construction and query errors fail closed.
  */
 export function createMapsAggregationRuntimeIndex(
@@ -136,6 +180,13 @@ export function createMapsAggregationRuntimeIndex(
   options: MapsAggregationRuntimeBuildOptions,
 ): MapsAggregationRuntimeIndex | null {
   if (!wasmRuntime) {
+    configuredOptions.onDiagnostic?.({
+      backend: "wasm",
+      fallbackReason: wasmLoadError
+        ? `Maps aggregation WASM runtime failed to load (${getErrorMessage(wasmLoadError)}); points are unclustered.`
+        : "Maps aggregation WASM runtime is not initialized; points are unclustered.",
+      mode: "fallback",
+    });
     return null;
   }
 

@@ -69,7 +69,7 @@ describe("Maps aggregation Rust authority", () => {
     ]);
   });
 
-  test("uses Supercluster only when the Rust runtime is unavailable", () => {
+  test("returns points unclustered when the Rust runtime is unavailable", () => {
     setMapsAggregationWasmRuntimeForTests(null);
 
     const index = createPointAggregationIndex([

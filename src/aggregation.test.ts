@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import {
   createMapDensityViewportSummary,
@@ -6,12 +6,27 @@ import {
   getBoundsFromPoints,
   type MapPoint,
 } from ".";
+import {
+  configureMapsAggregationRuntime,
+  resetMapsAggregationRuntimeForTests,
+  setMapsAggregationWasmRuntimeForTests,
+  type MapsAggregationDiagnostic,
+} from "./aggregation-runtime";
+import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
 
 type TestPoint = MapPoint<{
   city: string;
 }>;
 
+afterEach(() => {
+  resetMapsAggregationRuntimeForTests();
+});
+
 describe("@moritzbrantner/maps aggregation", () => {
+  beforeEach(() => {
+    setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+  });
+
   test("aggregates metric totals into clusters and preserves visible counts", () => {
     const index = createPointAggregationIndex<{ city: string }>([
       {
@@ -269,6 +284,65 @@ describe("@moritzbrantner/maps aggregation", () => {
 
     expect(aggregation.features.length).toBeLessThan(summary.itemCount);
     expect(summary.itemCount).toBe(25);
+  });
+});
+
+describe("@moritzbrantner/maps aggregation without the WASM runtime", () => {
+  const berlinPoints = Array.from({ length: 20 }, (_, index) => ({
+    id: `point-${index}`,
+    latitude: 52.52 + index * 0.0002,
+    longitude: 13.405 + index * 0.0002,
+    metrics: { orders: 1 },
+  }));
+
+  test("returns every visible point unclustered and reports the fallback", () => {
+    const diagnostics: MapsAggregationDiagnostic[] = [];
+    configureMapsAggregationRuntime({ onDiagnostic: (event) => diagnostics.push(event) });
+
+    const index = createPointAggregationIndex(berlinPoints);
+    const aggregation = index.getViewportAggregation({
+      bounds: [13.3, 52.4, 13.6, 52.7],
+      zoom: 4,
+    });
+
+    expect(aggregation.features).toHaveLength(20);
+    expect(aggregation.features.every((feature) => feature.kind === "point")).toBe(true);
+    expect(aggregation.summary).toMatchObject({
+      metrics: { orders: 20 },
+      visibleClusterCount: 0,
+      visiblePointCount: 20,
+      visibleUnclusteredCount: 20,
+    });
+    expect(diagnostics).toEqual([
+      expect.objectContaining({ backend: "wasm", mode: "fallback" }),
+    ]);
+  });
+
+  test("has no cluster leaves or expansion zooms", () => {
+    const index = createPointAggregationIndex(berlinPoints);
+
+    expect(index.getClusterLeaves(20)).toEqual([]);
+    expect(() => index.getClusterExpansionZoom(20)).toThrow("invalid cluster id 20");
+    expect(index.getPointById("point-3")).toMatchObject({ id: "point-3" });
+  });
+
+  test("filters points by wrapped and antimeridian-crossing viewport bounds", () => {
+    const index = createPointAggregationIndex([
+      { id: "east", latitude: 0, longitude: 179.8 },
+      { id: "west", latitude: 0, longitude: -179.8 },
+      { id: "berlin", latitude: 52.52, longitude: 13.405 },
+      { id: "north", latitude: 20, longitude: 179.8 },
+    ]);
+    const visibleIds = (bounds: [number, number, number, number]) =>
+      index
+        .getViewportAggregation({ bounds, zoom: 3 })
+        .features.map((feature) => (feature.kind === "point" ? feature.point.id : ""))
+        .sort();
+
+    expect(visibleIds([170, -10, -170, 10])).toEqual(["east", "west"]);
+    expect(visibleIds([535, -10, 539.9, 10])).toEqual(["east"]);
+    expect(visibleIds([-200, -90, 200, 90])).toEqual(["berlin", "east", "north", "west"]);
+    expect(visibleIds([10, 50, 15, 55])).toEqual(["berlin"]);
   });
 });
 

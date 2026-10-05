@@ -22,6 +22,12 @@ export default async function Page() {
 }
 ```
 
+On the server the aggregation WASM runtime is not loaded, so
+`createPointAggregationIndex()` returns every visible point as a `point` feature:
+no clusters, empty cluster leaves, and a `fallback` diagnostic. Summaries such as
+`visiblePointCount` and metric totals still cover all visible points. Map Views
+load the runtime in the browser and re-cluster once it is ready.
+
 ## Client Component
 
 ```tsx
