@@ -1,5 +1,6 @@
 "use client";
 
+import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
 import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
@@ -135,6 +136,7 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
     () => prepareHeatLayerColorRamp(heatmapColorRamp),
     [heatmapColorRamp],
   );
+  const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
   const heatIndex = useMemo(
     () =>
       // Field mode prepares scalar values below; density features are unused.
@@ -144,7 +146,16 @@ export function HeatLayer<TProperties = Record<string, unknown>>({
         maxWeight,
         weightMetric,
       }),
-    [deferredPoints, filterPoint, getWeight, heatmapSurfaceMode, maxWeight, weightMetric],
+    // The runtime version rebuilds the index once Rust clustering becomes available.
+    [
+      aggregationRuntimeVersion,
+      deferredPoints,
+      filterPoint,
+      getWeight,
+      heatmapSurfaceMode,
+      maxWeight,
+      weightMetric,
+    ],
   );
   const domainBoundsKey = createHeatLayerNumberArrayKey(domainBounds);
   const fieldValueDomainKey = createHeatLayerNumberArrayKey(fieldValueDomain);

@@ -1,5 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   HeatMap,
@@ -13,6 +13,11 @@ import {
   type MapPoint,
   type TemporalMapTrack,
 } from ".";
+import {
+  resetMapsAggregationRuntimeForTests,
+  setMapsAggregationWasmRuntimeForTests,
+} from "./aggregation-runtime";
+import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -216,7 +221,13 @@ const flatMock = vi.hoisted(() => {
 
 vi.mock("flat", () => flatMock);
 
+// Clustering is owned by the Rust aggregation runtime; these tests use its grid test double.
+beforeEach(() => {
+  setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+});
+
 afterEach(() => {
+  resetMapsAggregationRuntimeForTests();
   flatMock.reset();
 });
 

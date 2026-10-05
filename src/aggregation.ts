@@ -1,5 +1,3 @@
-import Supercluster from "supercluster";
-
 import {
   createMapsAggregationRuntimeIndex,
   type MapsAggregationRuntimeFeature,
@@ -97,22 +95,6 @@ export type PointAggregationIndex<TProperties = Record<string, unknown>> = {
   getViewportAggregation(query: ViewportAggregationQuery): ViewportAggregation<TProperties>;
 };
 
-type SuperclusterPointProperties = {
-  pointId: string;
-  [metricKey: string]: number | string;
-};
-
-type SuperclusterClusterProperties = MapMetricRecord;
-
-type SuperclusterFeature =
-  | Supercluster.ClusterFeature<SuperclusterClusterProperties>
-  | Supercluster.PointFeature<SuperclusterPointProperties>;
-
-const compactNumberFormatter = new Intl.NumberFormat("en", {
-  maximumFractionDigits: 1,
-  notation: "compact",
-});
-
 export function createPointAggregationIndex<TProperties = Record<string, unknown>>(
   points: readonly MapPoint<TProperties>[],
   options: PointAggregationIndexOptions<TProperties> = {},
@@ -128,7 +110,7 @@ export function createPointAggregationIndex<TProperties = Record<string, unknown
     return createRustPointAggregationIndex(runtimeIndex, pointLookup);
   }
 
-  return createSuperclusterPointAggregationIndex(normalizedPoints, pointLookup, options);
+  return createUnclusteredPointAggregationIndex(normalizedPoints, pointLookup);
 }
 
 export function createMapDensityViewportSummary<TProperties = Record<string, unknown>>(
@@ -246,59 +228,41 @@ function requireIndexedPoint<TProperties>(
   return point;
 }
 
-function createSuperclusterPointAggregationIndex<TProperties>(
+/**
+ * The no-WASM/SSR fallback: without the Rust aggregation runtime there is no clustering
+ * authority, so every visible point is returned as its own `point` feature.
+ */
+function createUnclusteredPointAggregationIndex<TProperties>(
   normalizedPoints: readonly IndexedMapPoint<TProperties>[],
   pointLookup: Map<string, IndexedMapPoint<TProperties>>,
-  options: PointAggregationIndexOptions<TProperties>,
 ): PointAggregationIndex<TProperties> {
   const metricKeys = collectMapMetricKeys(normalizedPoints.map((point) => point.metrics));
-  const tree = new Supercluster<SuperclusterPointProperties, SuperclusterClusterProperties>({
-    extent: options.extent ?? 512,
-    map: (properties) => mapSuperclusterProperties(properties, metricKeys),
-    maxZoom: options.maxZoom ?? 16,
-    minZoom: options.minZoom ?? 0,
-    radius: options.radius ?? 72,
-    reduce: (accumulated, properties) => {
-      for (const metricKey of metricKeys) {
-        accumulated[metricKey] =
-          readNumericMetric(accumulated, metricKey) + readNumericMetric(properties, metricKey);
-      }
-    },
-  });
-
-  tree.load(
-    normalizedPoints.map((point) => ({
-      geometry: {
-        coordinates: [point.longitude, point.latitude],
-        type: "Point" as const,
-      },
-      properties: {
-        pointId: point.id,
-        ...point.metrics,
-      },
-      type: "Feature" as const,
-    })),
-  );
 
   return {
     dispose() {},
     getClusterExpansionZoom(clusterId) {
-      return tree.getClusterExpansionZoom(clusterId);
+      throw new Error(
+        `invalid cluster id ${clusterId}: points are unclustered until the Maps aggregation WASM runtime is initialized`,
+      );
     },
-    getClusterLeaves(clusterId, limit = 10, offset = 0) {
-      return tree
-        .getLeaves(clusterId, limit, offset)
-        .map((feature) => pointLookup.get(feature.properties.pointId))
-        .filter(isDefined);
+    getClusterLeaves() {
+      return [];
     },
     getPointById(pointId) {
       return pointLookup.get(pointId) ?? null;
     },
     getViewportAggregation(query) {
-      const rawFeatures = getFeaturesForBounds(tree, query.bounds, query.zoom);
-      const features = rawFeatures
-        .map((feature) => toAggregatedMapFeature(feature, pointLookup, metricKeys, tree))
-        .filter(isDefined);
+      const contains = createBoundsPredicate(query.bounds);
+      const features = normalizedPoints
+        .filter((point) => contains(point.longitude, point.latitude))
+        .map(
+          (point): AggregatedMapPoint<TProperties> => ({
+            coordinates: [point.longitude, point.latitude],
+            kind: "point",
+            metrics: point.metrics,
+            point,
+          }),
+        );
 
       return {
         features,
@@ -306,6 +270,32 @@ function createSuperclusterPointAggregationIndex<TProperties>(
       };
     },
   };
+}
+
+// Same longitude wrapping and latitude clamping as the Rust (Supercluster) viewport query.
+function createBoundsPredicate(bounds: ViewportAggregationQuery["bounds"]) {
+  const [west, south, east, north] = bounds;
+  const minLatitude = Math.min(Math.max(south, -90), 90);
+  const maxLatitude = Math.min(Math.max(north, -90), 90);
+
+  if (east - west >= 360) {
+    return (_longitude: number, latitude: number) =>
+      latitude >= minLatitude && latitude <= maxLatitude;
+  }
+
+  const minLongitude = wrapLongitude(west);
+  const maxLongitude = east === 180 ? 180 : wrapLongitude(east);
+
+  return (longitude: number, latitude: number) =>
+    latitude >= minLatitude &&
+    latitude <= maxLatitude &&
+    (minLongitude <= maxLongitude
+      ? longitude >= minLongitude && longitude <= maxLongitude
+      : longitude >= minLongitude || longitude <= maxLongitude);
+}
+
+function wrapLongitude(longitude: number) {
+  return ((((longitude + 180) % 360) + 360) % 360) - 180;
 }
 
 function normalizeMapMetrics(metrics: MapMetricRecord | undefined): MapMetricRecord {
@@ -361,116 +351,6 @@ function isFiniteMapPoint<TProperties>(point: IndexedMapPoint<TProperties>) {
   return Number.isFinite(point.latitude) && Number.isFinite(point.longitude);
 }
 
-function mapSuperclusterProperties(
-  properties: SuperclusterPointProperties,
-  metricKeys: readonly string[],
-): SuperclusterClusterProperties {
-  const aggregated: SuperclusterClusterProperties = {};
-
-  for (const metricKey of metricKeys) {
-    aggregated[metricKey] = readNumericMetric(properties, metricKey);
-  }
-
-  return aggregated;
-}
-
-function getFeaturesForBounds(
-  tree: Supercluster<SuperclusterPointProperties, SuperclusterClusterProperties>,
-  bounds: ViewportAggregationQuery["bounds"],
-  zoom: number,
-): SuperclusterFeature[] {
-  const roundedZoom = Math.round(zoom);
-
-  if (bounds[0] <= bounds[2]) {
-    return tree.getClusters(bounds, roundedZoom);
-  }
-
-  const features = [
-    ...tree.getClusters([bounds[0], bounds[1], 180, bounds[3]], roundedZoom),
-    ...tree.getClusters([-180, bounds[1], bounds[2], bounds[3]], roundedZoom),
-  ];
-  const seen = new Set<string>();
-
-  return features.filter((feature) => {
-    const key =
-      feature.properties.cluster === true
-        ? `cluster:${feature.properties.cluster_id}`
-        : `point:${feature.properties.pointId}`;
-
-    if (seen.has(key)) {
-      return false;
-    }
-
-    seen.add(key);
-    return true;
-  });
-}
-
-function toAggregatedMapFeature<TProperties>(
-  feature: SuperclusterFeature,
-  pointLookup: Map<string, IndexedMapPoint<TProperties>>,
-  metricKeys: readonly string[],
-  tree: Supercluster<SuperclusterPointProperties, SuperclusterClusterProperties>,
-): AggregatedMapFeature<TProperties> | null {
-  const [longitude, latitude] = feature.geometry.coordinates;
-
-  if (feature.properties.cluster === true) {
-    const clusterId = feature.properties.cluster_id;
-    const pointCount = feature.properties.point_count;
-    const pointCountAbbreviated = feature.properties.point_count_abbreviated;
-
-    if (
-      typeof clusterId !== "number" ||
-      !Number.isFinite(clusterId) ||
-      typeof pointCount !== "number" ||
-      !Number.isFinite(pointCount)
-    ) {
-      return null;
-    }
-
-    return {
-      clusterId,
-      coordinates: [longitude, latitude],
-      expansionZoom: tree.getClusterExpansionZoom(clusterId),
-      kind: "cluster",
-      metrics: getMetricsFromProperties(feature.properties, metricKeys),
-      pointCount,
-      pointCountAbbreviated:
-        typeof pointCountAbbreviated === "string"
-          ? pointCountAbbreviated
-          : compactNumberFormatter.format(pointCount),
-    };
-  }
-
-  const pointId = feature.properties.pointId;
-  if (typeof pointId !== "string") {
-    return null;
-  }
-
-  const point = pointLookup.get(pointId);
-
-  if (!point) {
-    return null;
-  }
-
-  return {
-    coordinates: [longitude, latitude],
-    kind: "point",
-    metrics: point.metrics,
-    point,
-  };
-}
-
-function getMetricsFromProperties(properties: Record<string, unknown>, metricKeys: readonly string[]) {
-  const metrics: MapMetricRecord = {};
-
-  for (const metricKey of metricKeys) {
-    metrics[metricKey] = readNumericMetric(properties, metricKey);
-  }
-
-  return metrics;
-}
-
 function summarizeMapFeatures<TProperties>(
   query: ViewportAggregationQuery,
   features: readonly AggregatedMapFeature<TProperties>[],
@@ -515,8 +395,4 @@ function readNumericMetric(properties: Record<string, unknown>, metricKey: strin
   const value = properties[metricKey];
 
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function isDefined<TValue>(value: TValue | null | undefined): value is TValue {
-  return value !== null && value !== undefined;
 }

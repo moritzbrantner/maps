@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
+
+import { ensureMapsAggregationWasm } from "./aggregation-runtime";
 import {
   MapView as LegacyMapView,
   type FlatMapRuntime as LegacyFlatMapRuntime,
@@ -24,6 +27,11 @@ export type MapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
 export function MapView(props: MapViewProps) {
   const flatRuntime = props.flatRuntime ?? "maplibre";
   const mapDisplay = props.mapDisplay ?? "flat";
+
+  // Map Views own starting the Rust clustering runtime; layers rebuild their indexes when it is ready.
+  useEffect(() => {
+    void ensureMapsAggregationWasm();
+  }, []);
 
   if (mapDisplay === "flat" && flatRuntime === "maps") {
     return <MapsMapView {...props} flatRuntime="maps" mapDisplay="flat" />;

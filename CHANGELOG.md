@@ -9,6 +9,11 @@
   and related helpers and types). Import them from
   `@moritzbrantner/maps/editor` and `@moritzbrantner/maps/timeline`; the root
   entry now bundles without the optional `@moritzbrantner/timeline-editor` peer.
+- Removed the `supercluster` dependency. Point clustering now comes only from
+  the Maps Rust/WASM runtime, which Map Views start on mount; cluster and heat
+  layers rebuild their indexes once it is ready. Until then, and in SSR or
+  `core`-only code, `createPointAggregationIndex()` returns points unclustered
+  and reports a `fallback` diagnostic.
 
 ### Patch Changes
 

@@ -1,8 +1,13 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ClusterLayer } from "./cluster-layer";
 import { MapView } from "./map-view";
+import {
+  resetMapsAggregationRuntimeForTests,
+  setMapsAggregationWasmRuntimeForTests,
+} from "./aggregation-runtime";
+import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
 
 vi.mock("./canvas-flat-runtime", async () => {
   const React = await import("react");
@@ -82,11 +87,55 @@ vi.mock("./canvas-flat-runtime", async () => {
   return { MapsCanvasFlatRuntime: MockMapsCanvasFlatRuntime };
 });
 
+// Clustering is owned by the Rust aggregation runtime; these tests use its grid test double.
+beforeEach(() => {
+  setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+});
+
 afterEach(() => {
+  resetMapsAggregationRuntimeForTests();
   vi.clearAllMocks();
 });
 
 describe("Maps-owned ClusterLayer Canvas runtime", () => {
+  test("rebuilds an unclustered index once the Rust aggregation runtime is ready", async () => {
+    resetMapsAggregationRuntimeForTests();
+    const onViewportAggregationChange = vi.fn();
+    const points = [
+      { id: "a", label: "A", latitude: 0, longitude: 0 },
+      { id: "b", label: "B", latitude: 0.01, longitude: 0.01 },
+      { id: "c", label: "C", latitude: 0, longitude: 0.02 },
+    ];
+
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        initialViewState={{ center: [0, 0], zoom: 2 }}
+        mapLabel="Cluster runtime readiness"
+        mapStyle={{ tiles: false }}
+      >
+        <ClusterLayer onViewportAggregationChange={onViewportAggregationChange} points={points} />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(onViewportAggregationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visibleClusterCount: 0, visibleUnclusteredCount: 3 }),
+      );
+    });
+
+    act(() => {
+      setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+    });
+
+    await waitFor(() => {
+      expect(onViewportAggregationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visibleClusterCount: 1, visiblePointCount: 3 }),
+      );
+    });
+  });
+
   test("uses Rust viewport bounds and preserves orientation through cluster expansion", async () => {
     const onFeatureSelect = vi.fn();
     const onSelectedFeatureIdChange = vi.fn();

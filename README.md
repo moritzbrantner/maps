@@ -130,9 +130,13 @@ controller?.fitPoints(points, { padding: 72 });
   `@moritzbrantner/maps/editor` and `@moritzbrantner/maps/timeline`
   entrypoints, which hold `EditableGeoJsonMap` and the GeoJSON timeline exports.
   The root entry does not import it.
-- MapLibre, Three, Turf helpers, supercluster, d3-delaunay, polygon-clipping,
+- MapLibre, Three, Turf helpers, d3-delaunay, polygon-clipping,
   and related map/runtime packages are included as package dependencies.
 - Rendering map components requires browser DOM APIs and WebGL/canvas support.
+- Point clustering runs in the Maps Rust/WASM runtime (`@moritzbrantner/maps/wasm`).
+  Map Views load it on mount, so the bundler must serve that WASM. Until it is
+  ready, and in SSR or `core`-only code, aggregation indexes return every point
+  unclustered.
 - React map entrypoints are client components and start with `"use client"`.
 - `@moritzbrantner/maps/styles.css` is compiled CSS that includes package styles
   and MapLibre GL CSS without Tailwind preflight/global reset.

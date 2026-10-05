@@ -1,5 +1,6 @@
 "use client";
 
+import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
@@ -86,6 +87,7 @@ export function CanvasPointClusterLayer<
   const hoveredIdRef = useRef<string | null>(null);
   const indexRef = useRef<PointAggregationIndex<TProperties> | null>(null);
   const [resizeVersion, setResizeVersion] = useState(0);
+  const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
 
   useEffect(() => {
     if (mode !== "clusters") {
@@ -107,7 +109,7 @@ export function CanvasPointClusterLayer<
       }
       index.dispose();
     };
-  }, [clusterRadius, filterPoint, maxZoom, minZoom, mode, points]);
+  }, [aggregationRuntimeVersion, clusterRadius, filterPoint, maxZoom, minZoom, mode, points]);
 
   useEffect(() => {
     const container = surface?.maplibreMap?.getContainer();

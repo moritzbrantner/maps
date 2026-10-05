@@ -1,5 +1,6 @@
 "use client";
 
+import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
 import {
   Children,
   Fragment,
@@ -203,6 +204,8 @@ type MapsGeoJsonRuntime = {
 };
 
 type MapsClusterRuntime = {
+  /** The aggregation runtime the index was built with; a newly ready Rust runtime rebuilds it. */
+  aggregationRuntimeVersion: number;
   viewport?: ViewportAggregationQuery;
   aggregation?: ViewportAggregation<AnyRecord>;
   frame?: MapVectorRenderFrame<AggregatedMapFeature<AnyRecord>>;
@@ -266,6 +269,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const heatDescriptorsRef = useRef<Map<string, MapsHeatLayerDescriptor>>(new Map());
     const heatRuntimesRef = useRef<Map<string, MapsHeatLayerRenderState>>(new Map());
     const [heatRevision, setHeatRevision] = useState(0);
+    const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
     const entries = useMemo(() => collectOverlayEntries(children), [children]);
     const hasHeatEntries = entries.some((entry) => entry.kind === "heat");
     const [heatRuntime, setHeatRuntime] = useState<MapsHeatLayerRuntime | null>(null);
@@ -329,11 +333,18 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       for (const entry of entries) {
         if (entry.kind === "cluster") {
           const current = previousClusters.get(entry.runtimeKey);
-          if (current && clusterRuntimeMatches(current, entry.props)) {
+          if (
+            current &&
+            current.aggregationRuntimeVersion === aggregationRuntimeVersion &&
+            clusterRuntimeMatches(current, entry.props)
+          ) {
             nextClusters.set(entry.runtimeKey, current);
           } else {
             current?.index.dispose();
-            nextClusters.set(entry.runtimeKey, createClusterRuntime(entry.props));
+            nextClusters.set(
+              entry.runtimeKey,
+              createClusterRuntime(entry.props, aggregationRuntimeVersion),
+            );
           }
         }
 
@@ -359,7 +370,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         heatRuntimesRef.current.delete(key);
         heatDescriptorsRef.current.delete(key);
       }
-    }, [entries, heatRuntime]);
+    }, [aggregationRuntimeVersion, entries, heatRuntime]);
 
     useEffect(() => {
       return () => {
@@ -662,6 +673,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         drawRef.current = null;
       };
     }, [
+      aggregationRuntimeVersion,
       entries,
       getViewport,
       heatRevision,
@@ -1260,8 +1272,12 @@ function createClusterFeatureInteraction(
   };
 }
 
-function createClusterRuntime(props: ClusterLayerProps<AnyRecord>): MapsClusterRuntime {
+function createClusterRuntime(
+  props: ClusterLayerProps<AnyRecord>,
+  aggregationRuntimeVersion: number,
+): MapsClusterRuntime {
   return {
+    aggregationRuntimeVersion,
     clusterRadius: props.clusterRadius,
     filterPoint: props.filterPoint,
     index: createPointAggregationIndex(props.points, {

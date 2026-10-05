@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   BubbleMap,
@@ -56,6 +56,11 @@ import {
 } from "./webgl-flat-runtime";
 import { createFlowPathCoordinates } from "./flow-layer";
 import type { FlowLayerFeature } from "./flow-layer";
+import {
+  resetMapsAggregationRuntimeForTests,
+  setMapsAggregationWasmRuntimeForTests,
+} from "./aggregation-runtime";
+import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -257,7 +262,13 @@ const flatMock = vi.hoisted(() => {
 
 vi.mock("flat", () => flatMock);
 
+// Clustering is owned by the Rust aggregation runtime; these tests use its grid test double.
+beforeEach(() => {
+  setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+});
+
 afterEach(() => {
+  resetMapsAggregationRuntimeForTests();
   flatMock.reset();
   vi.unstubAllGlobals();
 });
@@ -526,6 +537,41 @@ function createMockMockRenderLayer(
 }
 
 describe("@moritzbrantner/maps additional map kinds", () => {
+  test("clusters a ClusteredMap once the Rust aggregation runtime becomes ready", async () => {
+    resetMapsAggregationRuntimeForTests();
+    const onViewportAggregationChange = vi.fn();
+
+    render(
+      <ClusteredMap
+        defaultViewState={{ center: [-74, 40], zoom: 3 }}
+        fitToData={false}
+        mapLabel="Clusters after runtime readiness"
+        onViewportAggregationChange={onViewportAggregationChange}
+        points={[
+          { id: "store-1", latitude: 40, longitude: -74 },
+          { id: "store-2", latitude: 40.01, longitude: -74.01 },
+        ]}
+        showAttributionControl={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onViewportAggregationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visibleClusterCount: 0, visibleUnclusteredCount: 2 }),
+      );
+    });
+
+    act(() => {
+      setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+    });
+
+    await waitFor(() => {
+      expect(onViewportAggregationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visibleClusterCount: 1, visiblePointCount: 2 }),
+      );
+    });
+  });
+
   test("creates point-map features from valid points", () => {
     const features = createPointMapFeatures([
       {

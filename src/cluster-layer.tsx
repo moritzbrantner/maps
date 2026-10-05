@@ -1,5 +1,6 @@
 "use client";
 
+import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
 import {
   startTransition,
   useContext,
@@ -69,6 +70,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
   const surfaceRef = useRef(surface);
   const flatFeatureCacheRef = useRef<Map<string, FlatClusterCacheEntry>>(new Map());
+  const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
   const index = useMemo(
     () =>
       createPointAggregationIndex(deferredPoints, {
@@ -77,7 +79,8 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         minZoom,
         radius: clusterRadius,
       }),
-    [clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
+    // The runtime version rebuilds the index once Rust clustering becomes available.
+    [aggregationRuntimeVersion, clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom],
   );
 
   useEffect(() => {
