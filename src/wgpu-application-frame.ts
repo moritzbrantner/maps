@@ -5,6 +5,7 @@ import type {
   MapRenderDirectionMarker,
   MapRenderLine,
   MapRenderPolygon,
+  MapVectorRenderFrame,
 } from "./map-render-frame";
 import type {
   MapScreenInteractionState,
@@ -53,6 +54,23 @@ export const MAPS_WGPU_APPLICATION_CIRCLE = 0;
 export const MAPS_WGPU_APPLICATION_LINE = 1;
 export const MAPS_WGPU_APPLICATION_DIRECTION_MARKER = 2;
 export const MAPS_WGPU_APPLICATION_POLYGON = 3;
+/** Painter-order run `(kind, group, 1)` drawing a GPU-retained point group (#155). */
+export const MAPS_WGPU_APPLICATION_RETAINED_POINTS = 4;
+
+/**
+ * Retained point paint record shared with `maps-wasm` (`RETAINED_POINT_PAINT_LENGTH`):
+ * radius, stroke width (CSS px), fill RGBA, stroke RGBA (linear light).
+ */
+export const MAPS_RETAINED_POINT_PAINT_STRIDE = 10;
+
+/** Geographic application points for the GPU-retained path; projection stays in Rust. */
+export type MapsRetainedApplicationPoints = {
+  count: number;
+  /** `[longitude, latitude]` per point, lowered once by Rust. */
+  lonLat: Float64Array;
+  /** `MAPS_RETAINED_POINT_PAINT_STRIDE` values per point, interaction deltas applied. */
+  paint: Float32Array;
+};
 
 /**
  * Packed circle record shared with `maps-wasm` (`APPLICATION_CIRCLE_RECORD_LENGTH`): x, y,
@@ -478,4 +496,75 @@ function srgbToLinear(value: number) {
 
 function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * The retained point form of a vector frame, or `null` when the frame is not made only of
+ * unlabeled circles (labels and other primitives still need screen projection). Paint is
+ * resolved here, with the same hover/selection stroke deltas as the screen transport.
+ */
+export function createMapsRetainedApplicationPoints(
+  frame: MapVectorRenderFrame<unknown>,
+  interaction: MapScreenInteractionState = {},
+): MapsRetainedApplicationPoints | null {
+  const count = frame.primitives.length;
+  if (count === 0) return null;
+  const lonLat = new Float64Array(count * 2);
+  const paint = new Float32Array(count * MAPS_RETAINED_POINT_PAINT_STRIDE);
+  const colors = new Map<string, MapsWgpuColor | null>();
+  const color = (value: string, opacity: number) => {
+    const key = `${value}\u0000${opacity}`;
+    let resolved = colors.get(key);
+    if (resolved === undefined) {
+      resolved = parseSupportedCssColor(value, opacity);
+      colors.set(key, resolved);
+    }
+    return resolved;
+  };
+
+  for (let index = 0; index < count; index += 1) {
+    const primitive = frame.primitives[index]!;
+    if (primitive.kind !== "circle" || primitive.label) return null;
+    const fillColor = color(primitive.fillColor, primitive.fillOpacity);
+    const strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
+    const strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
+    const [longitude, latitude] = primitive.center;
+    if (
+      !fillColor ||
+      !strokeColor ||
+      !Number.isFinite(longitude) ||
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(primitive.radius) ||
+      primitive.radius < 0 ||
+      !Number.isFinite(strokeWidth)
+    ) {
+      return null;
+    }
+    lonLat[index * 2] = longitude;
+    lonLat[index * 2 + 1] = latitude;
+    const offset = index * MAPS_RETAINED_POINT_PAINT_STRIDE;
+    paint[offset] = primitive.radius;
+    paint[offset + 1] = strokeWidth;
+    paint.set(fillColor, offset + 2);
+    paint.set(strokeColor, offset + 6);
+  }
+  return { count, lonLat, paint };
+}
+
+/** An application frame that only draws retained point `group` (no screen geometry). */
+export function createMapsWgpuRetainedPointsFrame(
+  group: number,
+  width: number,
+  height: number,
+): MapsWgpuApplicationFrame {
+  return {
+    circleCount: 0,
+    circleData: new Float32Array(0),
+    directionMarkers: [],
+    height,
+    lines: [],
+    order: Uint32Array.of(MAPS_WGPU_APPLICATION_RETAINED_POINTS, group, 1),
+    polygons: [],
+    width,
+  };
 }

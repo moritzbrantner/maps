@@ -18,6 +18,16 @@ const rendererOwners = new WeakMap<HTMLCanvasElement, object>();
 export type MapsWgpuFrameStats = {
   /** Application geometry bytes written to GPU buffers by the last frame. */
   applicationUploadBytes: number;
+  /** Retained application points currently held on the GPU. */
+  retainedPoints: number;
+  /** Cumulative points lowered from longitude/latitude (data changes only). */
+  retainedPointPreparations: number;
+  /** Cumulative anchor rebuilds of retained point offsets (first draw and rebases). */
+  retainedPointRebases: number;
+  /** Cumulative retained point instance bytes written to GPU buffers. */
+  retainedPointUploadBytes: number;
+  /** Retained point frames (world copies) drawn by the last frame. */
+  retainedPointFrames: number;
   drawCalls: number;
   rasterTiles: number;
   retainedVectorBytes: number;
@@ -47,6 +57,14 @@ export type MapsWgpuBaseMapRenderer = {
     viewportClip?: { width: number; height: number } | null,
   ): number;
   resize(width: number, height: number): void;
+  /**
+   * Retains an application point group on the GPU (#155): `[longitude, latitude]` pairs
+   * (lowered once by Rust) and `MAPS_RETAINED_POINT_PAINT_STRIDE` paint values per point.
+   * Frames reference the group from their painter order; camera frames do not re-upload it.
+   * Absent on renderers without retained point support; frames are then projected.
+   */
+  setRetainedPoints?(group: number, lonLat: Float64Array, paint: Float32Array): number;
+  evictRetainedPoints?(group: number): void;
   /** Style table from `createMapsVectorBasemapStyleTable`. */
   setVectorStyle(table: Float32Array): void;
   setVectorMaxZoom(maxZoom: number): void;
@@ -77,6 +95,8 @@ type MapsWgpuBaseMapWasmRenderer = {
     order: Uint32Array,
   ): number;
   resize(width: number, height: number): void;
+  setRetainedPoints(group: number, lonLat: Float64Array, paint: Float32Array): number;
+  evictRetainedPoints(group: number): void;
   setVectorMaxZoom(maxZoom: number): void;
   setVectorStyle(table: Float32Array): void;
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
@@ -143,6 +163,11 @@ export async function loadMapsWgpuBaseMapRenderer(
           retainedVectorLineSegments: stats[6] ?? 0,
           retainedVectorBytes: stats[7] ?? 0,
           applicationUploadBytes: stats[8] ?? 0,
+          retainedPoints: stats[9] ?? 0,
+          retainedPointPreparations: stats[10] ?? 0,
+          retainedPointRebases: stats[11] ?? 0,
+          retainedPointUploadBytes: stats[12] ?? 0,
+          retainedPointFrames: stats[13] ?? 0,
         };
       },
       isDeviceLost() {
@@ -187,6 +212,18 @@ export async function loadMapsWgpuBaseMapRenderer(
             applicationFrame?.circleData ?? EMPTY_CIRCLES,
             applicationFrame?.order ?? EMPTY_ORDER,
           );
+        });
+      },
+      setRetainedPoints(group, lonLat, paint) {
+        return runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          return renderer.setRetainedPoints(group, lonLat, paint);
+        });
+      },
+      evictRetainedPoints(group) {
+        runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          renderer.evictRetainedPoints(group);
         });
       },
       resize(width, height) {

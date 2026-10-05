@@ -146,6 +146,8 @@ beforeEach(() => {
     dispose: vi.fn(),
     evictTile: vi.fn(),
     evictVectorTile: vi.fn(),
+    // These probes cover the screen-projected path: a renderer without retained point
+    // support. Retained points have their own tests.
     frameStats: vi.fn(() => ({
       drawCalls: 0,
       rasterTiles: 0,
@@ -155,6 +157,11 @@ beforeEach(() => {
       retainedVectorTiles: 0,
       retainedVectorTriangles: 0,
       applicationUploadBytes: 0,
+      retainedPoints: 0,
+      retainedPointPreparations: 0,
+      retainedPointRebases: 0,
+      retainedPointUploadBytes: 0,
+      retainedPointFrames: 0,
       vectorTiles: 0,
     })),
     isDeviceLost: vi.fn(() => false),
