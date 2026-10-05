@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { WEBGPU_SWIFTSHADER_ARGS } from "./e2e/helpers/webgpu-args";
+
 export default defineConfig({
   expect: {
     toHaveScreenshot: {
@@ -14,11 +16,7 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: {
-          args: [
-            "--enable-unsafe-swiftshader",
-            "--enable-unsafe-webgpu",
-            "--use-gl=swiftshader",
-          ],
+          args: WEBGPU_SWIFTSHADER_ARGS,
         },
         viewport: { height: 1000, width: 1440 },
       },
@@ -29,11 +27,7 @@ export default defineConfig({
       use: {
         ...devices["Pixel 5"],
         launchOptions: {
-          args: [
-            "--enable-unsafe-swiftshader",
-            "--enable-unsafe-webgpu",
-            "--use-gl=swiftshader",
-          ],
+          args: WEBGPU_SWIFTSHADER_ARGS,
         },
         viewport: { height: 844, width: 390 },
       },

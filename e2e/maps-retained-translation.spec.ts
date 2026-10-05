@@ -1,14 +1,7 @@
 import { chromium, expect, test, type Page } from "@playwright/test";
 // @ts-expect-error -- plain ESM helper shared with the interaction benchmark.
 import { pngTile } from "../scripts/benchmark-tiles.mjs";
-
-const WEBGPU_SWIFTSHADER_ARGS = [
-  "--enable-unsafe-swiftshader",
-  "--enable-unsafe-webgpu",
-  "--enable-skia-graphite",
-  "--skia-graphite-dawn-backend=swiftshader",
-  "--use-angle=swiftshader",
-];
+import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 
 async function serveTiles(page: Page) {
   await page.route(/\/__bench_tiles\/(\d+)\/(-?\d+)\/(-?\d+)\.png/, (route) => {

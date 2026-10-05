@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { WEBGPU_SWIFTSHADER_ARGS } from "./e2e/helpers/webgpu-args";
+
 export default defineConfig({
   outputDir: "test-results-hosted",
   projects: [
@@ -8,7 +10,7 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: {
-          args: ["--enable-unsafe-swiftshader", "--use-gl=swiftshader"],
+          args: WEBGPU_SWIFTSHADER_ARGS,
         },
         viewport: { height: 1000, width: 1440 },
       },
