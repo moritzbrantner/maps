@@ -17,10 +17,13 @@ use maps_core::{
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, ImageBitmap};
 
+use crate::retained_frame::LocalFrame;
 use crate::vector_basemap_layout::{
-    FILL_VERTEX_SIZE, LINE_QUAD_INDICES, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, TILE_UNIFORM_SIZE,
-    fill_index_bytes, fill_vertex_bytes, line_index_bytes, line_vertex_bytes, style_table_bytes,
-    tile_matrix, tile_uniform_bytes,
+    FILL_VERTEX_SIZE, LINE_QUAD_INDICES, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes,
+    fill_vertex_bytes, line_index_bytes, line_vertex_bytes, style_table_bytes,
+};
+use crate::wgpu_retained::{
+    FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
 };
 
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
@@ -51,7 +54,17 @@ struct VectorTileBuffers {
     fill_groups: [std::ops::Range<u32>; VECTOR_FILL_PAINT_ORDER.len()],
     line_groups: [std::ops::Range<u32>; VECTOR_LINE_GROUP_COUNT],
     feature_count: u32,
-    byte_size: u64,
+}
+
+impl RetainedResource for VectorTileBuffers {
+    fn byte_size(&self) -> u64 {
+        retained_bytes([
+            &self.fill_vertices,
+            &self.fill_indices,
+            &self.line_vertices,
+            &self.line_indices,
+        ])
+    }
 }
 
 /// Counters of the last rendered frame, for hosts' observability.
@@ -93,14 +106,11 @@ pub struct MapsWgpuBaseMapRenderer {
     tiles: HashMap<RasterTileKey, TileTexture>,
     vector_fill_pipeline: wgpu::RenderPipeline,
     vector_line_pipeline: wgpu::RenderPipeline,
-    vector_tile_layout: wgpu::BindGroupLayout,
-    vector_tile_uniforms: wgpu::Buffer,
-    vector_tile_bind_group: wgpu::BindGroup,
-    vector_tile_uniform_capacity: u64,
-    vector_tile_uniform_stride: u64,
+    /// Per-tile frame uniforms of the retained vector buckets (shared retained module).
+    vector_frame_uniforms: FrameUniforms,
     vector_style_buffer: wgpu::Buffer,
     vector_style_bind_group: wgpu::BindGroup,
-    vector_tiles: HashMap<RasterTileKey, VectorTileBuffers>,
+    vector_tiles: RetainedSet<RasterTileKey, VectorTileBuffers>,
     vector_max_zoom: u8,
     frame_stats: FrameStats,
     /// Reused per-frame scratch space; avoids allocating on the render path.
@@ -417,20 +427,7 @@ impl MapsWgpuBaseMapRenderer {
         let application_circle_instance_buffer =
             create_application_circle_instance_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
-        let vector_tile_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Maps vector tile layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(TILE_UNIFORM_SIZE),
-                    },
-                    count: None,
-                }],
-            });
+        let vector_frame_uniforms = FrameUniforms::new(&device, "Maps vector tile frame layout");
         let vector_style_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Maps vector style layout"),
@@ -445,16 +442,6 @@ impl MapsWgpuBaseMapRenderer {
                     count: None,
                 }],
             });
-        let vector_tile_uniform_stride = TILE_UNIFORM_SIZE.next_multiple_of(u64::from(
-            device.limits().min_uniform_buffer_offset_alignment,
-        ));
-        let vector_tile_uniform_capacity = 16;
-        let vector_tile_uniforms = create_vector_tile_uniforms(
-            &device,
-            vector_tile_uniform_capacity * vector_tile_uniform_stride,
-        );
-        let vector_tile_bind_group =
-            create_vector_tile_bind_group(&device, &vector_tile_layout, &vector_tile_uniforms);
         let vector_style_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Maps vector style table"),
             size: STYLE_TABLE_SIZE,
@@ -477,7 +464,10 @@ impl MapsWgpuBaseMapRenderer {
         let vector_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Maps vector basemap pipeline layout"),
-                bind_group_layouts: &[Some(&vector_tile_layout), Some(&vector_style_layout)],
+                bind_group_layouts: &[
+                    Some(vector_frame_uniforms.layout()),
+                    Some(&vector_style_layout),
+                ],
                 immediate_size: 0,
             });
         let vector_fill_attributes = [
@@ -578,14 +568,10 @@ impl MapsWgpuBaseMapRenderer {
             tiles: HashMap::new(),
             vector_fill_pipeline,
             vector_line_pipeline,
-            vector_tile_layout,
-            vector_tile_uniforms,
-            vector_tile_bind_group,
-            vector_tile_uniform_capacity,
-            vector_tile_uniform_stride,
+            vector_frame_uniforms,
             vector_style_buffer,
             vector_style_bind_group,
-            vector_tiles: HashMap::new(),
+            vector_tiles: RetainedSet::new(),
             vector_max_zoom: DEFAULT_VECTOR_MAX_ZOOM,
             frame_stats: FrameStats::default(),
             frame_vertices: Vec::new(),
@@ -708,16 +694,7 @@ impl MapsWgpuBaseMapRenderer {
         let buckets = build_shortbread_buckets(bytes)
             .map_err(|error| js_error("could not build Shortbread buckets", error))?;
         let upload = |label: &str, usage: wgpu::BufferUsages, contents: Vec<u8>| {
-            (!contents.is_empty()).then(|| {
-                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size: contents.len() as u64,
-                    usage: usage | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                self.queue.write_buffer(&buffer, 0, &contents);
-                buffer
-            })
+            upload_retained_buffer(&self.device, &self.queue, label, usage, &contents)
         };
         let fill_vertices = upload(
             "Maps vector fill vertices",
@@ -739,11 +716,6 @@ impl MapsWgpuBaseMapRenderer {
             wgpu::BufferUsages::INDEX,
             line_index_bytes(&buckets),
         );
-        let byte_size = [&fill_vertices, &fill_indices, &line_vertices, &line_indices]
-            .into_iter()
-            .flatten()
-            .map(wgpu::Buffer::size)
-            .sum();
         self.vector_tiles.insert(
             (z, x, y),
             VectorTileBuffers {
@@ -754,7 +726,6 @@ impl MapsWgpuBaseMapRenderer {
                 fill_groups: buckets.fill_groups,
                 line_groups: buckets.line_groups,
                 feature_count: buckets.feature_count,
-                byte_size,
             },
         );
         Ok(buckets.feature_count)
@@ -762,7 +733,7 @@ impl MapsWgpuBaseMapRenderer {
 
     #[wasm_bindgen(js_name = evictVectorTile)]
     pub fn evict_vector_tile(&mut self, z: u8, x: u32, y: u32) {
-        self.vector_tiles.remove(&(z, x, y));
+        self.vector_tiles.evict(&(z, x, y));
     }
 
     /// Replaces the vector style table: one entry of 8 floats (RGBA in [0, 1], line
@@ -786,7 +757,7 @@ impl MapsWgpuBaseMapRenderer {
     /// segments and GPU bytes.
     #[wasm_bindgen(js_name = frameStats)]
     pub fn frame_stats(&self) -> Vec<f64> {
-        let (mut features, mut triangles, mut segments, mut bytes) = (0_u64, 0_u64, 0_u64, 0_u64);
+        let (mut features, mut triangles, mut segments) = (0_u64, 0_u64, 0_u64);
         for tile in self.vector_tiles.values() {
             features += u64::from(tile.feature_count);
             triangles += tile
@@ -799,7 +770,6 @@ impl MapsWgpuBaseMapRenderer {
                 .iter()
                 .map(|range| range.len() as u64)
                 .sum::<u64>();
-            bytes += tile.byte_size;
         }
         vec![
             f64::from(self.frame_stats.raster_tiles),
@@ -809,7 +779,7 @@ impl MapsWgpuBaseMapRenderer {
             features as f64,
             triangles as f64,
             segments as f64,
-            bytes as f64,
+            self.vector_tiles.byte_size() as f64,
         ]
     }
 
@@ -1049,40 +1019,22 @@ impl MapsWgpuBaseMapRenderer {
             clip.pixel_ratio as f32,
             0.0,
         ];
-        let mut uniforms = Vec::new();
-        let mut draws = Vec::new();
-        for placement in vector_tile_placements(raster, self.vector_max_zoom) {
-            let key = (placement.tile.z, placement.tile.x, placement.tile.y);
-            if !self.vector_tiles.contains_key(&key) {
-                continue;
-            }
-            let Some(matrix) = tile_matrix(view_projection, &placement) else {
-                continue;
-            };
-            let offset = uniforms.len() as u64;
-            uniforms.extend_from_slice(&tile_uniform_bytes(matrix, surface));
-            uniforms.resize((offset + self.vector_tile_uniform_stride) as usize, 0);
-            draws.push((key, offset as u32));
-        }
-        let count = draws.len() as u64;
-        if count > self.vector_tile_uniform_capacity {
-            let capacity = count.next_power_of_two();
-            self.vector_tile_uniforms = create_vector_tile_uniforms(
-                &self.device,
-                capacity * self.vector_tile_uniform_stride,
-            );
-            self.vector_tile_bind_group = create_vector_tile_bind_group(
-                &self.device,
-                &self.vector_tile_layout,
-                &self.vector_tile_uniforms,
-            );
-            self.vector_tile_uniform_capacity = capacity;
-        }
-        if !uniforms.is_empty() {
-            self.queue
-                .write_buffer(&self.vector_tile_uniforms, 0, &uniforms);
-        }
-        draws
+        let frames = vector_tile_placements(raster, self.vector_max_zoom)
+            .into_iter()
+            .filter_map(|placement| {
+                let key = (placement.tile.z, placement.tile.x, placement.tile.y);
+                self.vector_tiles
+                    .contains(&key)
+                    .then(|| (key, LocalFrame::from(&placement)))
+            })
+            .collect::<Vec<_>>();
+        self.vector_frame_uniforms.write(
+            &self.device,
+            &self.queue,
+            frames,
+            view_projection,
+            surface,
+        )
     }
 
     /// Paints fills group-major across tiles (style order spans tiles), then building
@@ -1100,7 +1052,9 @@ impl MapsWgpuBaseMapRenderer {
         pass.set_pipeline(&self.vector_fill_pipeline);
         for group in 0..VECTOR_FILL_PAINT_ORDER.len() {
             for (key, offset) in draws {
-                let tile = &self.vector_tiles[key];
+                let Some(tile) = self.vector_tiles.get(key) else {
+                    continue;
+                };
                 let range = tile.fill_groups[group].clone();
                 let (Some(vertices), Some(indices)) = (&tile.fill_vertices, &tile.fill_indices)
                 else {
@@ -1109,7 +1063,7 @@ impl MapsWgpuBaseMapRenderer {
                 if range.is_empty() {
                     continue;
                 }
-                pass.set_bind_group(0, &self.vector_tile_bind_group, &[*offset]);
+                pass.set_bind_group(0, self.vector_frame_uniforms.bind_group(), &[*offset]);
                 pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(range, 0, 0..1);
@@ -1119,7 +1073,9 @@ impl MapsWgpuBaseMapRenderer {
         pass.set_pipeline(&self.vector_line_pipeline);
         for group in 0..VECTOR_LINE_GROUP_COUNT {
             for (key, offset) in draws {
-                let tile = &self.vector_tiles[key];
+                let Some(tile) = self.vector_tiles.get(key) else {
+                    continue;
+                };
                 let range = tile.line_groups[group].clone();
                 let (Some(vertices), Some(indices)) = (&tile.line_vertices, &tile.line_indices)
                 else {
@@ -1129,7 +1085,7 @@ impl MapsWgpuBaseMapRenderer {
                     continue;
                 }
                 let per_segment = LINE_QUAD_INDICES.len() as u32;
-                pass.set_bind_group(0, &self.vector_tile_bind_group, &[*offset]);
+                pass.set_bind_group(0, self.vector_frame_uniforms.bind_group(), &[*offset]);
                 pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(range.start * per_segment..range.end * per_segment, 0, 0..1);
@@ -1169,34 +1125,6 @@ impl MapsWgpuBaseMapRenderer {
             }
         }
     }
-}
-
-fn create_vector_tile_uniforms(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Maps vector tile uniforms"),
-        size,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-
-fn create_vector_tile_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    uniforms: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Maps vector tile bind group"),
-        layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer: uniforms,
-                offset: 0,
-                size: wgpu::BufferSize::new(TILE_UNIFORM_SIZE),
-            }),
-        }],
-    })
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {

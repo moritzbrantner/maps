@@ -1,8 +1,8 @@
 //! Target-independent GPU layout of retained vector basemap buckets.
 //!
-//! The wgpu backend (wasm32 only) uploads these bytes once per tile and composes one
-//! per-tile matrix per frame; keeping the packing and matrix math here lets native
-//! `cargo test` cover them.
+//! The wgpu backend (wasm32 only) uploads these bytes once per tile through the shared
+//! retained-geometry module (`retained_frame`, `wgpu_retained`); keeping the packing here
+//! lets native `cargo test` cover it.
 #![cfg_attr(
     not(all(
         target_arch = "wasm32",
@@ -12,7 +12,7 @@
     allow(dead_code)
 )]
 
-use maps_core::{VectorBasemapStyleClass, VectorTileBuckets, VectorTilePlacement};
+use maps_core::{VectorBasemapStyleClass, VectorTileBuckets};
 
 /// Fill vertex: tile-normalized position (2 x f32) and style class (u32).
 pub(crate) const FILL_VERTEX_SIZE: u64 = 12;
@@ -23,8 +23,6 @@ pub(crate) const FILL_VERTEX_SIZE: u64 = 12;
 pub(crate) const LINE_VERTEX_SIZE: u64 = 20;
 pub(crate) const LINE_VERTICES_PER_SEGMENT: u32 = 4;
 pub(crate) const LINE_QUAD_INDICES: [u32; 6] = [0, 1, 2, 2, 1, 3];
-/// Per-tile uniform: column-major matrix, then (surface width px, height px, pixel ratio, 0).
-pub(crate) const TILE_UNIFORM_SIZE: u64 = 80;
 /// Style entry: premultiplied-at-draw RGBA color, then (width CSS px, 0, 0, 0).
 pub(crate) const STYLE_ENTRY_FLOATS: usize = 8;
 pub(crate) const STYLE_TABLE_SIZE: u64 =
@@ -81,45 +79,6 @@ pub(crate) fn line_index_bytes(buckets: &VectorTileBuckets) -> Vec<u8> {
         .collect()
 }
 
-/// `view_projection * T`, where `T` maps tile-normalized `(u, v)` (+v south) to the
-/// placement's local map-plane rectangle. Composed in `f64`; `None` when the result
-/// is not representable as finite `f32`.
-pub(crate) fn tile_matrix(
-    view_projection: [f32; 16],
-    placement: &VectorTilePlacement,
-) -> Option<[f32; 16]> {
-    let column = |index: usize| -> [f64; 4] {
-        std::array::from_fn(|row| f64::from(view_projection[index * 4 + row]))
-    };
-    let (x, y, z, w) = (column(0), column(1), column(2), column(3));
-    let size = placement.local_size;
-    let columns = [
-        x.map(|value| value * size),
-        y.map(|value| -value * size),
-        z,
-        std::array::from_fn(|row| {
-            x[row] * placement.local_west + y[row] * placement.local_north + w[row]
-        }),
-    ];
-    let mut matrix = [0.0_f32; 16];
-    for (index, value) in columns.into_iter().flatten().enumerate() {
-        let value = value as f32;
-        if !value.is_finite() {
-            return None;
-        }
-        matrix[index] = value;
-    }
-    Some(matrix)
-}
-
-pub(crate) fn tile_uniform_bytes(matrix: [f32; 16], surface: [f32; 4]) -> [u8; 80] {
-    let mut bytes = [0; TILE_UNIFORM_SIZE as usize];
-    for (index, value) in matrix.into_iter().chain(surface).enumerate() {
-        bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
-    }
-    bytes
-}
-
 /// Validates a host style table (one [`STYLE_ENTRY_FLOATS`] entry per style class).
 pub(crate) fn style_table_bytes(table: &[f32]) -> Result<Vec<u8>, &'static str> {
     if table.len() != VectorBasemapStyleClass::COUNT * STYLE_ENTRY_FLOATS {
@@ -142,57 +101,7 @@ pub(crate) fn style_table_bytes(table: &[f32]) -> Result<Vec<u8>, &'static str> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maps_core::{TileId, VectorFillVertex, VectorLineSegment};
-
-    fn identity() -> [f32; 16] {
-        let mut matrix = [0.0; 16];
-        for index in 0..4 {
-            matrix[index * 5] = 1.0;
-        }
-        matrix
-    }
-
-    fn apply(matrix: [f32; 16], point: [f32; 2]) -> [f32; 2] {
-        [
-            matrix[0] * point[0] + matrix[4] * point[1] + matrix[12],
-            matrix[1] * point[0] + matrix[5] * point[1] + matrix[13],
-        ]
-    }
-
-    #[test]
-    fn tile_matrix_maps_tile_corners_onto_the_local_placement() {
-        let placement = VectorTilePlacement {
-            tile: TileId::new(3, 1, 2).unwrap(),
-            local_west: -40.0,
-            local_north: 25.0,
-            local_size: 256.0,
-        };
-        let matrix = tile_matrix(identity(), &placement).unwrap();
-        assert_eq!(apply(matrix, [0.0, 0.0]), [-40.0, 25.0]);
-        assert_eq!(apply(matrix, [1.0, 1.0]), [216.0, -231.0]);
-    }
-
-    #[test]
-    fn tile_matrix_composes_with_the_camera() {
-        let mut view_projection = identity();
-        view_projection[0] = 0.5;
-        view_projection[5] = 0.25;
-        view_projection[12] = 0.1;
-        let placement = VectorTilePlacement {
-            tile: TileId::new(0, 0, 0).unwrap(),
-            local_west: 2.0,
-            local_north: 4.0,
-            local_size: 8.0,
-        };
-        let matrix = tile_matrix(view_projection, &placement).unwrap();
-        // Local (2 + 8 * 0.5, 4 - 8 * 0.5) = (6, 0) -> clip (3.1, 0).
-        assert_eq!(apply(matrix, [0.5, 0.5]), [3.1, 0.0]);
-        let overflow = VectorTilePlacement {
-            local_size: f64::MAX,
-            ..placement
-        };
-        assert_eq!(tile_matrix(view_projection, &overflow), None);
-    }
+    use maps_core::{VectorFillVertex, VectorLineSegment};
 
     #[test]
     fn bucket_bytes_follow_the_documented_strides() {

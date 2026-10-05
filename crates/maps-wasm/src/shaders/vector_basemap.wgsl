@@ -1,4 +1,5 @@
-struct VectorTile {
+// The shared retained-geometry frame uniform (see `wgpu_retained`).
+struct RetainedFrame {
   matrix: mat4x4<f32>,
   // Physical surface width/height (px) and the CSS-to-physical pixel ratio.
   surface: vec4<f32>,
@@ -15,7 +16,7 @@ struct VectorStyles {
 };
 
 @group(0) @binding(0)
-var<uniform> tile: VectorTile;
+var<uniform> tile: RetainedFrame;
 
 @group(1) @binding(0)
 var<uniform> styles: VectorStyles;
