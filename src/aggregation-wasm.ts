@@ -95,10 +95,7 @@ export async function importMapsWasmModule<TModule extends MapsWasmModuleBase>(
   let initialized = initializedModules.get(resolvedPackage);
 
   if (!initialized) {
-    const dynamicImport = new Function("specifier", "return import(specifier)") as (
-      specifier: string,
-    ) => Promise<MapsWasmModuleBase>;
-    initialized = dynamicImport(resolvedPackage)
+    initialized = importMapsWasmSpecifier(resolvedPackage)
       .then(async (module) => {
         await module.default?.();
         return module;
@@ -112,6 +109,22 @@ export async function importMapsWasmModule<TModule extends MapsWasmModuleBase>(
 
   // Each runtime loader validates the capability it needs on this module.
   return (await initialized) as TModule;
+}
+
+/**
+ * The published default is a literal package self-reference, so consumer bundlers resolve
+ * `@moritzbrantner/maps/wasm` (and its `.wasm` asset) like any other import; a configured
+ * module URL stays a runtime import that bundlers leave alone.
+ */
+function importMapsWasmSpecifier(specifier: string): Promise<MapsWasmModuleBase> {
+  if (specifier === DEFAULT_MAPS_WASM_PACKAGE) {
+    return import("@moritzbrantner/maps/wasm") as Promise<MapsWasmModuleBase>;
+  }
+
+  const dynamicImport = new Function("specifier", "return import(specifier)") as (
+    specifier: string,
+  ) => Promise<MapsWasmModuleBase>;
+  return dynamicImport(specifier);
 }
 
 function assertLive(disposed: boolean) {

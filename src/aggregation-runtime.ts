@@ -127,15 +127,19 @@ export async function initializeMapsAggregationWasm(options: MapsAggregationLoad
 }
 
 /**
- * Starts loading the aggregation WASM runtime once, unless one is already installed. Map Views
- * call this on mount; a failed load is not retried and leaves indexes unclustered.
+ * Starts loading the aggregation WASM runtime unless one is installed or loading. Map Views
+ * call this on mount; until it loads, indexes are unclustered.
  */
 export function ensureMapsAggregationWasm(): Promise<boolean> {
   if (wasmRuntime) {
     return Promise.resolve(true);
   }
 
-  pendingInitialization ??= initializeMapsAggregationWasm();
+  // A failed load is reported once per attempt; a later Map View mount may retry.
+  pendingInitialization ??= initializeMapsAggregationWasm().then((ready) => {
+    if (!ready) pendingInitialization = null;
+    return ready;
+  });
   return pendingInitialization;
 }
 

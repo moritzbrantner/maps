@@ -2,6 +2,8 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   clean: true,
+  // The WASM runtime is a sibling package export resolved by consumers' bundlers.
+  external: ["@moritzbrantner/maps/wasm"],
   dts: true,
   entry: {
     index: "src/index.ts",

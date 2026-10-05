@@ -9,6 +9,7 @@
     "types": ["node"],
     "paths": {
       "flat": ["./src/flat-shim.ts"],
+      "@moritzbrantner/maps/wasm": ["./src/maps-wasm-unbuilt.ts"],
       "@moritzbrantner/maps": ["./src/index.ts"]
     }
   },

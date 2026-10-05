@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,6 +92,12 @@ createRoot(document.getElementById("root")!).render(
 
   run("bun", ["install"], directory);
   run("bunx", ["--bun", "vite", "build"], directory);
+  // Map Views load the Rust aggregation runtime through the package's own `./wasm` export;
+  // the consumer bundler must have resolved it and emitted the WASM binary.
+  const assets = readdirSync(path.join(directory, "dist", "assets"));
+  if (!assets.some((file) => file.endsWith(".wasm"))) {
+    throw new Error("full Vite consumer did not bundle the Maps WASM runtime");
+  }
 }
 
 function verifyFlatOnlyViteConsumer(directory, packageTarball) {

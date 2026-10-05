@@ -169,6 +169,7 @@ export function CanvasPointClusterLayer<
     });
     onViewportAggregationChange?.(frame.summary);
   }, [
+    aggregationRuntimeVersion,
     clusterRadius,
     filterPoint,
     getFeatureId,
