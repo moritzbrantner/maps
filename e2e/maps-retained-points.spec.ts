@@ -152,6 +152,37 @@ for (const scenario of cases) {
   });
 }
 
+test("retained points are pickable in every visible world copy @smoke", async ({ page }) => {
+  const { map } = await openRetainedPoints(
+    page,
+    "points=world&lon=178&lat=0&zoom=0.2",
+    "wgpu",
+  );
+  let blobs: Blob[] = [];
+  await expect
+    .poll(async () => {
+      blobs = await redBlobs(page, await map.screenshot());
+      return blobs.length;
+    })
+    .toBe(4);
+  const box = (await map.boundingBox())!;
+  // The equator point at longitude 0 is drawn twice, one world apart.
+  const middle = blobs
+    .filter((blob) => blobs.some((other) => other !== blob && Math.abs(other.y - blob.y) < 1))
+    .sort((left, right) => left.x - right.x);
+  expect(middle).toHaveLength(2);
+  for (const copy of middle) {
+    await page.mouse.move(box.x + copy.x, box.y + copy.y);
+    await expect(page.getByText("Picked middle", { exact: true })).toBeVisible();
+    await page.mouse.move(box.x + 2, box.y + 2);
+    await expect(page.getByText("Picked middle", { exact: true })).toBeHidden();
+  }
+  await expect(map.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-base-renderer",
+    "wgpu",
+  );
+});
+
 for (const [count, journeySteps] of [
   [10_000, 40],
   [100_000, 12],

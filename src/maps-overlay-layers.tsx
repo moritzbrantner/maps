@@ -283,6 +283,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const retainedModeRef = useRef(false);
     const retainedSizeRef = useRef<{ height: number; width: number } | null>(null);
     const sceneRevisionRef = useRef(-1);
+    // Its own projection cache: the draw projector may hold results from before the
+    // runtime could project (same revision), which would hide every retained point.
+    const retainedPickProjectorRef = useRef(createCanvasMapSceneProjector());
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
     const clusterRuntimesRef = useRef<Map<string, MapsClusterRuntime>>(new Map());
@@ -460,6 +463,34 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       lastHoveredKeyRef.current = null;
     };
 
+    /**
+     * Retained points are drawn in every visible world copy, while the lazily projected
+     * picking scene places each point in its nearest copy. Retry the hit one world to
+     * either side, using the screen vector of one world at the viewport centre.
+     */
+    const hitTestRetainedWorldCopies = (
+      scene: CanvasMapScene<unknown>,
+      position: { x: number; y: number },
+      size: { height: number; width: number },
+    ) => {
+      const center = unproject(size.width / 2, size.height / 2);
+      if (!center) return null;
+      const east = project([center[0] + 179.9, center[1]]);
+      const west = project([center[0] - 179.9, center[1]]);
+      if (!east || !west) return null;
+      const scale = 360 / 359.8;
+      const world = { x: (east.x - west.x) * scale, y: (east.y - west.y) * scale };
+      if (Math.hypot(world.x, world.y) > 4 * Math.max(size.width, size.height)) return null;
+      for (const direction of [1, -1]) {
+        const hit = hitTestCanvasMapScene(scene, {
+          x: position.x + direction * world.x,
+          y: position.y + direction * world.y,
+        });
+        if (hit) return hit;
+      }
+      return null;
+    };
+
     const pickInternal = (clientX: number, clientY: number): InternalPick | null => {
       const canvas = canvasRef.current;
       const renderedSnapshot = renderedSnapshotRef.current;
@@ -470,7 +501,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         retainedSize &&
         sceneRevisionRef.current !== projectionRevisionRef.current
       ) {
-        sceneRef.current = projectScene(
+        sceneRef.current = retainedPickProjectorRef.current(
           renderedSnapshot.frame,
           project,
           retainedSize,
@@ -488,7 +519,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       // While a motion transform presents the retained scene, hit-test in its coordinates.
       const scenePosition = matrix ? invertOverlayMotionPoint(matrix, position) : position;
       if (!scenePosition) return null;
-      const hit = hitTestCanvasMapScene(scene, scenePosition);
+      const hit =
+        hitTestCanvasMapScene(scene, scenePosition) ??
+        (retainedModeRef.current && retainedSizeRef.current
+          ? hitTestRetainedWorldCopies(scene, scenePosition, retainedSizeRef.current)
+          : null);
       if (!hit) return null;
       const primitive = hit.renderPrimitive;
       const interaction = renderedSnapshot.interactions.get(primitive.primitiveId);
@@ -618,6 +653,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           renderedSnapshotRef.current = snapshot;
           sceneRef.current = null;
           sceneRevisionRef.current = -1;
+          retainedPickProjectorRef.current = createCanvasMapSceneProjector();
           lastDrawRef.current = null;
           canvas.dataset.mapOverlayPrimitives = String(snapshot.frame.primitives.length);
           canvas.dataset.mapOverlayHeatLayers = "0";

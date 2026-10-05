@@ -112,6 +112,11 @@ createRoot(document.getElementById("map")!).render(
     viewState={scenario === "dense" ? undefined : viewState}
     defaultViewState={scenario === "dense" ? viewState : undefined}
   >
-    <PointLayer points={points} pointColor="#ff0000" pointRadius={6} />
+    <PointLayer
+      points={points}
+      pointColor="#ff0000"
+      pointRadius={6}
+      renderFeatureTooltip={(feature) => <span>Picked {feature.point.id}</span>}
+    />
   </MapView>,
 );
