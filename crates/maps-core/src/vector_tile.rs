@@ -123,29 +123,85 @@ fn decode_with_coordinates<C: Clone>(
     bytes: &[u8],
     project: impl Fn(u32, i32, i32) -> Result<C, VectorTileError>,
 ) -> Result<VectorBasemapTile<C>, VectorTileError> {
-    let mut cursor = ProtoCursor::new(bytes);
     let mut output = VectorBasemapTile {
         lines: Vec::new(),
         polygons: Vec::new(),
     };
+    visit_shortbread_features(bytes, |feature| {
+        let mut coordinates = Vec::with_capacity(feature.paths.len());
+        for path in &feature.paths {
+            coordinates.push(
+                path.iter()
+                    .map(|[x, y]| project(feature.extent, *x, *y))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+        }
+        if let Some(kind) = feature.line_kind {
+            for path in &feature.line_paths {
+                output.lines.push(VectorBasemapLine {
+                    kind,
+                    coordinates: path
+                        .iter()
+                        .map(|[x, y]| project(feature.extent, *x, *y))
+                        .collect::<Result<Vec<_>, _>>()?,
+                });
+            }
+        }
+        if let Some(kind) = feature.polygon_kind {
+            output.polygons.extend(feature.polygons.iter().map(|rings| {
+                VectorBasemapPolygon {
+                    kind,
+                    source_kind: feature.source_kind.clone(),
+                    rings: rings
+                        .iter()
+                        .map(|&ring| coordinates[ring].clone())
+                        .collect(),
+                }
+            }));
+        }
+        Ok(())
+    })?;
+    Ok(output)
+}
 
+/// One accepted Shortbread feature in integer MVT tile coordinates.
+pub(crate) struct ShortbreadFeature {
+    pub extent: u32,
+    /// Set when every path of this feature is also Shortbread linework.
+    pub line_kind: Option<VectorBasemapLineKind>,
+    /// Set when this feature is a filled Shortbread polygon.
+    pub polygon_kind: Option<VectorBasemapPolygonKind>,
+    pub source_kind: Option<String>,
+    /// Decoded paths with at least two points; polygon rings are explicitly closed.
+    pub paths: Vec<Vec<[i32; 2]>>,
+    /// Linework of this feature (with `line_kind`): line paths as decoded, or polygon
+    /// rings split where they run along the tile clip edge, which is not a real shore.
+    pub line_paths: Vec<Vec<[i32; 2]>>,
+    /// Polygon path indices grouped as one exterior followed by its interior rings.
+    pub polygons: Vec<Vec<usize>>,
+}
+
+/// Visits the Shortbread features Maps owns, in protobuf layer and feature order.
+pub(crate) fn visit_shortbread_features(
+    bytes: &[u8],
+    mut visit: impl FnMut(ShortbreadFeature) -> Result<(), VectorTileError>,
+) -> Result<(), VectorTileError> {
+    let mut cursor = ProtoCursor::new(bytes);
     while !cursor.is_finished() {
         let (field, wire_type) = cursor.read_key()?;
         if field == 3 && wire_type == 2 {
             let layer = cursor.read_length_delimited()?;
-            decode_layer(layer, &project, &mut output)?;
+            decode_layer(layer, &mut visit)?;
         } else {
             cursor.skip(wire_type)?;
         }
     }
-
-    Ok(output)
+    Ok(())
 }
 
-fn decode_layer<C: Clone>(
+fn decode_layer(
     bytes: &[u8],
-    project: &impl Fn(u32, i32, i32) -> Result<C, VectorTileError>,
-    output: &mut VectorBasemapTile<C>,
+    visit: &mut impl FnMut(ShortbreadFeature) -> Result<(), VectorTileError>,
 ) -> Result<(), VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut name: Option<&str> = None;
@@ -188,15 +244,11 @@ fn decode_layer<C: Clone>(
     }
 
     for feature in features {
-        decode_feature(
-            feature,
-            project,
-            extent,
-            line_layer,
-            polygon_kind,
-            &properties,
-            output,
-        )?;
+        if let Some(feature) =
+            decode_feature(feature, extent, line_layer, polygon_kind, &properties)?
+        {
+            visit(feature)?;
+        }
     }
 
     Ok(())
@@ -271,15 +323,13 @@ fn shortbread_line_layer(name: &str) -> Option<(VectorBasemapLineKind, bool)> {
     }
 }
 
-fn decode_feature<C: Clone>(
+fn decode_feature(
     bytes: &[u8],
-    project: &impl Fn(u32, i32, i32) -> Result<C, VectorTileError>,
     extent: u32,
     line_layer: Option<(VectorBasemapLineKind, bool)>,
     polygon_kind: Option<VectorBasemapPolygonKind>,
     properties: &LayerProperties<'_>,
-    output: &mut VectorBasemapTile<C>,
-) -> Result<(), VectorTileError> {
+) -> Result<Option<ShortbreadFeature>, VectorTileError> {
     let mut cursor = ProtoCursor::new(bytes);
     let mut geometry_type = 0_u32;
     let mut geometry = Vec::new();
@@ -316,34 +366,22 @@ fn decode_feature<C: Clone>(
     let accepts_geometry = (geometry_type == 2 && line_layer.is_some())
         || (geometry_type == 3 && polygon_kind.is_some());
     if !accepts_geometry {
-        return Ok(());
+        return Ok(None);
     }
     if geometry.is_empty() {
         return Err(VectorTileError::InvalidGeometry);
     }
 
     let source_kind = properties.source_kind(&tags)?;
-    let paths = decode_geometry_paths(&geometry, geometry_type == 3)?;
-    let mut polygons: Vec<VectorBasemapPolygon<C>> = Vec::new();
-    for path in paths {
-        if path.len() < 2 {
-            continue;
-        }
-        let coordinates = path
-            .iter()
-            .map(|[x, y]| project(extent, *x, *y))
-            .collect::<Result<Vec<_>, _>>()?;
-        if let Some((kind, accepts_polygon)) = line_layer
-            && (geometry_type == 2 || accepts_polygon)
-        {
-            output.lines.push(VectorBasemapLine {
-                kind,
-                coordinates: coordinates.clone(),
-            });
-        }
-        if let Some(kind) = polygon_kind
-            && geometry_type == 3
-        {
+    let mut paths = decode_geometry_paths(&geometry, geometry_type == 3)?;
+    paths.retain(|path| path.len() >= 2);
+    let line_kind = line_layer
+        .filter(|(_, accepts_polygon)| geometry_type == 2 || *accepts_polygon)
+        .map(|(kind, _)| kind);
+    let polygon_kind = polygon_kind.filter(|_| geometry_type == 3);
+    let mut polygons: Vec<Vec<usize>> = Vec::new();
+    if polygon_kind.is_some() {
+        for (index, path) in paths.iter().enumerate() {
             // MVT uses screen coordinates: positive signed area is an exterior.
             // i128 keeps products and sums exact even for large buffered coordinates.
             let area: i128 = path
@@ -353,26 +391,77 @@ fn decode_feature<C: Clone>(
                         - i128::from(pair[1][0]) * i128::from(pair[0][1])
                 })
                 .sum();
-            if area > 0 {
-                polygons.push(VectorBasemapPolygon {
-                    kind,
-                    source_kind: source_kind.clone(),
-                    rings: vec![coordinates],
-                });
-            } else if area < 0 {
-                polygons
+            match area.signum() {
+                1 => polygons.push(vec![index]),
+                -1 => polygons
                     .last_mut()
                     .ok_or(VectorTileError::InvalidGeometry)?
-                    .rings
-                    .push(coordinates);
-            } else {
-                return Err(VectorTileError::InvalidGeometry);
+                    .push(index),
+                _ => return Err(VectorTileError::InvalidGeometry),
             }
         }
     }
-    output.polygons.extend(polygons);
 
-    Ok(())
+    let line_paths = match line_kind {
+        None => Vec::new(),
+        Some(_) if geometry_type == 2 => paths.clone(),
+        Some(_) => paths
+            .iter()
+            .flat_map(|ring| split_at_tile_edges(ring, extent))
+            .collect(),
+    };
+
+    Ok(Some(ShortbreadFeature {
+        extent,
+        line_kind,
+        polygon_kind,
+        source_kind,
+        paths,
+        line_paths,
+        polygons,
+    }))
+}
+
+/// Splits a polygon ring into runs that exclude segments lying on or beyond one tile
+/// clip edge. Clipped polygons close along the tile (buffer) boundary; outlining those
+/// segments would draw tile seams instead of coastlines.
+pub(crate) fn split_at_tile_edges(ring: &[[i32; 2]], extent: u32) -> Vec<Vec<[i32; 2]>> {
+    let extent = i32::try_from(extent).unwrap_or(i32::MAX);
+    let on_clip_edge = |a: [i32; 2], b: [i32; 2]| {
+        (a[0] <= 0 && b[0] <= 0)
+            || (a[0] >= extent && b[0] >= extent)
+            || (a[1] <= 0 && b[1] <= 0)
+            || (a[1] >= extent && b[1] >= extent)
+    };
+    let mut runs = Vec::new();
+    let mut current: Vec<[i32; 2]> = Vec::new();
+    for pair in ring.windows(2) {
+        if on_clip_edge(pair[0], pair[1]) {
+            if current.len() >= 2 {
+                runs.push(core::mem::take(&mut current));
+            }
+            current.clear();
+            continue;
+        }
+        if current.is_empty() {
+            current.push(pair[0]);
+        }
+        current.push(pair[1]);
+    }
+    if current.len() >= 2 {
+        runs.push(current);
+    }
+    // A ring whose first run continues its last run is one line through the start.
+    if runs.len() >= 2 && ring.first() == ring.last() {
+        let first = &runs[0];
+        let last = &runs[runs.len() - 1];
+        if first.first() == ring.first() && last.last() == ring.last() {
+            let mut joined = runs.pop().unwrap_or_default();
+            joined.extend_from_slice(&runs[0][1..]);
+            runs[0] = joined;
+        }
+    }
+    runs
 }
 
 fn decode_geometry_paths(
@@ -652,7 +741,8 @@ mod tests {
             pixels.polygons[0].rings[1][0],
             VectorTilePixel { x: 128.0, y: 128.0 }
         );
-        assert_eq!(pixels.lines.len(), 2);
+        // The buffered exterior is the tile clip edge; only the hole's shore is linework.
+        assert_eq!(pixels.lines.len(), 1);
         assert!(decode_shortbread_tile_pixels(&bytes, 0).is_err());
         assert!(decode_shortbread_tile_pixels(&bytes, 4097).is_err());
         assert!(decode_shortbread_tile_pixels(&[255], 512).is_err());
@@ -693,7 +783,8 @@ mod tests {
         assert_eq!(polygon.rings[0][0][0], 0.0);
         assert_eq!(polygon.rings[0][1][0], 180.0);
         assert_eq!(polygon.rings[1][0][0], 45.0);
-        assert_eq!(tile.lines.len(), 2);
+        // The exterior is the tile clip edge; only the island's shore is linework.
+        assert_eq!(tile.lines.len(), 1);
     }
 
     fn polygon_commands(rings: &[&[[i32; 2]]]) -> Vec<u32> {
@@ -805,9 +896,44 @@ mod tests {
         let bytes = tiny_line_tile("ocean", 3, &geometry);
         let lines = decode_shortbread_basemap_lines(&bytes, TileId::new(1, 0, 0).unwrap()).unwrap();
 
+        // Only the diagonal is shore; the ring's other sides are the tile clip edge.
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].kind, VectorBasemapLineKind::Coast);
-        assert_eq!(lines[0].coordinates.first(), lines[0].coordinates.last());
+        assert_eq!(lines[0].coordinates.len(), 2);
+        assert_eq!(lines[0].coordinates[0][0], 0.0);
+        assert_eq!(lines[0].coordinates[1][0], -180.0);
+    }
+
+    #[test]
+    fn polygon_outlines_skip_tile_clip_edges_but_keep_interior_rings() {
+        // A buffered water body clipped at x = -64 and y = 4160, with an island.
+        let ring = [
+            [-64, 1000],
+            [2000, 800],
+            [3000, 2000],
+            [2000, 4160],
+            [-64, 4160],
+            [-64, 1000],
+        ];
+        assert_eq!(
+            split_at_tile_edges(&ring, 4096),
+            vec![vec![[-64, 1000], [2000, 800], [3000, 2000], [2000, 4160]]]
+        );
+        // Starts mid-shore: the run through the closing point is joined.
+        let rotated = [
+            [2000, 800],
+            [3000, 2000],
+            [2000, 4160],
+            [-64, 4160],
+            [-64, 1000],
+            [2000, 800],
+        ];
+        assert_eq!(
+            split_at_tile_edges(&rotated, 4096),
+            vec![vec![[-64, 1000], [2000, 800], [3000, 2000], [2000, 4160]]]
+        );
+        let island = [[100, 100], [100, 300], [300, 300], [100, 100]];
+        assert_eq!(split_at_tile_edges(&island, 4096), vec![island.to_vec()]);
     }
 
     #[test]

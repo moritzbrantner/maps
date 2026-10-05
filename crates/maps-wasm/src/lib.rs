@@ -4,6 +4,8 @@
 //! values to and from that domain contract.
 
 mod engine_scenario;
+mod retained_frame;
+mod vector_basemap_layout;
 #[cfg(all(
     target_arch = "wasm32",
     target_os = "unknown",
@@ -19,6 +21,12 @@ mod wgpu_base_map;
     )
 ))]
 mod wgpu_geometry;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "wgpu-base-map"
+))]
+mod wgpu_retained;
 
 use std::collections::BTreeMap;
 

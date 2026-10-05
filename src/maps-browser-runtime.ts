@@ -29,7 +29,11 @@ import {
   type MapsRasterTileId,
 } from "./flat-runtime-wasm";
 import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
-import { loadMapsWgpuBaseMapRenderer, type MapsWgpuBaseMapRenderer } from "./wgpu-base-map-wasm";
+import {
+  loadMapsWgpuBaseMapRenderer,
+  type MapsWgpuBaseMapRenderer,
+  type MapsWgpuFrameStats,
+} from "./wgpu-base-map-wasm";
 
 const DEFAULT_TILE_SIZE = 256;
 const DEFAULT_SOURCE_MAX_ZOOM = 19;
@@ -69,8 +73,39 @@ type MapsWgpuApplicationFrameFactory = (
   interaction: MapScreenInteractionState,
 ) => MapsWgpuApplicationFrame | null;
 
+export type MapsBaseRenderer = "pending" | "wgpu" | "canvas2d";
+
+/**
+ * Vector basemap retained on the GPU (WebGPU backend only). Rust decodes and
+ * tessellates each tile once; camera frames only update per-tile uniforms. Tiles
+ * are drawn above raster tiles and beneath application geometry.
+ */
+export type MapsRetainedVectorBasemap = {
+  evictTile(tile: MapsRasterTileId): void;
+  setMaxZoom(maxZoom: number): void;
+  /** Style table from `createMapsVectorBasemapStyleTable`. */
+  setStyle(table: Float32Array): void;
+  /** Retains Shortbread MVT bytes for `tile`; returns the decoded feature count. */
+  uploadTile(tile: MapsRasterTileId, bytes: Uint8Array): number;
+};
+
+/** Descriptive renderer observations for inspection tooling; not a correctness contract. */
+export type MapsRendererStats = Partial<MapsWgpuFrameStats> & {
+  backend: MapsBaseRenderer;
+  /** Main-thread time of the last base render call (encode + submit), ms. */
+  lastRenderMs: number;
+  /** Full base renders since the runtime started. */
+  renders: number;
+  /** Camera frames presented by translating the retained render instead. */
+  translatedFrames: number;
+};
+
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
+  getBaseRenderer(): MapsBaseRenderer;
+  getRendererStats(): MapsRendererStats;
+  /** The GPU-retained vector basemap, or `null` without the WebGPU backend. */
+  getRetainedVectorBasemap(): MapsRetainedVectorBasemap | null;
   getViewState(): MapViewState;
   getVisibleBounds(): MapBounds;
   getVisibleTiles(): MapsRasterTileId[];
@@ -81,6 +116,8 @@ export type MapsCanvasFlatRuntimeController = {
     interaction?: MapScreenInteractionState,
   ): boolean;
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
+  /** Called when the base renderer changes, e.g. WebGPU device loss falls back to Canvas. */
+  subscribeBaseRenderer(listener: (renderer: MapsBaseRenderer) => void): () => void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
 };
 
@@ -178,9 +215,20 @@ export function createMapsBrowserRuntime(
     if (cancelled) throw new Error("Maps browser runtime is disposed.");
   }
 
-  function setBaseRenderer(backend: "pending" | "wgpu" | "canvas2d") {
+  let baseRenderer: MapsBaseRenderer = "pending";
+  const baseRendererListeners = new Set<(renderer: MapsBaseRenderer) => void>();
+  function setBaseRenderer(backend: MapsBaseRenderer) {
     canvas.dataset.mapBaseRenderer = backend;
     fallbackCanvas.style.visibility = backend === "canvas2d" ? "visible" : "hidden";
+    if (backend === baseRenderer) return;
+    baseRenderer = backend;
+    for (const listener of [...baseRendererListeners]) {
+      try {
+        listener(backend);
+      } catch (error) {
+        config.onError?.(error);
+      }
+    }
   }
   canvas.dataset.flatRuntime = "maps";
   canvas.dataset.mapBaseTiles = "0";
@@ -460,6 +508,28 @@ export function createMapsBrowserRuntime(
     synchronize = syncFrame;
     emitViewState = notifyViewState;
 
+    const retainedVectorBasemap: MapsRetainedVectorBasemap = {
+      evictTile(tile) {
+        activeRenderer?.evictVectorTile(tile);
+        frameSynchronizer.requestRender();
+      },
+      setMaxZoom(maxZoom) {
+        activeRenderer?.setVectorMaxZoom(maxZoom);
+        frameSynchronizer.requestRender();
+      },
+      setStyle(table) {
+        activeRenderer?.setVectorStyle(table);
+        frameSynchronizer.requestRender();
+      },
+      uploadTile(tile, bytes) {
+        const renderer = activeRenderer;
+        if (!renderer) return 0;
+        const features = renderer.uploadVectorTile(tile, bytes);
+        frameSynchronizer.requestRender();
+        return features;
+      },
+    };
+
     const controller: MapsCanvasFlatRuntimeController = {
       fitBounds(bounds, options = {}) {
         assertActive();
@@ -469,6 +539,17 @@ export function createMapsBrowserRuntime(
           options.maxZoom ?? normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM;
         runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
         notifyViewState(syncFrame(), options.reason ?? "fit-bounds");
+      },
+      getBaseRenderer() {
+        return baseRenderer;
+      },
+      getRendererStats() {
+        assertActive();
+        return { backend: baseRenderer, ...frameSynchronizer.getStats() };
+      },
+      getRetainedVectorBasemap() {
+        assertActive();
+        return activeRenderer ? retainedVectorBasemap : null;
       },
       getViewState() {
         assertActive();
@@ -502,6 +583,10 @@ export function createMapsBrowserRuntime(
         cancelCameraFrame();
         runtime.setViewState(next);
         notifyViewState(syncFrame(), reason);
+      },
+      subscribeBaseRenderer(listener) {
+        baseRendererListeners.add(listener);
+        return () => baseRendererListeners.delete(listener);
       },
       unproject(x, y) {
         assertActive();
@@ -745,6 +830,7 @@ export function createMapsBrowserRuntime(
     cancelKineticPan();
     cancelCameraFrame();
     config.onControllerReady?.(null);
+    baseRendererListeners.clear();
     synchronize = null;
     emitViewState = null;
     gesture.clear();
@@ -909,6 +995,7 @@ function createFrameSynchronizer({
   // When the camera last changed by more than a translation, for motion detection.
   let lastReshape = Number.NEGATIVE_INFINITY;
   let settleHandle: number | null = null;
+  let renderRequest: number | null = null;
   let drawnTilesAttribute = "0";
   let pendingTilesAttribute = "0";
 
@@ -918,6 +1005,9 @@ function createFrameSynchronizer({
     pendingTilesAttribute = value;
     canvas.dataset.mapBasePendingTiles = value;
   }
+  let vectorTilesAttribute: string | null = null;
+  const stats = { lastRenderMs: 0, renders: 0, translatedFrames: 0 };
+  let frameStats: MapsWgpuFrameStats | null = null;
 
   /** Marks rendered pixels stale; a tile only matters if the last render placed it. */
   function invalidateRendered(tileKey?: string) {
@@ -995,6 +1085,7 @@ function createFrameSynchronizer({
     }
     setSurfaceTranslation(x, y);
     translated = true;
+    stats.translatedFrames += 1;
     scheduleSettle();
     return true;
   }
@@ -1135,8 +1226,10 @@ function createFrameSynchronizer({
       ? { height: frame.camera.height, width: frame.camera.width }
       : null;
     const currentRenderer = renderer();
+    stats.renders += 1;
     if (currentRenderer) {
       try {
+        const started = performance.now();
         const drawnTiles = currentRenderer.render(
           frame.placements,
           frame.renderCamera,
@@ -1144,6 +1237,8 @@ function createFrameSynchronizer({
           margin,
           viewportClip,
         );
+        stats.lastRenderMs = performance.now() - started;
+        recordFrameStats(currentRenderer);
         const hasDecodedVisibleTile = frame.placements.some((placement) =>
           images.has(placement.tile.key),
         );
@@ -1162,9 +1257,34 @@ function createFrameSynchronizer({
     }
 
     cancelRendererRetry();
+    frameStats = null;
+    const started = performance.now();
     const drawnTiles = drawCanvasFrame(fallbackCanvas, images, frame, margin, viewportOnly);
+    stats.lastRenderMs = performance.now() - started;
     retainRenderedFrame(frame, viewportOnly);
     setDrawnTiles(drawnTiles);
+  }
+
+  function recordFrameStats(currentRenderer: MapsWgpuBaseMapRenderer) {
+    frameStats = currentRenderer.frameStats();
+    const vectorTiles =
+      frameStats.retainedVectorTiles > 0 || vectorTilesAttribute !== null
+        ? String(frameStats.vectorTiles)
+        : null;
+    if (vectorTiles !== null && vectorTiles !== vectorTilesAttribute) {
+      vectorTilesAttribute = vectorTiles;
+      canvas.dataset.mapVectorTiles = vectorTiles;
+    }
+  }
+
+  /** Re-renders the current camera once on the next frame (retained resources changed). */
+  function requestRender() {
+    invalidateRendered();
+    if (disposed || renderRequest !== null) return;
+    renderRequest = requestAnimationFrame(() => {
+      renderRequest = null;
+      if (!disposed && lastFrame && renderInvalidated) renderFrame(lastFrame);
+    });
   }
 
   function isEmptyApplicationFrame(frame: MapsWgpuApplicationFrame | null) {
@@ -1295,8 +1415,13 @@ function createFrameSynchronizer({
       cancelSettle();
       cancelRendererRetry();
       cancelDeviceLossMonitor();
+      if (renderRequest !== null) cancelAnimationFrame(renderRequest);
+      renderRequest = null;
       lastFrame = null;
       applicationFrame = null;
+    },
+    getStats() {
+      return { ...stats, ...frameStats };
     },
     getViewState() {
       return frameViewState(lastFrame ?? syncFrame());
@@ -1313,6 +1438,7 @@ function createFrameSynchronizer({
       }
       return [...unique.values()];
     },
+    requestRender,
     setApplicationFrame,
     syncFrame,
   };

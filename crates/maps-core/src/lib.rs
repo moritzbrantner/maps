@@ -10,6 +10,7 @@ mod engine;
 mod flat_runtime;
 mod matrix_camera;
 mod scenario;
+mod vector_bucket;
 mod vector_tile;
 
 use std::collections::BTreeMap;
@@ -35,6 +36,11 @@ pub use scenario::{
     CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
     EngineScenarioObservation, ProjectionObservation, ViewportObservation,
     VisibleBoundsObservation, execute_engine_scenario, execute_engine_scenario_json,
+};
+pub use vector_bucket::{
+    VECTOR_FILL_PAINT_ORDER, VECTOR_LINE_GROUP_COUNT, VectorBasemapStyleClass, VectorFillVertex,
+    VectorLineSegment, VectorTileBuckets, VectorTilePlacement, build_shortbread_buckets,
+    vector_tile_placements,
 };
 pub use vector_tile::{
     VectorBasemapLine, VectorBasemapLineKind, VectorBasemapPolygon, VectorBasemapPolygonKind,

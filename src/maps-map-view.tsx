@@ -13,6 +13,7 @@ import {
 
 import { getBoundsFromPoints, type ViewportAggregationQuery } from "./aggregation";
 import { MapsCanvasFlatRuntime, type MapsCanvasFlatRuntimeController } from "./canvas-flat-runtime";
+import type { MapsRendererStats } from "./maps-browser-runtime";
 import {
   FeatureOverlays,
   type ContextMenuOverlayState,
@@ -278,7 +279,11 @@ export function MapsMapView({
     controllerActions.current = { fitBoundsNow, fitToDataNow, flyToNow, setSurfaceViewState };
   });
   const [controller] = useState<
-    MapSurfaceController & Pick<MapsCanvasFlatRuntimeController, "getVisibleTiles">
+    MapSurfaceController &
+      Pick<
+        MapsCanvasFlatRuntimeController,
+        "getRetainedVectorBasemap" | "getVisibleTiles" | "subscribeBaseRenderer"
+      > & { getRendererStats(): MapsRendererStats | null }
   >(() => ({
     display: "flat",
     fitToData: () => controllerActions.current.fitToDataNow(),
@@ -292,8 +297,13 @@ export function MapsMapView({
       ),
     flyTo: (next, options) => controllerActions.current.flyToNow(next, options),
     getViewState: () => runtimeControllerRef.current?.getViewState() ?? currentViewStateRef.current,
+    getRendererStats: () => runtimeControllerRef.current?.getRendererStats() ?? null,
+    getRetainedVectorBasemap: () =>
+      runtimeControllerRef.current?.getRetainedVectorBasemap() ?? null,
     getVisibleTiles: () => runtimeControllerRef.current?.getVisibleTiles() ?? [],
     setViewState: (next, reason) => controllerActions.current.setSurfaceViewState(next, reason),
+    subscribeBaseRenderer: (listener) =>
+      runtimeControllerRef.current?.subscribeBaseRenderer(listener) ?? (() => {}),
   }));
   useLayoutEffect(() => {
     if (isReady) onMapControllerReady?.(controller);

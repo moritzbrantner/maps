@@ -58,7 +58,10 @@ export function EnginePage() {
       <header className="engine-toolbar">
         <div>
           <h1>Maps engine</h1>
-          <p>Explore, pan, zoom, and select a cluster.</p>
+          <p>
+            Explore, pan, zoom, and select a cluster.{" "}
+            <a href="?view=inspector">Renderer inspector</a>
+          </p>
         </div>
         <div className="engine-controls">
           <label>

@@ -8,16 +8,29 @@ import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 
 // Mirrors PACKED_TILE_DRAW_HEADER_LENGTH / PACKED_TILE_DRAW_STRIDE in
 // crates/maps-wasm/src/wgpu_base_map.rs.
-const PACKED_TILE_DRAW_HEADER_LENGTH = 19;
+const PACKED_TILE_DRAW_HEADER_LENGTH = 20;
 const PACKED_TILE_DRAW_STRIDE = 6;
 
 // Async hosts can overlap while replacing a renderer on the same DOM canvas.
 // Only the latest request may change that canvas or submit work to its surface.
 const rendererOwners = new WeakMap<HTMLCanvasElement, object>();
+/** Counters of the last rendered frame and of retained vector resources. */
+export type MapsWgpuFrameStats = {
+  drawCalls: number;
+  rasterTiles: number;
+  retainedVectorBytes: number;
+  retainedVectorFeatures: number;
+  retainedVectorLineSegments: number;
+  retainedVectorTiles: number;
+  retainedVectorTriangles: number;
+  vectorTiles: number;
+};
 
 export type MapsWgpuBaseMapRenderer = {
   dispose(): void;
   evictTile(tile: MapsRasterTileId): void;
+  evictVectorTile(tile: MapsRasterTileId): void;
+  frameStats(): MapsWgpuFrameStats;
   isDeviceLost(): boolean;
   render(
     placements: MapsRasterTilePlacement[],
@@ -32,17 +45,30 @@ export type MapsWgpuBaseMapRenderer = {
     viewportClip?: { width: number; height: number } | null,
   ): number;
   resize(width: number, height: number): void;
+  /** Style table from `createMapsVectorBasemapStyleTable`. */
+  setVectorStyle(table: Float32Array): void;
+  setVectorMaxZoom(maxZoom: number): void;
   uploadTile(tile: MapsRasterTileId, image: ImageBitmap): void;
+  /**
+   * Decodes Shortbread MVT bytes into tile-local GPU buckets (Rust) and retains them.
+   * Returns the decoded feature count. Malformed tiles throw without failing the renderer.
+   */
+  uploadVectorTile(tile: MapsRasterTileId, bytes: Uint8Array): number;
 };
 
 type MapsWgpuBaseMapWasmRenderer = {
   evictTile(z: number, x: number, y: number): void;
+  evictVectorTile(z: number, x: number, y: number): void;
+  frameStats(): Float64Array | number[];
   free?: () => void;
   isDeviceLost(): boolean;
   /** Packed tile draws; layout documented with `unpack_tile_draws` in maps-wasm. */
   renderPacked(tileDraws: Float64Array, applicationFrame: MapsWgpuApplicationFrame | null): number;
   resize(width: number, height: number): void;
+  setVectorMaxZoom(maxZoom: number): void;
+  setVectorStyle(table: Float32Array): void;
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
+  uploadVectorTile(z: number, x: number, y: number, bytes: Uint8Array): number;
 };
 
 type MapsWgpuBaseMapWasmModule = MapsWasmModuleBase & {
@@ -86,6 +112,26 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.evictTile(tile.z, tile.x, tile.y);
         });
       },
+      evictVectorTile(tile) {
+        runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          renderer.evictVectorTile(tile.z, tile.x, tile.y);
+        });
+      },
+      frameStats() {
+        assertLive(disposed);
+        const stats = renderer.frameStats();
+        return {
+          rasterTiles: stats[0] ?? 0,
+          vectorTiles: stats[1] ?? 0,
+          drawCalls: stats[2] ?? 0,
+          retainedVectorTiles: stats[3] ?? 0,
+          retainedVectorFeatures: stats[4] ?? 0,
+          retainedVectorTriangles: stats[5] ?? 0,
+          retainedVectorLineSegments: stats[6] ?? 0,
+          retainedVectorBytes: stats[7] ?? 0,
+        };
+      },
       isDeviceLost() {
         return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
@@ -109,6 +155,8 @@ export async function loadMapsWgpuBaseMapRenderer(
           tileDraws[16] = surfaceMargin;
           tileDraws[17] = viewportClip?.width ?? 0;
           tileDraws[18] = viewportClip?.height ?? 0;
+          // Same ratio the host uses to size the canvas backing store.
+          tileDraws[19] = Math.max(1, globalThis.devicePixelRatio || 1);
           let length = PACKED_TILE_DRAW_HEADER_LENGTH;
           for (const placement of placements) {
             if (viewportClip && placement.visible === false) continue;
@@ -129,11 +177,24 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.resize(width, height);
         });
       },
+      setVectorMaxZoom(maxZoom) {
+        assertLive(disposed);
+        renderer.setVectorMaxZoom(maxZoom);
+      },
+      setVectorStyle(table) {
+        assertLive(disposed);
+        renderer.setVectorStyle(table);
+      },
       uploadTile(tile, image) {
         runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           renderer.uploadTile(tile.z, tile.x, tile.y, image);
         });
+      },
+      uploadVectorTile(tile, bytes) {
+        // Data errors (malformed MVT) are the caller's; they must not hide the canvas.
+        assertLive(disposed);
+        return renderer.uploadVectorTile(tile.z, tile.x, tile.y, bytes);
       },
     };
   } catch (error) {

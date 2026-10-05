@@ -306,6 +306,11 @@ function resolveStrokeWidth(
   );
 }
 
+/** Parses a hex/rgb(a) CSS color into linear-light RGBA for the sRGB wgpu surface. */
+export function parseMapsWgpuCssColor(value: string, opacity = 1): MapsWgpuColor | null {
+  return parseSupportedCssColor(value, opacity);
+}
+
 function parseSupportedCssColor(value: string, opacity: number): MapsWgpuColor | null {
   if (!Number.isFinite(opacity)) return null;
   const normalizedOpacity = clamp01(opacity);

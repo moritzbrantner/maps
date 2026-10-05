@@ -1,0 +1,328 @@
+:root {
+  color-scheme: light;
+  --inspector-surface: #fcfcfb;
+  --inspector-panel: #ffffff;
+  --inspector-border: #e4e2dc;
+  --inspector-text: #0b0b0b;
+  --inspector-text-secondary: #52514e;
+  --inspector-muted: #8a8983;
+  --inspector-accent: #2a78d6;
+  --inspector-accent-soft: #e6f0fb;
+  --inspector-danger: #b42318;
+  --inspector-grid: #d9d7d0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --inspector-surface: #121211;
+    --inspector-panel: #1a1a19;
+    --inspector-border: #34332f;
+    --inspector-text: #ffffff;
+    --inspector-text-secondary: #c3c2b7;
+    --inspector-muted: #8f8e86;
+    --inspector-accent: #3987e5;
+    --inspector-accent-soft: #1d2a3b;
+    --inspector-danger: #f97066;
+    --inspector-grid: #3e3d39;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --inspector-surface: #121211;
+  --inspector-panel: #1a1a19;
+  --inspector-border: #34332f;
+  --inspector-text: #ffffff;
+  --inspector-text-secondary: #c3c2b7;
+  --inspector-muted: #8f8e86;
+  --inspector-accent: #3987e5;
+  --inspector-accent-soft: #1d2a3b;
+  --inspector-danger: #f97066;
+  --inspector-grid: #3e3d39;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--inspector-surface);
+  color: var(--inspector-text);
+  font:
+    14px/1.45 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+.engine-inspector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  height: 100%;
+}
+
+.engine-inspector__map {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.engine-inspector__map > * {
+  height: 100%;
+}
+
+.engine-inspector__panel {
+  background: var(--inspector-panel);
+  border-left: 1px solid var(--inspector-border);
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.engine-inspector__panel section {
+  border-top: 1px solid var(--inspector-border);
+  padding: 14px 0;
+}
+
+.engine-inspector__panel h1 {
+  font-size: 20px;
+  margin: 2px 0 6px;
+}
+
+.engine-inspector__panel h2 {
+  color: var(--inspector-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+}
+
+.engine-inspector__kicker {
+  color: var(--inspector-muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.engine-inspector__backend {
+  background: var(--inspector-accent-soft);
+  border-radius: 999px;
+  display: inline-block;
+  font-weight: 600;
+  margin: 0 0 10px;
+  padding: 3px 10px;
+}
+
+.engine-inspector__links {
+  display: flex;
+  gap: 14px;
+  padding-bottom: 12px;
+}
+
+.engine-inspector a {
+  color: var(--inspector-accent);
+}
+
+.engine-inspector__metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 10px;
+}
+
+.engine-inspector__metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.engine-inspector__metric-value {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.engine-inspector__metric-value small {
+  color: var(--inspector-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.engine-inspector__metric-label {
+  color: var(--inspector-text-secondary);
+  font-size: 12px;
+}
+
+.engine-inspector__sparkline {
+  margin: 0;
+}
+
+.engine-inspector__sparkline svg {
+  display: block;
+  height: 72px;
+  width: 100%;
+}
+
+.engine-inspector__sparkline figcaption {
+  color: var(--inspector-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.engine-inspector__series {
+  fill: none;
+  stroke: var(--inspector-accent);
+  stroke-linejoin: round;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.engine-inspector__budget {
+  stroke: var(--inspector-grid);
+  stroke-dasharray: 4 4;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.engine-inspector__crosshair {
+  stroke: var(--inspector-text-secondary);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.engine-inspector__list {
+  display: grid;
+  gap: 4px 12px;
+  grid-template-columns: 1fr auto;
+  margin: 0;
+}
+
+.engine-inspector__list dt {
+  color: var(--inspector-text-secondary);
+}
+
+.engine-inspector__list dd {
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  text-align: right;
+}
+
+.engine-inspector__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.engine-inspector button {
+  background: var(--inspector-panel);
+  border: 1px solid var(--inspector-border);
+  border-radius: 8px;
+  color: var(--inspector-text);
+  cursor: pointer;
+  font: inherit;
+  padding: 5px 10px;
+}
+
+.engine-inspector button:hover:not(:disabled) {
+  border-color: var(--inspector-accent);
+}
+
+.engine-inspector button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.engine-inspector__segmented {
+  display: flex;
+  gap: 14px;
+}
+
+.engine-inspector__hint {
+  color: var(--inspector-text-secondary);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+.engine-inspector__error {
+  color: var(--inspector-danger);
+  font-size: 12px;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.engine-inspector__classes {
+  border: 0;
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: 1fr 1fr;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.engine-inspector__classes legend {
+  color: var(--inspector-text-secondary);
+  font-size: 12px;
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.engine-inspector__classes label {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+}
+
+.engine-inspector__swatch {
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12);
+  display: inline-block;
+  height: 12px;
+  width: 12px;
+}
+
+.engine-inspector__swatch[data-line="true"] {
+  border-radius: 1px;
+  height: 3px;
+}
+
+.engine-inspector__table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.engine-inspector__table th,
+.engine-inspector__table td {
+  border-bottom: 1px solid var(--inspector-border);
+  padding: 4px 6px;
+  text-align: right;
+}
+
+.engine-inspector__table th:first-child {
+  text-align: left;
+}
+
+.engine-inspector__table thead th {
+  color: var(--inspector-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .engine-inspector {
+    grid-template-columns: 1fr;
+    grid-template-rows: 60vh auto;
+    height: auto;
+  }
+
+  .engine-inspector__panel {
+    border-left: 0;
+    border-top: 1px solid var(--inspector-border);
+    padding: 16px;
+  }
+}

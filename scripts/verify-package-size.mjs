@@ -11,14 +11,17 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // pans -6,930; Shortbread tile-pixel retention (289765e) +7,548; camera-ahead prefetch (8e32e7f) +3,550;
 // #162 WebGPU polygons +7,015; #180 tile zoom fallback +8,143; Rust 1.99/wasm-bindgen 0.2.129
 // -2,683; smaller steps net -507. The package budgets grow by about the same amount.
+// #191 then lands the #167 retained vector basemap (Rust Shortbread buckets, retained
+// wgpu vector pipelines, shared retained-geometry module): WASM 532,422 -> 591,763
+// (+59,341), compressed package 427,892, unpacked 1,696,963.
 // Keep a small margin for artifact metadata variation.
 const budgets = {
-  compressedSize: 405_500,
+  compressedSize: 430_000,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_626_000,
-  wasmRuntimeSize: 534_000,
+  unpackedSize: 1_700_500,
+  wasmRuntimeSize: 593_500,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {

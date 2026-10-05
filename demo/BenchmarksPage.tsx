@@ -7,6 +7,8 @@ import {
   type ChangeEvent,
   type ReactNode,
 } from "react";
+import { BenchmarkDashboard } from "./benchmarks/BenchmarkDashboard";
+import "./benchmarks/benchmarks.css";
 import { Map as MapLibreMap } from "maplibre-gl";
 
 import {
@@ -331,6 +333,7 @@ export function BenchmarksPage() {
           />
         </div>
       </section>
+      <BenchmarkDashboard />
     </main>
   );
 }
