@@ -4,6 +4,22 @@ import { expect, test, type Page } from "@playwright/test";
 // screen-projected Canvas fallback (Rust packed projection) draws the same points, and
 // dense camera journeys must not lower, project or upload per point.
 
+// The project-wide `--use-gl=swiftshader` launch loses the WebGPU device right after the
+// first frame (Chromium tears down its Dawn instance), so the GPU path would silently be
+// the Canvas fallback. Use the Graphite/Dawn SwiftShader arguments that keep WebGPU alive,
+// as maps-wgsl-validation.spec.ts does.
+test.use({
+  launchOptions: {
+    args: [
+      "--enable-unsafe-swiftshader",
+      "--enable-unsafe-webgpu",
+      "--enable-skia-graphite",
+      "--skia-graphite-dawn-backend=swiftshader",
+      "--use-angle=swiftshader",
+    ],
+  },
+});
+
 type Blob = { x: number; y: number; pixels: number };
 
 async function openRetainedPoints(page: Page, query: string, backend: "wgpu" | "canvas2d") {
@@ -77,6 +93,13 @@ const cases = [
   { name: "antimeridian", query: "points=antimeridian&lon=180&lat=0&zoom=11&step=0.03" },
   { name: "deep zoom", query: "points=grid&zoom=19&step=0.0001" },
   { name: "world copies", query: "points=world&lon=170&lat=0&zoom=1.2" },
+  // The viewport is wider than one world: retained WebGPU draws every visible world copy,
+  // like MapLibre's world copies, while the Canvas fallback projects each point once.
+  {
+    name: "viewport wider than one world",
+    query: "points=world&lon=178&lat=0&zoom=0.2",
+    worldWidthPx: 512 * 2 ** 0.2,
+  },
 ];
 
 for (const scenario of cases) {
@@ -109,20 +132,35 @@ for (const scenario of cases) {
     });
     const retained = positions.wgpu!;
     const projected = positions.canvas2d!;
-    expect(retained.length).toBe(projected.length);
+    const distance = (blob: Blob, others: Blob[], shift = 0) =>
+      Math.min(...others.map((other) => Math.hypot(other.x + shift - blob.x, other.y - blob.y)));
+    // Every projected point is drawn at the same position by the retained path.
+    for (const blob of projected) expect(distance(blob, retained)).toBeLessThan(0.75);
+    const worldWidth = "worldWidthPx" in scenario ? scenario.worldWidthPx : null;
+    if (worldWidth === null) {
+      expect(retained.length).toBe(projected.length);
+    }
     for (const blob of retained) {
       const nearest = Math.min(
-        ...projected.map((other) => Math.hypot(other.x - blob.x, other.y - blob.y)),
+        distance(blob, projected),
+        ...(worldWidth === null
+          ? []
+          : [distance(blob, projected, worldWidth), distance(blob, projected, -worldWidth)]),
       );
       expect(nearest).toBeLessThan(0.75);
     }
   });
 }
 
-for (const count of [10_000, 100_000]) {
+for (const [count, journeySteps] of [
+  [10_000, 40],
+  [100_000, 12],
+] as const) {
   test(`a ${count.toLocaleString("en")}-point camera journey does O(1) point work on WebGPU @smoke`, async ({
     page,
   }, testInfo) => {
+    // SwiftShader rasterizes 100k instanced points slowly; the evidence is the counters.
+    test.setTimeout(180_000);
     const { gpuValidation, map } = await openRetainedPoints(
       page,
       `points=dense&count=${count}&lon=12&lat=50&zoom=5`,
@@ -131,13 +169,13 @@ for (const count of [10_000, 100_000]) {
     await expect
       .poll(() => page.evaluate(() => window.retainedPoints.stats()?.retainedPoints ?? 0))
       .toBe(count);
-    const journey = await page.evaluate(async () => {
+    const journey = await page.evaluate(async (stepCount) => {
       const probe = window.retainedPoints;
       const frame = () => new Promise(requestAnimationFrame);
       await frame();
       const before = probe.stats()!;
       const steps: { ms: number; upload: number; frames: number }[] = [];
-      for (let step = 0; step < 40; step += 1) {
+      for (let step = 0; step < stepCount; step += 1) {
         const started = performance.now();
         probe.setViewState({
           bearing: (step * 7) % 60,
@@ -154,7 +192,7 @@ for (const count of [10_000, 100_000]) {
         });
       }
       return { after: probe.stats()!, before, steps };
-    });
+    }, journeySteps);
     const sorted = journey.steps.map((step) => step.ms).sort((left, right) => left - right);
     await testInfo.attach("retained-point-journey", {
       body: JSON.stringify(

@@ -106,6 +106,8 @@ pub(crate) struct RetainedView {
     pub(crate) center: [f64; 2],
     /// Screen px per world unit at the viewport centre.
     pub(crate) px_per_world: f64,
+    /// Widest horizontal reach of the placed tiles from the viewport centre, in worlds.
+    pub(crate) half_width_world: f64,
 }
 
 impl RetainedView {
@@ -119,6 +121,7 @@ impl RetainedView {
     ) -> Option<Self> {
         let mut copy_origins_x: Vec<f64> = Vec::new();
         let mut frame: Option<(f64, f64)> = None;
+        let mut local_x_range = (f64::INFINITY, f64::NEG_INFINITY);
         for (z, x, y, west, north, size) in placements {
             if !(west.is_finite() && north.is_finite() && size.is_finite() && size > 0.0) {
                 continue;
@@ -127,6 +130,7 @@ impl RetainedView {
             let origin_x = west - f64::from(x) * size;
             let origin_y = north + f64::from(y) * size;
             frame.get_or_insert((scale, origin_y));
+            local_x_range = (local_x_range.0.min(west), local_x_range.1.max(west + size));
             if !copy_origins_x
                 .iter()
                 .any(|existing| (existing - origin_x).abs() < scale * 0.5)
@@ -151,12 +155,14 @@ impl RetainedView {
         ];
         let w = m[3] * local_x + m[7] * local_y + m[15];
         let px_per_world = m[0].hypot(m[1]) / w.abs() * surface_width_px * 0.5 * scale;
+        let half_width_world = (local_x - local_x_range.0).max(local_x_range.1 - local_x) / scale;
         (center.iter().all(|value| value.is_finite()) && px_per_world.is_finite()).then_some(Self {
             copy_origins_x,
             origin_y,
             scale,
             center,
             px_per_world,
+            half_width_world,
         })
     }
 
@@ -170,14 +176,29 @@ impl RetainedView {
         dx.hypot(dy) * self.px_per_world > REBASE_DISTANCE_PX
     }
 
-    /// One local frame per visible world copy, placing `anchor` (offset 0) in local space.
-    /// Frame `(u, v)` offsets are world units with +v south, as the frame matrix expects.
+    /// Local frames placing `anchor` (offset 0) in local space: one per visible world copy
+    /// plus one beyond each edge. Offsets are wrapped to the nearest world around the
+    /// anchor, so a point may sit one world off its tile-derived copy; the boundary frames
+    /// keep every visible copy of every point covered. Frame `(u, v)` offsets are world
+    /// units with +v south, as the frame matrix expects.
+    ///
+    /// The boundary frames are only needed when a visible point can be half a world or more
+    /// from the anchor; otherwise every visible point already wraps onto its visible copy.
     pub(crate) fn anchor_frames(&self, anchor: [f64; 2]) -> impl Iterator<Item = LocalFrame> + '_ {
-        self.copy_origins_x.iter().map(move |origin_x| LocalFrame {
-            west: origin_x + anchor[0] * self.scale,
-            north: self.origin_y - anchor[1] * self.scale,
-            size: self.scale,
-        })
+        let anchor_distance = wrap_world_delta(self.center[0] - anchor[0]).abs();
+        let boundary = self.half_width_world + anchor_distance >= 0.45;
+        let first = self.copy_origins_x.first().copied().unwrap_or_default() - self.scale;
+        let last = self.copy_origins_x.last().copied().unwrap_or_default() + self.scale;
+        boundary
+            .then_some(first)
+            .into_iter()
+            .chain(self.copy_origins_x.iter().copied())
+            .chain(boundary.then_some(last))
+            .map(move |origin_x| LocalFrame {
+                west: origin_x + anchor[0] * self.scale,
+                north: self.origin_y - anchor[1] * self.scale,
+                size: self.scale,
+            })
     }
 }
 
@@ -276,13 +297,58 @@ mod tests {
         let world_x = points.world[0][0];
         let mut view_projection = identity_scaled(0.001);
         view_projection[12] = 0.0;
-        for (frame, origin_x) in view.anchor_frames(anchor).zip(&view.copy_origins_x) {
+        let skip = usize::from(view.anchor_frames(anchor).count() > view.copy_origins_x.len());
+        for (frame, origin_x) in view
+            .anchor_frames(anchor)
+            .skip(skip)
+            .zip(&view.copy_origins_x)
+        {
             let clip = apply(local_frame_matrix(view_projection, frame).unwrap(), offset);
             // Same local position as lowering world x directly into this copy.
             let expected_local_x = origin_x + world_x * view.scale;
             assert!((clip[0] - expected_local_x * 0.001).abs() < 1.0e-6);
             assert!(clip[1].abs() < 1.0e-6);
         }
+    }
+
+    #[test]
+    fn wrapped_offsets_still_cover_every_visible_world_copy() {
+        // Visible copies 0 and 1 (origins -512 and 512) with the anchor at the far east
+        // of world 0: a point at world x 0.48 wraps to +0.49 from the anchor.
+        let view = view_at([0.0, 0.0], 0.001);
+        let anchor = [0.99, 0.5];
+        let points = RetainedPoints::lower(&[-7.2, 0.0], &paint()).unwrap();
+        let world_x = points.world[0][0];
+        let bytes = points.instance_bytes(anchor);
+        let offset_u = f64::from(f32::from_le_bytes(bytes[0..4].try_into().unwrap()));
+        assert!(offset_u > 0.45);
+        let drawn: Vec<f64> = view
+            .anchor_frames(anchor)
+            .map(|frame| frame.west + offset_u * frame.size)
+            .collect();
+        for origin_x in &view.copy_origins_x {
+            let expected = origin_x + world_x * view.scale;
+            assert!(
+                drawn.iter().any(|local| (local - expected).abs() < 1.0e-3),
+                "copy at {origin_x} missing: {drawn:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_viewport_well_inside_one_world_draws_only_its_copy() {
+        // Zoomed in: tiles reach far less than half a world from the centre.
+        let view = RetainedView::from_placements(
+            [(10, 512, 512, -128.0, 128.0, 256.0)],
+            identity_scaled(0.001),
+            1000.0,
+        )
+        .unwrap();
+        assert!(view.half_width_world < 0.01);
+        assert_eq!(view.anchor_frames(view.center).count(), 1);
+        // The z=2 grid reaches half a world: boundary copies are included.
+        let wide = view_at([0.0, 0.0], 0.001);
+        assert_eq!(wide.anchor_frames(wide.center).count(), 4);
     }
 
     #[test]
