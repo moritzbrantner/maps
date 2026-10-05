@@ -126,8 +126,10 @@ controller?.fitPoints(points, { padding: 72 });
 
 - Rendered React maps require the `react`, `react-dom`, and
   `@moritzbrantner/ui` peer dependencies.
-- `@moritzbrantner/timeline-editor` is an optional peer required only for
-  timeline editor components.
+- `@moritzbrantner/timeline-editor` is an optional peer required only for the
+  `@moritzbrantner/maps/editor` and `@moritzbrantner/maps/timeline`
+  entrypoints, which hold `EditableGeoJsonMap` and the GeoJSON timeline exports.
+  The root entry does not import it.
 - MapLibre, Three, Turf helpers, supercluster, d3-delaunay, polygon-clipping,
   and related map/runtime packages are included as package dependencies.
 - Rendering map components requires browser DOM APIs and WebGL/canvas support.

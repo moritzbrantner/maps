@@ -1,7 +1,6 @@
 "use client";
 
 export {
-  EditableGeoJsonMap,
   GeoJsonEditorLayer,
   applyGeoJsonEditOperation,
   constrainGeoJsonGeometryToPolygon,
@@ -11,7 +10,6 @@ export {
   removeGeoJsonVertex,
   setGeoJsonVertex,
   validateGeoJsonEditableGeometry,
-  type EditableGeoJsonMapProps,
   type GeoJsonGeometryTransformOptions,
   type GeoJsonBatchEditReason,
   type GeoJsonEditorCommand,
@@ -28,6 +26,7 @@ export {
   type GeoJsonEditorSelection,
   type GeoJsonVertexHandle,
 } from "../geojson-editor";
+export { EditableGeoJsonMap, type EditableGeoJsonMapProps } from "../editable-geojson-map";
 export {
   createGeoJsonEditHistoryState,
   invertGeoJsonEditOperation,

@@ -20,6 +20,7 @@ try {
 
   verifyFullViteConsumer(path.join(tempRoot, "full-vite"), tarballPath);
   verifyFlatOnlyViteConsumer(path.join(tempRoot, "flat-vite"), tarballPath);
+  verifyRootRollupConsumer(path.join(tempRoot, "root-rollup"), tarballPath);
   verifyCoreOnlyNodeConsumer(path.join(tempRoot, "core-node"), tarballPath);
   verifyNextStyleBoundaries(path.join(tempRoot, "next-boundaries"), tarballPath);
 
@@ -117,6 +118,44 @@ const points = [
 
 createRoot(document.getElementById("root")!).render(
   <FlatPointMap points={points} style={{ height: 320 }} />,
+);
+`,
+  );
+
+  run("bun", ["install"], directory);
+  run("bunx", ["--bun", "vite", "build"], directory);
+}
+
+// Vite 5 bundles with Rollup, which rejects named imports that an ESM module does not export
+// (polygon-clipping's default-only ESM build, Vite's stub for a missing optional peer).
+// The root entry must build there without @moritzbrantner/timeline-editor installed.
+function verifyRootRollupConsumer(directory, packageTarball) {
+  writePackage(directory, {
+    "@moritzbrantner/maps": `file:${packageTarball}`,
+    "@moritzbrantner/ui": version("@moritzbrantner/ui"),
+    "@vitejs/plugin-react": "4.7.0",
+    react: version("react"),
+    "react-dom": version("react-dom"),
+    typescript: version("typescript"),
+    vite: "5.4.21",
+  });
+  writeViteShell(directory);
+  writeFile(
+    directory,
+    "src/main.tsx",
+    `import { createRoot } from "react-dom/client";
+import "@moritzbrantner/maps/styles.css";
+import { ClusteredMap, GeoJsonEditorLayer, unionGeoJsonFeatures } from "@moritzbrantner/maps";
+
+console.log(Boolean(GeoJsonEditorLayer), typeof unionGeoJsonFeatures);
+
+createRoot(document.getElementById("root")!).render(
+  <ClusteredMap
+    defaultViewState={{ center: [13.405, 52.52], zoom: 8 }}
+    fitToData={false}
+    points={[{ id: "berlin", latitude: 52.52, longitude: 13.405 }]}
+    style={{ height: 320 }}
+  />,
 );
 `,
   );
