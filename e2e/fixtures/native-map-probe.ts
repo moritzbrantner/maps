@@ -1,6 +1,5 @@
 import { configureMapsWasmPackage, importMapsWasmModule } from "../../src/aggregation-wasm";
 import type { MapsFlatRasterRuntime } from "../../src/flat-runtime-wasm";
-import type { MapsWgpuApplicationFrame } from "../../src/wgpu-application-frame";
 import type { MapViewState } from "../../src/map-display";
 
 export const anchor: [number, number] = [13.335, 52.544];
@@ -77,7 +76,12 @@ export async function observeNativeMap() {
     MapsFlatRasterRuntime: { prototype: MapsFlatRasterRuntime & { framePacked(): Float64Array } };
     MapsWgpuBaseMapRenderer: {
       prototype: {
-        renderPacked(tileDraws: Float64Array, frame: MapsWgpuApplicationFrame | null): number;
+        renderPacked(
+        tileDraws: Float64Array,
+        frame: object | null,
+        circleData: Float32Array,
+        order: Uint32Array,
+      ): number;
       };
     };
   }>();
@@ -107,14 +111,15 @@ export async function observeNativeMap() {
   probe.position = () => originalProject.call(active, ...anchor);
   const renderer = wasm.MapsWgpuBaseMapRenderer.prototype;
   const originalRender = renderer.renderPacked;
-  renderer.renderPacked = function (tileDraws, frame) {
-    const circle = frame?.circles[0];
+  renderer.renderPacked = function (tileDraws, frame, circleData, order) {
+    // Packed circle record: x, y first (see MAPS_WGPU_APPLICATION_CIRCLE_STRIDE).
+    const circle = circleData.length > 0 ? { x: circleData[0]!, y: circleData[1]! } : null;
     if (active)
       probe.samples.push({
         actual: circle ? [circle.x, circle.y] : null,
         expected: probe.position(),
       });
-    const result = originalRender.call(this, tileDraws, frame);
+    const result = originalRender.call(this, tileDraws, frame, circleData, order);
     // Synchronous camera preparation + submission only, not GPU completion or FPS.
     if (started !== null && circle) probe.cameraCpuMs.push(performance.now() - started);
     started = null;
