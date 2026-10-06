@@ -296,14 +296,8 @@ test("Globe view renders nonblank canvas and responds to dragging @smoke", async
           (
             window as typeof window & {
               __mbMapsDemo?: { getMapProjection?: () => string | null };
-              __mbMapsDemoMap?: { getProjection?: () => { type?: string } };
             }
-          ).__mbMapsDemo?.getMapProjection?.() ??
-          (
-            window as typeof window & {
-              __mbMapsDemoMap?: { getProjection?: () => { type?: string } };
-            }
-          ).__mbMapsDemoMap?.getProjection?.().type,
+          ).__mbMapsDemo?.getMapProjection?.() ?? null,
       ),
     )
     .toBe("globe");

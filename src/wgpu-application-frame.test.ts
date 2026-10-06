@@ -363,7 +363,7 @@ describe("wgpu application frame", () => {
     ]);
   });
 
-  test("keeps zero-area rings that Canvas still strokes and drops single points", () => {
+  test("keeps zero-area rings that Canvas still strokes and omits collapsed polygons", () => {
     const polygon: MapRenderPolygon = {
       feature: null,
       featureId: "polygon-a",
@@ -403,6 +403,16 @@ describe("wgpu application frame", () => {
         { x: 20, y: 20 },
       ],
     ]);
+    const collapsed = createMapsWgpuApplicationFrame(
+      frame([
+        [
+          { x: 30, y: 30 },
+          { x: 30, y: 30 },
+        ],
+      ]),
+    );
+    expect(collapsed?.polygons).toEqual([]);
+    expect(Array.from(collapsed?.order ?? [])).toEqual([]);
     expect(
       createMapsWgpuApplicationFrame(
         frame([

@@ -295,6 +295,8 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
             if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth) || !rings) {
               return null;
             }
+            // Every ring collapsed to a point: Canvas draws nothing for it either.
+            if (rings.length === 0) break;
 
             pushOrder(MAPS_WGPU_APPLICATION_POLYGON, polygons.length);
             polygons.push({
