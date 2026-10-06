@@ -1112,17 +1112,20 @@ function createHeatLayerCanvas({
   }
 
   // A context filter applies to every draw call on its own. Surfaces issue thousands
-  // of draws, so blur the finished surface once instead.
-  const surface = createHeatLayerSizedCanvas(width, height);
+  // of draws, so blur the finished surface once instead. The padding keeps shapes just
+  // outside the raster, whose blur still reaches it.
+  const padding = Math.ceil(blurRadius * 3);
+  const surface = createHeatLayerSizedCanvas(width + padding * 2, height + padding * 2);
   const surfaceContext = surface.getContext("2d");
 
   if (!surfaceContext) {
     return null;
   }
 
+  surfaceContext.translate(padding, padding);
   draw(surfaceContext);
   context.filter = `blur(${blurRadius}px)`;
-  context.drawImage(surface, 0, 0);
+  context.drawImage(surface, -padding, -padding);
   context.filter = "none";
 
   return canvas;
