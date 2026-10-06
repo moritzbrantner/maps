@@ -1,7 +1,8 @@
 use super::wgpu_geometry::{
-    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw, RasterTileKey,
-    SurfaceClip, WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices,
-    camera_uniform_bytes, prepare_application_geometry, unpack_tile_draws,
+    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw,
+    POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterTileKey, SurfaceClip, WgpuApplicationFrame,
+    WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
+    prepare_application_geometry, unpack_tile_draws,
 };
 
 use std::collections::HashMap;
@@ -129,6 +130,8 @@ pub struct MapsWgpuBaseMapRenderer {
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: u64,
     application_pipeline: wgpu::RenderPipeline,
+    polygon_pipelines: PolygonPipelines,
+    stencil_view: wgpu::TextureView,
     application_vertex_buffer: wgpu::Buffer,
     application_vertex_capacity: u64,
     application_circle_pipeline: wgpu::RenderPipeline,
@@ -205,11 +208,14 @@ impl MapsWgpuBaseMapRenderer {
         // not expose an implementation-defined black canvas behind application geometry.
         let surface_clear_alpha = 1.0;
         config.present_mode = wgpu::PresentMode::AutoVsync;
-        let surface_view_format = config.format.add_srgb_suffix();
+        // Blend in encoded sRGB like Canvas and the browser compositor, so translucent
+        // paint and the background match the Canvas path; CSS colors stay unconverted.
+        let surface_view_format = config.format.remove_srgb_suffix();
         if surface_view_format != config.format {
             config.view_formats = vec![surface_view_format];
         }
         surface.configure(&device, &config);
+        let stencil_view = create_stencil_view(&device, config.width, config.height);
 
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -314,7 +320,7 @@ impl MapsWgpuBaseMapRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: ignored_stencil(),
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -371,7 +377,7 @@ impl MapsWgpuBaseMapRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: ignored_stencil(),
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &application_shader,
@@ -386,6 +392,91 @@ impl MapsWgpuBaseMapRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let polygon_pipeline = |label: &str,
+                                stencil: Option<wgpu::DepthStencilState>,
+                                write_mask: wgpu::ColorWrites| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&application_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &application_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &application_vertex_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: stencil,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &application_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_view_format,
+                        blend: Some(premultiplied_blend_state()),
+                        write_mask,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let stencil_face = |compare, pass_op| wgpu::StencilFaceState {
+            compare,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op,
+        };
+        let polygon_pipelines = PolygonPipelines {
+            fill_stencil: polygon_pipeline(
+                "Maps polygon even-odd stencil pipeline",
+                stencil_state(
+                    stencil_face(
+                        wgpu::CompareFunction::Always,
+                        wgpu::StencilOperation::Invert,
+                    ),
+                    0,
+                    POLYGON_FILL_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::empty(),
+            ),
+            fill_cover: polygon_pipeline(
+                "Maps polygon fill cover pipeline",
+                stencil_state(
+                    stencil_face(
+                        wgpu::CompareFunction::NotEqual,
+                        wgpu::StencilOperation::Zero,
+                    ),
+                    POLYGON_FILL_STENCIL_BIT,
+                    POLYGON_FILL_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::ALL,
+            ),
+            stroke: polygon_pipeline(
+                "Maps polygon single-coverage stroke pipeline",
+                stencil_state(
+                    stencil_face(
+                        wgpu::CompareFunction::NotEqual,
+                        wgpu::StencilOperation::Replace,
+                    ),
+                    POLYGON_STROKE_STENCIL_BIT,
+                    POLYGON_STROKE_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::ALL,
+            ),
+            stroke_clear: polygon_pipeline(
+                "Maps polygon stroke stencil clear pipeline",
+                stencil_state(
+                    stencil_face(wgpu::CompareFunction::Always, wgpu::StencilOperation::Zero),
+                    0,
+                    POLYGON_STROKE_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::empty(),
+            ),
+        };
         let application_vertex_buffer =
             create_application_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
@@ -444,7 +535,7 @@ impl MapsWgpuBaseMapRenderer {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     ..Default::default()
                 },
-                depth_stencil: None,
+                depth_stencil: ignored_stencil(),
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &application_circle_shader,
@@ -544,7 +635,7 @@ impl MapsWgpuBaseMapRenderer {
                         topology: wgpu::PrimitiveTopology::TriangleList,
                         ..Default::default()
                     },
-                    depth_stencil: None,
+                    depth_stencil: ignored_stencil(),
                     multisample: wgpu::MultisampleState::default(),
                     fragment: Some(wgpu::FragmentState {
                         module: &vector_shader,
@@ -636,7 +727,7 @@ impl MapsWgpuBaseMapRenderer {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     ..Default::default()
                 },
-                depth_stencil: None,
+                depth_stencil: ignored_stencil(),
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &retained_point_shader,
@@ -668,6 +759,8 @@ impl MapsWgpuBaseMapRenderer {
             vertex_buffer,
             vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             application_pipeline,
+            polygon_pipelines,
+            stencil_view,
             application_vertex_buffer,
             application_vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             application_circle_pipeline,
@@ -705,6 +798,7 @@ impl MapsWgpuBaseMapRenderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        self.stencil_view = create_stencil_view(&self.device, width, height);
     }
 
     #[wasm_bindgen(js_name = uploadTile)]
@@ -731,7 +825,8 @@ impl MapsWgpuBaseMapRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // Sampled values stay encoded sRGB for the encoded-sRGB surface view.
+            format: wgpu::TextureFormat::Rgba8Unorm,
             // Browser external-image copies require a renderable destination, even
             // though this renderer only samples the uploaded tile afterwards.
             usage: wgpu::TextureUsages::COPY_DST
@@ -1091,7 +1186,14 @@ impl MapsWgpuBaseMapRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.stencil_view,
+                    depth_ops: None,
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
@@ -1147,6 +1249,9 @@ impl MapsWgpuBaseMapRenderer {
                     ApplicationDraw::RetainedPoints { group } => {
                         draw_calls +=
                             self.draw_retained_points(&mut pass, group, &retained_point_draws);
+                    }
+                    ApplicationDraw::Polygon(polygon) => {
+                        draw_calls += self.draw_polygon(&mut pass, polygon);
                     }
                 }
             }
@@ -1286,6 +1391,38 @@ impl MapsWgpuBaseMapRenderer {
     }
 
     /// Draws one retained group once per visible world copy. Returns the draw calls.
+    /// Even-odd fill (stencil fan, then cover), then a single-coverage stroke whose
+    /// stencil is cleared by redrawing its triangles without color.
+    fn draw_polygon(&self, pass: &mut wgpu::RenderPass<'_>, polygon: PolygonDraw) -> u32 {
+        let pipelines = &self.polygon_pipelines;
+        let mut draw_calls = 0;
+        pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
+        if polygon.fan_count > 0 {
+            pass.set_stencil_reference(0);
+            pass.set_pipeline(&pipelines.fill_stencil);
+            pass.draw(
+                polygon.fan_first..polygon.fan_first + polygon.fan_count,
+                0..1,
+            );
+            pass.set_pipeline(&pipelines.fill_cover);
+            pass.draw(
+                polygon.cover_first..polygon.cover_first + POLYGON_COVER_VERTEX_COUNT,
+                0..1,
+            );
+            draw_calls += 2;
+        }
+        if polygon.stroke_count > 0 {
+            let stroke = polygon.stroke_first..polygon.stroke_first + polygon.stroke_count;
+            pass.set_stencil_reference(POLYGON_STROKE_STENCIL_BIT);
+            pass.set_pipeline(&pipelines.stroke);
+            pass.draw(stroke.clone(), 0..1);
+            pass.set_pipeline(&pipelines.stroke_clear);
+            pass.draw(stroke, 0..1);
+            draw_calls += 2;
+        }
+        draw_calls
+    }
+
     fn draw_retained_points(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -1425,6 +1562,62 @@ fn create_application_circle_instance_buffer(device: &wgpu::Device, size: u64) -
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+/// Stencil bits: polygon fill parity and polygon stroke coverage. Each pass leaves its
+/// bit cleared, so every polygon starts from a zero stencil.
+const POLYGON_FILL_STENCIL_BIT: u32 = 1;
+const POLYGON_STROKE_STENCIL_BIT: u32 = 2;
+const STENCIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Stencil8;
+
+struct PolygonPipelines {
+    fill_stencil: wgpu::RenderPipeline,
+    fill_cover: wgpu::RenderPipeline,
+    stroke: wgpu::RenderPipeline,
+    stroke_clear: wgpu::RenderPipeline,
+}
+
+fn stencil_state(
+    face: wgpu::StencilFaceState,
+    read_mask: u32,
+    write_mask: u32,
+) -> Option<wgpu::DepthStencilState> {
+    Some(wgpu::DepthStencilState {
+        format: STENCIL_FORMAT,
+        depth_write_enabled: None,
+        depth_compare: None,
+        stencil: wgpu::StencilState {
+            front: face,
+            back: face,
+            read_mask,
+            write_mask,
+        },
+        bias: wgpu::DepthBiasState::default(),
+    })
+}
+
+/// The render pass carries the polygon stencil, so every pipeline declares it.
+fn ignored_stencil() -> Option<wgpu::DepthStencilState> {
+    stencil_state(wgpu::StencilFaceState::IGNORE, 0, 0)
+}
+
+fn create_stencil_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("Maps polygon stencil"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: STENCIL_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 fn premultiplied_blend_state() -> wgpu::BlendState {

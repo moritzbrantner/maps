@@ -60,7 +60,7 @@ describe("wgpu application frame", () => {
     ).toEqual({
       circles: [
         {
-          fillColor: [0.033105, 0.132868, 0.318547, 0.5],
+          fillColor: [0.2, 0.4, 0.6, 0.5],
           radius: 7,
           strokeColor: [1, 1, 1, 0.6],
           strokeWidth: 3.5,
@@ -188,7 +188,7 @@ describe("wgpu application frame", () => {
     });
   });
 
-  test("packs projected polygon rings for WebGPU without asserting correctness parity", () => {
+  test("packs projected polygon rings with encoded sRGB paint for WebGPU", () => {
     const polygon: MapRenderPolygon = {
       feature: null,
       featureId: "polygon-a",
@@ -252,7 +252,7 @@ describe("wgpu application frame", () => {
     expect(Array.from(packed?.order ?? [])).toEqual([MAPS_WGPU_APPLICATION_POLYGON, 0, 1]);
     expect(packed?.polygons).toHaveLength(1);
     expect(packed?.polygons[0]).toMatchObject({
-      fillColor: [0.033104766570885055, 0.13286832155381798, 0.31854677812509186, 0.4],
+      fillColor: [0.2, 0.4, 0.6, 0.4],
       rings: [
         [
           { x: 10, y: 10 },
@@ -270,8 +270,6 @@ describe("wgpu application frame", () => {
       strokeColor: [1, 1, 1, 1],
       strokeWidth: 3.5,
     });
-    expect(packed?.polygons[0]?.fillPoints.length).toBeGreaterThan(0);
-    expect((packed?.polygons[0]?.fillPoints.length ?? 0) % 3).toBe(0);
   });
 
   test("keeps polygon entries in source painter order", () => {
@@ -365,7 +363,7 @@ describe("wgpu application frame", () => {
     ]);
   });
 
-  test("fails closed for polygon rings without three vertices", () => {
+  test("keeps zero-area rings that Canvas still strokes and omits collapsed polygons", () => {
     const polygon: MapRenderPolygon = {
       feature: null,
       featureId: "polygon-a",
@@ -374,34 +372,58 @@ describe("wgpu application frame", () => {
       interactive: true,
       kind: "polygon",
       primitiveId: "polygon-a",
-      rings: [
-        [
-          [0, 0],
-          [1, 1],
-        ],
-      ],
+      rings: [],
       strokeColor: "#ffffff",
       strokeOpacity: 1,
       strokeWidth: 1,
     };
-    const frame: MapScreenRenderFrame = {
+    const frame = (rings: { x: number; y: number }[][]): MapScreenRenderFrame => ({
       height: 100,
-      primitives: [
-        {
-          kind: "polygon",
-          renderPrimitive: polygon,
-          rings: [
-            [
-              { x: 10, y: 10 },
-              { x: 20, y: 20 },
-            ],
-          ],
-        },
-      ],
+      primitives: [{ kind: "polygon", renderPrimitive: polygon, rings }],
       width: 100,
-    };
+    });
 
-    expect(createMapsWgpuApplicationFrame(frame)).toBeNull();
+    const packed = createMapsWgpuApplicationFrame(
+      frame([
+        [
+          { x: 10, y: 10 },
+          { x: 20, y: 20 },
+          { x: 10, y: 10 },
+        ],
+        [
+          { x: 30, y: 30 },
+          { x: 30, y: 30 },
+        ],
+      ]),
+    );
+
+    expect(packed?.polygons[0]?.rings).toEqual([
+      [
+        { x: 10, y: 10 },
+        { x: 20, y: 20 },
+      ],
+    ]);
+    const collapsed = createMapsWgpuApplicationFrame(
+      frame([
+        [
+          { x: 30, y: 30 },
+          { x: 30, y: 30 },
+        ],
+      ]),
+    );
+    expect(collapsed?.polygons).toEqual([]);
+    expect(Array.from(collapsed?.order ?? [])).toEqual([]);
+    expect(
+      createMapsWgpuApplicationFrame(
+        frame([
+          [
+            { x: 10, y: 10 },
+            { x: Number.NaN, y: 20 },
+            { x: 20, y: 10 },
+          ],
+        ]),
+      ),
+    ).toBeNull();
   });
 
   test("fails closed for degenerate line geometry", () => {
