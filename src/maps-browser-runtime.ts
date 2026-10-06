@@ -1357,6 +1357,14 @@ function createFrameSynchronizer({
   }
 
   // Painter order covers every primitive, retained groups included.
+  // Retained polygons stay on unpitched cameras. Under pitch a vertex can fall behind the
+  // camera: the GPU would clip and draw the rest of the polygon, while the projected
+  // picking scene (and the Canvas oracle) drop it, so the projected path keeps them in
+  // agreement. An inactive retained group makes the overlay redraw, which re-projects.
+  function cameraPitched() {
+    return (lastFrame?.camera.pitch ?? 0) !== 0;
+  }
+
   function isEmptyApplicationFrame(frame: MapsWgpuApplicationFrame | null) {
     return !frame || frame.order.length === 0;
   }
@@ -1382,6 +1390,8 @@ function createFrameSynchronizer({
     const currentRenderer = renderer();
     if (!currentRenderer || !retainedPointTransport) return false;
 
+    // A pitched camera returns retained polygons to the projected path.
+    if (retainedPoints?.kind === "polygons" && cameraPitched()) releaseRetainedPoints();
     const current = retainedPoints;
     const unchanged =
       current !== null &&
@@ -1392,7 +1402,8 @@ function createFrameSynchronizer({
       sameIdSet(current.selected, interaction.selectedPrimitiveIds);
     if (!unchanged) {
       const points = retainedPointTransport.points(frame, interaction);
-      const polygons = points ? null : retainedPointTransport.polygons(frame, interaction);
+      const polygons =
+        points || cameraPitched() ? null : retainedPointTransport.polygons(frame, interaction);
       const upload = points
         ? currentRenderer.setRetainedPoints &&
           (() =>
@@ -1598,7 +1609,9 @@ function createFrameSynchronizer({
     setApplicationFrame,
     setRetainedApplicationPoints,
     retainedApplicationPointsActive: () =>
-      retainedPoints !== null && retainedPoints.renderer === renderer(),
+      retainedPoints !== null &&
+      retainedPoints.renderer === renderer() &&
+      !(retainedPoints.kind === "polygons" && cameraPitched()),
     syncFrame,
   };
 }

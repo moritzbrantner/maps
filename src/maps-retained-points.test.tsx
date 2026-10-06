@@ -365,6 +365,27 @@ describe("GPU-retained application polygons (#196)", () => {
     expect(runtime.project).not.toHaveBeenCalled();
   });
 
+  it("keeps polygons on the projected path while the camera is pitched", async () => {
+    const { container, controller } = await mountPolygons(polygonCollection(3));
+    await waitFor(() =>
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]),
+    );
+    const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+
+    // A vertex behind a pitched camera would be clipped on the GPU but dropped by picking.
+    act(() => controller().setViewState({ center: [0, 0], zoom: 4, pitch: 40 }));
+    await waitFor(() => {
+      expect(overlay.dataset.mapOverlayBackend).toBe("wgpu");
+      expect(paints.at(-1)?.order[0]).not.toBe(MAPS_WGPU_APPLICATION_RETAINED_POLYGONS);
+    });
+
+    act(() => controller().setViewState({ center: [0, 0], zoom: 4, pitch: 0 }));
+    await waitFor(() => {
+      expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]);
+    });
+  });
+
   it("re-lowers on interaction changes and returns mixed frames to the screen path", async () => {
     const { container, rerenderPolygons } = await mountPolygons(polygonCollection(3));
     await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1));
