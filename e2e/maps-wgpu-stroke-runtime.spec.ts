@@ -1,4 +1,5 @@
 import { chromium, expect, test } from "@playwright/test";
+import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 
 const VISIBLE_RASTER_TILE = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGMM2FLxnwEPYMInOXwUAACRIgKL3I8IIQAAAABJRU5ErkJggg==",
@@ -7,14 +8,6 @@ const VISIBLE_RASTER_TILE = Buffer.from(
 
 // Use Graphite/Dawn with SwiftShader for both WebGPU and canvas presentation.
 // Ganesh/Vulkan interop can destroy the device on GPU-less Linux runners.
-const WEBGPU_SWIFTSHADER_ARGS = [
-  "--enable-unsafe-swiftshader",
-  "--enable-unsafe-webgpu",
-  "--enable-skia-graphite",
-  "--skia-graphite-dawn-backend=swiftshader",
-  "--use-angle=swiftshader",
-];
-
 test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path @smoke", async ({
   baseURL,
 }, testInfo) => {

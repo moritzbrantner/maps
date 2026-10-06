@@ -3,20 +3,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium, expect, test } from "@playwright/test";
+import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 
 const SHADER_DIRECTORY = fileURLToPath(
   new URL("../crates/maps-wasm/src/shaders/", import.meta.url),
 );
 
 // Same Dawn/SwiftShader setup as the wgpu runtime smoke tests.
-const WEBGPU_SWIFTSHADER_ARGS = [
-  "--enable-unsafe-swiftshader",
-  "--enable-unsafe-webgpu",
-  "--enable-skia-graphite",
-  "--skia-graphite-dawn-backend=swiftshader",
-  "--use-angle=swiftshader",
-];
-
 // naga accepts this; Tint rejects a function whose last statement is `discard`.
 // It proves the browser compiler is the one judging the shaders below.
 const TINT_ONLY_REJECTION = `

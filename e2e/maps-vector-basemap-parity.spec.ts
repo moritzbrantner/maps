@@ -1,13 +1,7 @@
 import { chromium, expect, test, type Browser } from "@playwright/test";
+import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 
 // Graphite/Dawn on SwiftShader: WebGPU and Canvas presentation without a hardware GPU.
-const WEBGPU_SWIFTSHADER_ARGS = [
-  "--enable-unsafe-swiftshader",
-  "--enable-unsafe-webgpu",
-  "--enable-skia-graphite",
-  "--skia-graphite-dawn-backend=swiftshader",
-  "--use-angle=swiftshader",
-];
 const CAMERA = { lon: 10.3, lat: 50.4, zoom: 4.4 };
 const MAP_SIZE = { width: 640, height: 480 };
 

@@ -1,13 +1,6 @@
 import { chromium, expect, test, type Page, type TestInfo } from "@playwright/test";
 import { retainMapPixels } from "./helpers/map-pixel-evidence";
-
-const WEBGPU_SWIFTSHADER_ARGS = [
-  "--enable-unsafe-swiftshader",
-  "--enable-unsafe-webgpu",
-  "--enable-skia-graphite",
-  "--skia-graphite-dawn-backend=swiftshader",
-  "--use-angle=swiftshader",
-];
+import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 
 async function openBackendPage(
   backend: "wgpu" | "canvas2d",

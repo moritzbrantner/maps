@@ -1219,7 +1219,14 @@ export function App() {
         ),
       getGeoJsonSelection: () => geoJsonSelection,
       getMapDisplay: () => e2eControllerRef.current?.display ?? null,
-      getMapProjection: () => e2eMapRef.current?.getProjection?.().type ?? null,
+      getMapProjection: () => {
+        try {
+          return e2eMapRef.current?.getProjection?.().type ?? null;
+        } catch {
+          // After a view switch the previous map is removed until the next one registers.
+          return null;
+        }
+      },
       getMeasurementDraft: () => measurementDraft,
       getMeasurementCount: () => measurements.length,
       getPointCoordinate: (id) => getDemoPointCoordinate(id, visibleEditablePoints, visiblePoints),

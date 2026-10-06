@@ -4,22 +4,6 @@ import { expect, test, type Page } from "@playwright/test";
 // screen-projected Canvas fallback (Rust packed projection) draws the same points, and
 // dense camera journeys must not lower, project or upload per point.
 
-// The project-wide `--use-gl=swiftshader` launch loses the WebGPU device right after the
-// first frame (Chromium tears down its Dawn instance), so the GPU path would silently be
-// the Canvas fallback. Use the Graphite/Dawn SwiftShader arguments that keep WebGPU alive,
-// as maps-wgsl-validation.spec.ts does.
-test.use({
-  launchOptions: {
-    args: [
-      "--enable-unsafe-swiftshader",
-      "--enable-unsafe-webgpu",
-      "--enable-skia-graphite",
-      "--skia-graphite-dawn-backend=swiftshader",
-      "--use-angle=swiftshader",
-    ],
-  },
-});
-
 type Blob = { x: number; y: number; pixels: number };
 
 async function openRetainedPoints(page: Page, query: string, backend: "wgpu" | "canvas2d") {
