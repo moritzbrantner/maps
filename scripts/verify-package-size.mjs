@@ -14,14 +14,18 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // #191 then lands the #167 retained vector basemap (Rust Shortbread buckets, retained
 // wgpu vector pipelines, shared retained-geometry module): WASM 532,422 -> 591,763
 // (+59,341), compressed package 427,892, unpacked 1,696,963.
+// Local measurements since: #194 retained points and nearby steps 591,763 -> 604,819 (+13,056);
+// #161 stencil polygons and encoded-sRGB blending +2,746; #196 retained polygons (fan, cover and
+// screen-extruded stroke pipelines) +16,264 -> 623,829 WASM, compressed package 444,281,
+// unpacked 1,750,305.
 // Keep a small margin for artifact metadata variation.
 const budgets = {
-  compressedSize: 430_000,
+  compressedSize: 446_000,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_700_500,
-  wasmRuntimeSize: 593_500,
+  unpackedSize: 1_752_500,
+  wasmRuntimeSize: 625_500,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {

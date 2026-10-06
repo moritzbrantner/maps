@@ -20,6 +20,10 @@ use web_sys::{HtmlCanvasElement, ImageBitmap};
 
 use crate::retained_frame::LocalFrame;
 use crate::retained_points::{RETAINED_POINT_INSTANCE_SIZE, RetainedPoints, RetainedView};
+use crate::retained_polygons::{
+    RETAINED_POLYGON_COVER_VERTEX_COUNT, RETAINED_POLYGON_FILL_VERTEX_SIZE,
+    RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonDraw, RetainedPolygons,
+};
 use crate::vector_basemap_layout::{
     FILL_VERTEX_SIZE, LINE_QUAD_INDICES, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes,
     fill_vertex_bytes, line_index_bytes, line_vertex_bytes, style_table_bytes,
@@ -48,6 +52,7 @@ const APPLICATION_CIRCLE_SHADER: &str = include_str!("shaders/application_circle
 const VECTOR_SHADER: &str = include_str!("shaders/vector_basemap.wgsl");
 
 const RETAINED_POINTS_SHADER: &str = include_str!("shaders/retained_points.wgsl");
+const RETAINED_POLYGONS_SHADER: &str = include_str!("shaders/retained_polygons.wgsl");
 
 /// One retained application point group (#155): `f64` world truth in Rust, `f32` anchor
 /// offsets on the GPU. Camera frames only move the anchor's frame uniform.
@@ -71,6 +76,33 @@ struct RetainedPointCounters {
     /// Anchor rebuilds of offsets (first draw and deterministic rebases).
     rebases: u64,
     /// Instance bytes written to GPU buffers.
+    upload_bytes: u64,
+}
+
+/// One retained application polygon group (#196): `f64` world rings in Rust, anchor-offset
+/// fan/cover and stroke geometry on the GPU. Camera frames only move the frame uniform.
+struct RetainedPolygonGroup {
+    polygons: RetainedPolygons,
+    anchor: Option<[f64; 2]>,
+    fill: Option<wgpu::Buffer>,
+    stroke: Option<wgpu::Buffer>,
+    draws: Vec<RetainedPolygonDraw>,
+}
+
+impl RetainedResource for RetainedPolygonGroup {
+    fn byte_size(&self) -> u64 {
+        retained_bytes([&self.fill, &self.stroke])
+    }
+}
+
+/// Cumulative retained-polygon work, for O(1)-camera evidence.
+#[derive(Clone, Copy, Default)]
+struct RetainedPolygonCounters {
+    /// Polygons lowered from longitude/latitude (data changes only).
+    prepared: u64,
+    /// Anchor rebuilds of geometry (first draw and deterministic rebases).
+    rebases: u64,
+    /// Geometry bytes written to GPU buffers.
     upload_bytes: u64,
 }
 
@@ -105,6 +137,7 @@ struct FrameStats {
     /// Application circle instances and triangle vertices written to GPU buffers.
     application_upload_bytes: u64,
     retained_point_frames: u32,
+    retained_polygon_frames: u32,
 }
 
 struct TileTexture {
@@ -149,6 +182,10 @@ pub struct MapsWgpuBaseMapRenderer {
     retained_point_pipeline: wgpu::RenderPipeline,
     retained_point_uniforms: FrameUniforms,
     retained_point_counters: RetainedPointCounters,
+    retained_polygons: RetainedSet<u32, RetainedPolygonGroup>,
+    retained_polygon_pipelines: PolygonPipelines,
+    retained_polygon_uniforms: FrameUniforms,
+    retained_polygon_counters: RetainedPolygonCounters,
     vector_max_zoom: u8,
     frame_stats: FrameStats,
     /// Reused per-frame scratch space; avoids allocating on the render path.
@@ -743,6 +780,140 @@ impl MapsWgpuBaseMapRenderer {
                 cache: None,
             });
 
+        let retained_polygon_uniforms =
+            FrameUniforms::new(&device, "Maps retained polygon frame layout");
+        let retained_polygon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Maps retained polygon shader"),
+            source: wgpu::ShaderSource::Wgsl(RETAINED_POLYGONS_SHADER.into()),
+        });
+        let retained_polygon_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Maps retained polygon pipeline layout"),
+                bind_group_layouts: &[Some(retained_polygon_uniforms.layout())],
+                immediate_size: 0,
+            });
+        let attribute = |format, offset, shader_location| wgpu::VertexAttribute {
+            format,
+            offset,
+            shader_location,
+        };
+        let retained_fill_attributes = [
+            attribute(wgpu::VertexFormat::Float32x2, 0, 0),
+            attribute(wgpu::VertexFormat::Float32x4, 8, 1),
+        ];
+        let retained_stroke_attributes = [
+            attribute(wgpu::VertexFormat::Float32x2, 0, 0),
+            attribute(wgpu::VertexFormat::Float32x2, 8, 1),
+            attribute(wgpu::VertexFormat::Float32x2, 16, 2),
+            attribute(wgpu::VertexFormat::Float32, 24, 3),
+            attribute(wgpu::VertexFormat::Float32, 28, 4),
+            attribute(wgpu::VertexFormat::Float32x4, 32, 5),
+        ];
+        let retained_polygon_pipeline =
+            |label: &str,
+             stroke: bool,
+             stencil: Option<wgpu::DepthStencilState>,
+             write_mask: wgpu::ColorWrites| {
+                let (entry_point, array_stride, attributes): (_, _, &[wgpu::VertexAttribute]) =
+                    if stroke {
+                        (
+                            "vs_stroke",
+                            RETAINED_POLYGON_STROKE_VERTEX_SIZE,
+                            &retained_stroke_attributes,
+                        )
+                    } else {
+                        (
+                            "vs_fill",
+                            RETAINED_POLYGON_FILL_VERTEX_SIZE,
+                            &retained_fill_attributes,
+                        )
+                    };
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&retained_polygon_layout),
+                    vertex: wgpu::VertexState {
+                        module: &retained_polygon_shader,
+                        entry_point: Some(entry_point),
+                        compilation_options: Default::default(),
+                        buffers: &[Some(wgpu::VertexBufferLayout {
+                            array_stride,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes,
+                        })],
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        ..Default::default()
+                    },
+                    depth_stencil: stencil,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &retained_polygon_shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: surface_view_format,
+                            blend: Some(premultiplied_blend_state()),
+                            write_mask,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        // The same stencil passes as screen polygons (#161), on the retained frame layout.
+        let retained_polygon_pipelines = PolygonPipelines {
+            fill_stencil: retained_polygon_pipeline(
+                "Maps retained polygon even-odd stencil pipeline",
+                false,
+                stencil_state(
+                    stencil_face(
+                        wgpu::CompareFunction::Always,
+                        wgpu::StencilOperation::Invert,
+                    ),
+                    0,
+                    POLYGON_FILL_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::empty(),
+            ),
+            fill_cover: retained_polygon_pipeline(
+                "Maps retained polygon fill cover pipeline",
+                false,
+                stencil_state(
+                    stencil_face(
+                        wgpu::CompareFunction::NotEqual,
+                        wgpu::StencilOperation::Zero,
+                    ),
+                    POLYGON_FILL_STENCIL_BIT,
+                    POLYGON_FILL_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::ALL,
+            ),
+            stroke: retained_polygon_pipeline(
+                "Maps retained polygon single-coverage stroke pipeline",
+                true,
+                stencil_state(
+                    stencil_face(
+                        wgpu::CompareFunction::NotEqual,
+                        wgpu::StencilOperation::Replace,
+                    ),
+                    POLYGON_STROKE_STENCIL_BIT,
+                    POLYGON_STROKE_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::ALL,
+            ),
+            stroke_clear: retained_polygon_pipeline(
+                "Maps retained polygon stroke stencil clear pipeline",
+                true,
+                stencil_state(
+                    stencil_face(wgpu::CompareFunction::Always, wgpu::StencilOperation::Zero),
+                    0,
+                    POLYGON_STROKE_STENCIL_BIT,
+                ),
+                wgpu::ColorWrites::empty(),
+            ),
+        };
+
         Ok(Self {
             surface,
             device,
@@ -777,6 +948,10 @@ impl MapsWgpuBaseMapRenderer {
             retained_point_pipeline,
             retained_point_uniforms,
             retained_point_counters: RetainedPointCounters::default(),
+            retained_polygons: RetainedSet::new(),
+            retained_polygon_pipelines,
+            retained_polygon_uniforms,
+            retained_polygon_counters: RetainedPolygonCounters::default(),
             vector_max_zoom: DEFAULT_VECTOR_MAX_ZOOM,
             frame_stats: FrameStats::default(),
             frame_vertices: Vec::new(),
@@ -968,6 +1143,42 @@ impl MapsWgpuBaseMapRenderer {
         self.retained_points.evict(&group);
     }
 
+    /// Retains an application polygon group, lowered once by `maps-core`: each polygon's
+    /// ring count, each ring's point count, the concatenated `[longitude, latitude]` pairs
+    /// and one paint record per polygon (fill RGBA, stroke RGBA, stroke width in CSS px).
+    /// Replaces the group's previous content. Returns the polygon count.
+    #[wasm_bindgen(js_name = setRetainedPolygons)]
+    pub fn set_retained_polygons(
+        &mut self,
+        group: u32,
+        ring_counts: &[u32],
+        point_counts: &[u32],
+        lon_lat: &[f64],
+        paint: &[f32],
+    ) -> Result<u32, JsValue> {
+        let polygons = RetainedPolygons::lower(ring_counts, point_counts, lon_lat, paint)
+            .map_err(JsValue::from_str)?;
+        let count = u32::try_from(polygons.len())
+            .map_err(|_| JsValue::from_str("too many retained polygons"))?;
+        self.retained_polygon_counters.prepared += u64::from(count);
+        self.retained_polygons.insert(
+            group,
+            RetainedPolygonGroup {
+                polygons,
+                anchor: None,
+                fill: None,
+                stroke: None,
+                draws: Vec::new(),
+            },
+        );
+        Ok(count)
+    }
+
+    #[wasm_bindgen(js_name = evictRetainedPolygons)]
+    pub fn evict_retained_polygons(&mut self, group: u32) {
+        self.retained_polygons.evict(&group);
+    }
+
     #[wasm_bindgen(js_name = evictVectorTile)]
     pub fn evict_vector_tile(&mut self, z: u8, x: u32, y: u32) {
         self.vector_tiles.evict(&(z, x, y));
@@ -993,7 +1204,9 @@ impl MapsWgpuBaseMapRenderer {
     /// drawn, draw calls, then retained vector tiles, features, fill triangles, line
     /// segments and GPU bytes, then application GPU upload bytes of the last frame, then
     /// retained points, cumulative retained point preparations, rebases and instance
-    /// upload bytes, and the retained point frames (world copies) drawn last frame.
+    /// upload bytes, and the retained point frames (world copies) drawn last frame, then the
+    /// same five for retained polygons: polygons, preparations, rebases, geometry upload
+    /// bytes and frames.
     #[wasm_bindgen(js_name = frameStats)]
     pub fn frame_stats(&self) -> Vec<f64> {
         let (mut features, mut triangles, mut segments) = (0_u64, 0_u64, 0_u64);
@@ -1028,6 +1241,14 @@ impl MapsWgpuBaseMapRenderer {
             self.retained_point_counters.rebases as f64,
             self.retained_point_counters.upload_bytes as f64,
             f64::from(self.frame_stats.retained_point_frames),
+            self.retained_polygons
+                .values()
+                .map(|group| group.polygons.len())
+                .sum::<usize>() as f64,
+            self.retained_polygon_counters.prepared as f64,
+            self.retained_polygon_counters.rebases as f64,
+            self.retained_polygon_counters.upload_bytes as f64,
+            f64::from(self.frame_stats.retained_polygon_frames),
         ]
     }
 
@@ -1151,6 +1372,12 @@ impl MapsWgpuBaseMapRenderer {
             view_projection,
             clip,
         );
+        let retained_polygon_draws = self.prepare_retained_polygon_draws(
+            &application_geometry.draws,
+            placements,
+            view_projection,
+            clip,
+        );
 
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
@@ -1250,6 +1477,10 @@ impl MapsWgpuBaseMapRenderer {
                         draw_calls +=
                             self.draw_retained_points(&mut pass, group, &retained_point_draws);
                     }
+                    ApplicationDraw::RetainedPolygons { group } => {
+                        draw_calls +=
+                            self.draw_retained_polygons(&mut pass, group, &retained_polygon_draws);
+                    }
                     ApplicationDraw::Polygon(polygon) => {
                         draw_calls += self.draw_polygon(&mut pass, polygon);
                     }
@@ -1267,6 +1498,7 @@ impl MapsWgpuBaseMapRenderer {
                 + application_geometry.triangle_vertices.len())
                 as u64,
             retained_point_frames: retained_point_draws.len() as u32,
+            retained_polygon_frames: retained_polygon_draws.len() as u32,
         };
         Ok(drawn_tiles)
     }
@@ -1314,6 +1546,143 @@ impl MapsWgpuBaseMapRenderer {
         )
     }
 
+    /// The camera as seen through this frame's raster placements, for retained groups.
+    fn retained_view(
+        &self,
+        placements: &[WgpuRasterTilePlacement],
+        view_projection: [f32; 16],
+        clip: SurfaceClip,
+    ) -> Option<RetainedView> {
+        let surface_width = f64::from(self.config.width) / clip.pixel_ratio.max(f64::MIN_POSITIVE);
+        RetainedView::from_placements(
+            placements.iter().filter_map(|placement| {
+                let (z, x, y) = placement.key?;
+                Some((
+                    z,
+                    x,
+                    y,
+                    placement.local_west,
+                    placement.local_north,
+                    placement.local_size,
+                ))
+            }),
+            view_projection,
+            surface_width,
+        )
+    }
+
+    /// Places every retained polygon group drawn this frame, like retained points: the
+    /// geometry is rebuilt only on its first draw or after a deterministic rebase.
+    fn prepare_retained_polygon_draws(
+        &mut self,
+        draws: &[ApplicationDraw],
+        placements: &[WgpuRasterTilePlacement],
+        view_projection: [f32; 16],
+        clip: SurfaceClip,
+    ) -> Vec<(u32, u32)> {
+        let groups: Vec<u32> = draws
+            .iter()
+            .filter_map(|draw| match *draw {
+                ApplicationDraw::RetainedPolygons { group } => Some(group),
+                _ => None,
+            })
+            .collect();
+        if groups.is_empty() {
+            return Vec::new();
+        }
+        let Some(view) = self.retained_view(placements, view_projection, clip) else {
+            return Vec::new();
+        };
+        let mut frames = Vec::new();
+        for group_key in groups {
+            let Some(group) = self.retained_polygons.get_mut(&group_key) else {
+                continue;
+            };
+            if view.needs_rebase(group.anchor) || group.fill.is_none() && group.stroke.is_none() {
+                let anchor = view.center;
+                let geometry = group.polygons.geometry(anchor);
+                group.fill = upload_retained_buffer(
+                    &self.device,
+                    &self.queue,
+                    "Maps retained polygon fills",
+                    wgpu::BufferUsages::VERTEX,
+                    &geometry.fill,
+                );
+                group.stroke = upload_retained_buffer(
+                    &self.device,
+                    &self.queue,
+                    "Maps retained polygon strokes",
+                    wgpu::BufferUsages::VERTEX,
+                    &geometry.stroke,
+                );
+                group.draws = geometry.draws;
+                group.anchor = Some(anchor);
+                self.retained_polygon_counters.rebases += 1;
+                self.retained_polygon_counters.upload_bytes +=
+                    (geometry.fill.len() + geometry.stroke.len()) as u64;
+            }
+            if let Some(anchor) = group.anchor {
+                frames.extend(view.anchor_frames(anchor).map(|frame| (group_key, frame)));
+            }
+        }
+        let surface = [
+            self.config.width as f32,
+            self.config.height as f32,
+            clip.pixel_ratio as f32,
+            0.0,
+        ];
+        self.retained_polygon_uniforms.write(
+            &self.device,
+            &self.queue,
+            frames,
+            view_projection,
+            surface,
+        )
+    }
+
+    /// Draws one retained polygon group once per visible world copy, polygon by polygon in
+    /// source order, with the even-odd fill and single-coverage stroke passes.
+    fn draw_retained_polygons(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        group_key: u32,
+        draws: &[(u32, u32)],
+    ) -> u32 {
+        let Some(group) = self.retained_polygons.get(&group_key) else {
+            return 0;
+        };
+        let pipelines = &self.retained_polygon_pipelines;
+        let mut calls = 0;
+        for (_, offset) in draws.iter().filter(|(key, _)| *key == group_key) {
+            pass.set_bind_group(0, self.retained_polygon_uniforms.bind_group(), &[*offset]);
+            for draw in &group.draws {
+                if let (true, Some(fill)) = (draw.fan_count > 0, &group.fill) {
+                    pass.set_vertex_buffer(0, fill.slice(..));
+                    pass.set_stencil_reference(0);
+                    pass.set_pipeline(&pipelines.fill_stencil);
+                    pass.draw(draw.fan_first..draw.fan_first + draw.fan_count, 0..1);
+                    pass.set_pipeline(&pipelines.fill_cover);
+                    pass.draw(
+                        draw.cover_first..draw.cover_first + RETAINED_POLYGON_COVER_VERTEX_COUNT,
+                        0..1,
+                    );
+                    calls += 2;
+                }
+                if let (true, Some(stroke)) = (draw.stroke_count > 0, &group.stroke) {
+                    let range = draw.stroke_first..draw.stroke_first + draw.stroke_count;
+                    pass.set_vertex_buffer(0, stroke.slice(..));
+                    pass.set_stencil_reference(POLYGON_STROKE_STENCIL_BIT);
+                    pass.set_pipeline(&pipelines.stroke);
+                    pass.draw(range.clone(), 0..1);
+                    pass.set_pipeline(&pipelines.stroke_clear);
+                    pass.draw(range, 0..1);
+                    calls += 2;
+                }
+            }
+        }
+        calls
+    }
+
     /// Places every retained point group drawn this frame: rebuilds a group's anchor
     /// offsets only on its first draw or after a deterministic rebase, then writes one
     /// frame uniform per world copy. Returns (group, uniform offset) pairs.
@@ -1334,22 +1703,7 @@ impl MapsWgpuBaseMapRenderer {
         if groups.is_empty() {
             return Vec::new();
         }
-        let surface_width = f64::from(self.config.width) / clip.pixel_ratio.max(f64::MIN_POSITIVE);
-        let Some(view) = RetainedView::from_placements(
-            placements.iter().filter_map(|placement| {
-                let (z, x, y) = placement.key?;
-                Some((
-                    z,
-                    x,
-                    y,
-                    placement.local_west,
-                    placement.local_north,
-                    placement.local_size,
-                ))
-            }),
-            view_projection,
-            surface_width,
-        ) else {
+        let Some(view) = self.retained_view(placements, view_projection, clip) else {
             return Vec::new();
         };
         let mut frames = Vec::new();
@@ -1390,7 +1744,6 @@ impl MapsWgpuBaseMapRenderer {
         )
     }
 
-    /// Draws one retained group once per visible world copy. Returns the draw calls.
     /// Even-odd fill (stencil fan, then cover), then a single-coverage stroke whose
     /// stencil is cleared by redrawing its triangles without color.
     fn draw_polygon(&self, pass: &mut wgpu::RenderPass<'_>, polygon: PolygonDraw) -> u32 {
@@ -1423,6 +1776,7 @@ impl MapsWgpuBaseMapRenderer {
         draw_calls
     }
 
+    /// Draws one retained point group once per visible world copy. Returns the draw calls.
     fn draw_retained_points(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
