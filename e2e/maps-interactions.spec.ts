@@ -210,6 +210,8 @@ test("interaction modes do not leak between measuring and editing", async ({ pag
   await expect.poll(() => getSelectedPointId(page)).toBe(null);
 
   await page.getByRole("button", { name: "Measuring" }).click();
+  // Leaving measuring re-renders the point layers before they hit-test again.
+  await waitForMapIdle(page);
   await clickFeatureCoordinate(page, "point", "berlin");
   await expect.poll(() => getSelectedPointId(page)).toBe("berlin");
 
@@ -227,6 +229,8 @@ test("interaction modes do not leak between measuring and editing", async ({ pag
 
   await editorToolbarButton(page, "Select").click();
   await expect.poll(() => getEditMode(page)).toBe("select");
+  // MapLibre hit-tests rendered features; let the drawn polygon's data update land first.
+  await waitForMapIdle(page);
   await clickFeatureCoordinate(page, "geojson", "geojson-point");
   await expect.poll(() => getGeoJsonSelectionCount(page)).toBe(1);
 });
@@ -248,6 +252,7 @@ test("editor interaction selects, multi-selects, moves, reshapes, deletes, and d
 
   await clickFeatureCoordinate(page, "geojson", "geojson-point");
   await editorToolbarButton(page, "Move").click();
+  await waitForMapIdle(page);
   const beforeMoveCenter = await getGeoJsonCenter(page, "geojson-point");
   const movePoint = await projectFeature(page, beforeMoveCenter);
   await page.mouse.move(movePoint.x, movePoint.y);
@@ -260,6 +265,8 @@ test("editor interaction selects, multi-selects, moves, reshapes, deletes, and d
 
   await editorToolbarButton(page, "Select").click();
   await expect.poll(() => getEditMode(page)).toBe("select");
+  // The moved point's data update must render before hit-testing.
+  await waitForMapIdle(page);
   const visiblePolygonPoint = await projectFeature(page, [10.8, 48.2]);
   await page.mouse.click(visiblePolygonPoint.x, visiblePolygonPoint.y);
   await expect(

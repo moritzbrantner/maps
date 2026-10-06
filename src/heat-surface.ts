@@ -1046,37 +1046,13 @@ function createHeatLayerSampledSurfaceCanvasImage({
   });
 }
 
-function createHeatLayerCanvasDataUrl({
-  blur,
-  draw,
-  height,
-  width,
-}: {
+function createHeatLayerCanvasDataUrl(options: {
   blur: number;
   draw: (context: CanvasRenderingContext2D) => void;
   height: number;
   width: number;
 }) {
-  if (!canUseHeatLayerCanvas()) {
-    return null;
-  }
-
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-
-  if (!context) {
-    return null;
-  }
-
-  canvas.width = Math.max(1, Math.ceil(width));
-  canvas.height = Math.max(1, Math.ceil(height));
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.save();
-  context.filter = `blur(${roundSvgNumber(Math.max(0, blur))}px)`;
-  draw(context);
-  context.restore();
-
-  return canvas.toDataURL("image/png");
+  return createHeatLayerCanvas(options)?.toDataURL("image/png") ?? null;
 }
 
 async function createHeatLayerCanvasImage(options: {
@@ -1121,20 +1097,42 @@ function createHeatLayerCanvas({
     return null;
   }
 
-  const canvas = document.createElement("canvas");
+  const canvas = createHeatLayerSizedCanvas(width, height);
   const context = canvas.getContext("2d");
 
   if (!context) {
     return null;
   }
 
+  const blurRadius = roundSvgNumber(Math.max(0, blur));
+
+  if (blurRadius === 0) {
+    draw(context);
+    return canvas;
+  }
+
+  // A context filter applies to every draw call on its own. Surfaces issue thousands
+  // of draws, so blur the finished surface once instead.
+  const surface = createHeatLayerSizedCanvas(width, height);
+  const surfaceContext = surface.getContext("2d");
+
+  if (!surfaceContext) {
+    return null;
+  }
+
+  draw(surfaceContext);
+  context.filter = `blur(${blurRadius}px)`;
+  context.drawImage(surface, 0, 0);
+  context.filter = "none";
+
+  return canvas;
+}
+
+function createHeatLayerSizedCanvas(width: number, height: number) {
+  const canvas = document.createElement("canvas");
+
   canvas.width = Math.max(1, Math.ceil(width));
   canvas.height = Math.max(1, Math.ceil(height));
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.save();
-  context.filter = `blur(${roundSvgNumber(Math.max(0, blur))}px)`;
-  draw(context);
-  context.restore();
 
   return canvas;
 }
