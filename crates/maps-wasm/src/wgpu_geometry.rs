@@ -226,11 +226,7 @@ impl WgpuApplicationFrame {
             }
         }
         for polygon in &mut self.polygons {
-            for point in polygon
-                .fill_points
-                .iter_mut()
-                .chain(polygon.rings.iter_mut().flatten())
-            {
+            for point in polygon.rings.iter_mut().flatten() {
                 point.x += margin;
                 point.y += margin;
             }
@@ -276,7 +272,6 @@ pub(super) struct WgpuApplicationLine {
 #[serde(rename_all = "camelCase")]
 pub(super) struct WgpuApplicationPolygon {
     pub(super) fill_color: [f32; 4],
-    pub(super) fill_points: Vec<WgpuApplicationPoint>,
     pub(super) rings: Vec<Vec<WgpuApplicationPoint>>,
     pub(super) stroke_color: [f32; 4],
     pub(super) stroke_width: f64,
@@ -293,8 +288,26 @@ pub(super) enum ApplicationDraw {
         vertex_count: u32,
     },
     /// A retained point group by key; its instances stay on the GPU across frames.
-    RetainedPoints { group: u32 },
+    RetainedPoints {
+        group: u32,
+    },
+    Polygon(PolygonDraw),
 }
+
+/// One polygon's ranges in the application triangle buffer. The fill is even-odd, like
+/// Canvas: a fan per ring inverts the stencil, then a bounding cover paints and clears it.
+/// The stroke paints each pixel once, so a translucent stroke blends like one Canvas stroke.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct PolygonDraw {
+    pub(super) fan_first: u32,
+    /// Zero when the polygon has no visible fill; the cover follows the fan.
+    pub(super) fan_count: u32,
+    pub(super) cover_first: u32,
+    pub(super) stroke_first: u32,
+    pub(super) stroke_count: u32,
+}
+
+pub(super) const POLYGON_COVER_VERTEX_COUNT: u32 = 6;
 
 #[derive(Default)]
 pub(super) struct ApplicationGeometry {
@@ -431,9 +444,7 @@ pub(super) fn prepare_application_geometry(
                 );
             }
             APPLICATION_POLYGON => {
-                let first_vertex =
-                    (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
-                append_application_polygon(
+                let draw = append_application_polygon(
                     &mut geometry.triangle_vertices,
                     frame.width,
                     frame.height,
@@ -442,17 +453,8 @@ pub(super) fn prepare_application_geometry(
                         .get(index)
                         .ok_or("invalid wgpu polygon order index")?,
                 )?;
-                let vertex_count = (geometry.triangle_vertices.len() as u64
-                    / APPLICATION_VERTEX_SIZE) as u32
-                    - first_vertex;
-                if vertex_count > 0 {
-                    append_application_draw(
-                        &mut geometry.draws,
-                        ApplicationDraw::Triangles {
-                            first_vertex,
-                            vertex_count,
-                        },
-                    );
+                if draw.fan_count > 0 || draw.stroke_count > 0 {
+                    geometry.draws.push(ApplicationDraw::Polygon(draw));
                 }
             }
             APPLICATION_RETAINED_POINTS => {
@@ -590,20 +592,13 @@ fn append_application_polygon(
     width: f64,
     height: f64,
     polygon: &WgpuApplicationPolygon,
-) -> Result<(), &'static str> {
-    if polygon.fill_points.is_empty()
-        || !polygon.fill_points.len().is_multiple_of(3)
+) -> Result<PolygonDraw, &'static str> {
+    if polygon.rings.is_empty()
         || polygon
-            .fill_points
+            .rings
             .iter()
+            .flatten()
             .any(|point| !point.x.is_finite() || !point.y.is_finite())
-        || polygon.rings.is_empty()
-        || polygon.rings.iter().any(|ring| {
-            ring.len() < 3
-                || ring
-                    .iter()
-                    .any(|point| !point.x.is_finite() || !point.y.is_finite())
-        })
         || !valid_color(polygon.fill_color)
         || !valid_color(polygon.stroke_color)
         || !polygon.stroke_width.is_finite()
@@ -612,85 +607,137 @@ fn append_application_polygon(
         return Err("invalid wgpu application polygon");
     }
 
-    for point in &polygon.fill_points {
-        append_application_vertex(output, width, height, point.x, point.y, polygon.fill_color)?;
+    // Degenerate rings cover no area; Canvas still strokes them.
+    let rings: Vec<Cow<'_, [WgpuApplicationPoint]>> = polygon
+        .rings
+        .iter()
+        .map(|ring| open_polygon_ring(ring))
+        .filter(|ring| ring.len() >= 2)
+        .collect();
+    let vertex_index = |output: &Vec<u8>| (output.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+    let mut draw = PolygonDraw::default();
+
+    let fill_rings = || rings.iter().filter(|ring| ring.len() >= 3);
+    if polygon.fill_color[3] > 0.0
+        && let Some(anchor) = fill_rings().next().map(|ring| ring[0])
+    {
+        draw.fan_first = vertex_index(output);
+        let (mut min_x, mut min_y) = (anchor.x, anchor.y);
+        let (mut max_x, mut max_y) = (anchor.x, anchor.y);
+        for ring in fill_rings() {
+            for (index, &point) in ring.iter().enumerate() {
+                let next = ring[(index + 1) % ring.len()];
+                for vertex in [anchor, point, next] {
+                    append_application_vertex(
+                        output,
+                        width,
+                        height,
+                        vertex.x,
+                        vertex.y,
+                        polygon.fill_color,
+                    )?;
+                }
+                min_x = min_x.min(point.x);
+                min_y = min_y.min(point.y);
+                max_x = max_x.max(point.x);
+                max_y = max_y.max(point.y);
+            }
+        }
+        draw.cover_first = vertex_index(output);
+        draw.fan_count = draw.cover_first - draw.fan_first;
+        for (x, y) in [
+            (min_x, min_y),
+            (max_x, min_y),
+            (max_x, max_y),
+            (min_x, min_y),
+            (max_x, max_y),
+            (min_x, max_y),
+        ] {
+            append_application_vertex(output, width, height, x, y, polygon.fill_color)?;
+        }
     }
 
-    if polygon.stroke_width == 0.0 {
-        return Ok(());
+    if polygon.stroke_width > 0.0 && polygon.stroke_color[3] > 0.0 && !rings.is_empty() {
+        draw.stroke_first = vertex_index(output);
+        let half_width = polygon.stroke_width / 2.0;
+        for ring in &rings {
+            for (index, &start) in ring.iter().enumerate() {
+                let end = ring[(index + 1) % ring.len()];
+                let offset = line_endpoint_offset(unit_direction(start, end)?, half_width);
+                let start_left = (start.x + offset.0, start.y + offset.1);
+                let start_right = (start.x - offset.0, start.y - offset.1);
+                let end_left = (end.x + offset.0, end.y + offset.1);
+                let end_right = (end.x - offset.0, end.y - offset.1);
+                for point in [
+                    start_left,
+                    start_right,
+                    end_left,
+                    start_right,
+                    end_right,
+                    end_left,
+                ] {
+                    append_application_vertex(
+                        output,
+                        width,
+                        height,
+                        point.0,
+                        point.1,
+                        polygon.stroke_color,
+                    )?;
+                }
+                // Canvas strokes polygon rings with round joins.
+                append_round_join(
+                    output,
+                    width,
+                    height,
+                    start,
+                    half_width,
+                    polygon.stroke_color,
+                )?;
+            }
+        }
+        draw.stroke_count = vertex_index(output) - draw.stroke_first;
     }
-    for ring in &polygon.rings {
-        append_application_polygon_ring_stroke(
-            output,
-            width,
-            height,
-            ring,
-            polygon.stroke_width,
-            polygon.stroke_color,
-        )?;
-    }
-    Ok(())
+    Ok(draw)
 }
 
-fn append_application_polygon_ring_stroke(
-    output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
-    ring: &[WgpuApplicationPoint],
-    stroke_width: f64,
-    color: [f32; 4],
-) -> Result<(), &'static str> {
-    let mut points = deduplicate_line_points(ring).into_owned();
+/// Distinct consecutive points of a ring, without the closing repeat of its first point.
+fn open_polygon_ring(ring: &[WgpuApplicationPoint]) -> Cow<'_, [WgpuApplicationPoint]> {
+    let mut points = deduplicate_line_points(ring);
     if points.len() > 1 {
         let first = points[0];
-        let last = *points.last().expect("polygon ring is non-empty");
+        let last = points[points.len() - 1];
         let dx = last.x - first.x;
         let dy = last.y - first.y;
         if dx * dx + dy * dy <= GEOMETRY_EPSILON_SQUARED {
-            points.pop();
+            points.to_mut().pop();
         }
     }
-    if points.len() < 3 {
-        return Err("wgpu application polygon ring has fewer than three distinct points");
-    }
+    points
+}
 
-    let half_width = stroke_width / 2.0;
-    let mut directions = Vec::with_capacity(points.len());
-    for index in 0..points.len() {
-        directions.push(unit_direction(
-            points[index],
-            points[(index + 1) % points.len()],
-        )?);
-    }
-
-    let mut offsets = Vec::with_capacity(points.len());
-    for index in 0..points.len() {
-        offsets.push(line_join_offset(
-            directions[(index + directions.len() - 1) % directions.len()],
-            directions[index],
-            half_width,
-        ));
-    }
-
-    for index in 0..points.len() {
-        let start = points[index];
-        let end = points[(index + 1) % points.len()];
-        let start_offset = offsets[index];
-        let end_offset = offsets[(index + 1) % offsets.len()];
-        let start_left = (start.x + start_offset.0, start.y + start_offset.1);
-        let start_right = (start.x - start_offset.0, start.y - start_offset.1);
-        let end_left = (end.x + end_offset.0, end.y + end_offset.1);
-        let end_right = (end.x - end_offset.0, end.y - end_offset.1);
-
-        for point in [
-            start_left,
-            start_right,
-            end_left,
-            start_right,
-            end_right,
-            end_left,
-        ] {
-            append_application_vertex(output, width, height, point.0, point.1, color)?;
+fn append_round_join(
+    output: &mut Vec<u8>,
+    width: f64,
+    height: f64,
+    center: WgpuApplicationPoint,
+    radius: f64,
+    color: [f32; 4],
+) -> Result<(), &'static str> {
+    let segments = 2 * LINE_CAP_SEGMENTS;
+    for segment in 0..segments {
+        let angle_a = std::f64::consts::TAU * segment as f64 / segments as f64;
+        let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / segments as f64;
+        append_application_vertex(output, width, height, center.x, center.y, color)?;
+        for angle in [angle_a, angle_b] {
+            append_application_vertex(
+                output,
+                width,
+                height,
+                center.x + radius * angle.cos(),
+                center.y + radius * angle.sin(),
+                color,
+            )?;
         }
     }
     Ok(())
@@ -1002,14 +1049,6 @@ mod application_geometry_tests {
     fn polygon() -> WgpuApplicationPolygon {
         WgpuApplicationPolygon {
             fill_color: [0.1, 0.4, 0.2, 0.8],
-            fill_points: vec![
-                WgpuApplicationPoint { x: 10.0, y: 10.0 },
-                WgpuApplicationPoint { x: 30.0, y: 10.0 },
-                WgpuApplicationPoint { x: 30.0, y: 30.0 },
-                WgpuApplicationPoint { x: 10.0, y: 10.0 },
-                WgpuApplicationPoint { x: 30.0, y: 30.0 },
-                WgpuApplicationPoint { x: 10.0, y: 30.0 },
-            ],
             rings: vec![vec![
                 WgpuApplicationPoint { x: 10.0, y: 10.0 },
                 WgpuApplicationPoint { x: 30.0, y: 10.0 },
@@ -1060,13 +1099,6 @@ mod application_geometry_tests {
             (frame.lines[0].points[0].x, frame.lines[0].points[0].y),
             (138.0, 138.0)
         );
-        for (point, original) in frame.polygons[0]
-            .fill_points
-            .iter()
-            .zip(polygon().fill_points)
-        {
-            assert_eq!((point.x, point.y), (original.x + 128.0, original.y + 128.0));
-        }
         for (ring, original) in frame.polygons[0].rings.iter().zip(polygon().rings) {
             for (point, original) in ring.iter().zip(original) {
                 assert_eq!((point.x, point.y), (original.x + 128.0, original.y + 128.0));
@@ -1107,30 +1139,101 @@ mod application_geometry_tests {
         );
     }
 
-    #[test]
-    fn polygon_fill_and_closed_stroke_use_existing_triangle_path() {
+    fn polygon_draw(polygon: WgpuApplicationPolygon) -> (ApplicationGeometry, PolygonDraw) {
         let frame = packed_frame(
             Vec::new(),
             Vec::new(),
             100.0,
             Vec::new(),
             vec![[APPLICATION_POLYGON, 0]],
-            vec![polygon()],
+            vec![polygon],
+            100.0,
+        );
+        let geometry = prepare_application_geometry(&frame).unwrap();
+        let [ApplicationDraw::Polygon(draw)] = geometry.draws[..] else {
+            panic!("expected one polygon draw, got {:?}", geometry.draws);
+        };
+        (geometry, draw)
+    }
+
+    fn vertex_count(geometry: &ApplicationGeometry) -> u32 {
+        (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32
+    }
+
+    #[test]
+    fn polygon_fill_fans_every_ring_then_covers_its_bounds() {
+        let mut with_hole = polygon();
+        with_hole.rings.push(vec![
+            WgpuApplicationPoint { x: 15.0, y: 15.0 },
+            WgpuApplicationPoint { x: 25.0, y: 15.0 },
+            WgpuApplicationPoint { x: 25.0, y: 25.0 },
+            WgpuApplicationPoint { x: 15.0, y: 25.0 },
+            WgpuApplicationPoint { x: 15.0, y: 15.0 },
+        ]);
+
+        let (geometry, draw) = polygon_draw(with_hole);
+
+        // One fan triangle per ring edge; the closing repeat adds no edge.
+        assert_eq!((draw.fan_first, draw.fan_count), (0, 8 * 3));
+        assert_eq!(draw.cover_first, draw.fan_count);
+        assert_eq!(
+            draw.stroke_first,
+            draw.cover_first + POLYGON_COVER_VERTEX_COUNT
+        );
+        // A rectangle and a round join per ring vertex.
+        let per_vertex = 6 + 2 * LINE_CAP_SEGMENTS as u32 * 3;
+        assert_eq!(draw.stroke_count, 8 * per_vertex);
+        assert_eq!(
+            vertex_count(&geometry),
+            draw.stroke_first + draw.stroke_count
+        );
+    }
+
+    #[test]
+    fn polygon_without_visible_fill_or_stroke_skips_those_passes() {
+        let mut stroke_only = polygon();
+        stroke_only.fill_color[3] = 0.0;
+        let (_, draw) = polygon_draw(stroke_only);
+        assert_eq!(draw.fan_count, 0);
+        assert!(draw.stroke_count > 0);
+
+        let mut fill_only = polygon();
+        fill_only.stroke_width = 0.0;
+        let (_, draw) = polygon_draw(fill_only);
+        assert!(draw.fan_count > 0);
+        assert_eq!(draw.stroke_count, 0);
+    }
+
+    #[test]
+    fn zero_area_ring_keeps_its_canvas_stroke_without_failing_the_frame() {
+        let mut collinear = polygon();
+        collinear.rings = vec![vec![
+            WgpuApplicationPoint { x: 10.0, y: 10.0 },
+            WgpuApplicationPoint { x: 20.0, y: 10.0 },
+            WgpuApplicationPoint { x: 10.0, y: 10.0 },
+        ]];
+
+        let (_, draw) = polygon_draw(collinear);
+
+        assert_eq!(draw.fan_count, 0);
+        assert!(draw.stroke_count > 0);
+    }
+
+    #[test]
+    fn non_finite_polygon_fails_the_frame_closed() {
+        let mut invalid = polygon();
+        invalid.rings[0][1].x = f64::NAN;
+        let frame = packed_frame(
+            Vec::new(),
+            Vec::new(),
+            100.0,
+            Vec::new(),
+            vec![[APPLICATION_POLYGON, 0]],
+            vec![invalid],
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame).unwrap();
-        let vertex_count =
-            (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
-
-        assert_eq!(vertex_count, 30);
-        assert_eq!(
-            geometry.draws,
-            vec![ApplicationDraw::Triangles {
-                first_vertex: 0,
-                vertex_count,
-            }]
-        );
+        assert!(prepare_application_geometry(&frame).is_err());
     }
 
     #[test]
@@ -1150,26 +1253,21 @@ mod application_geometry_tests {
         );
 
         let geometry = prepare_application_geometry(&frame).unwrap();
-        let polygon_vertices =
-            (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
 
-        assert_eq!(
-            geometry.draws,
-            vec![
+        assert!(matches!(
+            geometry.draws[..],
+            [
                 ApplicationDraw::Circles {
                     first_instance: 0,
                     instance_count: 1,
                 },
-                ApplicationDraw::Triangles {
-                    first_vertex: 0,
-                    vertex_count: polygon_vertices,
-                },
+                ApplicationDraw::Polygon(_),
                 ApplicationDraw::Circles {
                     first_instance: 1,
                     instance_count: 1,
                 },
             ]
-        );
+        ));
     }
 
     #[test]

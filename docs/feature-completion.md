@@ -87,7 +87,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Raster tile/source lifecycle and first-party base map | Yes | Yes | In progress | Retain GPU resources, prove churn/overzoom/world-copy/memory behavior, then retire superseded paths. |
 | Points and clusters | Yes | Yes | In progress | Circle instancing landed in #153; finish packed/retained application transport under #154/#60 with representative density evidence. |
 | Lines and flows | Yes | Yes | In progress | Keep the shared render frame; profile triangle generation/upload and retain stable geometry before adding specialized paths. |
-| GeoJSON polygon fills/strokes and holes | Yes via Canvas reference | Yes via Canvas reference | Not yet | Add hole/order-correct WebGPU coverage first, prove Canvas parity, then retain/chunk/cull polygon GPU geometry. |
+| GeoJSON polygon fills/strokes and holes | Yes | Yes (#161: WebGPU matches the Canvas oracle) | Not yet | Even-odd stencil fill and single-coverage strokes in encoded sRGB; retain local polygon geometry across camera frames (#196). |
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. |
 | Heat/scalar surfaces | Existing product capability | Existing correctness coverage | Needs first-party performance pass | Integrate through the common rendering/runtime evidence path before calling the first-party path complete. |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |

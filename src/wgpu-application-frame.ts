@@ -1,4 +1,3 @@
-import earcut from "earcut";
 
 import type {
   MapRenderCircle,
@@ -44,7 +43,7 @@ export type MapsWgpuApplicationLine = {
 
 export type MapsWgpuApplicationPolygon = {
   fillColor: MapsWgpuColor;
-  fillPoints: readonly MapsWgpuApplicationPoint[];
+  /** Even-odd rings, as Canvas fills them; the renderer tessellates through its stencil. */
   rings: readonly (readonly MapsWgpuApplicationPoint[])[];
   strokeColor: MapsWgpuColor;
   strokeWidth: number;
@@ -59,7 +58,7 @@ export const MAPS_WGPU_APPLICATION_RETAINED_POINTS = 4;
 
 /**
  * Retained point paint record shared with `maps-wasm` (`RETAINED_POINT_PAINT_LENGTH`):
- * radius, stroke width (CSS px), fill RGBA, stroke RGBA (linear light).
+ * radius, stroke width (CSS px), fill RGBA, stroke RGBA (encoded sRGB).
  */
 export const MAPS_RETAINED_POINT_PAINT_STRIDE = 10;
 
@@ -74,7 +73,7 @@ export type MapsRetainedApplicationPoints = {
 
 /**
  * Packed circle record shared with `maps-wasm` (`APPLICATION_CIRCLE_RECORD_LENGTH`): x, y,
- * radius, stroke width (viewport CSS px), fill RGBA, stroke RGBA (linear light).
+ * radius, stroke width (viewport CSS px), fill RGBA, stroke RGBA (encoded sRGB).
  */
 export const MAPS_WGPU_APPLICATION_CIRCLE_STRIDE = 12;
 /** Painter-order runs: (kind, first index, count) per run of consecutive same-kind entries. */
@@ -99,7 +98,7 @@ export type MapsWgpuApplicationTransportStats = {
   frames: number;
   /** Circles packed into typed records (no per-circle transport objects). */
   circles: number;
-  /** CSS colors parsed; repeated paint values reuse the cached linear RGBA. */
+  /** CSS colors parsed; repeated paint values reuse the cached RGBA. */
   paintParses: number;
   /** Typed bytes handed to the WASM bridge for circles and painter order. */
   transportBytes: number;
@@ -125,9 +124,9 @@ const PAINT_CACHE_LIMIT = 4096;
  * boundary as one reused `Float32Array` of fixed records rather than one object per circle, and
  * painter order as run-length `Uint32Array` runs; resolved paint is cached by CSS value, so
  * camera-only frames do not reparse colors. Lines, polygons and direction markers keep the
- * object transport until their retained representation (#155) replaces it. Polygon fills use
- * Earcut only as renderer-side screen-space tessellation; Maps remains authoritative for
- * geographic projection, ring semantics, identity and interaction state. Labels remain a thin
+ * object transport until their retained representation (#155) replaces it. Maps remains
+ * authoritative for geographic projection, ring semantics, identity and interaction state;
+ * the renderer only fills rings even-odd, as Canvas does. Labels remain a thin
  * Canvas annotation pass above wgpu geometry.
  *
  * A packed frame's typed arrays are views into the packer's buffers: they stay valid until the
@@ -291,17 +290,16 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
               primitive.primitiveId,
               interaction,
             );
-            const geometry = preparePolygonGeometry(scenePrimitive.rings);
+            const rings = preparePolygonRings(scenePrimitive.rings);
 
-            if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth) || !geometry) {
+            if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth) || !rings) {
               return null;
             }
 
             pushOrder(MAPS_WGPU_APPLICATION_POLYGON, polygons.length);
             polygons.push({
               fillColor,
-              fillPoints: geometry.fillPoints,
-              rings: geometry.rings,
+              rings,
               strokeColor,
               strokeWidth,
             });
@@ -371,38 +369,19 @@ function hasNonDegenerateSegment(points: readonly MapsWgpuApplicationPoint[]) {
   return false;
 }
 
-function preparePolygonGeometry(
+/** Rings without repeated points; `null` (Canvas fallback) for non-finite geometry. */
+function preparePolygonRings(
   sourceRings: readonly (readonly MapsWgpuApplicationPoint[])[],
-): { fillPoints: MapsWgpuApplicationPoint[]; rings: MapsWgpuApplicationPoint[][] } | null {
+): MapsWgpuApplicationPoint[][] | null {
   if (sourceRings.length === 0) return null;
-
   const rings: MapsWgpuApplicationPoint[][] = [];
-  const vertices: number[] = [];
-  const holeIndices: number[] = [];
-
-  for (let ringIndex = 0; ringIndex < sourceRings.length; ringIndex += 1) {
-    const ring = normalizePolygonRing(sourceRings[ringIndex]!);
-    if (ring.length < 3 || !allFinitePoints(ring)) return null;
-
-    if (ringIndex > 0) holeIndices.push(vertices.length / 2);
-    rings.push(ring);
-    for (const point of ring) vertices.push(point.x, point.y);
+  for (const source of sourceRings) {
+    const ring = normalizePolygonRing(source);
+    if (!allFinitePoints(ring)) return null;
+    // Fewer than two distinct points draw nothing on Canvas either.
+    if (ring.length >= 2) rings.push(ring);
   }
-
-  let indices: number[];
-  try {
-    indices = earcut(vertices, holeIndices, 2);
-  } catch {
-    return null;
-  }
-  if (indices.length === 0 || indices.length % 3 !== 0) return null;
-
-  const fillPoints: MapsWgpuApplicationPoint[] = [];
-  for (const index of indices) {
-    if (!Number.isInteger(index) || index < 0 || index * 2 + 1 >= vertices.length) return null;
-    fillPoints.push({ x: vertices[index * 2]!, y: vertices[index * 2 + 1]! });
-  }
-  return { fillPoints, rings };
+  return rings;
 }
 
 function normalizePolygonRing(
@@ -439,7 +418,10 @@ function resolveStrokeWidth(
   );
 }
 
-/** Parses a hex/rgb(a) CSS color into linear-light RGBA for the sRGB wgpu surface. */
+/**
+ * Parses a hex/rgb(a) CSS color into encoded sRGB RGBA. The wgpu surface blends in encoded
+ * sRGB, as Canvas does, so translucent paint composites the same on both backends.
+ */
 export function parseMapsWgpuCssColor(value: string, opacity = 1): MapsWgpuColor | null {
   return parseSupportedCssColor(value, opacity);
 }
@@ -468,12 +450,7 @@ function parseSupportedCssColor(value: string, opacity: number): MapsWgpuColor |
   }
 
   if (!rgba) return null;
-  return [
-    srgbToLinear(rgba[0]),
-    srgbToLinear(rgba[1]),
-    srgbToLinear(rgba[2]),
-    rgba[3] * normalizedOpacity,
-  ];
+  return [rgba[0], rgba[1], rgba[2], rgba[3] * normalizedOpacity];
 }
 
 function parseHexColor(hex: string): MapsWgpuColor | null {
@@ -488,10 +465,6 @@ function parseHexColor(hex: string): MapsWgpuColor | null {
   const withAlpha = expanded.length === 6 ? `${expanded}ff` : expanded;
   const parts = [0, 2, 4, 6].map((offset) => Number.parseInt(withAlpha.slice(offset, offset + 2), 16));
   return [parts[0]! / 255, parts[1]! / 255, parts[2]! / 255, parts[3]! / 255];
-}
-
-function srgbToLinear(value: number) {
-  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
 function clamp01(value: number) {
