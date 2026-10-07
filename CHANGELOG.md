@@ -31,6 +31,11 @@
   compatibility frames on hover, and no longer makes a mounted GeoJSON Editor
   re-render every MapLibre layer. A MapLibre Map View with `maxBounds` and a
   GeoJSON Editor no longer loops renders.
+- On MapLibre Map Views, uncontrolled hover now updates the hovered class and
+  flow opacity of point, cluster, flow and GeoJSON layers. The existing markers
+  and paths are restyled in place, so hovered features stay mounted under the
+  pointer and the layers do not re-render. Before, their hover styling only
+  refreshed when a mounted GeoJSON Editor forced a full layer re-render.
 
 ## 0.1.5
 

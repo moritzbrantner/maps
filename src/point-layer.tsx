@@ -9,7 +9,11 @@ import { MapSurfaceContext } from "./map-view";
 import type { FlatLayer } from "./maplibre-compat";
 import { createPointLayerFeatures, createBubbleLayerFeatures } from "./point-layer-data";
 export { createPointLayerFeatures, createBubbleLayerFeatures } from "./point-layer-data";
-import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
+import {
+  reconcileFlatLayerEntries,
+  updateFlatLayerEntriesHover,
+  type FlatLayerEntryHover,
+} from "./flat-layer-reconciler";
 
 export type PointLayerFeature<TProperties = Record<string, unknown>> = {
   coordinates: [longitude: number, latitude: number];
@@ -235,7 +239,6 @@ function PointFeatureLayer<
             const signature = createFlatPointSignature({
               featureDraggable,
               fillColor,
-              hovered,
               isMeasuring,
               label,
               radius,
@@ -255,29 +258,46 @@ function PointFeatureLayer<
                 })
                 .addTo(layer);
 
+            const getClassName = (featureHovered: boolean) =>
+              joinClassNames(
+                "mb-maps__point-marker",
+                featureDraggable && "mb-maps__feature--draggable",
+                featureHovered && "mb-maps__feature--hovered",
+                selected && "mb-maps__feature--selected",
+              );
+
             return {
+              hoverState: hovered,
               key: featureKey,
               render: () => {
                 const marker = flat.circleMarker(toLatLng(feature.coordinates), {
                   bubblingMouseEvents: false,
-                  className: joinClassNames(
-                    "mb-maps__point-marker",
-                    featureDraggable && "mb-maps__feature--draggable",
-                    hovered && "mb-maps__feature--hovered",
-                    selected && "mb-maps__feature--selected",
-                  ),
+                  className: getClassName(hovered),
                   color: "#ffffff",
                   fillColor,
                   fillOpacity: 0.92,
                   interactive: !isMeasuring,
                   opacity: 1,
                   radius,
-                  weight: selected ? 3 : 2,
+                  weight: selected || hovered ? 3 : 2,
                 });
+
+                const hover: FlatLayerEntryHover<boolean> = {
+                  apply: (featureHovered) => {
+                    marker.setStyle?.({
+                      className: getClassName(featureHovered),
+                      // The Maps runtime's hover delta, as real MapLibre paint.
+                      weight: selected ? 3 : featureHovered ? 3 : 2,
+                    });
+                  },
+                  feature,
+                  state: hovered,
+                };
 
                 if (!isMeasuring) {
                   const entry: FlatPointCacheEntry = {
                     coordinatesKey,
+                    hover,
                     layers: [marker],
                     signature,
                   };
@@ -373,6 +393,7 @@ function PointFeatureLayer<
                 marker.addTo(layer);
                 return {
                   coordinatesKey,
+                  hover,
                   layers: label ? [marker, addLabel()] : [marker],
                   signature,
                 };
@@ -397,7 +418,22 @@ function PointFeatureLayer<
           }),
         });
       },
-      { preserveOnRender: true, renderOnViewStateChange: false },
+      {
+        onHoverChange: hoveredFeatureId
+          ? undefined
+          : () =>
+              updateFlatLayerEntriesHover(flatMarkerCacheRef.current, (feature) =>
+                Boolean(
+                  surfaceRef.current?.isFeatureHovered(
+                    feature as TFeature,
+                    hoveredFeatureId,
+                    getFeatureId,
+                  ),
+                ),
+              ),
+        preserveOnRender: true,
+        renderOnViewStateChange: false,
+      },
     );
   }, [
     features,
@@ -699,6 +735,7 @@ type FlatDragEvent = FlatFeaturePointerEvent & {
 
 type FlatPointCacheEntry = {
   coordinatesKey: string;
+  hover: FlatLayerEntryHover<boolean>;
   layers: FlatLayer[];
   signature: string;
 };
@@ -735,7 +772,6 @@ function createFlatPointCoordinatesKey(coordinates: [longitude: number, latitude
 function createFlatPointSignature({
   featureDraggable,
   fillColor,
-  hovered,
   isMeasuring,
   label,
   radius,
@@ -743,7 +779,6 @@ function createFlatPointSignature({
 }: {
   featureDraggable: boolean;
   fillColor: string;
-  hovered: boolean;
   isMeasuring: boolean;
   label: string | null;
   radius: number;
@@ -752,7 +787,6 @@ function createFlatPointSignature({
   return JSON.stringify({
     featureDraggable,
     fillColor,
-    hovered,
     interactive: !isMeasuring,
     label,
     radius,

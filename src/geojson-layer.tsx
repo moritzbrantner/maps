@@ -13,7 +13,11 @@ import {
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-view";
 import { cloneGeometry, normalizeGeometryParts } from "./temporal-geojson-geometry";
-import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
+import {
+  reconcileFlatLayerEntries,
+  updateFlatLayerEntriesHover,
+  type FlatLayerEntryHover,
+} from "./flat-layer-reconciler";
 import type {
   TemporalGeoJsonGeometryFeatureCollection,
   TemporalGeoJsonSupportedGeometry,
@@ -142,15 +146,9 @@ export function GeoJsonLayer<
             const selected = currentSurface.isFeatureSelected(feature, selectedFeatureId, getFeatureId);
             const hovered = currentSurface.isFeatureHovered(feature, hoveredFeatureId, getFeatureId);
             const featureInteractive = isFeatureInteractive?.(feature) ?? true;
-            const className = joinClassNames(
-              "mb-maps__geojson-feature",
-              hovered && "mb-maps__feature--hovered",
-              selected && "mb-maps__feature--selected",
-            );
             const featureKey = getFlatGeoJsonFeatureKey(feature, getFeatureId);
             const geometryKey = createFlatGeoJsonGeometryKey(feature.geometry);
             const signature = createFlatGeoJsonSignature({
-              className,
               feature,
               interactionMode,
               selected,
@@ -158,11 +156,12 @@ export function GeoJsonLayer<
             });
 
             return {
+              hoverState: hovered,
               key: featureKey,
               render: () => {
                 const layers = createFlatGeometryLayers(feature.geometry, {
                   bubblingMouseEvents: false,
-                  className,
+                  className: getFlatGeoJsonClassName(hovered, selected),
                   interactive: interactionMode === "none" && featureInteractive,
                   flat,
                   selected,
@@ -191,12 +190,34 @@ export function GeoJsonLayer<
                   geometryLayer.addTo(layer);
                 }
 
-                return {
+                const entry: FlatGeoJsonCacheEntry = {
                   geometryKey,
+                  hover: {
+                    apply: (featureHovered) => {
+                      // The entry's current style: a retained entry is restyled in place when
+                      // the layer's style props change, so the creation-time style is stale.
+                      updateFlatGeoJsonCachedStyle(
+                        entry.layers,
+                        feature.geometry,
+                        entry.selected,
+                        entry.style,
+                        getFlatGeoJsonClassName(featureHovered, entry.selected),
+                        featureHovered,
+                      );
+                    },
+                    feature,
+                    state: hovered,
+                  },
                   interactive: featureInteractive,
                   layers,
+                  selected,
                   signature,
+                  style,
                 };
+
+                // Created layers carry the selected width; a hovered feature also gets its delta.
+                if (hovered) entry.hover.apply(true);
+                return entry;
               },
               signature,
               update: (entry) => {
@@ -212,11 +233,15 @@ export function GeoJsonLayer<
                   feature.geometry,
                   selected,
                   style,
+                  getFlatGeoJsonClassName(entry.hover.state, selected),
+                  entry.hover.state,
                 );
 
                 if (geometryUpdated) {
                   entry.geometryKey = geometryKey;
                 }
+                entry.selected = selected;
+                entry.style = style;
 
                 return geometryUpdated && styleUpdated;
               },
@@ -225,7 +250,22 @@ export function GeoJsonLayer<
           }),
         });
       },
-      { preserveOnRender: true, renderOnViewStateChange: false },
+      {
+        onHoverChange: hoveredFeatureId
+          ? undefined
+          : () =>
+              updateFlatLayerEntriesHover(flatFeatureCacheRef.current, (feature) =>
+                Boolean(
+                  surfaceRef.current?.isFeatureHovered(
+                    feature as GeoJsonLayerFeature<TProperties>,
+                    hoveredFeatureId,
+                    getFeatureId,
+                  ),
+                ),
+              ),
+        preserveOnRender: true,
+        renderOnViewStateChange: false,
+      },
     );
   }, [
     featureCollection,
@@ -281,10 +321,22 @@ export function createGeoJsonLayerFeatures<
 
 type FlatGeoJsonCacheEntry = {
   geometryKey: string;
+  hover: FlatLayerEntryHover<boolean>;
   interactive: boolean;
   layers: FlatGeometryLayer[];
+  selected: boolean;
   signature: string;
+  /** The style last applied; hover restyles from it, not from the creation-time style. */
+  style: Required<GeoJsonLayerStyle>;
 };
+
+function getFlatGeoJsonClassName(hovered: boolean, selected: boolean) {
+  return joinClassNames(
+    "mb-maps__geojson-feature",
+    hovered && "mb-maps__feature--hovered",
+    selected && "mb-maps__feature--selected",
+  );
+}
 
 function getFlatGeoJsonFeatureKey<TProperties extends Record<string, unknown>>(
   feature: GeoJsonLayerFeature<TProperties>,
@@ -298,20 +350,17 @@ function createFlatGeoJsonGeometryKey(geometry: TemporalGeoJsonSupportedGeometry
 }
 
 function createFlatGeoJsonSignature<TProperties extends Record<string, unknown>>({
-  className,
   feature,
   interactionMode,
   selected,
   style,
 }: {
-  className: string;
   feature: GeoJsonLayerFeature<TProperties>;
   interactionMode: string;
   selected: boolean;
   style: Required<GeoJsonLayerStyle>;
 }) {
   return JSON.stringify({
-    className,
     feature: {
       id: feature.id,
       properties: feature.properties,
@@ -363,64 +412,86 @@ function updateFlatGeoJsonCachedStyle(
   geometry: TemporalGeoJsonSupportedGeometry,
   selected: boolean,
   style: Required<GeoJsonLayerStyle>,
+  className: string,
+  hovered = false,
 ) {
   switch (geometry.type) {
     case "Point":
-      return Boolean(layers[0]?.setStyle?.(getFlatPointLayerStyle(style, selected)));
+      return Boolean(layers[0]?.setStyle?.({ ...getFlatPointLayerStyle(style, selected, hovered), className }));
     case "MultiPoint":
       if (layers.length !== geometry.coordinates.length) {
         return false;
       }
       return layers.every((layer) =>
-        Boolean(layer.setStyle?.(getFlatPointLayerStyle(style, selected)))
+        Boolean(layer.setStyle?.({ ...getFlatPointLayerStyle(style, selected, hovered), className }))
       );
     case "LineString":
-      return Boolean(layers[0]?.setStyle?.(getFlatLineLayerStyle(style, selected)));
+      return Boolean(layers[0]?.setStyle?.({ ...getFlatLineLayerStyle(style, selected, hovered), className }));
     case "MultiLineString":
       if (layers.length !== geometry.coordinates.length) {
         return false;
       }
       return layers.every((layer) =>
-        Boolean(layer.setStyle?.(getFlatLineLayerStyle(style, selected)))
+        Boolean(layer.setStyle?.({ ...getFlatLineLayerStyle(style, selected, hovered), className }))
       );
     case "Polygon":
-      return Boolean(layers[0]?.setStyle?.(getFlatPolygonLayerStyle(style, selected)));
+      return Boolean(layers[0]?.setStyle?.({ ...getFlatPolygonLayerStyle(style, selected, hovered), className }));
     case "MultiPolygon":
       if (layers.length !== geometry.coordinates.length) {
         return false;
       }
       return layers.every((layer) =>
-        Boolean(layer.setStyle?.(getFlatPolygonLayerStyle(style, selected)))
+        Boolean(layer.setStyle?.({ ...getFlatPolygonLayerStyle(style, selected, hovered), className }))
       );
   }
 }
 
-function getFlatPointLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+/**
+ * Stroke widths follow the Maps runtime's interaction deltas: selected +1.5 (+1 for points),
+ * hovered +1, so hover changes MapLibre paint rather than only a metadata class.
+ */
+function interactionStrokeDelta(selected: boolean, hovered: boolean, selectedDelta: number) {
+  return selected ? selectedDelta : hovered ? 1 : 0;
+}
+
+function getFlatPointLayerStyle(
+  style: Required<GeoJsonLayerStyle>,
+  selected: boolean,
+  hovered = false,
+) {
   return {
     color: "#ffffff",
     fillColor: style.pointColor,
     fillOpacity: 0.94,
     opacity: 1,
     radius: style.pointRadius,
-    weight: selected ? 3 : 2,
+    weight: 2 + interactionStrokeDelta(selected, hovered, 1),
   };
 }
 
-function getFlatLineLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+function getFlatLineLayerStyle(
+  style: Required<GeoJsonLayerStyle>,
+  selected: boolean,
+  hovered = false,
+) {
   return {
     color: style.lineColor,
     opacity: style.lineOpacity,
-    weight: selected ? style.lineWidth + 1.5 : style.lineWidth,
+    weight: style.lineWidth + interactionStrokeDelta(selected, hovered, 1.5),
   };
 }
 
-function getFlatPolygonLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+function getFlatPolygonLayerStyle(
+  style: Required<GeoJsonLayerStyle>,
+  selected: boolean,
+  hovered = false,
+) {
   return {
     color: style.polygonStrokeColor,
     fillColor: style.polygonFillColor,
     fillOpacity: style.polygonFillOpacity,
     opacity: 0.9,
-    weight: selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth,
+    weight: style.polygonStrokeWidth + interactionStrokeDelta(selected, hovered, 1.5),
   };
 }
 
