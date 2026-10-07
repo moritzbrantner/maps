@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { Profiler, StrictMode, useContext } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -44,6 +44,12 @@ import {
   type MapPoint,
 } from ".";
 import { resolveMapLibreDisplayStyle } from "./map-display";
+import { GeoJsonEditorLayer } from "./geojson-editor";
+import {
+  MapSurfaceContext,
+  useMapHoveredFeature,
+  useMapSurfaceViewState,
+} from "./map-surface-context";
 import {
   buildWebGlFlatTileUrl,
   coordinateToWebGlFlatWorldPoint,
@@ -3282,6 +3288,125 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     });
 
     expect(screen.getByText("NYC to Boston: 9 trips")).toBeTruthy();
+  });
+});
+
+// #119: camera and hover are separate subscriptions from the stable surface capabilities.
+describe("MapLibre Map View surface subscriptions", () => {
+  test("keeps stable layers, editors and native compatibility frames out of hover and camera fan-out", async () => {
+    const engine = createMockCompatibilityEngine();
+    const renders = { hover: 0, pointLayer: 0, stable: 0, view: 0 };
+    function StableConsumer() {
+      useContext(MapSurfaceContext);
+      renders.stable += 1;
+      return null;
+    }
+    function ViewConsumer() {
+      useMapSurfaceViewState();
+      renders.view += 1;
+      return null;
+    }
+    function HoverConsumer() {
+      useMapHoveredFeature();
+      renders.hover += 1;
+      return null;
+    }
+    let controller: import("./map-display").MapSurfaceController | null = null;
+    const stores = [{ id: "store-1", latitude: 40, longitude: -74 }];
+    const points = [{ id: "p1", label: "Hovered point", latitude: 41, longitude: -73 }];
+    const emptyCollection = { type: "FeatureCollection" as const, features: [] };
+
+    render(
+      <MapEngineProvider engine={engine}>
+        <MapView
+          fitToData={false}
+          mapLabel="Subscription split"
+          maxBounds={[-80, 30, -60, 50]}
+          onMapControllerReady={(next) => {
+            controller = next;
+          }}
+          showAttributionControl={false}
+        >
+          <MapDataset id="stores" kind="geo-points" points={stores} />
+          <GeoPointLayer datasetId="stores" />
+          <Profiler
+            id="point-layer"
+            onRender={() => {
+              renders.pointLayer += 1;
+            }}
+          >
+            <PointLayer
+              points={points}
+              renderFeatureTooltip={(feature) => <span>{feature.point.label}</span>}
+            />
+          </Profiler>
+          <GeoJsonEditorLayer featureCollection={emptyCollection} mode="select" />
+          <MapControls>
+            <StableConsumer />
+            <ViewConsumer />
+            <HoverConsumer />
+          </MapControls>
+        </MapView>
+      </MapEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Subscription split").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const groupClears = () =>
+      flatMock.getLayerGroups().reduce((total, group) => total + group.clearCount, 0);
+    let clearsBefore = 0;
+    let framesBefore = 0;
+    const reset = () => {
+      renders.hover = renders.pointLayer = renders.stable = renders.view = 0;
+      clearsBefore = groupClears();
+      framesBefore = engine.computeFrame.mock.calls.length;
+    };
+    const work = () => ({
+      computeFrame: engine.computeFrame.mock.calls.length - framesBefore,
+      groupClears: groupClears() - clearsBefore,
+    });
+
+    reset();
+    for (let i = 1; i <= 8; i++) {
+      await act(async () => {
+        controller?.setViewState({ center: [-73 + i / 10, 41], zoom: 6 });
+      });
+    }
+    // Before the split: stable 8, hover 8, point layer 8, and 16 full layer re-renders
+    // requested by the editor's surface-dependent effect.
+    expect(renders).toEqual({ hover: 0, pointLayer: 0, stable: 0, view: 8 });
+    expect(work()).toEqual({ computeFrame: 8, groupClears: 0 });
+
+    const marker = flatMock
+      .getLayerGroups()
+      .flatMap((group) => group.layers)
+      .find((layer) => layer.handlers.has("mouseover") && layer.latLng?.[0] === 41);
+    expect(marker).toBeTruthy();
+
+    reset();
+    await act(async () => {
+      marker?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 10, y: 10 } });
+    });
+    expect(screen.getByText("Hovered point")).toBeTruthy();
+    // Before the split: every consumer re-rendered, the editor requested a full layer
+    // re-render (2 group clears) and the native layer recomputed its frame.
+    expect(renders).toEqual({ hover: 1, pointLayer: 0, stable: 0, view: 0 });
+    expect(work()).toEqual({ computeFrame: 0, groupClears: 0 });
+
+    reset();
+    await act(async () => {
+      marker?.handlers.get("mouseout")?.[0]?.({});
+    });
+    expect(screen.queryByText("Hovered point")).toBeNull();
+    expect(renders).toEqual({ hover: 1, pointLayer: 0, stable: 0, view: 0 });
+    expect(work()).toEqual({ computeFrame: 0, groupClears: 0 });
   });
 });
 

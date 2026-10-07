@@ -57,7 +57,7 @@ import {
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
 import type { MapScreenInteractionState, MapScreenProject } from "./map-screen-render-frame";
-import type { MapSurfaceContextValue } from "./map-surface-context";
+import { useMapHoveredFeature, type MapSurfaceContextValue } from "./map-surface-context";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
 import type {
   MapsHeatLayerRenderState,
@@ -303,6 +303,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const heatRuntimesRef = useRef<Map<string, MapsHeatLayerRenderState>>(new Map());
     const [heatRevision, setHeatRevision] = useState(0);
     const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
+    // Hover is the only interaction state this overlay renders from: a hover change
+    // repaints the retained snapshot, while camera changes arrive via `redraw()`.
+    const hovered = useMapHoveredFeature();
     const entries = useMemo(() => collectOverlayEntries(children), [children]);
     const hasHeatEntries = entries.some((entry) => entry.kind === "heat");
     const [heatRuntime, setHeatRuntime] = useState<MapsHeatLayerRuntime | null>(null);
@@ -834,6 +837,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       getViewport,
       heatRevision,
       heatRuntime,
+      hovered,
       project,
       projectScene,
       renderApplicationFrame,

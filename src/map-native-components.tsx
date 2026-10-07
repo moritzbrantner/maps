@@ -33,7 +33,7 @@ import type {
 } from "./map-interaction";
 import { PointLayer, type PointLayerFeature } from "./point-layer";
 import type { MapRuntimeDataset } from "./map-runtime";
-import { MapSurfaceContext } from "./map-view";
+import { MapSurfaceContext, useMapSurfaceViewState } from "./map-surface-context";
 import type { TemporalGeoJsonSupportedGeometry } from "./temporal-geojson-types";
 
 type CompatibilityEngine = {
@@ -136,7 +136,8 @@ export function useMapEngine() {
  * second renderer proves the contract in #58/#59.
  */
 export function useMapFrame(layer: { datasetId: string; kind: string }) {
-  const surface = useContext(MapSurfaceContext);
+  const display = useContext(MapSurfaceContext)?.display;
+  const viewState = useMapSurfaceViewState();
   const { getDataset, version } = useMapRuntime();
   const dataset = getDataset(layer.datasetId);
   void version;
@@ -148,16 +149,17 @@ export function useMapFrame(layer: { datasetId: string; kind: string }) {
             dataset,
             datasetId: layer.datasetId,
             kind: layer.kind,
-            viewport: surface
-              ? {
-                  center: surface.viewState.center,
-                  display: surface.display,
-                  zoom: surface.viewState.zoom,
-                }
-              : null,
+            viewport:
+              display && viewState
+                ? {
+                    center: viewState.center,
+                    display,
+                    zoom: viewState.zoom,
+                  }
+                : null,
           }
         : null,
-    [dataset, layer.datasetId, layer.kind, surface],
+    [dataset, display, layer.datasetId, layer.kind, viewState],
   );
 }
 
@@ -396,7 +398,8 @@ function useCompatibilityLayer(
   publicDatasetId: string,
   options: Record<string, unknown> = {},
 ) {
-  const surface = useContext(MapSurfaceContext);
+  const display = useContext(MapSurfaceContext)?.display;
+  const viewState = useMapSurfaceViewState();
   const { compatibilityEngine, getCompatibilityDatasetId, version } = useMapRuntime();
   const compatibilityLayerIdRef = useRef<string | null>(null);
   const compatibilityDatasetId = getCompatibilityDatasetId(publicDatasetId);
@@ -424,21 +427,21 @@ function useCompatibilityLayer(
 
   useEffect(() => {
     const compatibilityLayerId = compatibilityLayerIdRef.current;
-    if (!compatibilityEngine || !compatibilityLayerId || !surface) return;
+    if (!compatibilityEngine || !compatibilityLayerId || !display || !viewState) return;
 
     callCompatibilityEngine(compatibilityEngine, "computeFrame", {
       layerIds: [compatibilityLayerId],
       viewport: {
         bounds: [-180, -90, 180, 90],
-        center: surface.viewState.center,
-        display: surface.display,
+        center: viewState.center,
+        display,
         height: 1,
         kind: "geo",
         width: 1,
-        zoom: surface.viewState.zoom,
+        zoom: viewState.zoom,
       },
     });
-  }, [compatibilityEngine, surface, version]);
+  }, [compatibilityEngine, display, version, viewState]);
 }
 
 function mapPointCallback(

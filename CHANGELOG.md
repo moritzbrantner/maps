@@ -25,6 +25,12 @@
 
 - Imported `polygon-clipping` through its default export so Rollup-based
   bundlers (Vite 5) accept the package.
+- Map Views now publish camera and hover state separately from their stable
+  surface capabilities. Hovering or moving the camera no longer re-renders
+  layers that do not draw from that state, no longer re-runs Maps-native
+  compatibility frames on hover, and no longer makes a mounted GeoJSON Editor
+  re-render every MapLibre layer. A MapLibre Map View with `maxBounds` and a
+  GeoJSON Editor no longer loops renders.
 
 ## 0.1.5
 
