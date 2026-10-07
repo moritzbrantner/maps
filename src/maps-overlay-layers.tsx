@@ -121,9 +121,10 @@ type MapsOverlayInteractionSurface = Pick<
 >;
 
 /**
- * The GPU-retained point path of the Maps runtime (#155). `render` hands it a vector frame
- * of unlabeled circles; `active` reports whether the live renderer still draws it, so
- * camera frames can skip layer work entirely.
+ * The GPU-retained application path of the Maps runtime: points (#155) and polygons (#196).
+ * `render` hands it a vector frame made only of unlabeled circles or only of polygons;
+ * `active` reports whether the live renderer still draws it, so camera frames can skip
+ * layer work entirely.
  */
 export type MapsOverlayRetainedPoints = {
   active(): boolean;

@@ -31,6 +31,7 @@ import {
 import type { MapVectorRenderFrame } from "./map-render-frame";
 import type {
   MapsRetainedApplicationPoints,
+  MapsRetainedApplicationPolygons,
   MapsWgpuApplicationFrame,
 } from "./wgpu-application-frame";
 import {
@@ -77,13 +78,21 @@ type MapsWgpuApplicationFrameFactory = (
   interaction: MapScreenInteractionState,
 ) => MapsWgpuApplicationFrame | null;
 
-/** Builders of the GPU-retained point path (#155), loaded with the wgpu transport. */
+/**
+ * Builders of the GPU-retained application paths, loaded with the wgpu transport: points
+ * (#155) and polygons (#196).
+ */
 type MapsRetainedPointTransport = {
   points: (
     frame: MapVectorRenderFrame<unknown>,
     interaction: MapScreenInteractionState,
   ) => MapsRetainedApplicationPoints | null;
   frame: (group: number, width: number, height: number) => MapsWgpuApplicationFrame;
+  polygons: (
+    frame: MapVectorRenderFrame<unknown>,
+    interaction: MapScreenInteractionState,
+  ) => MapsRetainedApplicationPolygons | null;
+  polygonFrame: (group: number, width: number, height: number) => MapsWgpuApplicationFrame;
 };
 
 /** The single retained application point group a Map View currently owns. */
@@ -132,9 +141,10 @@ export type MapsCanvasFlatRuntimeController = {
     interaction?: MapScreenInteractionState,
   ): boolean;
   /**
-   * Draws a vector frame of unlabeled circles from GPU-retained points (#155): Rust lowers
-   * longitude/latitude once and camera frames only update uniforms. Returns `false` when
-   * the frame or backend cannot use the retained path; the caller then projects it.
+   * Draws a vector frame made only of unlabeled circles (#155) or only of polygons (#196)
+   * from GPU-retained geometry: Rust lowers longitude/latitude once and camera frames only
+   * update uniforms. Returns `false` when the frame or backend cannot use the retained
+   * path; the caller then projects it.
    */
   renderRetainedApplicationPoints(
     frame: MapVectorRenderFrame<unknown>,
@@ -469,6 +479,8 @@ export function createMapsBrowserRuntime(
       retainedPointTransport = {
         frame: transport.createMapsWgpuRetainedPointsFrame,
         points: transport.createMapsRetainedApplicationPoints,
+        polygonFrame: transport.createMapsWgpuRetainedPolygonsFrame,
+        polygons: transport.createMapsRetainedApplicationPolygons,
       };
       delete canvas.dataset.mapBaseRendererError;
     } catch (error) {
@@ -1027,10 +1039,13 @@ function createFrameSynchronizer({
   // group is retained. Camera frames never rebuild it.
   let retainedPoints: {
     hovered: ReadonlySet<string>;
+    kind: "points" | "polygons";
     primitives: readonly unknown[];
     renderer: MapsWgpuBaseMapRenderer;
     selected: ReadonlySet<string>;
   } | null = null;
+  // The application frame that draws the retained group; any other frame replaced it.
+  let retainedApplicationFrame: MapsWgpuApplicationFrame | null = null;
   let preparingCameraFrame = false;
   // The last full render: its camera, whether its margin holds content (so pure
   // pans can be presented by translation), and the tiles it placed. Pixels are only
@@ -1341,23 +1356,27 @@ function createFrameSynchronizer({
     });
   }
 
+  // Painter order covers every primitive, retained groups included.
+  // Retained polygons stay on unpitched cameras. Under pitch a vertex can fall behind the
+  // camera: the GPU would clip and draw the rest of the polygon, while the projected
+  // picking scene (and the Canvas oracle) drop it, so the projected path keeps them in
+  // agreement. An inactive retained group makes the overlay redraw, which re-projects.
+  function cameraPitched() {
+    return (lastFrame?.camera.pitch ?? 0) !== 0;
+  }
+
   function isEmptyApplicationFrame(frame: MapsWgpuApplicationFrame | null) {
-    return (
-      !frame ||
-      (frame.circleCount === 0 &&
-        frame.lines.length === 0 &&
-        frame.polygons.length === 0 &&
-        frame.directionMarkers.length === 0)
-    );
+    return !frame || frame.order.length === 0;
   }
 
   function releaseRetainedPoints() {
     if (!retainedPoints) return;
-    const owner = retainedPoints.renderer;
+    const { kind, renderer: owner } = retainedPoints;
     retainedPoints = null;
     if (owner !== renderer()) return;
     try {
-      owner.evictRetainedPoints?.(RETAINED_APPLICATION_POINT_GROUP);
+      if (kind === "points") owner.evictRetainedPoints?.(RETAINED_APPLICATION_POINT_GROUP);
+      else owner.evictRetainedPolygons?.(RETAINED_APPLICATION_POINT_GROUP);
     } catch {
       // A failed renderer already released its resources.
     }
@@ -1371,6 +1390,8 @@ function createFrameSynchronizer({
     const currentRenderer = renderer();
     if (!currentRenderer || !retainedPointTransport) return false;
 
+    // A pitched camera returns retained polygons to the projected path.
+    if (retainedPoints?.kind === "polygons" && cameraPitched()) releaseRetainedPoints();
     const current = retainedPoints;
     const unchanged =
       current !== null &&
@@ -1381,20 +1402,35 @@ function createFrameSynchronizer({
       sameIdSet(current.selected, interaction.selectedPrimitiveIds);
     if (!unchanged) {
       const points = retainedPointTransport.points(frame, interaction);
-      if (!points) {
+      const polygons =
+        points || cameraPitched() ? null : retainedPointTransport.polygons(frame, interaction);
+      const upload = points
+        ? currentRenderer.setRetainedPoints &&
+          (() =>
+            currentRenderer.setRetainedPoints!(
+              RETAINED_APPLICATION_POINT_GROUP,
+              points.lonLat,
+              points.paint,
+            ))
+        : polygons
+          ? currentRenderer.setRetainedPolygons &&
+            (() =>
+              currentRenderer.setRetainedPolygons!(
+                RETAINED_APPLICATION_POINT_GROUP,
+                polygons.ringCounts,
+                polygons.pointCounts,
+                polygons.lonLat,
+                polygons.paint,
+              ))
+          : null;
+      if (!upload) {
         releaseRetainedPoints();
         return false;
       }
-      if (!currentRenderer.setRetainedPoints) {
-        releaseRetainedPoints();
-        return false;
-      }
+      // Replacing the group's kind: evict the previous one first.
+      if (current && current.kind !== (points ? "points" : "polygons")) releaseRetainedPoints();
       try {
-        currentRenderer.setRetainedPoints(
-          RETAINED_APPLICATION_POINT_GROUP,
-          points.lonLat,
-          points.paint,
-        );
+        upload();
       } catch {
         // The renderer hid its canvas on the failed operation: retire it like any other
         // renderer failure so the Canvas fallback draws the map and the layers.
@@ -1404,18 +1440,20 @@ function createFrameSynchronizer({
       }
       retainedPoints = {
         hovered: new Set(interaction.hoveredPrimitiveIds ?? []),
+        kind: points ? "points" : "polygons",
         primitives: frame.primitives.slice(),
         renderer: currentRenderer,
         selected: new Set(interaction.selectedPrimitiveIds ?? []),
       };
     }
 
-    if (!unchanged || !applicationFrame || applicationFrame.circleCount !== 0) {
-      applicationFrame = retainedPointTransport.frame(
-        RETAINED_APPLICATION_POINT_GROUP,
-        size.width,
-        size.height,
-      );
+    if (!unchanged || !applicationFrame || applicationFrame !== retainedApplicationFrame) {
+      const createFrame =
+        retainedPoints!.kind === "points"
+          ? retainedPointTransport.frame
+          : retainedPointTransport.polygonFrame;
+      applicationFrame = createFrame(RETAINED_APPLICATION_POINT_GROUP, size.width, size.height);
+      retainedApplicationFrame = applicationFrame;
       invalidateRendered();
     }
     if (!preparingCameraFrame) {
@@ -1571,7 +1609,9 @@ function createFrameSynchronizer({
     setApplicationFrame,
     setRetainedApplicationPoints,
     retainedApplicationPointsActive: () =>
-      retainedPoints !== null && retainedPoints.renderer === renderer(),
+      retainedPoints !== null &&
+      retainedPoints.renderer === renderer() &&
+      !(retainedPoints.kind === "polygons" && cameraPitched()),
     syncFrame,
   };
 }

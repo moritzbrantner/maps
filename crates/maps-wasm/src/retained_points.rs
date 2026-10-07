@@ -90,7 +90,7 @@ impl RetainedPoints {
 }
 
 /// `delta` wrapped into `[-0.5, 0.5)` world widths.
-fn wrap_world_delta(delta: f64) -> f64 {
+pub(crate) fn wrap_world_delta(delta: f64) -> f64 {
     delta - (delta + 0.5).floor()
 }
 

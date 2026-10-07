@@ -4,11 +4,19 @@ import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 
 type Backend = "canvas2d" | "wgpu";
 
+type Overlay = "canvas2d" | "wgpu" | "wgpu-retained";
+
 // Canvas is the polygon correctness oracle (#161). Both backends render the same fixture:
 // holes, several exteriors, overlapping holes and self-intersection (even-odd), translucent
 // fills and strokes with round joins, painter order with lines and points, and hover/selection
-// stroke widths.
-async function renderPolygonParity(baseURL: string | undefined, backend: Backend, cases?: string) {
+// stroke widths. Frames made only of polygons take the GPU-retained path (#196).
+async function renderPolygonParity(
+  baseURL: string | undefined,
+  backend: Backend,
+  query: Record<string, string>,
+  overlay: Overlay,
+  journey?: (page: Page) => Promise<void>,
+) {
   const browser = await chromium.launch({ args: WEBGPU_SWIFTSHADER_ARGS });
   try {
     const page = await browser.newPage({ viewport: { height: 600, width: 1000 } });
@@ -17,18 +25,29 @@ async function renderPolygonParity(baseURL: string | undefined, backend: Backend
         Object.defineProperty(Navigator.prototype, "gpu", { configurable: true, get: () => undefined });
       });
     }
+    const gpuValidation: string[] = [];
+    page.on("console", (message) => {
+      if (/WGSL|\[Invalid [A-Za-z]+/.test(message.text())) gpuValidation.push(message.text());
+    });
     const url = new URL("/e2e/fixtures/polygon-parity.html", baseURL ?? "http://127.0.0.1:5181");
-    if (cases) url.searchParams.set("cases", cases);
+    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
     await page.goto(url.toString());
 
     const map = page.getByLabel("Polygon parity");
     const base = map.locator('canvas[data-flat-runtime="maps"]');
-    const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
     await expect(base).toHaveAttribute("data-map-base-renderer", backend);
     await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-    await expect(overlay).toHaveAttribute("data-map-overlay-backend", backend);
+    await expect(map.locator('canvas[data-map-overlay-runtime="maps"]')).toHaveAttribute(
+      "data-map-overlay-backend",
+      overlay,
+    );
     await settleFrames(page);
-    return await map.screenshot();
+    await journey?.(page);
+    await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
+    await settleFrames(page);
+    const screenshot = await map.screenshot();
+    expect(gpuValidation).toEqual([]);
+    return screenshot;
   } finally {
     await browser.close();
   }
@@ -140,10 +159,17 @@ async function compareScreenshots(expected: Buffer, actual: Buffer) {
 async function expectPolygonParity(
   baseURL: string | undefined,
   testInfo: TestInfo,
-  cases?: string,
+  query: Record<string, string>,
+  overlay: Overlay,
+  journey?: { wgpu: (page: Page) => Promise<void>; canvasQuery: Record<string, string> },
 ) {
-  const canvas = await renderPolygonParity(baseURL, "canvas2d", cases);
-  const wgpu = await renderPolygonParity(baseURL, "wgpu", cases);
+  const canvas = await renderPolygonParity(
+    baseURL,
+    "canvas2d",
+    { ...query, ...journey?.canvasQuery },
+    "canvas2d",
+  );
+  const wgpu = await renderPolygonParity(baseURL, "wgpu", query, overlay, journey?.wgpu);
   const comparison = await compareScreenshots(canvas, wgpu);
   for (const [name, body] of [
     ["canvas2d", canvas],
@@ -158,14 +184,78 @@ async function expectPolygonParity(
   expect(comparison.mismatched).toBeLessThan(comparison.total * 0.0005);
 }
 
+const POLYGON_ONLY_CASES =
+  "hole,multiple-exteriors,overlapping-holes,self-intersecting,translucent-stroke,selected,hovered";
+
 test("WebGPU polygons match the Canvas oracle across fill, stroke, order and interaction", async ({
   baseURL,
 }, testInfo) => {
-  await expectPolygonParity(baseURL, testInfo);
+  // Lines and points in the frame keep it on the projected screen path.
+  await expectPolygonParity(baseURL, testInfo, {}, "wgpu");
 });
 
-test("A zero-area polygon keeps the frame on WebGPU and strokes like Canvas", async ({
+test("A zero-area polygon stays on WebGPU and strokes like Canvas", async ({
   baseURL,
 }, testInfo) => {
-  await expectPolygonParity(baseURL, testInfo, "zero-area,hole");
+  await expectPolygonParity(baseURL, testInfo, { cases: "zero-area,hole" }, "wgpu-retained");
+});
+
+test("Retained WebGPU polygons match the Canvas oracle @smoke", async ({ baseURL }, testInfo) => {
+  await expectPolygonParity(baseURL, testInfo, { cases: POLYGON_ONLY_CASES }, "wgpu-retained");
+});
+
+test("Retained WebGPU polygons match the Canvas oracle across the antimeridian", async ({
+  baseURL,
+}, testInfo) => {
+  await expectPolygonParity(
+    baseURL,
+    testInfo,
+    { cases: "antimeridian", lon: "180", zoom: "5" },
+    "wgpu-retained",
+  );
+});
+
+test("A retained polygon camera journey re-lowers and uploads nothing, then matches Canvas @smoke", async ({
+  baseURL,
+}, testInfo) => {
+  const final = { lon: "3.5", lat: "-1.5", zoom: "4.6" };
+  await expectPolygonParity(baseURL, testInfo, { cases: POLYGON_ONLY_CASES }, "wgpu-retained", {
+    canvasQuery: final,
+    async wgpu(page) {
+      const journey = await page.evaluate(async (target) => {
+        const probe = window.polygonParity;
+        const frame = () => new Promise(requestAnimationFrame);
+        await frame();
+        const before = probe.stats()!;
+        const steps: { upload: number; frames: number }[] = [];
+        for (let step = 1; step <= 20; step += 1) {
+          const t = step / 20;
+          probe.setViewState({
+            center: [Number(target.lon) * t, Number(target.lat) * t],
+            zoom: 4 + (Number(target.zoom) - 4) * t,
+          });
+          await frame();
+          const stats = probe.stats()!;
+          steps.push({
+            frames: stats.retainedPolygonFrames ?? 0,
+            upload: stats.applicationUploadBytes ?? 0,
+          });
+        }
+        return { after: probe.stats()!, before, steps };
+      }, final);
+      // The MultiPolygon case contributes three polygons.
+      expect(journey.before.retainedPolygons).toBe(9);
+      expect(journey.after.retainedPolygonPreparations).toBe(
+        journey.before.retainedPolygonPreparations,
+      );
+      expect(journey.after.retainedPolygonRebases).toBe(journey.before.retainedPolygonRebases);
+      expect(journey.after.retainedPolygonUploadBytes).toBe(
+        journey.before.retainedPolygonUploadBytes,
+      );
+      for (const step of journey.steps) {
+        expect(step.upload).toBe(0);
+        expect(step.frames).toBeGreaterThan(0);
+      }
+    },
+  });
 });

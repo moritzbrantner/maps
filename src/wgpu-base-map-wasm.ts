@@ -28,6 +28,16 @@ export type MapsWgpuFrameStats = {
   retainedPointUploadBytes: number;
   /** Retained point frames (world copies) drawn by the last frame. */
   retainedPointFrames: number;
+  /** Retained application polygons currently held on the GPU. */
+  retainedPolygons: number;
+  /** Cumulative polygons lowered from longitude/latitude (data changes only). */
+  retainedPolygonPreparations: number;
+  /** Cumulative anchor rebuilds of retained polygon geometry (first draw and rebases). */
+  retainedPolygonRebases: number;
+  /** Cumulative retained polygon geometry bytes written to GPU buffers. */
+  retainedPolygonUploadBytes: number;
+  /** Retained polygon frames (world copies) drawn by the last frame. */
+  retainedPolygonFrames: number;
   drawCalls: number;
   rasterTiles: number;
   retainedVectorBytes: number;
@@ -65,6 +75,20 @@ export type MapsWgpuBaseMapRenderer = {
    */
   setRetainedPoints?(group: number, lonLat: Float64Array, paint: Float32Array): number;
   evictRetainedPoints?(group: number): void;
+  /**
+   * Retains an application polygon group on the GPU (#196): per-polygon ring counts,
+   * per-ring point counts, `[longitude, latitude]` pairs (lowered once by Rust) and
+   * `MAPS_RETAINED_POLYGON_PAINT_STRIDE` paint values per polygon. Camera frames do not
+   * re-upload it. Absent on renderers without retained polygon support.
+   */
+  setRetainedPolygons?(
+    group: number,
+    ringCounts: Uint32Array,
+    pointCounts: Uint32Array,
+    lonLat: Float64Array,
+    paint: Float32Array,
+  ): number;
+  evictRetainedPolygons?(group: number): void;
   /** Style table from `createMapsVectorBasemapStyleTable`. */
   setVectorStyle(table: Float32Array): void;
   setVectorMaxZoom(maxZoom: number): void;
@@ -97,6 +121,14 @@ type MapsWgpuBaseMapWasmRenderer = {
   resize(width: number, height: number): void;
   setRetainedPoints(group: number, lonLat: Float64Array, paint: Float32Array): number;
   evictRetainedPoints(group: number): void;
+  setRetainedPolygons(
+    group: number,
+    ringCounts: Uint32Array,
+    pointCounts: Uint32Array,
+    lonLat: Float64Array,
+    paint: Float32Array,
+  ): number;
+  evictRetainedPolygons(group: number): void;
   setVectorMaxZoom(maxZoom: number): void;
   setVectorStyle(table: Float32Array): void;
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
@@ -168,6 +200,11 @@ export async function loadMapsWgpuBaseMapRenderer(
           retainedPointRebases: stats[11] ?? 0,
           retainedPointUploadBytes: stats[12] ?? 0,
           retainedPointFrames: stats[13] ?? 0,
+          retainedPolygons: stats[14] ?? 0,
+          retainedPolygonPreparations: stats[15] ?? 0,
+          retainedPolygonRebases: stats[16] ?? 0,
+          retainedPolygonUploadBytes: stats[17] ?? 0,
+          retainedPolygonFrames: stats[18] ?? 0,
         };
       },
       isDeviceLost() {
@@ -224,6 +261,18 @@ export async function loadMapsWgpuBaseMapRenderer(
         runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           renderer.evictRetainedPoints(group);
+        });
+      },
+      setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint) {
+        return runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          return renderer.setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint);
+        });
+      },
+      evictRetainedPolygons(group) {
+        runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          renderer.evictRetainedPolygons(group);
         });
       },
       resize(width, height) {

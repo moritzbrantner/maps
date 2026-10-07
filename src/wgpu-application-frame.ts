@@ -55,6 +55,8 @@ export const MAPS_WGPU_APPLICATION_DIRECTION_MARKER = 2;
 export const MAPS_WGPU_APPLICATION_POLYGON = 3;
 /** Painter-order run `(kind, group, 1)` drawing a GPU-retained point group (#155). */
 export const MAPS_WGPU_APPLICATION_RETAINED_POINTS = 4;
+/** Painter-order run `(kind, group, 1)` drawing a GPU-retained polygon group (#196). */
+export const MAPS_WGPU_APPLICATION_RETAINED_POLYGONS = 5;
 
 /**
  * Retained point paint record shared with `maps-wasm` (`RETAINED_POINT_PAINT_LENGTH`):
@@ -68,6 +70,25 @@ export type MapsRetainedApplicationPoints = {
   /** `[longitude, latitude]` per point, lowered once by Rust. */
   lonLat: Float64Array;
   /** `MAPS_RETAINED_POINT_PAINT_STRIDE` values per point, interaction deltas applied. */
+  paint: Float32Array;
+};
+
+/**
+ * Retained polygon paint record shared with `maps-wasm` (`RETAINED_POLYGON_PAINT_LENGTH`):
+ * fill RGBA, stroke RGBA (encoded sRGB), stroke width (CSS px).
+ */
+export const MAPS_RETAINED_POLYGON_PAINT_STRIDE = 9;
+
+/** Geographic application polygons for the GPU-retained path; projection stays in Rust. */
+export type MapsRetainedApplicationPolygons = {
+  count: number;
+  /** Ring count of each polygon. */
+  ringCounts: Uint32Array;
+  /** Point count of each ring, in polygon order. */
+  pointCounts: Uint32Array;
+  /** `[longitude, latitude]` per ring point, lowered once by Rust. */
+  lonLat: Float64Array;
+  /** `MAPS_RETAINED_POLYGON_PAINT_STRIDE` values per polygon, interaction deltas applied. */
   paint: Float32Array;
 };
 
@@ -524,6 +545,73 @@ export function createMapsRetainedApplicationPoints(
     paint.set(strokeColor, offset + 6);
   }
   return { count, lonLat, paint };
+}
+
+/**
+ * The retained polygon form of a vector frame, or `null` unless the frame is made only of
+ * polygons. Paint is resolved here with the screen transport's hover/selection deltas.
+ */
+export function createMapsRetainedApplicationPolygons(
+  frame: MapVectorRenderFrame<unknown>,
+  interaction: MapScreenInteractionState = {},
+): MapsRetainedApplicationPolygons | null {
+  const count = frame.primitives.length;
+  if (count === 0) return null;
+  const ringCounts = new Uint32Array(count);
+  const pointCounts: number[] = [];
+  const lonLat: number[] = [];
+  const paint = new Float32Array(count * MAPS_RETAINED_POLYGON_PAINT_STRIDE);
+  const colors = new Map<string, MapsWgpuColor | null>();
+  const color = (value: string, opacity: number) => {
+    const key = `${value}\u0000${opacity}`;
+    let resolved = colors.get(key);
+    if (resolved === undefined) {
+      resolved = parseSupportedCssColor(value, opacity);
+      colors.set(key, resolved);
+    }
+    return resolved;
+  };
+
+  for (let index = 0; index < count; index += 1) {
+    const primitive = frame.primitives[index]!;
+    if (primitive.kind !== "polygon") return null;
+    const fillColor = color(primitive.fillColor, primitive.fillOpacity);
+    const strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
+    const strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
+    if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth)) return null;
+    ringCounts[index] = primitive.rings.length;
+    for (const ring of primitive.rings) {
+      pointCounts.push(ring.length);
+      for (const [longitude, latitude] of ring) {
+        // Non-finite geometry stays on the projected path, which fails closed to Canvas.
+        if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
+        lonLat.push(longitude, latitude);
+      }
+    }
+    const offset = index * MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+    paint.set(fillColor, offset);
+    paint.set(strokeColor, offset + 4);
+    paint[offset + 8] = strokeWidth;
+  }
+  return {
+    count,
+    lonLat: Float64Array.from(lonLat),
+    paint,
+    pointCounts: Uint32Array.from(pointCounts),
+    ringCounts,
+  };
+}
+
+/** An application frame that only draws retained polygon `group` (no screen geometry). */
+export function createMapsWgpuRetainedPolygonsFrame(
+  group: number,
+  width: number,
+  height: number,
+): MapsWgpuApplicationFrame {
+  return {
+    ...createMapsWgpuRetainedPointsFrame(group, width, height),
+    order: Uint32Array.of(MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, group, 1),
+  };
 }
 
 /** An application frame that only draws retained point `group` (no screen geometry). */

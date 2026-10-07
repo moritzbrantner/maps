@@ -5,8 +5,12 @@ import type { MapSurfaceController, MapViewState } from "./map-display";
 import type { MapsFlatRasterFrame, MapsFlatRasterRuntime } from "./flat-runtime-wasm";
 import { loadMapsFlatRasterRuntime } from "./flat-runtime-wasm";
 import { MapsMapView } from "./maps-map-view";
+import { GeoJsonLayer } from "./geojson-layer";
 import { PointLayer } from "./point-layer";
-import { MAPS_WGPU_APPLICATION_RETAINED_POINTS } from "./wgpu-application-frame";
+import {
+  MAPS_WGPU_APPLICATION_RETAINED_POINTS,
+  MAPS_WGPU_APPLICATION_RETAINED_POLYGONS,
+} from "./wgpu-application-frame";
 import { loadMapsWgpuBaseMapRenderer, type MapsWgpuBaseMapRenderer } from "./wgpu-base-map-wasm";
 
 // Only the WASM/device boundary is stubbed; the Map View, overlay, layer preparation and
@@ -135,6 +139,8 @@ beforeEach(() => {
     evictVectorTile: vi.fn(),
     evictRetainedPoints: vi.fn(),
     setRetainedPoints: vi.fn((_group: number, lonLat: Float64Array) => lonLat.length / 2),
+    evictRetainedPolygons: vi.fn(),
+    setRetainedPolygons: vi.fn((_group: number, ringCounts: Uint32Array) => ringCounts.length),
     frameStats: vi.fn(() => ({
       drawCalls: 0,
       rasterTiles: 0,
@@ -149,6 +155,11 @@ beforeEach(() => {
       retainedPointRebases: 0,
       retainedPointUploadBytes: 0,
       retainedPointFrames: 0,
+      retainedPolygons: 0,
+      retainedPolygonPreparations: 0,
+      retainedPolygonRebases: 0,
+      retainedPolygonUploadBytes: 0,
+      retainedPolygonFrames: 0,
       vectorTiles: 0,
     })),
     isDeviceLost: vi.fn(() => false),
@@ -255,6 +266,143 @@ describe("GPU-retained application points (#155)", () => {
     });
     rerenderPoints(createPoints(100, 2));
     await waitFor(() => expect(renderer.dispose).toHaveBeenCalled());
+  });
+});
+
+type PolygonCollection = Parameters<typeof GeoJsonLayer>[0]["featureCollection"];
+
+function polygonCollection(count: number, withPoint = false): PolygonCollection {
+  const square = (west: number, south: number) => [
+    [west, south],
+    [west + 2, south],
+    [west + 2, south + 2],
+    [west, south + 2],
+    [west, south],
+  ];
+  return {
+    type: "FeatureCollection",
+    features: [
+      ...Array.from({ length: count }, (_, index) => ({
+        geometry: {
+          coordinates: [square(index * 3, 0), square(index * 3 + 0.5, 0.5).slice().reverse()],
+          type: "Polygon" as const,
+        },
+        id: `zone-${index}`,
+        properties: {},
+        type: "Feature" as const,
+      })),
+      ...(withPoint
+        ? [
+            {
+              geometry: { coordinates: [1, 1], type: "Point" as const },
+              id: "marker",
+              properties: {},
+              type: "Feature" as const,
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
+describe("GPU-retained application polygons (#196)", () => {
+  async function mountPolygons(collection: PolygonCollection, hoveredFeatureId?: string) {
+    let controller: MapSurfaceController | undefined;
+    const content = (next: PolygonCollection, hovered?: string) => (
+      <MapsMapView
+        mapLabel="Retained polygons"
+        mapStyle={{ tiles: false }}
+        fitToData={false}
+        initialViewState={{ center: [0, 0], zoom: 4 }}
+        onMapControllerReady={(ready) => {
+          controller = ready;
+        }}
+      >
+        <GeoJsonLayer
+          featureCollection={next}
+          getFeatureId={(feature) => String(feature.id)}
+          hoveredFeatureId={hovered ?? null}
+        />
+      </MapsMapView>
+    );
+    const mounted = render(content(collection, hoveredFeatureId));
+    return {
+      ...mounted,
+      controller: () => controller!,
+      rerenderPolygons: (next: PolygonCollection, hovered?: string) =>
+        mounted.rerender(content(next, hovered)),
+    };
+  }
+
+  it("lowers polygons once and does no per-polygon work on camera-only frames", async () => {
+    const { container, controller } = await mountPolygons(polygonCollection(50));
+    await waitFor(() => {
+      expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1);
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]);
+    });
+    const [group, ringCounts, pointCounts, lonLat, paint] = vi.mocked(renderer.setRetainedPolygons!)
+      .mock.calls[0]!;
+    expect(group).toBe(1);
+    expect(Array.from(ringCounts)).toEqual(Array(50).fill(2));
+    expect(Array.from(pointCounts)).toEqual(Array(100).fill(5));
+    expect(lonLat).toHaveLength(100 * 5 * 2);
+    expect(paint).toHaveLength(50 * 9);
+    const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+    expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
+
+    vi.mocked(runtime.project).mockClear();
+    vi.mocked(runtime.projectPacked).mockClear();
+    paints.length = 0;
+    for (let step = 1; step <= 10; step += 1) {
+      act(() => controller().setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 }));
+    }
+    expect(paints.length).toBeGreaterThanOrEqual(10);
+    for (const paint of paints) {
+      expect(paint.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]);
+    }
+    expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1);
+    expect(runtime.projectPacked).not.toHaveBeenCalled();
+    expect(runtime.project).not.toHaveBeenCalled();
+  });
+
+  it("keeps polygons on the projected path while the camera is pitched", async () => {
+    const { container, controller } = await mountPolygons(polygonCollection(3));
+    await waitFor(() =>
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]),
+    );
+    const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+
+    // A vertex behind a pitched camera would be clipped on the GPU but dropped by picking.
+    act(() => controller().setViewState({ center: [0, 0], zoom: 4, pitch: 40 }));
+    await waitFor(() => {
+      expect(overlay.dataset.mapOverlayBackend).toBe("wgpu");
+      expect(paints.at(-1)?.order[0]).not.toBe(MAPS_WGPU_APPLICATION_RETAINED_POLYGONS);
+    });
+
+    act(() => controller().setViewState({ center: [0, 0], zoom: 4, pitch: 0 }));
+    await waitFor(() => {
+      expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]);
+    });
+  });
+
+  it("re-lowers on interaction changes and returns mixed frames to the screen path", async () => {
+    const { container, rerenderPolygons } = await mountPolygons(polygonCollection(3));
+    await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1));
+
+    rerenderPolygons(polygonCollection(3), "zone-1");
+    await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(2));
+    const paint = vi.mocked(renderer.setRetainedPolygons!).mock.calls[1]![4];
+    // Hovering widens the stroke of that polygon only.
+    expect(paint[9 + 8]).toBeGreaterThan(paint[8]!);
+
+    rerenderPolygons(polygonCollection(3, true));
+    await waitFor(() => {
+      expect(renderer.evictRetainedPolygons).toHaveBeenCalledWith(1);
+      expect(paints.at(-1)?.order[0]).not.toBe(MAPS_WGPU_APPLICATION_RETAINED_POLYGONS);
+    });
+    const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+    expect(overlay.dataset.mapOverlayBackend).toBe("wgpu");
   });
 });
 

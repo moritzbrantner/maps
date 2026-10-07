@@ -1,6 +1,13 @@
 import { createRoot } from "react-dom/client";
 
-import { GeoJsonLayer, MapView, type GeoJsonLayerStyle } from "../../src";
+import {
+  GeoJsonLayer,
+  MapView,
+  type GeoJsonLayerStyle,
+  type MapSurfaceController,
+  type MapViewState,
+} from "../../src";
+import type { MapsRendererStats } from "../../src/maps-browser-runtime";
 import { configureMapsWasmPackage } from "../../src/aggregation-wasm";
 
 configureMapsWasmPackage("/wasm/maps_wasm.js");
@@ -133,6 +140,30 @@ const cases = {
     { coordinates: [square(11, -9, 8)], type: "Polygon" },
     opaque("#fef3c7", 3),
   ),
+  // Opt-in: across the antimeridian, viewed with `lon=180`.
+  antimeridian: feature(
+    "antimeridian",
+    {
+      coordinates: [
+        [
+          [174, -6],
+          [-174, -6],
+          [-174, 6],
+          [174, 6],
+          [174, -6],
+        ],
+        [
+          [178, -2],
+          [178, 2],
+          [-178, 2],
+          [-178, -2],
+          [178, -2],
+        ],
+      ],
+      type: "Polygon",
+    },
+    { ...opaque("#0d9488", 3), polygonFillOpacity: 0.8 },
+  ),
   // Opt-in invalid input; the packer's whole-frame behavior is part of the contract.
   "zero-area": feature(
     "zero-area",
@@ -154,8 +185,35 @@ const cases = {
 const params = new URLSearchParams(window.location.search);
 const only = params.get("cases")?.split(",");
 const features = Object.entries(cases)
-  .filter(([id]) => (only ? only.includes(id) : id !== "zero-area"))
+  .filter(([id]) => (only ? only.includes(id) : id !== "zero-area" && id !== "antimeridian"))
   .map(([, value]) => value);
+
+type Controller = MapSurfaceController & { getRendererStats(): MapsRendererStats | null };
+
+declare global {
+  interface Window {
+    polygonParity: {
+      controller: Controller | null;
+      setViewState(state: MapViewState): void;
+      stats(): MapsRendererStats | null;
+    };
+  }
+}
+
+window.polygonParity = {
+  controller: null,
+  setViewState(state) {
+    window.polygonParity.controller?.setViewState(state);
+  },
+  stats() {
+    return window.polygonParity.controller?.getRendererStats() ?? null;
+  },
+};
+
+const initialViewState: MapViewState = {
+  center: [Number(params.get("lon") ?? 0), Number(params.get("lat") ?? 0)],
+  zoom: Number(params.get("zoom") ?? 4),
+};
 
 function PolygonParity() {
   return (
@@ -165,7 +223,10 @@ function PolygonParity() {
       mapLabel="Polygon parity"
       mapStyle={{ maxZoom: 8, minZoom: 0, tileSize: 256, tiles: WHITE_TILE }}
       style={{ height: 540, width: 960 }}
-      viewState={{ center: [0, 0], zoom: 4 }}
+      defaultViewState={initialViewState}
+      onMapControllerReady={(controller) => {
+        window.polygonParity.controller = controller as Controller | null;
+      }}
     >
       <GeoJsonLayer<CaseProperties>
         featureCollection={{ features, type: "FeatureCollection" }}
