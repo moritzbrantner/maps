@@ -96,15 +96,28 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
           contentType: "application/json",
         });
         expect(work.beforePaint).toEqual({ samples: 0, projected: 0 });
-        expect(work.samples).toHaveLength(1);
-        expect(work.projected).toBe(count + 2400);
-        expect(work.projectionBatches).toBe(1);
         expect(work.scalarProjections).toBe(0);
         expect([work.styles, work.filters, work.weights]).toEqual([0, 0, 0]);
         expect(work.changes).toBe(1);
         expect(work.readyCount).toBe(1);
-        expect(work.samples[0]!.actual![0]).toBeCloseTo(work.samples[0]!.expected[0], 4);
-        expect(work.samples[0]!.actual![1]).toBeCloseTo(work.samples[0]!.expected[1], 4);
+        if (backend === "wgpu") {
+          // Points and flows are GPU-retained (#155, #195): camera frames project nothing
+          // and draw no screen circles; placement parity is covered by the retained specs.
+          await expect(map.locator('[data-map-overlay-runtime="maps"]')).toHaveAttribute(
+            "data-map-overlay-backend",
+            "wgpu-retained",
+          );
+          expect(work.projected).toBe(0);
+          expect(work.projectionBatches).toBe(0);
+          expect(work.samples.length).toBeGreaterThanOrEqual(1);
+          for (const sample of work.samples) expect(sample.actual).toBeNull();
+        } else {
+          expect(work.samples).toHaveLength(1);
+          expect(work.projected).toBe(count + 2400);
+          expect(work.projectionBatches).toBe(1);
+          expect(work.samples[0]!.actual![0]).toBeCloseTo(work.samples[0]!.expected[0], 4);
+          expect(work.samples[0]!.actual![1]).toBeCloseTo(work.samples[0]!.expected[1], 4);
+        }
         const box = (await map.boundingBox())!;
         const point = work.samples[0]!.expected;
         await page.evaluate(() => window.mapsNativeProbe.reset());
@@ -116,7 +129,10 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
           weights: window.mapsNativeProbe.weights,
           projected: window.mapsNativeProbe.projected,
         }));
-        expect(hover).toEqual({ styles: 0, filters: 0, weights: 0, projected: 0 });
+        expect({ ...hover, projected: 0 }).toEqual({ styles: 0, filters: 0, weights: 0, projected: 0 });
+        // Retained frames project for picking lazily, once per camera, on the first pointer
+        // event (#155); the screen path reuses the scene it already projected.
+        expect(hover.projected).toBe(backend === "wgpu" ? count + 2400 : 0);
         await retainBackendPixels(backend, map, page, info, `native-${count}-${backend}`);
         // Real pointer drag exercises the native host's pointer listeners, not React synthetic events.
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
