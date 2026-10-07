@@ -121,7 +121,8 @@ type MapsOverlayInteractionSurface = Pick<
 >;
 
 /**
- * The GPU-retained application path of the Maps runtime: points (#155) and polygons (#196).
+ * The GPU-retained application path of the Maps runtime: points (#155), polygons (#196),
+ * lines and flows (#195).
  * `render` hands it a vector frame made only of unlabeled circles or only of polygons;
  * `active` reports whether the live renderer still draws it, so camera frames can skip
  * layer work entirely.
@@ -633,7 +634,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         };
         if (
           retainedPoints &&
-          entries.every((entry) => entry.kind === "point" || entry.kind === "geojson") &&
+          entries.every(
+            (entry) => entry.kind === "point" || entry.kind === "geojson" || entry.kind === "flow",
+          ) &&
           !snapshot.renderSteps.some((step) => step.kind === "raster") &&
           retainedPoints.render(snapshot.frame, interaction, size)
         ) {

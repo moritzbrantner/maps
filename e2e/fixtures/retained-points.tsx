@@ -6,6 +6,7 @@ import "../../styles.css";
 import { configureMapsWasmPackage } from "../../src/aggregation-wasm";
 import type { MapSurfaceController, MapViewState } from "../../src/map-display";
 import type { MapsRendererStats } from "../../src/maps-browser-runtime";
+import { FlowLayer } from "../../src/flow-layer";
 import { MapView } from "../../src/map-view";
 import { PointLayer } from "../../src/point-layer";
 
@@ -89,6 +90,14 @@ const points: Point[] =
             3,
           );
 
+// `flows=N`: N flows with direction markers above the points (#195), over the dense area.
+const flowCount = Number(params.get("flows") ?? 0);
+const flows = Array.from({ length: flowCount }, (_, index) => ({
+  from: [-3 + (index % 10) * 3, 41 + Math.floor(index / 10) * 1.5] as [number, number],
+  id: `f-${index}`,
+  to: [-1 + (index % 10) * 3, 43 + Math.floor(index / 10) * 1.5] as [number, number],
+}));
+
 window.retainedPoints = {
   controller: null,
   setViewState(state) {
@@ -118,5 +127,6 @@ createRoot(document.getElementById("map")!).render(
       pointRadius={6}
       renderFeatureTooltip={(feature) => <span>Picked {feature.point.id}</span>}
     />
+    {flowCount > 0 ? <FlowLayer flowColor="#1d4ed8" flows={flows} showDirection /> : null}
   </MapView>,
 );

@@ -30,8 +30,7 @@ import {
 } from "./flat-runtime-wasm";
 import type { MapVectorRenderFrame } from "./map-render-frame";
 import type {
-  MapsRetainedApplicationPoints,
-  MapsRetainedApplicationPolygons,
+  MapsRetainedApplicationRun,
   MapsWgpuApplicationFrame,
 } from "./wgpu-application-frame";
 import {
@@ -79,24 +78,21 @@ type MapsWgpuApplicationFrameFactory = (
 ) => MapsWgpuApplicationFrame | null;
 
 /**
- * Builders of the GPU-retained application paths, loaded with the wgpu transport: points
- * (#155) and polygons (#196).
+ * Builders of the GPU-retained application paths, loaded with the wgpu transport: point
+ * groups (#155) and shape groups of polygons (#196), lines and direction markers (#195).
  */
 type MapsRetainedPointTransport = {
-  points: (
+  runs: (
     frame: MapVectorRenderFrame<unknown>,
     interaction: MapScreenInteractionState,
-  ) => MapsRetainedApplicationPoints | null;
-  frame: (group: number, width: number, height: number) => MapsWgpuApplicationFrame;
-  polygons: (
-    frame: MapVectorRenderFrame<unknown>,
-    interaction: MapScreenInteractionState,
-  ) => MapsRetainedApplicationPolygons | null;
-  polygonFrame: (group: number, width: number, height: number) => MapsWgpuApplicationFrame;
+    options: { shapes: boolean },
+  ) => MapsRetainedApplicationRun[] | null;
+  frame: (
+    runs: readonly MapsRetainedApplicationRun["kind"][],
+    width: number,
+    height: number,
+  ) => MapsWgpuApplicationFrame;
 };
-
-/** The single retained application point group a Map View currently owns. */
-const RETAINED_APPLICATION_POINT_GROUP = 1;
 
 export type MapsBaseRenderer = "pending" | "wgpu" | "canvas2d";
 
@@ -477,10 +473,8 @@ export function createMapsBrowserRuntime(
       const packer = transport.createMapsWgpuApplicationFramePacker();
       packApplicationFrame = (frame, interaction) => packer.pack(frame, interaction);
       retainedPointTransport = {
-        frame: transport.createMapsWgpuRetainedPointsFrame,
-        points: transport.createMapsRetainedApplicationPoints,
-        polygonFrame: transport.createMapsWgpuRetainedPolygonsFrame,
-        polygons: transport.createMapsRetainedApplicationPolygons,
+        frame: transport.createMapsWgpuRetainedFrame,
+        runs: transport.createMapsRetainedApplicationRuns,
       };
       delete canvas.dataset.mapBaseRendererError;
     } catch (error) {
@@ -1035,11 +1029,11 @@ function createFrameSynchronizer({
   let deviceLossMonitorTimer: number | null = null;
   let lastFrame: MapsFlatRasterFrame | null = null;
   let applicationFrame: MapsWgpuApplicationFrame | null = null;
-  // What the retained point group on `retainedRenderer` was built from; `null` when no
-  // group is retained. Camera frames never rebuild it.
+  // What the retained groups on `renderer` were built from; `null` when nothing is
+  // retained. Group `index + 1` holds run `index`. Camera frames never rebuild them.
   let retainedPoints: {
     hovered: ReadonlySet<string>;
-    kind: "points" | "polygons";
+    kinds: MapsRetainedApplicationRun["kind"][];
     primitives: readonly unknown[];
     renderer: MapsWgpuBaseMapRenderer;
     selected: ReadonlySet<string>;
@@ -1369,14 +1363,22 @@ function createFrameSynchronizer({
     return !frame || frame.order.length === 0;
   }
 
-  function releaseRetainedPoints() {
+  function hasRetainedShapes() {
+    return retainedPoints?.kinds.includes("polygons") ?? false;
+  }
+
+  /** Evicts the retained groups from `keep` on, and every group whose kind changes. */
+  function releaseRetainedPoints(keep: readonly MapsRetainedApplicationRun["kind"][] = []) {
     if (!retainedPoints) return;
-    const { kind, renderer: owner } = retainedPoints;
+    const { kinds, renderer: owner } = retainedPoints;
     retainedPoints = null;
     if (owner !== renderer()) return;
     try {
-      if (kind === "points") owner.evictRetainedPoints?.(RETAINED_APPLICATION_POINT_GROUP);
-      else owner.evictRetainedPolygons?.(RETAINED_APPLICATION_POINT_GROUP);
+      kinds.forEach((kind, index) => {
+        if (keep[index] === kind) return;
+        if (kind === "points") owner.evictRetainedPoints?.(index + 1);
+        else owner.evictRetainedPolygons?.(index + 1);
+      });
     } catch {
       // A failed renderer already released its resources.
     }
@@ -1390,8 +1392,8 @@ function createFrameSynchronizer({
     const currentRenderer = renderer();
     if (!currentRenderer || !retainedPointTransport) return false;
 
-    // A pitched camera returns retained polygons to the projected path.
-    if (retainedPoints?.kind === "polygons" && cameraPitched()) releaseRetainedPoints();
+    // A pitched camera returns retained shapes to the projected path.
+    if (hasRetainedShapes() && cameraPitched()) releaseRetainedPoints();
     const current = retainedPoints;
     const unchanged =
       current !== null &&
@@ -1401,36 +1403,32 @@ function createFrameSynchronizer({
       sameIdSet(current.hovered, interaction.hoveredPrimitiveIds) &&
       sameIdSet(current.selected, interaction.selectedPrimitiveIds);
     if (!unchanged) {
-      const points = retainedPointTransport.points(frame, interaction);
-      const polygons =
-        points || cameraPitched() ? null : retainedPointTransport.polygons(frame, interaction);
-      const upload = points
-        ? currentRenderer.setRetainedPoints &&
-          (() =>
-            currentRenderer.setRetainedPoints!(
-              RETAINED_APPLICATION_POINT_GROUP,
-              points.lonLat,
-              points.paint,
-            ))
-        : polygons
-          ? currentRenderer.setRetainedPolygons &&
+      const runs = retainedPointTransport.runs(frame, interaction, { shapes: !cameraPitched() });
+      const uploads = runs?.map((run, index) =>
+        run.kind === "points"
+          ? currentRenderer.setRetainedPoints &&
+            (() =>
+              currentRenderer.setRetainedPoints!(index + 1, run.points.lonLat, run.points.paint))
+          : currentRenderer.setRetainedPolygons &&
             (() =>
               currentRenderer.setRetainedPolygons!(
-                RETAINED_APPLICATION_POINT_GROUP,
-                polygons.ringCounts,
-                polygons.pointCounts,
-                polygons.lonLat,
-                polygons.paint,
-              ))
-          : null;
-      if (!upload) {
+                index + 1,
+                run.polygons.ringCounts,
+                run.polygons.pointCounts,
+                run.polygons.lonLat,
+                run.polygons.paint,
+              )),
+      );
+      if (!runs || !uploads || uploads.some((upload) => !upload)) {
         releaseRetainedPoints();
         return false;
       }
-      // Replacing the group's kind: evict the previous one first.
-      if (current && current.kind !== (points ? "points" : "polygons")) releaseRetainedPoints();
+      const kinds = runs.map((run) => run.kind);
+      // Groups this frame no longer uses, or uses for another kind, are evicted first;
+      // the others are replaced in place.
+      releaseRetainedPoints(kinds);
       try {
-        upload();
+        for (const upload of uploads) upload!();
       } catch {
         // The renderer hid its canvas on the failed operation: retire it like any other
         // renderer failure so the Canvas fallback draws the map and the layers.
@@ -1440,7 +1438,7 @@ function createFrameSynchronizer({
       }
       retainedPoints = {
         hovered: new Set(interaction.hoveredPrimitiveIds ?? []),
-        kind: points ? "points" : "polygons",
+        kinds,
         primitives: frame.primitives.slice(),
         renderer: currentRenderer,
         selected: new Set(interaction.selectedPrimitiveIds ?? []),
@@ -1448,11 +1446,11 @@ function createFrameSynchronizer({
     }
 
     if (!unchanged || !applicationFrame || applicationFrame !== retainedApplicationFrame) {
-      const createFrame =
-        retainedPoints!.kind === "points"
-          ? retainedPointTransport.frame
-          : retainedPointTransport.polygonFrame;
-      applicationFrame = createFrame(RETAINED_APPLICATION_POINT_GROUP, size.width, size.height);
+      applicationFrame = retainedPointTransport.frame(
+        retainedPoints!.kinds,
+        size.width,
+        size.height,
+      );
       retainedApplicationFrame = applicationFrame;
       invalidateRendered();
     }
@@ -1611,7 +1609,7 @@ function createFrameSynchronizer({
     retainedApplicationPointsActive: () =>
       retainedPoints !== null &&
       retainedPoints.renderer === renderer() &&
-      !(retainedPoints.kind === "polygons" && cameraPitched()),
+      !(hasRetainedShapes() && cameraPitched()),
     syncFrame,
   };
 }

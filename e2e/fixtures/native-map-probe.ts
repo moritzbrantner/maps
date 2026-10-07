@@ -121,7 +121,9 @@ export async function observeNativeMap() {
       });
     const result = originalRender.call(this, tileDraws, frame, circleData, order);
     // Synchronous camera preparation + submission only, not GPU completion or FPS.
-    if (started !== null && circle) probe.cameraCpuMs.push(performance.now() - started);
+    // Screen circles, or GPU-retained groups (#155/#195) whose camera frames upload nothing.
+    if (started !== null && (circle || order.length > 0))
+      probe.cameraCpuMs.push(performance.now() - started);
     started = null;
     return result;
   };

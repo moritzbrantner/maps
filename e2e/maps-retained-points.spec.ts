@@ -244,3 +244,96 @@ for (const [count, journeySteps] of [
     await expect(map).toBeVisible();
   });
 }
+
+test("a mixed point and flow camera journey keeps both retained groups O(1) on WebGPU @smoke", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const count = 10_000;
+  const flowCount = 200;
+  const { gpuValidation, map } = await openRetainedPoints(
+    page,
+    `points=dense&count=${count}&flows=${flowCount}&lon=12&lat=50&zoom=5`,
+    "wgpu",
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const stats = window.retainedPoints.stats();
+        return [stats?.retainedPoints ?? 0, stats?.retainedPolygons ?? 0];
+      }),
+    )
+    // Each flow is a line, a direction marker and two endpoint circles in one shape group.
+    .toEqual([count, flowCount * 4]);
+  const journey = await page.evaluate(async () => {
+    const probe = window.retainedPoints;
+    const frame = () => new Promise(requestAnimationFrame);
+    await frame();
+    const before = probe.stats()!;
+    const steps: { ms: number; upload: number; pointFrames: number; shapeFrames: number }[] = [];
+    // Retained shapes stay on unpitched cameras, so this journey pans, zooms and rotates.
+    for (let step = 0; step < 30; step += 1) {
+      const started = performance.now();
+      probe.setViewState({
+        bearing: (step * 7) % 60,
+        center: [12 + Math.sin(step / 6) * 3, 50 + Math.cos(step / 6) * 2],
+        pitch: 0,
+        zoom: 5 + (step % 10) * 0.4,
+      });
+      await frame();
+      const stats = probe.stats()!;
+      steps.push({
+        ms: performance.now() - started,
+        pointFrames: stats.retainedPointFrames ?? 0,
+        shapeFrames: stats.retainedPolygonFrames ?? 0,
+        upload: stats.applicationUploadBytes ?? 0,
+      });
+    }
+    return { after: probe.stats()!, before, steps };
+  });
+  const sorted = journey.steps.map((step) => step.ms).sort((left, right) => left - right);
+  await testInfo.attach("retained-point-flow-journey", {
+    body: JSON.stringify(
+      {
+        count,
+        flowCount,
+        before: journey.before,
+        after: journey.after,
+        presentationMs: {
+          p50: sorted[Math.floor(sorted.length * 0.5)],
+          p95: sorted[Math.floor(sorted.length * 0.95)],
+          max: sorted.at(-1),
+        },
+        steps: journey.steps,
+      },
+      null,
+      2,
+    ),
+    contentType: "application/json",
+  });
+  expect(gpuValidation).toEqual([]);
+  await expect(map.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-base-renderer",
+    "wgpu",
+  );
+  await expect(map.locator('[data-map-overlay-runtime="maps"]')).toHaveAttribute(
+    "data-map-overlay-backend",
+    "wgpu-retained",
+  );
+  for (const counter of [
+    "retainedPointPreparations",
+    "retainedPointRebases",
+    "retainedPointUploadBytes",
+    "retainedPolygonPreparations",
+    "retainedPolygonRebases",
+    "retainedPolygonUploadBytes",
+  ] as const) {
+    expect(journey.after[counter], counter).toBe(journey.before[counter]);
+  }
+  for (const step of journey.steps) {
+    expect(step.upload).toBe(0);
+    expect(step.pointFrames).toBeGreaterThan(0);
+    expect(step.shapeFrames).toBeGreaterThan(0);
+  }
+});
+
