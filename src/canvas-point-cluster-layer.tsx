@@ -22,7 +22,11 @@ import type {
   MapFeatureContextMenuContext,
   MapFeatureInteractionProps,
 } from "./map-interaction";
-import { MapSurfaceContext } from "./map-surface-context";
+import {
+  MapSurfaceContext,
+  useMapHoveredFeature,
+  useMapSurfaceViewState,
+} from "./map-surface-context";
 import {
   createPointClusterRenderFrame,
   createPointOnlyRenderFrame,
@@ -82,6 +86,9 @@ export function CanvasPointClusterLayer<
   selectedFeatureId,
 }: CanvasPointClusterLayerProps<TProperties>) {
   const surface = useContext(MapSurfaceContext);
+  const viewState = useMapSurfaceViewState();
+  // The scene paints the hovered cluster or point.
+  const hovered = useMapHoveredFeature();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<CanvasPointClusterScene<TProperties> | null>(null);
   const hoveredIdRef = useRef<string | null>(null);
@@ -173,6 +180,7 @@ export function CanvasPointClusterLayer<
     clusterRadius,
     filterPoint,
     getFeatureId,
+    hovered,
     hoveredFeatureId,
     maxZoom,
     minZoom,
@@ -182,9 +190,9 @@ export function CanvasPointClusterLayer<
     resizeVersion,
     selectedFeatureId,
     surface,
-    surface?.viewState.center[0],
-    surface?.viewState.center[1],
-    surface?.viewState.zoom,
+    viewState?.center[0],
+    viewState?.center[1],
+    viewState?.zoom,
   ]);
 
   useEffect(() => {

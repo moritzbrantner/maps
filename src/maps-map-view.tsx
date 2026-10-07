@@ -42,7 +42,14 @@ import {
   type MapsOverlayRetainedPoints,
   type MapsProjectCoordinate,
 } from "./maps-overlay-layers";
-import { MapSurfaceContext, type MapSurfaceContextValue } from "./map-surface-context";
+import {
+  MapHoverContext,
+  MapSurfaceContext,
+  MapViewStateContext,
+  createMapHoverStore,
+  isMapFeatureHovered,
+  type MapSurfaceContextValue,
+} from "./map-surface-context";
 import { useControllableMapViewState } from "./map-view-state";
 import { getFeatureCoordinate, isBlockedHoverPosition } from "./map-view-utils";
 import type { MapsTileImageLoader } from "./maps-browser-runtime";
@@ -88,7 +95,9 @@ export function MapsMapView({
   const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [runtimeError, setRuntimeError] = useState<unknown>(null);
-  const [hovered, setHovered] = useState<{ feature: unknown; id: string | null } | null>(null);
+  // Hover and camera are separate subscriptions; the surface value stays stable (#119).
+  const [hoverStore] = useState(createMapHoverStore);
+  const setHovered = hoverStore.set;
   const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
   const [popup, setPopup] = useState<FeatureOverlayState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuOverlayState | null>(null);
@@ -344,7 +353,7 @@ export function MapsMapView({
     viewState,
   ]);
 
-  const interactionSurface = useMemo<Omit<MapSurfaceContextValue, "viewState">>(
+  const surface = useMemo<MapSurfaceContextValue>(
     () => ({
       closeFeaturePopup,
       display: "flat",
@@ -471,12 +480,11 @@ export function MapsMapView({
           return getFeatureId(feature, getId as never) === hoveredFeatureId;
         }
 
-        if (!hovered) {
-          return false;
-        }
-
-        const id = getFeatureId(feature, getId as never);
-        return id ? hovered.id === id : hovered.feature === feature;
+        return isMapFeatureHovered(
+          hoverStore.get(),
+          getFeatureId(feature, getId as never),
+          feature,
+        );
       },
       isFeatureSelected(feature, selectedFeatureId, getId) {
         if (!selectedFeatureId) {
@@ -509,14 +517,10 @@ export function MapsMapView({
       closeFeaturePopup,
       getFeatureId,
       handleBackgroundClick,
-      hovered,
+      hoverStore,
+      setHovered,
       setSurfaceViewState,
     ],
-  );
-
-  const context = useMemo<MapSurfaceContextValue>(
-    () => ({ ...interactionSurface, viewState: currentViewState }),
-    [interactionSurface, currentViewState],
   );
 
   if (runtimeError) {
@@ -542,7 +546,9 @@ export function MapsMapView({
   const fallbackCursor = typeof style?.cursor === "string" ? style.cursor : "";
 
   return (
-    <MapSurfaceContext.Provider value={context}>
+    <MapSurfaceContext.Provider value={surface}>
+      <MapViewStateContext.Provider value={currentViewState}>
+      <MapHoverContext.Provider value={hoverStore}>
       <div
         aria-label={mapLabel}
         className={rootClassName}
@@ -655,7 +661,7 @@ export function MapsMapView({
           project={projectCoordinate}
           renderApplicationFrame={renderApplicationFrame}
           retainedPoints={retainedPoints}
-          surface={interactionSurface}
+          surface={surface}
           unproject={unprojectCoordinate}
         >
           {mapChildren.layers}
@@ -685,6 +691,8 @@ export function MapsMapView({
           onClosePopup={closeFeaturePopup}
         />
       </div>
+      </MapHoverContext.Provider>
+      </MapViewStateContext.Provider>
     </MapSurfaceContext.Provider>
   );
 }

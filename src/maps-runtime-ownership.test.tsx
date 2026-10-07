@@ -1,9 +1,15 @@
-import { Suspense, startTransition, useState, useCallback } from "react";
+import { Suspense, startTransition, useCallback, useContext, useState } from "react";
 import { MapsCanvasFlatRuntime } from "./canvas-flat-runtime";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GeoJsonLayer } from "./geojson-layer";
+import { MapOverlay } from "./map-components";
+import {
+  MapSurfaceContext,
+  useMapHoveredFeature,
+  useMapSurfaceViewState,
+} from "./map-surface-context";
 import { MapsMapView } from "./maps-map-view";
 import type { MapSurfaceController, MapViewState } from "./map-display";
 import type { MapsFlatRasterFrame, MapsFlatRasterRuntime } from "./flat-runtime-wasm";
@@ -352,6 +358,91 @@ describe("Controlled composition regression", () => {
     expect(vi.mocked(runtime.projectPacked)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runtime.projectPacked).mock.calls[0]![0]).toHaveLength(2000);
     expect(paints).toHaveLength(1);
+  });
+});
+
+// #119: camera and hover are separate subscriptions from the stable surface capabilities.
+describe("Map surface subscriptions by update frequency", () => {
+  it("keeps stable consumers out of camera and hover updates while hover still repaints", async () => {
+    const renders = { hover: 0, stable: 0, view: 0 };
+    let latestSurface: unknown = null;
+    function StableConsumer() {
+      latestSurface = useContext(MapSurfaceContext);
+      renders.stable += 1;
+      return null;
+    }
+    function ViewConsumer() {
+      useMapSurfaceViewState();
+      renders.view += 1;
+      return null;
+    }
+    function HoverConsumer() {
+      useMapHoveredFeature();
+      renders.hover += 1;
+      return null;
+    }
+    const style = vi.fn((_feature: unknown) => ({ pointColor: "#2563eb" }));
+    const onReady = vi.fn();
+    const mounted = render(
+      <MapsMapView
+        mapLabel="Subscription split"
+        mapStyle={{ tiles: false }}
+        fitToData={false}
+        initialViewState={{ center: [0, 0], zoom: 4 }}
+        onMapControllerReady={onReady}
+      >
+        <GeoJsonLayer featureCollection={featureCollection} getFeatureStyle={style} />
+        <MapOverlay>
+          <StableConsumer />
+          <ViewConsumer />
+          <HoverConsumer />
+        </MapOverlay>
+      </MapsMapView>,
+    );
+    await ready(mounted.container);
+    await waitFor(() => expect(onReady).toHaveBeenCalled());
+    const controller = onReady.mock.calls[0]![0] as MapSurfaceController;
+    const surface = latestSurface;
+    const work = () => ({
+      paints: paints.length,
+      projectPacked: vi.mocked(runtime.projectPacked).mock.calls.length,
+      styles: style.mock.calls.length,
+    });
+    const reset = () => {
+      renders.hover = renders.stable = renders.view = 0;
+      paints.length = 0;
+      style.mockClear();
+      vi.mocked(runtime.projectPacked).mockClear();
+    };
+
+    reset();
+    for (let i = 1; i <= 8; i++) {
+      act(() => controller.setViewState({ center: [i / 100, 0], zoom: 4 }));
+      act(flushAnimationFrame);
+    }
+    // Before the split: stable 8, hover 8. One projection pass and paint per camera change.
+    expect(renders).toEqual({ hover: 0, stable: 0, view: 8 });
+    expect(work()).toEqual({ paints: 8, projectPacked: 8, styles: 0 });
+
+    const base = mounted.container.querySelector('[data-flat-runtime="maps"]')!;
+    const [x, y] = runtime.project(10, 0);
+    reset();
+    fireEvent.pointerMove(base, { clientX: x, clientY: y, pointerId: 1, pointerType: "mouse" });
+    act(flushAnimationFrame);
+    // Moving within the hovered feature is not a hover change.
+    fireEvent.pointerMove(base, { clientX: x + 1, clientY: y, pointerId: 1, pointerType: "mouse" });
+    act(flushAnimationFrame);
+    // Before the split: stable 2, view 2 for the same two moves.
+    expect(renders).toEqual({ hover: 1, stable: 0, view: 0 });
+    // The hover repaint reuses prepared geometry: no projection or style work.
+    expect(work()).toEqual({ paints: 1, projectPacked: 0, styles: 0 });
+
+    reset();
+    fireEvent.pointerMove(base, { clientX: 5, clientY: 5, pointerId: 1, pointerType: "mouse" });
+    act(flushAnimationFrame);
+    expect(renders).toEqual({ hover: 1, stable: 0, view: 0 });
+    expect(work()).toEqual({ paints: 1, projectPacked: 0, styles: 0 });
+    expect(latestSurface).toBe(surface);
   });
 });
 

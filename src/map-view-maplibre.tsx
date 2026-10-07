@@ -55,7 +55,11 @@ import {
 import { WebGlFlatRuntime, type FlatMapRuntime } from "./webgl-flat-runtime";
 import type { MapContextMenuContext, MapFeatureContextMenuContext } from "./map-interaction";
 import {
+  MapHoverContext,
   MapSurfaceContext,
+  MapViewStateContext,
+  createMapHoverStore,
+  isMapFeatureHovered,
   type MapLibreLayerRegistrationOptions,
   type MapLibreLayerRender,
   type MapInteractionMode,
@@ -153,12 +157,21 @@ export function MapView({
   const [interactionMode, setInteractionMode] = useState<MapInteractionMode>("none");
   const isMeasuring = interactionMode === "measurement";
   const isEditing = interactionMode === "editing";
-  const [hovered, setHovered] = useState<{ feature: unknown; id: string | null } | null>(null);
+  // Hover and camera are separate subscriptions; the surface value stays stable (#119).
+  const [hoverStore] = useState(createMapHoverStore);
+  const setHovered = hoverStore.set;
   const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
   const [popup, setPopup] = useState<FeatureOverlayState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuOverlayState | null>(null);
   const [boundsMinZoom, setBoundsMinZoom] = useState<number | undefined>(undefined);
-  const resolvedMaxBounds = normalizeMapBounds(maxBounds);
+  // Keyed by value: a new bounds array per render must not re-create view-state commands
+  // (with a GeoJSON Editor mounted, that re-created the surface and looped renders).
+  const maxBoundsKey = maxBounds?.join(",") ?? null;
+  const resolvedMaxBounds = useMemo(
+    () =>
+      maxBoundsKey ? normalizeMapBounds(maxBoundsKey.split(",").map(Number) as MapBounds) : null,
+    [maxBoundsKey],
+  );
   const {
     controlled,
     setViewState,
@@ -921,13 +934,11 @@ export function MapView({
           return getFeatureId(feature, getId as never) === hoveredFeatureId;
         }
 
-        if (!hovered) {
-          return false;
-        }
-
-        const id = getFeatureId(feature, getId as never);
-
-        return id ? hovered.id === id : hovered.feature === feature;
+        return isMapFeatureHovered(
+          hoverStore.get(),
+          getFeatureId(feature, getId as never),
+          feature,
+        );
       },
       isFeatureSelected(feature, selectedFeatureId, getId) {
         if (!selectedFeatureId) {
@@ -946,12 +957,10 @@ export function MapView({
       requestRender,
       setMeasurementActive,
       setViewState,
-      viewState: currentViewState,
     }),
     [
-      currentViewState,
       getFeatureId,
-      hovered,
+      hoverStore,
       interactionMode,
       isReady,
       isMeasuring,
@@ -959,6 +968,7 @@ export function MapView({
       registerMapLibreLayer,
       registerInteractionMode,
       requestRender,
+      setHovered,
       setMeasurementActive,
       setViewState,
     ],
@@ -974,6 +984,8 @@ export function MapView({
 
   return (
     <MapSurfaceContext.Provider value={context}>
+      <MapViewStateContext.Provider value={currentViewState}>
+      <MapHoverContext.Provider value={hoverStore}>
       <div
         aria-label={mapLabel}
         className={rootClassName}
@@ -1022,6 +1034,8 @@ export function MapView({
           }}
         />
       </div>
+      </MapHoverContext.Provider>
+      </MapViewStateContext.Provider>
     </MapSurfaceContext.Provider>
   );
 }
