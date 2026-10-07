@@ -63,6 +63,7 @@ export function createMapsNativeLayerRuntime<P = Record<string, unknown>>() {
       const paint = [
         props.getFeatureId,
         props.getPointColor,
+        props.getPointLabel,
         props.getPointRadius,
         props.pointColor,
         props.pointRadius,
@@ -74,6 +75,7 @@ export function createMapsNativeLayerRuntime<P = Record<string, unknown>>() {
           getFillColor: (feature) =>
             props.getPointColor?.(feature) ?? props.pointColor ?? "#0f172a",
           getRadius: (feature) => props.getPointRadius?.(feature) ?? props.pointRadius ?? 6,
+          getLabel: props.getPointLabel && ((feature) => props.getPointLabel!(feature) || null),
           primitivePrefix: prefix,
         });
         // Borrow the owned immutable coordinates across paint-only replacements.

@@ -274,6 +274,66 @@ describe("GPU-retained application points (#155)", () => {
   });
 });
 
+describe("GPU-retained labeled points (#204)", () => {
+  it("keeps labeled points retained and projects only the labeled ones per camera frame", async () => {
+    const points = createPoints(1_000);
+    let controller: MapSurfaceController | undefined;
+    const { container } = render(
+      <MapsMapView
+        mapLabel="Retained labeled points"
+        mapStyle={{ tiles: false }}
+        fitToData={false}
+        initialViewState={{ center: [0, 0], zoom: 4 }}
+        onMapControllerReady={(ready) => {
+          controller = ready;
+        }}
+      >
+        <PointLayer
+          points={points}
+          getPointLabel={(feature) =>
+            Number(feature.point.id.slice("point-".length)) % 100 === 0 ? feature.point.id : null
+          }
+        />
+      </MapsMapView>,
+    );
+    await waitFor(() =>
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POINTS, 1, 1]),
+    );
+    const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+    expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
+    // Labeled points stay in the one retained group, in painter order.
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(renderer.setRetainedPoints!).mock.calls[0]![1]).toHaveLength(2_000);
+    await waitFor(() => expect(context.fillText).toHaveBeenCalledWith("point-100", 104, 300));
+    const projectionsAfterMount = Number(overlay.dataset.mapOverlayLabelProjections);
+
+    vi.mocked(runtime.project).mockClear();
+    vi.mocked(runtime.projectPacked).mockClear();
+    vi.mocked(context.fillText).mockClear();
+    paints.length = 0;
+    for (let step = 1; step <= 10; step += 1) {
+      act(() => controller!.setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 }));
+    }
+
+    expect(paints.length).toBeGreaterThanOrEqual(10);
+    for (const paint of paints) {
+      expect(paint.circles).toBe(0);
+      expect(paint.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POINTS, 1, 1]);
+    }
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
+    // Each camera frame projects the 10 labeled points, never the 1,000 retained ones.
+    const projected = vi
+      .mocked(runtime.projectPacked)
+      .mock.calls.map(([coordinates]) => coordinates.length / 2);
+    expect(projected).toEqual(Array(10).fill(10));
+    expect(runtime.project).not.toHaveBeenCalled();
+    expect(Number(overlay.dataset.mapOverlayLabelProjections) - projectionsAfterMount).toBe(100);
+    expect(context.fillText).toHaveBeenCalledTimes(100);
+    // The last frame's label follows the camera: center [5, 0], zoom 5.
+    expect(context.fillText).toHaveBeenLastCalledWith("point-900", 300 + (-41 - 5) * 5, 200 + 25 * 5);
+  });
+});
+
 type PolygonCollection = Parameters<typeof GeoJsonLayer>[0]["featureCollection"];
 
 function polygonCollection(count: number, withPoint = false): PolygonCollection {

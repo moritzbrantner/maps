@@ -3,7 +3,7 @@
 import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef } from "react";
 
 import { type IndexedMapPoint, type MapPoint, type MapPointFilter } from "./aggregation";
-import { joinClassNames, toLatLng, type MapViewportProps } from "./map-display";
+import { escapeHtml, joinClassNames, toLatLng, type MapViewportProps } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 import type { FlatLayer } from "./maplibre-compat";
@@ -22,6 +22,8 @@ export type PointLayerProps<TProperties = Record<string, unknown>> = MapFeatureI
   draggable?: boolean | ((feature: PointLayerFeature<TProperties>) => boolean);
   filterPoint?: MapPointFilter<TProperties>;
   getPointColor?: (feature: PointLayerFeature<TProperties>) => string;
+  /** Text drawn centered on a point, like a cluster count; `null` or `""` draws none. */
+  getPointLabel?: (feature: PointLayerFeature<TProperties>) => string | null;
   getPointRadius?: (feature: PointLayerFeature<TProperties>) => number;
   layerId?: string;
   onFeatureDrag?: (
@@ -53,6 +55,7 @@ export type BubbleLayerProps<TProperties = Record<string, unknown>> = Omit<
   PointLayerProps<TProperties>,
   | "draggable"
   | "getPointColor"
+  | "getPointLabel"
   | "getPointRadius"
   | "onFeatureDrag"
   | "onFeatureDragEnd"
@@ -85,6 +88,7 @@ export function PointLayer<TProperties = Record<string, unknown>>({
   draggable,
   getFeatureId,
   getPointColor,
+  getPointLabel,
   getPointRadius,
   hoveredFeatureId,
   layerId,
@@ -115,6 +119,7 @@ export function PointLayer<TProperties = Record<string, unknown>>({
       draggable={draggable}
       getFeatureId={getFeatureId}
       getPointColor={getPointColor}
+      getPointLabel={getPointLabel}
       getPointRadius={getPointRadius}
       hoveredFeatureId={hoveredFeatureId}
       layerId={layerId}
@@ -148,6 +153,7 @@ function PointFeatureLayer<
   draggable,
   getFeatureId,
   getPointColor,
+  getPointLabel,
   getPointRadius,
   hoveredFeatureId,
   layerId,
@@ -168,6 +174,7 @@ function PointFeatureLayer<
   draggable?: boolean | ((feature: TFeature) => boolean);
   features: readonly TFeature[];
   getPointColor?: (feature: TFeature) => string;
+  getPointLabel?: (feature: TFeature) => string | null;
   getPointRadius?: (feature: TFeature) => number;
   layerId?: string;
   onFeatureDrag?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
@@ -224,14 +231,29 @@ function PointFeatureLayer<
             const coordinatesKey = createFlatPointCoordinatesKey(feature.coordinates);
             const fillColor = getPointColor?.(feature) ?? pointColor;
             const radius = Math.max(0, getPointRadius?.(feature) ?? pointRadius);
+            const label = getPointLabel?.(feature) || null;
             const signature = createFlatPointSignature({
               featureDraggable,
               fillColor,
               hovered,
               isMeasuring,
+              label,
               radius,
               selected,
             });
+            // Drawn above its point, as the Maps runtime's Canvas label pass does.
+            const addLabel = () =>
+              flat
+                .marker(toLatLng(feature.coordinates), {
+                  icon: flat.divIcon({
+                    className: "mb-maps__cluster-count",
+                    html: escapeHtml(label!),
+                    iconAnchor: [18, 18],
+                    iconSize: [36, 36],
+                  }),
+                  interactive: false,
+                })
+                .addTo(layer);
 
             return {
               key: featureKey,
@@ -342,13 +364,14 @@ function PointFeatureLayer<
                   });
 
                   marker.addTo(layer);
+                  if (label) entry.layers.push(addLabel());
                   return entry;
                 }
 
                 marker.addTo(layer);
                 return {
                   coordinatesKey,
-                  layers: [marker],
+                  layers: label ? [marker, addLabel()] : [marker],
                   signature,
                 };
               },
@@ -379,6 +402,7 @@ function PointFeatureLayer<
     draggable,
     getFeatureId,
     getPointColor,
+    getPointLabel,
     getPointRadius,
     hoveredFeatureId,
     resolvedLayerId,
@@ -704,6 +728,7 @@ function createFlatPointSignature({
   fillColor,
   hovered,
   isMeasuring,
+  label,
   radius,
   selected,
 }: {
@@ -711,6 +736,7 @@ function createFlatPointSignature({
   fillColor: string;
   hovered: boolean;
   isMeasuring: boolean;
+  label: string | null;
   radius: number;
   selected: boolean;
 }) {
@@ -719,6 +745,7 @@ function createFlatPointSignature({
     fillColor,
     hovered,
     interactive: !isMeasuring,
+    label,
     radius,
     selected,
   });

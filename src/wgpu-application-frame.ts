@@ -539,11 +539,12 @@ function createRetainedColorCache(): RetainedColor {
 
 /**
  * The retained form of a vector frame: its primitives split, in painter order, into runs of
- * consecutive unlabeled circles (point groups) and consecutive polygons, lines, direction
- * markers and short circle runs (shape groups; see `MAPS_RETAINED_POINT_RUN_MIN`). `null`
- * when any primitive still needs screen projection (labels),
- * cannot be lowered, or the frame splits into more than `MAPS_RETAINED_APPLICATION_MAX_RUNS`
- * runs. `shapes: false` (a pitched camera) keeps every frame with shapes on the projected
+ * consecutive circles (point groups) and consecutive polygons, lines, direction markers and
+ * short circle runs (shape groups; see `MAPS_RETAINED_POINT_RUN_MIN`). Labeled circles are
+ * retained like any other (#204): only their label text needs a screen position, which the
+ * host's Canvas annotation pass projects for the labeled circles alone. `null` when a
+ * primitive cannot be lowered, or the frame splits into more than
+ * `MAPS_RETAINED_APPLICATION_MAX_RUNS` runs. `shapes: false` (a pitched camera) keeps every frame with shapes on the projected
  * path. Paint is resolved here with the screen transport's hover/selection deltas.
  */
 export function createMapsRetainedApplicationRuns(
@@ -607,7 +608,7 @@ function createRetainedPoints(
 
   for (let index = 0; index < count; index += 1) {
     const primitive = primitives[index]!;
-    if (primitive.kind !== "circle" || primitive.label) return null;
+    if (primitive.kind !== "circle") return null;
     const fillColor = color(primitive.fillColor, primitive.fillOpacity);
     const strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
     const strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
@@ -666,7 +667,6 @@ function createRetainedShapes(
     let radius = 0;
     switch (primitive.kind) {
       case "circle": {
-        if (primitive.label) return null;
         fillColor = color(primitive.fillColor, primitive.fillOpacity);
         strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
         strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);

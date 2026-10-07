@@ -137,10 +137,11 @@ export type MapsCanvasFlatRuntimeController = {
     interaction?: MapScreenInteractionState,
   ): boolean;
   /**
-   * Draws a vector frame made only of unlabeled circles (#155) or only of polygons (#196)
-   * from GPU-retained geometry: Rust lowers longitude/latitude once and camera frames only
-   * update uniforms. Returns `false` when the frame or backend cannot use the retained
-   * path; the caller then projects it.
+   * Draws a vector frame of points (#155), polygons (#196), lines and flows (#195) from
+   * GPU-retained geometry: Rust lowers longitude/latitude once and camera frames only
+   * update uniforms. Labeled circles are retained too; the caller draws their labels
+   * (#204). Returns `false` when the frame or backend cannot use the retained path; the
+   * caller then projects it.
    */
   renderRetainedApplicationPoints(
     frame: MapVectorRenderFrame<unknown>,

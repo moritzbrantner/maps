@@ -1341,6 +1341,42 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     expect(group?.layers[0]).toBe(layer);
   });
 
+  test("draws flat point labels above their markers", async () => {
+    render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Labeled points"
+        showAttributionControl={false}
+      >
+        <PointLayer
+          getPointLabel={(feature) => (feature.point.id === "store-1" ? "S<1>" : null)}
+          points={[
+            { id: "store-1", latitude: 40, longitude: -74 },
+            { id: "store-2", latitude: 41, longitude: -73 },
+          ]}
+        />
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Labeled points").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    expect(flatMock.getLayerGroups()[0]?.layers).toMatchObject([
+      { latLng: [40, -74], type: "circleMarker" },
+      {
+        latLng: [40, -74],
+        options: {
+          icon: { options: { className: "mb-maps__cluster-count", html: "S&lt;1&gt;" } },
+          interactive: false,
+        },
+        type: "marker",
+      },
+      { latLng: [41, -73], type: "circleMarker" },
+    ]);
+  });
+
   test("keeps equivalent flat point marker rerenders mounted once", async () => {
     const { rerender } = render(
       <MapView

@@ -630,10 +630,26 @@ describe("retained application runs (#195)", () => {
     expect(shapes.polygons.paint[8]).toBe(4.5);
   });
 
+  test("retains labeled circles with their unlabeled neighbours (#204)", () => {
+    // Only the label text needs a screen position; the circles stay in painter order.
+    const result = runs([
+      ...circles(MAPS_RETAINED_POINT_RUN_MIN, "a"),
+      circle("labeled", "Label"),
+      ...circles(MAPS_RETAINED_POINT_RUN_MIN, "b"),
+    ]);
+    expect(result?.map((run) => run.kind)).toEqual(["points"]);
+    const [points] = result!;
+    if (points?.kind !== "points") throw new Error("expected points");
+    expect(points.points.count).toBe(MAPS_RETAINED_POINT_RUN_MIN * 2 + 1);
+    expect(runs([circle("labeled", "Label")])?.map((run) => run.kind)).toEqual(["points"]);
+    // A labeled flow endpoint stays in its shape group.
+    expect(runs([line("l"), circle("labeled", "Label")])?.map((run) => run.kind)).toEqual([
+      "polygons",
+    ]);
+  });
+
   test("keeps frames that still need screen work on the projected path", () => {
     expect(runs([])).toBeNull();
-    expect(runs([line("l"), circle("labeled", "Label")])).toBeNull();
-    expect(runs([circle("labeled", "Label")])).toBeNull();
     expect(runs([line("degenerate", [[1, 1], [1, 1]])])).toBeNull();
     expect(runs([line("nan", [[0, 0], [Number.NaN, 1]])])).toBeNull();
 

@@ -52,6 +52,7 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import {
   createGeoJsonVectorRenderFrame,
   createPointClusterVectorRenderFrame,
+  isMapRenderLabeledCircle,
   type MapVectorRenderFrame,
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
@@ -122,10 +123,9 @@ type MapsOverlayInteractionSurface = Pick<
 
 /**
  * The GPU-retained application path of the Maps runtime: points (#155), polygons (#196),
- * lines and flows (#195).
- * `render` hands it a vector frame made only of unlabeled circles or only of polygons;
- * `active` reports whether the live renderer still draws it, so camera frames can skip
- * layer work entirely.
+ * lines and flows (#195). `render` hands it a vector frame; `active` reports whether the
+ * live renderer still draws it, so camera frames skip layer work entirely apart from
+ * projecting the labeled circles for the Canvas label pass (#204).
  */
 export type MapsOverlayRetainedPoints = {
   active(): boolean;
@@ -288,6 +288,13 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     // Its own projection cache: the draw projector may hold results from before the
     // runtime could project (same revision), which would hide every retained point.
     const retainedPickProjectorRef = useRef(createCanvasMapSceneProjector());
+    // The labeled circles of the retained frame (#204). Their circles are retained like the
+    // others; camera frames project only them, for the Canvas label pass. `null` without
+    // labels.
+    const retainedLabeledRef = useRef<MapVectorRenderFrame<unknown> | null>(null);
+    const retainedLabelProjectorRef = useRef(createCanvasMapSceneProjector());
+    /** Labeled circles projected by retained label passes, for transport evidence. */
+    const retainedLabelProjectionsRef = useRef(0);
     const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
     const lastHoveredKeyRef = useRef<string | null>(null);
     const clusterRuntimesRef = useRef<Map<string, MapsClusterRuntime>>(new Map());
@@ -458,6 +465,34 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       return true;
     };
 
+    /**
+     * The Canvas label pass of a retained frame: projects only its labeled circles at the
+     * current camera, O(labels), and draws their labels above the retained geometry, as the
+     * screen path draws labels above wgpu geometry.
+     */
+    const drawRetainedLabels = (
+      canvas: HTMLCanvasElement,
+      size: { height: number; width: number },
+    ) => {
+      const labeled = retainedLabeledRef.current;
+      const labels = labeled
+        ? retainedLabelProjectorRef.current(labeled, project, size, projectionRevisionRef.current)
+        : null;
+      if (labeled) {
+        retainedLabelProjectionsRef.current += labeled.primitives.length;
+        canvas.dataset.mapOverlayLabelProjections = String(retainedLabelProjectionsRef.current);
+      }
+      const context = getCanvasContext(canvas);
+      if (!context) return;
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      if (!labels) return;
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      drawCanvasMapLabels(context, labels);
+    };
+
+
     const clearHover = () => {
       const interaction = lastHoveredInteractionRef.current;
       if (interaction) interaction.clearHover();
@@ -535,7 +570,12 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       () => ({
         redraw() {
           projectionRevisionRef.current += 1;
-          if (retainedModeRef.current && retainedPoints?.active()) return;
+          if (retainedModeRef.current && retainedPoints?.active()) {
+            const canvas = canvasRef.current;
+            const size = retainedSizeRef.current;
+            if (retainedLabeledRef.current && canvas && size) drawRetainedLabels(canvas, size);
+            return;
+          }
           if (presentMotion()) return;
           drawRef.current?.();
         },
@@ -640,6 +680,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           !snapshot.renderSteps.some((step) => step.kind === "raster") &&
           retainedPoints.render(snapshot.frame, interaction, size)
         ) {
+          const labeled = snapshot.frame.primitives.filter(isMapRenderLabeledCircle);
+          retainedLabeledRef.current =
+            labeled.length > 0 ? { kind: "vector", primitives: labeled } : null;
+          retainedLabelProjectorRef.current = createCanvasMapSceneProjector();
           retainedModeRef.current = true;
           retainedSizeRef.current = { height: size.height, width: size.width };
           applicationFrameVisibleRef.current = true;
@@ -651,11 +695,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           canvas.dataset.mapOverlayPrimitives = String(snapshot.frame.primitives.length);
           canvas.dataset.mapOverlayHeatLayers = "0";
           canvas.dataset.mapOverlayBackend = "wgpu-retained";
-          const context = getCanvasContext(canvas);
-          context?.setTransform(1, 0, 0, 1, 0, 0);
-          context?.clearRect(0, 0, canvas.width, canvas.height);
+          drawRetainedLabels(canvas, size);
           return;
         }
+        retainedLabeledRef.current = null;
         if (retainedModeRef.current) {
           // Leaving the retained path: the screen frame below replaces (and releases) it.
           retainedModeRef.current = false;
