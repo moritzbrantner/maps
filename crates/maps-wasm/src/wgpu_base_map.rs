@@ -1143,10 +1143,11 @@ impl MapsWgpuBaseMapRenderer {
         self.retained_points.evict(&group);
     }
 
-    /// Retains an application polygon group, lowered once by `maps-core`: each polygon's
-    /// ring count, each ring's point count, the concatenated `[longitude, latitude]` pairs
-    /// and one paint record per polygon (fill RGBA, stroke RGBA, stroke width in CSS px).
-    /// Replaces the group's previous content. Returns the polygon count.
+    /// Retains an application shape group (polygons, lines and direction markers), lowered
+    /// once by `maps-core`: each shape's ring count, each ring's point count, the
+    /// concatenated `[longitude, latitude]` pairs and one paint record per shape (fill
+    /// RGBA, stroke RGBA, stroke width or marker size in CSS px, shape kind). Replaces the
+    /// group's previous content. Returns the shape count.
     #[wasm_bindgen(js_name = setRetainedPolygons)]
     pub fn set_retained_polygons(
         &mut self,

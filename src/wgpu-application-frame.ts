@@ -55,7 +55,10 @@ export const MAPS_WGPU_APPLICATION_DIRECTION_MARKER = 2;
 export const MAPS_WGPU_APPLICATION_POLYGON = 3;
 /** Painter-order run `(kind, group, 1)` drawing a GPU-retained point group (#155). */
 export const MAPS_WGPU_APPLICATION_RETAINED_POINTS = 4;
-/** Painter-order run `(kind, group, 1)` drawing a GPU-retained polygon group (#196). */
+/**
+ * Painter-order run `(kind, group, 1)` drawing a GPU-retained shape group: polygons (#196),
+ * lines and flow direction markers (#195).
+ */
 export const MAPS_WGPU_APPLICATION_RETAINED_POLYGONS = 5;
 
 /**
@@ -74,23 +77,48 @@ export type MapsRetainedApplicationPoints = {
 };
 
 /**
- * Retained polygon paint record shared with `maps-wasm` (`RETAINED_POLYGON_PAINT_LENGTH`):
- * fill RGBA, stroke RGBA (encoded sRGB), stroke width (CSS px).
+ * Retained shape paint record shared with `maps-wasm` (`RETAINED_POLYGON_PAINT_LENGTH`):
+ * fill RGBA, stroke RGBA (encoded sRGB), stroke width or marker size (CSS px), shape kind,
+ * circle radius (CSS px).
  */
-export const MAPS_RETAINED_POLYGON_PAINT_STRIDE = 9;
+export const MAPS_RETAINED_POLYGON_PAINT_STRIDE = 11;
+/** Shape kinds of a retained shape group, shared with `maps-wasm` (`RETAINED_SHAPE_*`). */
+export const MAPS_RETAINED_SHAPE_POLYGON = 0;
+export const MAPS_RETAINED_SHAPE_LINE = 1;
+/** One ring `[previous, anchor]`; the marker points along the projected heading. */
+export const MAPS_RETAINED_SHAPE_DIRECTION_MARKER = 2;
+/** One ring `[center]`. */
+export const MAPS_RETAINED_SHAPE_CIRCLE = 3;
 
-/** Geographic application polygons for the GPU-retained path; projection stays in Rust. */
+/** Geographic application shapes for the GPU-retained path; projection stays in Rust. */
 export type MapsRetainedApplicationPolygons = {
   count: number;
-  /** Ring count of each polygon. */
+  /** Ring count of each shape (one for lines and markers). */
   ringCounts: Uint32Array;
-  /** Point count of each ring, in polygon order. */
+  /** Point count of each ring, in shape order. */
   pointCounts: Uint32Array;
   /** `[longitude, latitude]` per ring point, lowered once by Rust. */
   lonLat: Float64Array;
-  /** `MAPS_RETAINED_POLYGON_PAINT_STRIDE` values per polygon, interaction deltas applied. */
+  /** `MAPS_RETAINED_POLYGON_PAINT_STRIDE` values per shape, interaction deltas applied. */
   paint: Float32Array;
 };
+
+/**
+ * Circle runs at least this long between shapes become instanced point groups; shorter
+ * ones, such as a flow's endpoints, join the shape group around them.
+ */
+export const MAPS_RETAINED_POINT_RUN_MIN = 16;
+
+/** One retained group of a frame: consecutive points, or consecutive shapes. */
+export type MapsRetainedApplicationRun =
+  | { kind: "points"; points: MapsRetainedApplicationPoints }
+  | { kind: "polygons"; polygons: MapsRetainedApplicationPolygons };
+
+/**
+ * Most retained groups one frame may split into; a frame that alternates kinds more often
+ * stays on the projected path rather than paying a draw per tiny group.
+ */
+export const MAPS_RETAINED_APPLICATION_MAX_RUNS = 32;
 
 /**
  * Packed circle record shared with `maps-wasm` (`APPLICATION_CIRCLE_RECORD_LENGTH`): x, y,
@@ -494,21 +522,11 @@ function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
-/**
- * The retained point form of a vector frame, or `null` when the frame is not made only of
- * unlabeled circles (labels and other primitives still need screen projection). Paint is
- * resolved here, with the same hover/selection stroke deltas as the screen transport.
- */
-export function createMapsRetainedApplicationPoints(
-  frame: MapVectorRenderFrame<unknown>,
-  interaction: MapScreenInteractionState = {},
-): MapsRetainedApplicationPoints | null {
-  const count = frame.primitives.length;
-  if (count === 0) return null;
-  const lonLat = new Float64Array(count * 2);
-  const paint = new Float32Array(count * MAPS_RETAINED_POINT_PAINT_STRIDE);
+type RetainedColor = (value: string, opacity: number) => MapsWgpuColor | null;
+
+function createRetainedColorCache(): RetainedColor {
   const colors = new Map<string, MapsWgpuColor | null>();
-  const color = (value: string, opacity: number) => {
+  return (value, opacity) => {
     const key = `${value}\u0000${opacity}`;
     let resolved = colors.get(key);
     if (resolved === undefined) {
@@ -517,9 +535,78 @@ export function createMapsRetainedApplicationPoints(
     }
     return resolved;
   };
+}
+
+/**
+ * The retained form of a vector frame: its primitives split, in painter order, into runs of
+ * consecutive unlabeled circles (point groups) and consecutive polygons, lines, direction
+ * markers and short circle runs (shape groups; see `MAPS_RETAINED_POINT_RUN_MIN`). `null`
+ * when any primitive still needs screen projection (labels),
+ * cannot be lowered, or the frame splits into more than `MAPS_RETAINED_APPLICATION_MAX_RUNS`
+ * runs. `shapes: false` (a pitched camera) keeps every frame with shapes on the projected
+ * path. Paint is resolved here with the screen transport's hover/selection deltas.
+ */
+export function createMapsRetainedApplicationRuns(
+  frame: MapVectorRenderFrame<unknown>,
+  interaction: MapScreenInteractionState = {},
+  { shapes = true }: { shapes?: boolean } = {},
+): MapsRetainedApplicationRun[] | null {
+  const primitives = frame.primitives;
+  if (primitives.length === 0) return null;
+  const color = createRetainedColorCache();
+  const groups = retainedGroupKinds(primitives);
+  const runs: MapsRetainedApplicationRun[] = [];
+  let start = 0;
+  while (start < primitives.length) {
+    const points = groups[start] === "points";
+    let end = start + 1;
+    while (end < primitives.length && groups[end] === groups[start]) end += 1;
+    if (runs.length === MAPS_RETAINED_APPLICATION_MAX_RUNS || (!points && !shapes)) return null;
+    const slice = primitives.slice(start, end);
+    if (points) {
+      const lowered = createRetainedPoints(slice, interaction, color);
+      if (!lowered) return null;
+      runs.push({ kind: "points", points: lowered });
+    } else {
+      const lowered = createRetainedShapes(slice, interaction, color);
+      if (!lowered) return null;
+      runs.push({ kind: "polygons", polygons: lowered });
+    }
+    start = end;
+  }
+  return runs;
+}
+
+/** Each primitive's group kind: long circle runs (or an all-circle frame) are points. */
+function retainedGroupKinds(
+  primitives: readonly MapVectorRenderFrame<unknown>["primitives"][number][],
+): MapsRetainedApplicationRun["kind"][] {
+  const kinds: MapsRetainedApplicationRun["kind"][] = [];
+  const allCircles = primitives.every((primitive) => primitive.kind === "circle");
+  let start = 0;
+  while (start < primitives.length) {
+    const circles = primitives[start]!.kind === "circle";
+    let end = start + 1;
+    while (end < primitives.length && (primitives[end]!.kind === "circle") === circles) end += 1;
+    const kind =
+      circles && (allCircles || end - start >= MAPS_RETAINED_POINT_RUN_MIN) ? "points" : "polygons";
+    for (let index = start; index < end; index += 1) kinds.push(kind);
+    start = end;
+  }
+  return kinds;
+}
+
+function createRetainedPoints(
+  primitives: readonly MapVectorRenderFrame<unknown>["primitives"][number][],
+  interaction: MapScreenInteractionState,
+  color: RetainedColor,
+): MapsRetainedApplicationPoints | null {
+  const count = primitives.length;
+  const lonLat = new Float64Array(count * 2);
+  const paint = new Float32Array(count * MAPS_RETAINED_POINT_PAINT_STRIDE);
 
   for (let index = 0; index < count; index += 1) {
-    const primitive = frame.primitives[index]!;
+    const primitive = primitives[index]!;
     if (primitive.kind !== "circle" || primitive.label) return null;
     const fillColor = color(primitive.fillColor, primitive.fillOpacity);
     const strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
@@ -547,51 +634,84 @@ export function createMapsRetainedApplicationPoints(
   return { count, lonLat, paint };
 }
 
-/**
- * The retained polygon form of a vector frame, or `null` unless the frame is made only of
- * polygons. Paint is resolved here with the screen transport's hover/selection deltas.
- */
-export function createMapsRetainedApplicationPolygons(
-  frame: MapVectorRenderFrame<unknown>,
-  interaction: MapScreenInteractionState = {},
+const TRANSPARENT: MapsWgpuColor = [0, 0, 0, 0];
+
+function createRetainedShapes(
+  primitives: readonly MapVectorRenderFrame<unknown>["primitives"][number][],
+  interaction: MapScreenInteractionState,
+  color: RetainedColor,
 ): MapsRetainedApplicationPolygons | null {
-  const count = frame.primitives.length;
-  if (count === 0) return null;
+  const count = primitives.length;
   const ringCounts = new Uint32Array(count);
   const pointCounts: number[] = [];
   const lonLat: number[] = [];
   const paint = new Float32Array(count * MAPS_RETAINED_POLYGON_PAINT_STRIDE);
-  const colors = new Map<string, MapsWgpuColor | null>();
-  const color = (value: string, opacity: number) => {
-    const key = `${value}\u0000${opacity}`;
-    let resolved = colors.get(key);
-    if (resolved === undefined) {
-      resolved = parseSupportedCssColor(value, opacity);
-      colors.set(key, resolved);
+  // Non-finite geometry stays on the projected path, which fails closed to Canvas.
+  const pushRing = (ring: readonly (readonly [number, number])[]) => {
+    pointCounts.push(ring.length);
+    for (const [longitude, latitude] of ring) {
+      if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return false;
+      lonLat.push(longitude, latitude);
     }
-    return resolved;
+    return true;
   };
 
   for (let index = 0; index < count; index += 1) {
-    const primitive = frame.primitives[index]!;
-    if (primitive.kind !== "polygon") return null;
-    const fillColor = color(primitive.fillColor, primitive.fillOpacity);
-    const strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
-    const strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
-    if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth)) return null;
-    ringCounts[index] = primitive.rings.length;
-    for (const ring of primitive.rings) {
-      pointCounts.push(ring.length);
-      for (const [longitude, latitude] of ring) {
-        // Non-finite geometry stays on the projected path, which fails closed to Canvas.
-        if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
-        lonLat.push(longitude, latitude);
+    const primitive = primitives[index]!;
+    const offset = index * MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+    let fillColor: MapsWgpuColor | null = TRANSPARENT;
+    let strokeColor: MapsWgpuColor | null;
+    let strokeWidth: number;
+    let shape: number;
+    let radius = 0;
+    switch (primitive.kind) {
+      case "circle": {
+        if (primitive.label) return null;
+        fillColor = color(primitive.fillColor, primitive.fillOpacity);
+        strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
+        strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
+        shape = MAPS_RETAINED_SHAPE_CIRCLE;
+        radius = primitive.radius;
+        if (!Number.isFinite(radius) || radius < 0) return null;
+        ringCounts[index] = 1;
+        if (!pushRing([primitive.center])) return null;
+        break;
+      }
+      case "polygon": {
+        fillColor = color(primitive.fillColor, primitive.fillOpacity);
+        strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
+        strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
+        shape = MAPS_RETAINED_SHAPE_POLYGON;
+        ringCounts[index] = primitive.rings.length;
+        for (const ring of primitive.rings) if (!pushRing(ring)) return null;
+        break;
+      }
+      case "line": {
+        strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
+        strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
+        shape = MAPS_RETAINED_SHAPE_LINE;
+        // The screen transport rejects lines without a segment; keep the same fallback.
+        if (!hasDistinctCoordinates(primitive.coordinates)) return null;
+        ringCounts[index] = 1;
+        if (!pushRing(primitive.coordinates)) return null;
+        break;
+      }
+      case "direction-marker": {
+        strokeColor = color(primitive.color, primitive.opacity);
+        strokeWidth = primitive.size;
+        shape = MAPS_RETAINED_SHAPE_DIRECTION_MARKER;
+        if (!Number.isFinite(strokeWidth) || strokeWidth < 0) return null;
+        ringCounts[index] = 1;
+        if (!pushRing([primitive.previous, primitive.anchor])) return null;
+        break;
       }
     }
-    const offset = index * MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+    if (!fillColor || !strokeColor || !Number.isFinite(strokeWidth)) return null;
     paint.set(fillColor, offset);
     paint.set(strokeColor, offset + 4);
     paint[offset + 8] = strokeWidth;
+    paint[offset + 9] = shape;
+    paint[offset + 10] = radius;
   }
   return {
     count,
@@ -602,31 +722,40 @@ export function createMapsRetainedApplicationPolygons(
   };
 }
 
-/** An application frame that only draws retained polygon `group` (no screen geometry). */
-export function createMapsWgpuRetainedPolygonsFrame(
-  group: number,
-  width: number,
-  height: number,
-): MapsWgpuApplicationFrame {
-  return {
-    ...createMapsWgpuRetainedPointsFrame(group, width, height),
-    order: Uint32Array.of(MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, group, 1),
-  };
+function hasDistinctCoordinates(coordinates: readonly (readonly [number, number])[]) {
+  const first = coordinates[0];
+  return (
+    first !== undefined &&
+    coordinates.some((coordinate) => coordinate[0] !== first[0] || coordinate[1] !== first[1])
+  );
 }
 
-/** An application frame that only draws retained point `group` (no screen geometry). */
-export function createMapsWgpuRetainedPointsFrame(
-  group: number,
+/** An application frame that only draws retained groups `1..=runs.length`, in order. */
+export function createMapsWgpuRetainedFrame(
+  runs: readonly MapsRetainedApplicationRun["kind"][],
   width: number,
   height: number,
 ): MapsWgpuApplicationFrame {
+  const order = new Uint32Array(runs.length * MAPS_WGPU_APPLICATION_ORDER_STRIDE);
+  runs.forEach((kind, index) => {
+    order.set(
+      [
+        kind === "points"
+          ? MAPS_WGPU_APPLICATION_RETAINED_POINTS
+          : MAPS_WGPU_APPLICATION_RETAINED_POLYGONS,
+        index + 1,
+        1,
+      ],
+      index * MAPS_WGPU_APPLICATION_ORDER_STRIDE,
+    );
+  });
   return {
     circleCount: 0,
     circleData: new Float32Array(0),
     directionMarkers: [],
     height,
     lines: [],
-    order: Uint32Array.of(MAPS_WGPU_APPLICATION_RETAINED_POINTS, group, 1),
+    order,
     polygons: [],
     width,
   };

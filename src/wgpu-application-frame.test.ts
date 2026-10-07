@@ -8,9 +8,16 @@ import type {
 } from "./map-render-frame";
 import type { MapScreenRenderFrame } from "./map-screen-render-frame";
 import {
+  createMapsRetainedApplicationRuns,
   createMapsWgpuApplicationFrame,
   createMapsWgpuApplicationFramePacker,
   MAPS_WGPU_APPLICATION_CIRCLE,
+  MAPS_RETAINED_APPLICATION_MAX_RUNS,
+  MAPS_RETAINED_POINT_RUN_MIN,
+  MAPS_RETAINED_POLYGON_PAINT_STRIDE,
+  MAPS_RETAINED_SHAPE_CIRCLE,
+  MAPS_RETAINED_SHAPE_DIRECTION_MARKER,
+  MAPS_RETAINED_SHAPE_LINE,
   MAPS_WGPU_APPLICATION_POLYGON,
   readMapsWgpuApplicationCircles,
   type MapsWgpuApplicationFrame,
@@ -532,3 +539,120 @@ describe("wgpu application frame", () => {
     expect(readMapsWgpuApplicationCircles(second)[0]).toMatchObject({ x: 3, y: 0 });
   });
 });
+
+describe("retained application runs (#195)", () => {
+  const base = { feature: null, featureId: "f", interactive: true };
+  const circle = (id: string, label: string | null = null): MapRenderCircle => ({
+    ...base,
+    center: [1, 2],
+    fillColor: "#ff0000",
+    fillOpacity: 1,
+    kind: "circle",
+    label,
+    primitiveId: id,
+    radius: 4,
+    strokeColor: "#000000",
+    strokeOpacity: 1,
+    strokeWidth: 1,
+  });
+  const line = (id: string, coordinates: [number, number][] = [[0, 0], [1, 1]]): MapRenderLine => ({
+    ...base,
+    coordinates,
+    kind: "line",
+    primitiveId: id,
+    strokeColor: "rgba(0, 128, 255, 0.5)",
+    strokeOpacity: 0.8,
+    strokeWidth: 3,
+  });
+  const marker = (id: string): MapRenderDirectionMarker => ({
+    ...base,
+    anchor: [1, 1],
+    color: "#00ff00",
+    kind: "direction-marker",
+    opacity: 1,
+    previous: [0, 0],
+    primitiveId: id,
+    size: 9,
+  });
+  const runs = (primitives: Parameters<typeof createMapsRetainedApplicationRuns>[0]["primitives"]) =>
+    createMapsRetainedApplicationRuns({ kind: "vector", primitives });
+
+  const circles = (count: number, prefix: string) =>
+    Array.from({ length: count }, (_, index) => circle(`${prefix}${index}`));
+
+  test("splits painter order into point and shape runs", () => {
+    const result = runs([
+      ...circles(MAPS_RETAINED_POINT_RUN_MIN, "a"),
+      line("l"),
+      marker("m"),
+      ...circles(MAPS_RETAINED_POINT_RUN_MIN, "b"),
+    ]);
+
+    expect(result?.map((run) => run.kind)).toEqual(["points", "polygons", "points"]);
+    const shapes = result![1]!;
+    if (shapes.kind !== "polygons") throw new Error("expected shapes");
+    expect(Array.from(shapes.polygons.ringCounts)).toEqual([1, 1]);
+    expect(Array.from(shapes.polygons.pointCounts)).toEqual([2, 2]);
+    // The marker ring is [previous, anchor].
+    expect(Array.from(shapes.polygons.lonLat)).toEqual([0, 0, 1, 1, 0, 0, 1, 1]);
+    const paint = shapes.polygons.paint;
+    const stride = MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+    expect(paint[3]).toBe(0);
+    expect(paint[7]).toBeCloseTo(0.4);
+    expect(paint[8]).toBe(3);
+    expect(paint[9]).toBe(MAPS_RETAINED_SHAPE_LINE);
+    expect(paint[stride + 8]).toBe(9);
+    expect(paint[stride + 9]).toBe(MAPS_RETAINED_SHAPE_DIRECTION_MARKER);
+  });
+
+  test("keeps short circle runs, such as flow endpoints, in the shape group", () => {
+    const flow = [line("l1"), marker("m1"), circle("to1"), circle("from1")];
+    const result = runs([...flow, line("l2"), circle("to2")]);
+
+    expect(result?.map((run) => run.kind)).toEqual(["polygons"]);
+    const [shapes] = result!;
+    if (shapes?.kind !== "polygons") throw new Error("expected shapes");
+    const stride = MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+    expect(shapes.polygons.paint[2 * stride + 9]).toBe(MAPS_RETAINED_SHAPE_CIRCLE);
+    expect(shapes.polygons.paint[2 * stride + 10]).toBe(4);
+    expect(shapes.polygons.paint[2 * stride + 3]).toBe(1);
+    // A frame of circles only stays one instanced point group, however short.
+    expect(runs([circle("a")])?.map((run) => run.kind)).toEqual(["points"]);
+  });
+
+  test("applies the screen transport's interaction stroke deltas to lines", () => {
+    const result = createMapsRetainedApplicationRuns(
+      { kind: "vector", primitives: [line("l")] },
+      { selectedPrimitiveIds: new Set(["l"]) },
+    );
+    const [shapes] = result!;
+    if (shapes?.kind !== "polygons") throw new Error("expected shapes");
+    expect(shapes.polygons.paint[8]).toBe(4.5);
+  });
+
+  test("keeps frames that still need screen work on the projected path", () => {
+    expect(runs([])).toBeNull();
+    expect(runs([line("l"), circle("labeled", "Label")])).toBeNull();
+    expect(runs([circle("labeled", "Label")])).toBeNull();
+    expect(runs([line("degenerate", [[1, 1], [1, 1]])])).toBeNull();
+    expect(runs([line("nan", [[0, 0], [Number.NaN, 1]])])).toBeNull();
+
+    const pitched = { shapes: false };
+    expect(
+      createMapsRetainedApplicationRuns({ kind: "vector", primitives: [circle("a"), line("l")] }, {}, pitched),
+    ).toBeNull();
+    expect(
+      createMapsRetainedApplicationRuns({ kind: "vector", primitives: [circle("a")] }, {}, pitched),
+    ).toHaveLength(1);
+
+    const alternating = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        index % 2 === 0 ? circles(MAPS_RETAINED_POINT_RUN_MIN, `c${index}-`) : [line(`l${index}`)],
+      ).flat();
+    expect(runs(alternating(MAPS_RETAINED_APPLICATION_MAX_RUNS + 1))).toBeNull();
+    expect(runs(alternating(MAPS_RETAINED_APPLICATION_MAX_RUNS))).toHaveLength(
+      MAPS_RETAINED_APPLICATION_MAX_RUNS,
+    );
+  });
+});
+

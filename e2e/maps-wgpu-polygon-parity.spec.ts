@@ -9,7 +9,8 @@ type Overlay = "canvas2d" | "wgpu" | "wgpu-retained";
 // Canvas is the polygon correctness oracle (#161). Both backends render the same fixture:
 // holes, several exteriors, overlapping holes and self-intersection (even-odd), translucent
 // fills and strokes with round joins, painter order with lines and points, and hover/selection
-// stroke widths. Frames made only of polygons take the GPU-retained path (#196).
+// stroke widths. Frames of polygons (#196), lines, flows and unlabeled points (#195) take the
+// GPU-retained path.
 async function renderPolygonParity(
   baseURL: string | undefined,
   backend: Backend,
@@ -190,8 +191,19 @@ const POLYGON_ONLY_CASES =
 test("WebGPU polygons match the Canvas oracle across fill, stroke, order and interaction", async ({
   baseURL,
 }, testInfo) => {
-  // Lines and points in the frame keep it on the projected screen path.
-  await expectPolygonParity(baseURL, testInfo, {}, "wgpu");
+  // The line and the point between the polygons are retained in the same painter order.
+  await expectPolygonParity(baseURL, testInfo, {}, "wgpu-retained");
+});
+
+test("Retained WebGPU lines and flows match the Canvas oracle @smoke", async ({
+  baseURL,
+}, testInfo) => {
+  await expectPolygonParity(
+    baseURL,
+    testInfo,
+    { cases: "line-joins,translucent-line,order-lower,order-line,order-point,hovered", flows: "1" },
+    "wgpu-retained",
+  );
 });
 
 test("A zero-area polygon stays on WebGPU and strokes like Canvas", async ({

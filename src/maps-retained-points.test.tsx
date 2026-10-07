@@ -5,9 +5,14 @@ import type { MapSurfaceController, MapViewState } from "./map-display";
 import type { MapsFlatRasterFrame, MapsFlatRasterRuntime } from "./flat-runtime-wasm";
 import { loadMapsFlatRasterRuntime } from "./flat-runtime-wasm";
 import { MapsMapView } from "./maps-map-view";
+import { FlowLayer } from "./flow-layer";
 import { GeoJsonLayer } from "./geojson-layer";
 import { PointLayer } from "./point-layer";
 import {
+  MAPS_RETAINED_POLYGON_PAINT_STRIDE,
+  MAPS_RETAINED_SHAPE_CIRCLE,
+  MAPS_RETAINED_SHAPE_DIRECTION_MARKER,
+  MAPS_RETAINED_SHAPE_LINE,
   MAPS_WGPU_APPLICATION_RETAINED_POINTS,
   MAPS_WGPU_APPLICATION_RETAINED_POLYGONS,
 } from "./wgpu-application-frame";
@@ -346,7 +351,7 @@ describe("GPU-retained application polygons (#196)", () => {
     expect(Array.from(ringCounts)).toEqual(Array(50).fill(2));
     expect(Array.from(pointCounts)).toEqual(Array(100).fill(5));
     expect(lonLat).toHaveLength(100 * 5 * 2);
-    expect(paint).toHaveLength(50 * 9);
+    expect(paint).toHaveLength(50 * MAPS_RETAINED_POLYGON_PAINT_STRIDE);
     const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
     expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
 
@@ -394,15 +399,101 @@ describe("GPU-retained application polygons (#196)", () => {
     await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(2));
     const paint = vi.mocked(renderer.setRetainedPolygons!).mock.calls[1]![4];
     // Hovering widens the stroke of that polygon only.
-    expect(paint[9 + 8]).toBeGreaterThan(paint[8]!);
+    expect(paint[MAPS_RETAINED_POLYGON_PAINT_STRIDE + 8]).toBeGreaterThan(paint[8]!);
 
+    // An unlabeled point after the polygons joins their shape group (#195).
     rerenderPolygons(polygonCollection(3, true));
-    await waitFor(() => {
-      expect(renderer.evictRetainedPolygons).toHaveBeenCalledWith(1);
-      expect(paints.at(-1)?.order[0]).not.toBe(MAPS_WGPU_APPLICATION_RETAINED_POLYGONS);
-    });
+    await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(renderer.setRetainedPolygons!).mock.calls[2]![1]).toHaveLength(4);
+    expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]);
+    expect(renderer.setRetainedPoints).not.toHaveBeenCalled();
     const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
-    expect(overlay.dataset.mapOverlayBackend).toBe("wgpu");
+    expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
+  });
+});
+
+describe("GPU-retained lines and flows (#195)", () => {
+  const flows = Array.from({ length: 20 }, (_, index) => ({
+    from: [index * 2 - 20, -10] as [number, number],
+    id: `flow-${index}`,
+    to: [index * 2 - 18, 10] as [number, number],
+  }));
+
+  function content(withPoints: boolean, ready?: (controller: MapSurfaceController) => void) {
+    return (
+      <MapsMapView
+        mapLabel="Retained flows"
+        mapStyle={{ tiles: false }}
+        fitToData={false}
+        initialViewState={{ center: [0, 0], zoom: 4 }}
+        onMapControllerReady={ready}
+      >
+        {withPoints ? <PointLayer points={createPoints(500)} /> : null}
+        <FlowLayer flows={flows} showDirection />
+      </MapsMapView>
+    );
+  }
+
+  it("keeps a point layer under a flow layer retained across camera frames", async () => {
+    let controller: MapSurfaceController | undefined;
+    const { container } = render(
+      content(true, (ready) => {
+        controller = ready;
+      }),
+    );
+    await waitFor(() =>
+      expect(paints.at(-1)?.order).toEqual([
+        MAPS_WGPU_APPLICATION_RETAINED_POINTS,
+        1,
+        1,
+        MAPS_WGPU_APPLICATION_RETAINED_POLYGONS,
+        2,
+        1,
+      ]),
+    );
+    const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+    expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
+    expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1);
+    const [group, ringCounts, , , paint] = vi.mocked(renderer.setRetainedPolygons!).mock.calls[0]!;
+    expect(group).toBe(2);
+    const kinds = Array.from(
+      { length: ringCounts.length },
+      (_, index) => paint[index * MAPS_RETAINED_POLYGON_PAINT_STRIDE + 9],
+    );
+    expect(kinds.filter((kind) => kind === MAPS_RETAINED_SHAPE_LINE)).toHaveLength(20);
+    expect(kinds.filter((kind) => kind === MAPS_RETAINED_SHAPE_DIRECTION_MARKER)).toHaveLength(20);
+    // Each flow's two endpoints stay in the shape group, in painter order.
+    expect(kinds.filter((kind) => kind === MAPS_RETAINED_SHAPE_CIRCLE)).toHaveLength(40);
+
+    vi.mocked(runtime.project).mockClear();
+    vi.mocked(runtime.projectPacked).mockClear();
+    paints.length = 0;
+    for (let step = 1; step <= 10; step += 1) {
+      act(() => controller!.setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 }));
+    }
+    expect(paints.length).toBeGreaterThanOrEqual(10);
+    for (const paint of paints) {
+      expect(paint.circles).toBe(0);
+      expect(paint.order).toHaveLength(6);
+    }
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
+    expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1);
+    expect(runtime.projectPacked).not.toHaveBeenCalled();
+    expect(runtime.project).not.toHaveBeenCalled();
+  });
+
+  it("evicts groups a new frame no longer uses or uses for another kind", async () => {
+    const { rerender } = render(content(true));
+    await waitFor(() => expect(paints.at(-1)?.order).toHaveLength(6));
+
+    rerender(content(false));
+    await waitFor(() =>
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]),
+    );
+    expect(renderer.evictRetainedPoints).toHaveBeenCalledWith(1);
+    expect(renderer.evictRetainedPolygons).toHaveBeenCalledWith(2);
+    expect(vi.mocked(renderer.setRetainedPolygons!).mock.calls.at(-1)![0]).toBe(1);
   });
 });
 

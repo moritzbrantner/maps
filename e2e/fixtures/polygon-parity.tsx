@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 
 import {
+  FlowLayer,
   GeoJsonLayer,
   MapView,
   type GeoJsonLayerStyle,
@@ -164,6 +165,36 @@ const cases = {
     },
     { ...opaque("#0d9488", 3), polygonFillOpacity: 0.8 },
   ),
+  // Opt-in line cases (#195), in the top row: sharp round joins, round caps and a
+  // translucent line that crosses itself, which must blend once where it overlaps.
+  "line-joins": feature(
+    "line-joins",
+    {
+      coordinates: [
+        [-19, 3],
+        [-15, 9],
+        [-11, 3.5],
+        [-7, 9],
+        [-6.5, 4],
+      ],
+      type: "LineString",
+    },
+    { lineColor: "#7c3aed", lineOpacity: 1, lineWidth: 10 },
+  ),
+  "translucent-line": feature(
+    "translucent-line",
+    {
+      coordinates: [
+        [1, 3],
+        [9, 9],
+        [9, 3],
+        [1, 9],
+        [3, 2],
+      ],
+      type: "LineString",
+    },
+    { lineColor: "#0f766e", lineOpacity: 0.5, lineWidth: 14 },
+  ),
   // Opt-in invalid input; the packer's whole-frame behavior is part of the contract.
   "zero-area": feature(
     "zero-area",
@@ -182,11 +213,26 @@ const cases = {
   ),
 };
 
+const OPT_IN = new Set(["zero-area", "antimeridian", "line-joins", "translucent-line"]);
 const params = new URLSearchParams(window.location.search);
 const only = params.get("cases")?.split(",");
 const features = Object.entries(cases)
-  .filter(([id]) => (only ? only.includes(id) : id !== "zero-area" && id !== "antimeridian"))
+  .filter(([id]) => (only ? only.includes(id) : !OPT_IN.has(id)))
   .map(([, value]) => value);
+// `flows=1`: flows above the GeoJSON layer (#195): direction markers on their own, then
+// endpoints, which interleave circles with lines in painter order.
+const flowPoint = (longitude: number, latitude: number): [number, number] => [longitude, latitude];
+const flows =
+  params.get("flows") === "1"
+    ? {
+        endpoints: [{ from: flowPoint(19, -9), id: "west", to: flowPoint(12, -2) }],
+        markers: [
+          { from: flowPoint(11, -9), id: "east", to: flowPoint(18, -1) },
+          { from: flowPoint(11, 3), id: "north-east", to: flowPoint(19, 9) },
+          { from: flowPoint(-4, 2), id: "north", to: flowPoint(-3, 9) },
+        ],
+      }
+    : null;
 
 type Controller = MapSurfaceController & { getRendererStats(): MapsRendererStats | null };
 
@@ -235,6 +281,19 @@ function PolygonParity() {
         hoveredFeatureId="hovered"
         selectedFeatureId="selected"
       />
+      {flows ? (
+        <>
+          <FlowLayer
+            flowColor="#1d4ed8"
+            flows={flows.markers}
+            maxWidth={8}
+            minWidth={8}
+            showDirection
+            showEndpoints={false}
+          />
+          <FlowLayer flowColor="#be185d" flows={flows.endpoints} maxWidth={6} minWidth={6} />
+        </>
+      ) : null}
     </MapView>
   );
 }

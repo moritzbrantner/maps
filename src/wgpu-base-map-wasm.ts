@@ -76,10 +76,10 @@ export type MapsWgpuBaseMapRenderer = {
   setRetainedPoints?(group: number, lonLat: Float64Array, paint: Float32Array): number;
   evictRetainedPoints?(group: number): void;
   /**
-   * Retains an application polygon group on the GPU (#196): per-polygon ring counts,
-   * per-ring point counts, `[longitude, latitude]` pairs (lowered once by Rust) and
-   * `MAPS_RETAINED_POLYGON_PAINT_STRIDE` paint values per polygon. Camera frames do not
-   * re-upload it. Absent on renderers without retained polygon support.
+   * Retains an application shape group on the GPU: polygons (#196), lines and direction
+   * markers (#195). Per-shape ring counts, per-ring point counts, `[longitude, latitude]`
+   * pairs (lowered once by Rust) and `MAPS_RETAINED_POLYGON_PAINT_STRIDE` paint values per
+   * shape. Camera frames do not re-upload it. Absent on renderers without retained shapes.
    */
   setRetainedPolygons?(
     group: number,
