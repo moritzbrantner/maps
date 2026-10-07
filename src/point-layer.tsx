@@ -316,6 +316,8 @@ function PointFeatureLayer<
                   if (featureDraggable) {
                     bindFlatPointDrag(marker as FlatPointMarker, {
                       coordinates: feature.coordinates,
+                      // The label marker, added after the circle, moves with it.
+                      followers: () => entry.layers.slice(1) as FlatPointMarker[],
                       feature,
                       map: map as FlatDragMap,
                       onFeatureDrag,
@@ -485,10 +487,13 @@ function getFlatFeaturePosition(
   return map.latLngToContainerPoint?.(toLatLng(coordinates)) ?? { x: 0, y: 0 };
 }
 
-function bindFlatPointDrag<TFeature>(
+/** @internal Exported for tests. */
+export function bindFlatPointDrag<TFeature>(
   marker: FlatPointMarker,
   options: {
     coordinates: [longitude: number, latitude: number];
+    /** Layers drawn at the point, such as its label, that move with the dragged circle. */
+    followers?: () => readonly FlatPointMarker[];
     feature: TFeature;
     map: FlatDragMap;
     onFeatureDrag?: (feature: TFeature, coordinates: [longitude: number, latitude: number]) => void;
@@ -504,6 +509,10 @@ function bindFlatPointDrag<TFeature>(
     pointer: [number, number];
   } | null = null;
   let lastCoordinates: [number, number] | null = null;
+  const moveTo = (coordinates: [number, number]) => {
+    marker.setLatLng?.(toLatLng(coordinates));
+    for (const follower of options.followers?.() ?? []) follower.setLatLng?.(toLatLng(coordinates));
+  };
 
   const handleMove = (event: FlatDragEvent = {}) => {
     const pointerCoordinates = getFlatDragCoordinates(options.map, event);
@@ -537,7 +546,7 @@ function bindFlatPointDrag<TFeature>(
     }
 
     lastCoordinates = coordinates;
-    marker.setLatLng?.(toLatLng(coordinates));
+    moveTo(coordinates);
     options.onFeatureDrag?.(options.feature, coordinates);
   };
 
@@ -561,7 +570,7 @@ function bindFlatPointDrag<TFeature>(
     }
 
     if (dragStart?.active && coordinates) {
-      marker.setLatLng?.(toLatLng(coordinates));
+      moveTo(coordinates);
       options.onFeatureDragEnd?.(options.feature, coordinates);
     }
 
