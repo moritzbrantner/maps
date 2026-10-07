@@ -105,6 +105,7 @@ type RegisteredFlatLayer = {
   cleanup: (() => void) | null;
   id: string;
   group: FlatLayerGroup | null;
+  onHoverChange: (() => void) | null;
   preserveOnRender: boolean;
   render: MapLibreLayerRender;
   renderOnViewStateChange: boolean;
@@ -288,6 +289,21 @@ export function MapView({
       });
     }
   });
+
+  // Hover restyles the registered layers in place; it never re-renders them (#208).
+  useEffect(
+    () =>
+      hoverStore.subscribe(() => {
+        if (!isFlatStyleReadyRef.current) {
+          return;
+        }
+
+        for (const layer of layersRef.current.values()) {
+          layer.onHoverChange?.();
+        }
+      }),
+    [hoverStore],
+  );
 
   const clearFeatureHover = useEffectEvent(() => {
     blockedHoverPositionRef.current = null;
@@ -691,6 +707,7 @@ export function MapView({
         cleanup: previous?.cleanup ?? null,
         id,
         group,
+        onHoverChange: options.onHoverChange ?? null,
         preserveOnRender,
         render,
         renderOnViewStateChange,
@@ -720,6 +737,7 @@ export function MapView({
         layersRef.current.set(id, {
           ...layer,
           cleanup: null,
+          onHoverChange: null,
           preserveOnRender: false,
           render: clearRender,
           renderOnViewStateChange: false,

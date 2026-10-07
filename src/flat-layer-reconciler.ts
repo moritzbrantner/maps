@@ -2,12 +2,27 @@
 
 import type { FlatLayer } from "./maplibre-compat";
 
+/**
+ * Hover styling of a cached entry. It stays out of the entry signature and is applied in
+ * place, because replacing a layer under the pointer re-fires `mouseout`/`mouseover` (#208).
+ */
+export type FlatLayerEntryHover<TState = unknown> = {
+  /** Restyles the entry's existing layers for the given hover state. */
+  apply(state: TState): void;
+  /** The Map Feature the entry's pointer handlers report. */
+  feature: unknown;
+  state: TState;
+};
+
 export type FlatLayerEntry<TLayer = FlatLayer> = {
+  hover?: FlatLayerEntryHover;
   layers: readonly TLayer[];
   signature: string;
 };
 
 export type FlatLayerPlan<TEntry extends FlatLayerEntry<unknown>> = {
+  /** Hover state for a kept entry, applied in place when it differs from the entry's. */
+  hoverState?: unknown;
   key: string;
   render: () => TEntry | null;
   signature: string;
@@ -51,6 +66,7 @@ export function reconcileFlatLayerEntries<TEntry extends FlatLayerEntry<unknown>
 
     if (cached?.signature === plan.signature) {
       if (!plan.update || plan.update(cached)) {
+        syncFlatLayerEntryHover(cached, plan.hoverState);
         continue;
       }
 
@@ -58,6 +74,7 @@ export function reconcileFlatLayerEntries<TEntry extends FlatLayerEntry<unknown>
       cache.delete(key);
     } else if (cached && plan.updateOnSignatureChange && plan.update?.(cached)) {
       cached.signature = plan.signature;
+      syncFlatLayerEntryHover(cached, plan.hoverState);
       continue;
     } else if (cached) {
       remove(layer, cached);
@@ -78,6 +95,30 @@ export function reconcileFlatLayerEntries<TEntry extends FlatLayerEntry<unknown>
 
     remove(layer, cached);
     cache.delete(key);
+  }
+}
+
+function syncFlatLayerEntryHover(entry: FlatLayerEntry<unknown>, state: unknown) {
+  if (!entry.hover || state === undefined || entry.hover.state === state) {
+    return;
+  }
+
+  entry.hover.apply(state);
+  entry.hover.state = state;
+}
+
+/**
+ * Restyles cached entries in place for a hover change, without reconciling the layer:
+ * only entries whose hover state changed are touched.
+ */
+export function updateFlatLayerEntriesHover<TEntry extends FlatLayerEntry<unknown>>(
+  cache: Map<string, TEntry>,
+  getState: (feature: unknown) => unknown,
+) {
+  for (const entry of cache.values()) {
+    if (entry.hover) {
+      syncFlatLayerEntryHover(entry, getState(entry.hover.feature));
+    }
   }
 }
 

@@ -23,6 +23,7 @@ export class Map {
   private fallbackLayerGroup: unknown = null;
   private layers = new globalThis.Map<string, unknown>();
   private mockLayers = new globalThis.Map<string, unknown>();
+  private pendingFlatMarker: { remove?: () => void } | null = null;
   private maxBounds: [[number, number], [number, number]] | null = null;
   private minZoom = 0;
   private projection: ProjectionSpecification = { type: "mercator" };
@@ -148,9 +149,20 @@ export class Map {
         }
       : options;
 
-    return flatRuntime.marker(toLatLng(coordinates) as never, legacyOptions as never).addTo(
+    const mockMarker = flatRuntime.marker(toLatLng(coordinates) as never, legacyOptions as never).addTo(
       this.getCurrentLayerGroup() as never,
     );
+
+    // The compatibility DOM marker adds its `Marker` right after; it removes this mock.
+    this.pendingFlatMarker = mockMarker as { remove?: () => void };
+    return mockMarker;
+  }
+
+  __mbTakePendingFlatMarker() {
+    const marker = this.pendingFlatMarker;
+
+    this.pendingFlatMarker = null;
+    return marker;
   }
 
   containerPointToLatLng(point: [number, number]) {
@@ -411,7 +423,18 @@ export class Map {
     this.sources.delete(id);
   }
 
-  setPaintProperty() {}
+  // The compatibility layers restyle in place through paint properties; mirror their
+  // flat options (class name, opacity, ...) onto the mock layer.
+  setPaintProperty(id: string) {
+    const layer = this.layers.get(id) as
+      | { metadata?: { flatOptions?: Record<string, unknown> } }
+      | undefined;
+    const mockLayer = this.mockLayers.get(id) as { options?: Record<string, unknown> } | undefined;
+
+    if (layer?.metadata?.flatOptions && mockLayer) {
+      mockLayer.options = { ...mockLayer.options, ...layer.metadata.flatOptions };
+    }
+  }
 
   setMaxBounds(bounds: [[number, number], [number, number]] | null) {
     this.maxBounds = bounds;
@@ -573,11 +596,17 @@ function imageCoordinatesToBounds(coordinates: Array<[number, number]> | undefin
 }
 
 export class Marker {
-  addTo() {
+  private flatMarker: { remove?: () => void } | null = null;
+
+  addTo(map: { __mbTakePendingFlatMarker?: () => { remove?: () => void } | null }) {
+    this.flatMarker = map.__mbTakePendingFlatMarker?.() ?? null;
     return this;
   }
 
-  remove() {}
+  remove() {
+    this.flatMarker?.remove?.();
+    this.flatMarker = null;
+  }
 
   setLngLat() {
     return this;

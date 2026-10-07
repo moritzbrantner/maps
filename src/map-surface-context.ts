@@ -29,6 +29,11 @@ export type MapLibreLayerRender = (context: {
 }) => void;
 
 export type MapLibreLayerRegistrationOptions = {
+  /**
+   * Called when the uncontrolled hovered feature changes, so the layer can restyle its
+   * existing markers and paths in place instead of re-rendering (#208).
+   */
+  onHoverChange?: () => void;
   preserveOnRender?: boolean;
   renderOnViewStateChange?: boolean;
 };
