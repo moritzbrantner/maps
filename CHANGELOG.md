@@ -15,6 +15,12 @@
   `core`-only code, `createPointAggregationIndex()` returns points unclustered
   and reports a `fallback` diagnostic.
 
+### Minor Changes
+
+- `PointLayer` accepts `getPointLabel` to draw text centered on a point, as
+  cluster layers draw their counts. On WebGPU, labeled points stay GPU-retained
+  and camera frames project only the labeled points for the label pass.
+
 ### Patch Changes
 
 - Imported `polygon-clipping` through its default export so Rollup-based
