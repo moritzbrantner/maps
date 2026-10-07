@@ -470,10 +470,8 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
      * every copy, but the label pass places one label per point, so labeled frames then stay
      * on the projected path, which draws each circle and its label once, as Canvas does.
      */
-    const viewShowsWorldCopies = (size: { height: number; width: number }) => {
-      const bounds = getViewport(size.width, size.height)?.bounds;
-      return bounds !== undefined && bounds[2] - bounds[0] >= 360;
-    };
+    const viewShowsWorldCopies = (size: { height: number; width: number }) =>
+      getViewport(size.width, size.height)?.spansFullWorld === true;
 
     /**
      * The Canvas label pass of a retained frame: projects only its labeled circles at the

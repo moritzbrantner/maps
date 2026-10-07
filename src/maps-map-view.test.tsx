@@ -58,6 +58,9 @@ vi.mock("./canvas-flat-runtime", async () => {
         getVisibleBounds() {
           return [-180, -85, 180, 85];
         },
+        getVisibleSpansFullWorld() {
+          return true;
+        },
         project(coordinates) {
           return {
             x: 400 + coordinates[0] * 10,

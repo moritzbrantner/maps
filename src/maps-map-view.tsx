@@ -242,6 +242,7 @@ export function MapsMapView({
 
       return {
         bounds: runtime.getVisibleBounds(),
+        spansFullWorld: runtime.getVisibleSpansFullWorld(),
         zoom: runtime.getViewState().zoom,
       };
     },

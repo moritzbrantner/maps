@@ -129,6 +129,8 @@ export type MapsCanvasFlatRuntimeController = {
   getRetainedVectorBasemap(): MapsRetainedVectorBasemap | null;
   getViewState(): MapViewState;
   getVisibleBounds(): MapBounds;
+  /** Whether the current camera sees the whole world, so a location can repeat across world copies. */
+  getVisibleSpansFullWorld(): boolean;
   getVisibleTiles(): MapsRasterTileId[];
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   projectPacked(coordinates: Float64Array): Float64Array;
@@ -603,6 +605,10 @@ export function createMapsBrowserRuntime(
         assertActive();
         const bounds = frameSynchronizer.getVisibleBounds();
         return [bounds.west, bounds.south, bounds.east, bounds.north];
+      },
+      getVisibleSpansFullWorld() {
+        assertActive();
+        return frameSynchronizer.getVisibleBounds().spansFullWorld;
       },
       getVisibleTiles() {
         assertActive();
