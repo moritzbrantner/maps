@@ -155,12 +155,12 @@ impl RetainedPolygons {
                         return Err("a retained circle needs one centre");
                     }
                     Shape::Circle => lowered.push(ring),
+                    // Distinct coordinates can meet in Mercator (a 360° wrap, clamped poles):
+                    // Canvas then strokes a zero-length path, whose round caps form a dot,
+                    // which the single join disc of a one-point path reproduces.
+                    Shape::Line => lowered.push(dedup(ring)),
                     _ => {
-                        let ring = if shape == Shape::Polygon {
-                            open_ring(ring)
-                        } else {
-                            dedup(ring)
-                        };
+                        let ring = open_ring(ring);
                         // Fewer than two distinct points draw nothing on Canvas either.
                         if ring.len() >= 2 {
                             lowered.push(ring);
@@ -605,6 +605,16 @@ mod tests {
         assert_eq!(kinds.iter().filter(|&&kind| kind == 0.0).count(), 2 * 6);
         assert_eq!(kinds.iter().filter(|&&kind| kind == 1.0).count(), 3 * 6);
         assert_eq!(draw.stroke_count as usize, kinds.len());
+    }
+
+    #[test]
+    fn a_line_that_collapses_in_mercator_is_a_round_cap_dot() {
+        let lines = RetainedPolygons::lower(&[1], &[2], &[0.0, 0.0, 360.0, 0.0], &LINE).unwrap();
+        let geometry = lines.geometry([0.0, 0.0]);
+        let [draw] = geometry.draws[..] else { panic!() };
+
+        assert_eq!(draw.stroke_count, 6);
+        assert_eq!(stroke_kinds(&geometry), [1.0; 6], "one disc, no segment");
     }
 
     #[test]
