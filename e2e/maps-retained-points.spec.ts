@@ -460,3 +460,27 @@ test("a 10,000-point journey with 50 labeled points projects only the labels on 
     expect(step.labelProjections).toBe(labels);
   }
 });
+
+test("labeled points in a view wider than one world use the projected path @smoke", async ({
+  page,
+}) => {
+  // Retained circles repeat in every world copy, but the label pass places one label per
+  // point, so the overlay keeps such frames on the projected path (#204).
+  await page.goto("/e2e/fixtures/retained-points.html?points=world&lon=178&lat=0&zoom=0.2&labels=all");
+  const map = page.getByLabel("Retained points map");
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await expect(map.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-base-renderer",
+    "wgpu",
+  );
+  await expect(map.locator('[data-map-overlay-runtime="maps"]')).toHaveAttribute(
+    "data-map-overlay-backend",
+    "wgpu",
+  );
+  // Zooming in to a single world copy returns the frame to the retained path.
+  await page.evaluate(() => window.retainedPoints.setViewState({ center: [0, 0], zoom: 4 }));
+  await expect(map.locator('[data-map-overlay-runtime="maps"]')).toHaveAttribute(
+    "data-map-overlay-backend",
+    "wgpu-retained",
+  );
+});

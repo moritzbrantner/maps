@@ -466,6 +466,16 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     };
 
     /**
+     * Whether the view may show a point in more than one world copy. Retained geometry draws
+     * every copy, but the label pass places one label per point, so labeled frames then stay
+     * on the projected path, which draws each circle and its label once, as Canvas does.
+     */
+    const viewShowsWorldCopies = (size: { height: number; width: number }) => {
+      const bounds = getViewport(size.width, size.height)?.bounds;
+      return bounds !== undefined && bounds[2] - bounds[0] >= 360;
+    };
+
+    /**
      * The Canvas label pass of a retained frame: projects only its labeled circles at the
      * current camera, O(labels), and draws their labels above the retained geometry, as the
      * screen path draws labels above wgpu geometry.
@@ -573,7 +583,15 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           if (retainedModeRef.current && retainedPoints?.active()) {
             const canvas = canvasRef.current;
             const size = retainedSizeRef.current;
-            if (retainedLabeledRef.current && canvas && size) drawRetainedLabels(canvas, size);
+            if (retainedLabeledRef.current && canvas && size) {
+              // Zoomed out to several world copies: the full draw moves labels to the
+              // projected path (see `viewShowsWorldCopies`).
+              if (viewShowsWorldCopies(size)) {
+                drawRef.current?.();
+                return;
+              }
+              drawRetainedLabels(canvas, size);
+            }
             return;
           }
           if (presentMotion()) return;
@@ -678,6 +696,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
             (entry) => entry.kind === "point" || entry.kind === "geojson" || entry.kind === "flow",
           ) &&
           !snapshot.renderSteps.some((step) => step.kind === "raster") &&
+          !(
+            snapshot.frame.primitives.some(isMapRenderLabeledCircle) && viewShowsWorldCopies(size)
+          ) &&
           retainedPoints.render(snapshot.frame, interaction, size)
         ) {
           const labeled = snapshot.frame.primitives.filter(isMapRenderLabeledCircle);

@@ -127,13 +127,14 @@ beforeEach(() => {
         renderCamera: {
           viewProjection: [camera.zoom, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
         },
+        // One world copy at the test zooms; a full-longitude view would show several.
         visibleBounds: {
-          west: -180,
-          east: 180,
-          south: -85,
-          north: 85,
+          west: camera.center[0] - 60,
+          east: camera.center[0] + 60,
+          south: -40,
+          north: 40,
           crossesAntimeridian: false,
-          spansFullWorld: true,
+          spansFullWorld: false,
         },
       }),
     ),
