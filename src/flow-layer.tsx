@@ -16,7 +16,11 @@ import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
 import { createFlowLayerFeatures, createFlowPathCoordinates } from "./flow-layer-data";
 export { createFlowLayerFeatures, createFlowPathCoordinates } from "./flow-layer-data";
-import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
+import {
+  reconcileFlatLayerEntries,
+  updateFlatLayerEntriesHover,
+  type FlatLayerEntryHover,
+} from "./flat-layer-reconciler";
 
 export type MapFlow<TProperties = Record<string, unknown>> = {
   from: [longitude: number, latitude: number];
@@ -175,44 +179,67 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
             );
             const flowCoordinates = createFlowPathCoordinates(feature, flowShape);
             const flowLatLngs = flowCoordinates.map(toLatLng);
-            const hasActiveFlow = Boolean(selectedFeatureId) || hasHoveredFlow;
-            const active = selected || hovered;
-            const opacity = active
-              ? hovered
-                ? hoveredFlowOpacity
-                : selectedFlowOpacity
-              : hasActiveFlow
-                ? inactiveFlowOpacity
-                : 0.72;
+            const hasSelectedFlow = Boolean(selectedFeatureId);
+            const hoverState = getFlatFlowHoverState(hovered, hasHoveredFlow);
+            // Hover only changes class names and opacity, which are restyled in place.
+            const getStyle = (state: FlatFlowHoverState) => {
+              const flowHovered = state === "hovered";
+              const hasActiveFlow = hasSelectedFlow || state !== "idle";
+              const active = selected || flowHovered;
+
+              return {
+                className: joinClassNames(
+                  "mb-maps__flow-line",
+                  active && "mb-maps__flow-line--active",
+                  hasActiveFlow && !active && "mb-maps__flow-line--inactive",
+                  flowHovered && "mb-maps__feature--hovered",
+                  selected && "mb-maps__feature--selected",
+                ),
+                opacity: active
+                  ? flowHovered
+                    ? hoveredFlowOpacity
+                    : selectedFlowOpacity
+                  : hasActiveFlow
+                    ? inactiveFlowOpacity
+                    : 0.72,
+              };
+            };
+            const style = getStyle(hoverState);
             const featureKey = getFlatFlowFeatureKey(feature, getFeatureId);
             const geometryKey = createFlatFlowGeometryKey(feature, flowCoordinates);
             const signature = createFlatFlowSignature({
               color,
               directionMarker,
               feature,
-              hasActiveFlow,
-              hovered,
+              hasSelectedFlow,
+              hoveredFlowOpacity,
+              inactiveFlowOpacity,
               isMeasuring,
-              opacity,
               selected,
+              selectedFlowOpacity,
               showDirection,
               showEndpoints,
             });
+            const addArrow = (opacity: number) =>
+              addFlowArrowMarker({
+                color,
+                feature,
+                flowCoordinates,
+                flat,
+                map,
+                opacity,
+                overlay: layer,
+              }) ?? null;
 
             return {
+              hoverState,
               key: featureKey,
               render: () => {
                 const line = flat.polyline(flowLatLngs, {
-                  className: joinClassNames(
-                    "mb-maps__flow-line",
-                    active && "mb-maps__flow-line--active",
-                    hasActiveFlow && !active && "mb-maps__flow-line--inactive",
-                    hovered && "mb-maps__feature--hovered",
-                    selected && "mb-maps__feature--selected",
-                  ),
+                  className: style.className,
                   color,
                   interactive: !isMeasuring,
-                  opacity,
+                  opacity: style.opacity,
                   weight: selected ? feature.width + 1.5 : feature.width,
                 });
 
@@ -279,16 +306,7 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
                 let toEndpointLayer: FlatLayer | null = null;
 
                 if (showDirection && directionMarker === "arrow") {
-                  arrowLayer =
-                    addFlowArrowMarker({
-                      color,
-                      feature,
-                      flowCoordinates,
-                      flat,
-                      map,
-                      opacity,
-                      overlay: layer,
-                    }) ?? null;
+                  arrowLayer = addArrow(style.opacity);
                   if (arrowLayer) {
                     layers.push(arrowLayer);
                   }
@@ -323,15 +341,41 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
                   layers.push(toEndpointLayer);
                 }
 
-                return {
+                const entry: FlatFlowCacheEntry = {
                   arrowLayer,
                   fromEndpointLayer,
                   geometryKey,
+                  hover: {
+                    apply: (state) => {
+                      const nextStyle = getStyle(state);
+
+                      line.setStyle?.(nextStyle);
+
+                      // The arrow glyph is a non-interactive DOM marker with its opacity
+                      // baked in, so it is replaced; the hovered path stays mounted.
+                      if (entry.arrowLayer) {
+                        const index = entry.layers.indexOf(entry.arrowLayer);
+                        const nextArrow = addArrow(nextStyle.opacity);
+
+                        layer.removeLayer(entry.arrowLayer);
+                        entry.arrowLayer = nextArrow;
+                        if (nextArrow) {
+                          entry.layers.splice(index, 1, nextArrow);
+                        } else {
+                          entry.layers.splice(index, 1);
+                        }
+                      }
+                    },
+                    feature,
+                    state: hoverState,
+                  },
                   layers,
                   lineLayer: line,
                   signature,
                   toEndpointLayer,
                 };
+
+                return entry;
               },
               signature,
               update: (entry) => {
@@ -351,7 +395,30 @@ export function FlowLayer<TProperties = Record<string, unknown>>({
           }),
         });
       },
-      { preserveOnRender: true, renderOnViewStateChange: false },
+      {
+        onHoverChange: hoveredFeatureId
+          ? undefined
+          : () => {
+              const cache = flatFlowCacheRef.current;
+              const isHovered = (feature: unknown) =>
+                Boolean(
+                  surfaceRef.current?.isFeatureHovered(
+                    feature as FlowLayerFeature<TProperties>,
+                    hoveredFeatureId,
+                    getFeatureId,
+                  ),
+                );
+              const hasHoveredFlow = Array.from(cache.values()).some((entry) =>
+                isHovered(entry.hover.feature),
+              );
+
+              updateFlatLayerEntriesHover(cache, (feature) =>
+                getFlatFlowHoverState(isHovered(feature), hasHoveredFlow),
+              );
+            },
+        preserveOnRender: true,
+        renderOnViewStateChange: false,
+      },
     );
   }, [
     directionMarker,
@@ -392,10 +459,17 @@ function getFlowCenter<TProperties>(
   ];
 }
 
+type FlatFlowHoverState = "dimmed" | "hovered" | "idle";
+
+function getFlatFlowHoverState(hovered: boolean, hasHoveredFlow: boolean): FlatFlowHoverState {
+  return hovered ? "hovered" : hasHoveredFlow ? "dimmed" : "idle";
+}
+
 type FlatFlowCacheEntry = {
   arrowLayer: FlatLayer | null;
   fromEndpointLayer: FlatLayer | null;
   geometryKey: string;
+  hover: FlatLayerEntryHover<FlatFlowHoverState>;
   layers: FlatLayer[];
   lineLayer: FlatLayer;
   signature: string;
@@ -424,22 +498,24 @@ function createFlatFlowSignature<TProperties>({
   color,
   directionMarker,
   feature,
-  hasActiveFlow,
-  hovered,
+  hasSelectedFlow,
+  hoveredFlowOpacity,
+  inactiveFlowOpacity,
   isMeasuring,
-  opacity,
   selected,
+  selectedFlowOpacity,
   showDirection,
   showEndpoints,
 }: {
   color: string;
   directionMarker: FlowDirectionMarker;
   feature: FlowLayerFeature<TProperties>;
-  hasActiveFlow: boolean;
-  hovered: boolean;
+  hasSelectedFlow: boolean;
+  hoveredFlowOpacity: number;
+  inactiveFlowOpacity: number;
   isMeasuring: boolean;
-  opacity: number;
   selected: boolean;
+  selectedFlowOpacity: number;
   showDirection: boolean;
   showEndpoints: boolean;
 }) {
@@ -452,12 +528,13 @@ function createFlatFlowSignature<TProperties>({
       metrics: feature.flow.metrics,
       properties: feature.flow.properties,
     },
-    hasActiveFlow,
-    hovered,
+    hasSelectedFlow,
+    hoveredFlowOpacity,
+    inactiveFlowOpacity,
     interactive: !isMeasuring,
-    opacity,
     rawValue: feature.rawValue,
     selected,
+    selectedFlowOpacity,
     showDirection,
     showEndpoints,
     value: feature.value,

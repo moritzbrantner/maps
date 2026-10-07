@@ -1027,7 +1027,7 @@ describe("@moritzbrantner/maps additional map kinds", () => {
 
     expect(screen.getByText("2")).toBeTruthy();
     expect(
-      group?.layers.find((layer) => layer.options?.className === "mb-maps__cluster-marker"),
+      group?.layers.find((layer) => hasLayerClassName(layer, "mb-maps__cluster-marker")),
     ).toBe(marker);
   });
 
@@ -3407,6 +3407,208 @@ describe("MapLibre Map View surface subscriptions", () => {
     expect(screen.queryByText("Hovered point")).toBeNull();
     expect(renders).toEqual({ hover: 1, pointLayer: 0, stable: 0, view: 0 });
     expect(work()).toEqual({ computeFrame: 0, groupClears: 0 });
+  });
+});
+
+// #208: uncontrolled hover restyles the existing MapLibre layers in place.
+describe("MapLibre Map View uncontrolled hover styling", () => {
+  const hoveredClassName = "mb-maps__feature--hovered";
+
+  async function renderHoverableLayer(label: string, layer: React.ReactNode) {
+    let layerRenders = 0;
+
+    render(
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel={label}
+        showAttributionControl={false}
+      >
+        <Profiler
+          id="hover-layer"
+          onRender={() => {
+            layerRenders += 1;
+          }}
+        >
+          {layer}
+        </Profiler>
+      </MapView>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(label).getAttribute("data-map-ready")).toBe("true");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const layers = () => flatMock.getLayerGroups().flatMap((group) => group.layers);
+    const groupClears = () =>
+      flatMock.getLayerGroups().reduce((total, group) => total + group.clearCount, 0);
+    const before = { clears: groupClears(), renders: layerRenders };
+
+    return {
+      layers,
+      work: () => ({
+        groupClears: groupClears() - before.clears,
+        layerRenders: layerRenders - before.renders,
+      }),
+    };
+  }
+
+  async function hover(layer: { handlers: Map<string, Array<(...args: unknown[]) => void>> }) {
+    await act(async () => {
+      layer.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+  }
+
+  async function unhover(layer: { handlers: Map<string, Array<(...args: unknown[]) => void>> }) {
+    await act(async () => {
+      layer.handlers.get("mouseout")?.[0]?.({});
+    });
+  }
+
+  test("toggles the hovered class on the same point marker", async () => {
+    const { layers, work } = await renderHoverableLayer(
+      "Hover point styling",
+      <PointLayer
+        points={[
+          { id: "p1", label: "Point 1", latitude: 40, longitude: -74 },
+          { id: "p2", label: "Point 2", latitude: 41, longitude: -73 },
+        ]}
+      />,
+    );
+    const [first, second] = layers().filter((layer) => layer.type === "circleMarker");
+
+    await hover(first!);
+    expect(hasLayerClassName(first!, hoveredClassName)).toBe(true);
+    expect(hasLayerClassName(second!, hoveredClassName)).toBe(false);
+    expect(layers()).toContain(first);
+
+    await unhover(first!);
+    expect(hasLayerClassName(first!, hoveredClassName)).toBe(false);
+    expect(layers()).toContain(first);
+    expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
+  });
+
+  test("toggles the hovered class on the same cluster marker", async () => {
+    const { layers, work } = await renderHoverableLayer(
+      "Hover cluster styling",
+      <ClusterLayer
+        points={[
+          { id: "store-1", latitude: 40, longitude: -74 },
+          { id: "store-2", latitude: 40.01, longitude: -74.01 },
+        ]}
+      />,
+    );
+    const cluster = layers().find((layer) =>
+      hasLayerClassName(layer, "mb-maps__cluster-marker"),
+    );
+    expect(cluster).toBeTruthy();
+
+    await hover(cluster!);
+    expect(hasLayerClassName(cluster!, hoveredClassName)).toBe(true);
+    expect(layers()).toContain(cluster);
+
+    await unhover(cluster!);
+    expect(hasLayerClassName(cluster!, hoveredClassName)).toBe(false);
+    expect(layers()).toContain(cluster);
+    expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
+  });
+
+  test("restyles the same flow paths with hovered and inactive opacity", async () => {
+    const { layers, work } = await renderHoverableLayer(
+      "Hover flow styling",
+      <FlowLayer
+        flows={[
+          { from: [-74, 40], id: "route-1", metrics: { trips: 10 }, to: [-73, 41] },
+          { from: [-75, 39], id: "route-2", metrics: { trips: 5 }, to: [-72, 42] },
+        ]}
+        hoveredFlowOpacity={0.9}
+        inactiveFlowOpacity={0.2}
+        weightMetric="trips"
+      />,
+    );
+    const [hovered, other] = layers().filter((layer) => layer.type === "polyline");
+    expect(hovered?.options?.opacity).toBe(0.72);
+
+    await hover(hovered!);
+    expect(hasLayerClassName(hovered!, hoveredClassName)).toBe(true);
+    expect(hovered?.options?.opacity).toBe(0.9);
+    expect(hasLayerClassName(other!, "mb-maps__flow-line--inactive")).toBe(true);
+    expect(other?.options?.opacity).toBe(0.2);
+    expect(layers()).toEqual(expect.arrayContaining([hovered, other]));
+
+    await unhover(hovered!);
+    expect(hasLayerClassName(hovered!, hoveredClassName)).toBe(false);
+    expect(hovered?.options?.opacity).toBe(0.72);
+    expect(hasLayerClassName(other!, "mb-maps__flow-line--inactive")).toBe(false);
+    expect(other?.options?.opacity).toBe(0.72);
+    expect(layers()).toEqual(expect.arrayContaining([hovered, other]));
+    expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
+  });
+
+  test("keeps the hovered flow path mounted while its direction arrows follow the hover opacity", async () => {
+    const { layers, work } = await renderHoverableLayer(
+      "Hover flow arrows",
+      <FlowLayer
+        flows={[
+          { from: [-74, 40], id: "route-1", metrics: { trips: 10 }, to: [-73, 41] },
+          { from: [-75, 39], id: "route-2", metrics: { trips: 5 }, to: [-72, 42] },
+        ]}
+        inactiveFlowOpacity={0.2}
+        showDirection
+        showEndpoints={false}
+        weightMetric="trips"
+      />,
+    );
+    const arrows = () => layers().filter((layer) => layer.type === "marker");
+    const [hovered] = layers().filter((layer) => layer.type === "polyline");
+    expect(arrows().map((arrow) => arrow.options?.opacity)).toEqual([0.72, 0.72]);
+
+    await hover(hovered!);
+    expect(layers()).toContain(hovered);
+    expect(arrows().map((arrow) => arrow.options?.opacity).sort()).toEqual([0.2, 0.95]);
+
+    await unhover(hovered!);
+    expect(arrows().map((arrow) => arrow.options?.opacity)).toEqual([0.72, 0.72]);
+    expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
+  });
+
+  test("toggles the hovered class on the same GeoJSON paths", async () => {
+    const { layers, work } = await renderHoverableLayer(
+      "Hover GeoJSON styling",
+      <GeoJsonLayer
+        featureCollection={{
+          type: "FeatureCollection",
+          features: [
+            {
+              id: "route-1",
+              type: "Feature",
+              properties: {},
+              geometry: {
+                type: "LineString",
+                coordinates: [
+                  [-75, 39],
+                  [-73, 41],
+                ],
+              },
+            },
+          ],
+        }}
+      />,
+    );
+    const path = layers().find((layer) => hasLayerClassName(layer, "mb-maps__geojson-feature"));
+    expect(path).toBeTruthy();
+
+    await hover(path!);
+    expect(hasLayerClassName(path!, hoveredClassName)).toBe(true);
+    expect(layers()).toContain(path);
+
+    await unhover(path!);
+    expect(hasLayerClassName(path!, hoveredClassName)).toBe(false);
+    expect(layers()).toContain(path);
+    expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
   });
 });
 

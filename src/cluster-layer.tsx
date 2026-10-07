@@ -21,7 +21,11 @@ import {
   type PointAggregationIndexOptions,
   type VisibleAggregationSummary,
 } from "./aggregation";
-import { reconcileFlatLayerEntries } from "./flat-layer-reconciler";
+import {
+  reconcileFlatLayerEntries,
+  updateFlatLayerEntriesHover,
+  type FlatLayerEntryHover,
+} from "./flat-layer-reconciler";
 import { escapeHtml, joinClassNames, toLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
@@ -144,22 +148,33 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             );
             const coordinatesKey = createFlatClusterCoordinatesKey(renderFeature.coordinates);
             const signature = createFlatClusterSignature({
-              hovered,
               isMeasuring,
               renderFeature,
               selected,
             });
+            const getClassName = (featureHovered: boolean) =>
+              joinClassNames(
+                renderFeature.kind === "cluster"
+                  ? "mb-maps__cluster-marker"
+                  : "mb-maps__point-marker",
+                featureHovered && "mb-maps__feature--hovered",
+                selected && "mb-maps__feature--selected",
+              );
+            const createHover = (marker: FlatLayer): FlatLayerEntryHover<boolean> => ({
+              apply: (featureHovered) => {
+                marker.setStyle?.({ className: getClassName(featureHovered) });
+              },
+              feature,
+              state: hovered,
+            });
 
             return {
+              hoverState: hovered,
               key: renderFeature.id,
               render: () => {
                 if (renderFeature.kind === "cluster") {
                   const marker = flat.circleMarker(toLatLng(renderFeature.coordinates), {
-                    className: joinClassNames(
-                      "mb-maps__cluster-marker",
-                      hovered && "mb-maps__feature--hovered",
-                      selected && "mb-maps__feature--selected",
-                    ),
+                    className: getClassName(hovered),
                     color: "#ffffff",
                     fillColor: renderFeature.fillColor,
                     fillOpacity: 0.9,
@@ -251,17 +266,14 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
                   return {
                     coordinatesKey,
+                    hover: createHover(marker),
                     layers: [marker, countMarker],
                     signature,
                   };
                 }
 
                 const marker = flat.circleMarker(toLatLng(renderFeature.coordinates), {
-                  className: joinClassNames(
-                    "mb-maps__point-marker",
-                    hovered && "mb-maps__feature--hovered",
-                    selected && "mb-maps__feature--selected",
-                  ),
+                  className: getClassName(hovered),
                   color: "#ffffff",
                   fillColor: renderFeature.fillColor,
                   fillOpacity: 0.92,
@@ -333,6 +345,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 marker.addTo(layer);
                 return {
                   coordinatesKey,
+                  hover: createHover(marker),
                   layers: [marker],
                   signature,
                 };
@@ -357,7 +370,21 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           }),
         });
       },
-      { preserveOnRender: true },
+      {
+        onHoverChange: hoveredFeatureId
+          ? undefined
+          : () =>
+              updateFlatLayerEntriesHover(flatFeatureCacheRef.current, (feature) =>
+                Boolean(
+                  surfaceRef.current?.isFeatureHovered(
+                    feature as AggregatedMapFeature<TProperties>,
+                    hoveredFeatureId,
+                    getFeatureId,
+                  ),
+                ),
+              ),
+        preserveOnRender: true,
+      },
     );
   }, [
     getFeatureId,
@@ -398,19 +425,16 @@ function createFlatClusterCoordinatesKey(coordinates: [longitude: number, latitu
 }
 
 function createFlatClusterSignature<TProperties>({
-  hovered,
   isMeasuring,
   renderFeature,
   selected,
 }: {
-  hovered: boolean;
   isMeasuring: boolean;
   renderFeature: MapPointClusterRenderFeature<TProperties>;
   selected: boolean;
 }) {
   return JSON.stringify({
     fillColor: renderFeature.fillColor,
-    hovered,
     interactive: !isMeasuring,
     kind: renderFeature.kind,
     label: renderFeature.label ?? renderFeature.id,
@@ -421,6 +445,7 @@ function createFlatClusterSignature<TProperties>({
 
 type FlatClusterCacheEntry = {
   coordinatesKey: string;
+  hover: FlatLayerEntryHover<boolean>;
   layers: FlatLayer[];
   signature: string;
 };
