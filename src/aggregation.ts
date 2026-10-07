@@ -43,6 +43,8 @@ export type AggregatedMapFeature<TProperties = Record<string, unknown>> =
 export type ViewportAggregationQuery = {
   bounds: [west: number, south: number, east: number, north: number];
   zoom: number;
+  /** Rust's camera result: the view sees the whole world and may repeat world copies. */
+  spansFullWorld?: boolean;
 };
 
 export type VisibleAggregationSummary = {

@@ -22,6 +22,7 @@ vi.mock("./canvas-flat-runtime", async () => {
     ) => void;
     getViewState: () => ViewState;
     getVisibleBounds: () => [number, number, number, number];
+    getVisibleSpansFullWorld: () => boolean;
     project: (coordinates: [number, number]) => { x: number; y: number };
     projectPacked: (coordinates: Float64Array) => Float64Array;
     setViewState: (viewState: ViewState, reason?: Reason) => void;
@@ -57,6 +58,9 @@ vi.mock("./canvas-flat-runtime", async () => {
         },
         getVisibleBounds() {
           return [-180, -85, 180, 85];
+        },
+        getVisibleSpansFullWorld() {
+          return true;
         },
         project(coordinates) {
           return {

@@ -60,6 +60,16 @@ export type MapVectorRenderPrimitive<TFeature = unknown> =
   | MapRenderPolygon<TFeature>;
 
 /**
+ * A circle with a label: its label is drawn by the Canvas annotation pass, which needs its
+ * screen position, so retained frames project it every camera frame (#204).
+ */
+export function isMapRenderLabeledCircle<TFeature>(
+  primitive: MapVectorRenderPrimitive<TFeature>,
+): boolean {
+  return primitive.kind === "circle" && Boolean(primitive.label);
+}
+
+/**
  * Maps-owned semantic vector render frame.
  *
  * Geographic coordinates, stable feature identity, interaction eligibility and
