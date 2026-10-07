@@ -3619,6 +3619,58 @@ describe("MapLibre Map View uncontrolled hover styling", () => {
     expect(layers()).toContain(path);
     expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
   });
+
+  test("restyles a retained GeoJSON path from its updated style on hover", async () => {
+    const collection = {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          id: "route-1",
+          type: "Feature" as const,
+          properties: {},
+          geometry: {
+            type: "LineString" as const,
+            coordinates: [
+              [-75, 39],
+              [-73, 41],
+            ] as [number, number][],
+          },
+        },
+      ],
+    };
+    const view = (lineColor: string) => (
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Hover restyled GeoJSON"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer featureCollection={collection} lineColor={lineColor} />
+      </MapView>
+    );
+    const { rerender } = render(view("#111111"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Hover restyled GeoJSON").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    rerender(view("#222222"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const path = flatMock
+      .getLayerGroups()
+      .flatMap((group) => group.layers)
+      .find((layer) => hasLayerClassName(layer, "mb-maps__geojson-feature"));
+    expect(paintOf(path!)["line-color"]).toBe("#222222");
+
+    await hover(path!);
+    // The hover restyle keeps the updated color instead of the creation-time one.
+    expect(paintOf(path!)["line-color"]).toBe("#222222");
+  });
 });
 
 function paintOf(layer: unknown): Record<string, unknown> {

@@ -194,11 +194,13 @@ export function GeoJsonLayer<
                   geometryKey,
                   hover: {
                     apply: (featureHovered) => {
+                      // The entry's current style: a retained entry is restyled in place when
+                      // the layer's style props change, so the creation-time style is stale.
                       updateFlatGeoJsonCachedStyle(
                         entry.layers,
                         feature.geometry,
                         entry.selected,
-                        style,
+                        entry.style,
                         getFlatGeoJsonClassName(featureHovered, entry.selected),
                         featureHovered,
                       );
@@ -210,6 +212,7 @@ export function GeoJsonLayer<
                   layers,
                   selected,
                   signature,
+                  style,
                 };
 
                 // Created layers carry the selected width; a hovered feature also gets its delta.
@@ -238,6 +241,7 @@ export function GeoJsonLayer<
                   entry.geometryKey = geometryKey;
                 }
                 entry.selected = selected;
+                entry.style = style;
 
                 return geometryUpdated && styleUpdated;
               },
@@ -322,6 +326,8 @@ type FlatGeoJsonCacheEntry = {
   layers: FlatGeometryLayer[];
   selected: boolean;
   signature: string;
+  /** The style last applied; hover restyles from it, not from the creation-time style. */
+  style: Required<GeoJsonLayerStyle>;
 };
 
 function getFlatGeoJsonClassName(hovered: boolean, selected: boolean) {
