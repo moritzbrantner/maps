@@ -90,6 +90,19 @@ const points: Point[] =
             3,
           );
 
+// `labels=N`: every (points / N)-th point is labeled with "1" (#204); `labels=all` labels
+// every point.
+const labelParam = params.get("labels");
+const labelEvery =
+  labelParam === null
+    ? 0
+    : labelParam === "all"
+      ? 1
+      : Math.max(1, Math.floor(points.length / Number(labelParam)));
+const labeledIds = new Set(
+  labelEvery > 0 ? points.filter((_, index) => index % labelEvery === 0).map((point) => point.id) : [],
+);
+
 // `flows=N`: N flows with direction markers above the points (#195), over the dense area.
 const flowCount = Number(params.get("flows") ?? 0);
 const flows = Array.from({ length: flowCount }, (_, index) => ({
@@ -123,8 +136,14 @@ createRoot(document.getElementById("map")!).render(
   >
     <PointLayer
       points={points}
+      getPointLabel={
+        labeledIds.size > 0
+          ? (feature) => (labeledIds.has(feature.point.id) ? "1" : null)
+          : undefined
+      }
       pointColor="#ff0000"
-      pointRadius={6}
+      // Labels sit inside a larger circle, so each point stays one red blob.
+      pointRadius={labelEvery > 0 ? 12 : 6}
       renderFeatureTooltip={(feature) => <span>Picked {feature.point.id}</span>}
     />
     {flowCount > 0 ? <FlowLayer flowColor="#1d4ed8" flows={flows} showDirection /> : null}

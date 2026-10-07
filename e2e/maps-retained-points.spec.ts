@@ -76,6 +76,8 @@ const cases = [
   { name: "bearing and pitch", query: "points=grid&zoom=11&bearing=35&pitch=45" },
   { name: "antimeridian", query: "points=antimeridian&lon=180&lat=0&zoom=11&step=0.03" },
   { name: "deep zoom", query: "points=grid&zoom=19&step=0.0001" },
+  // Labeled points stay retained; only their labels are projected, for the Canvas pass (#204).
+  { name: "labeled points", query: "points=grid&zoom=11&labels=all" },
   { name: "world copies", query: "points=world&lon=170&lat=0&zoom=1.2" },
   // The viewport is wider than one world: retained WebGPU draws every visible world copy,
   // like MapLibre's world copies, while the Canvas fallback projects each point once.
@@ -337,3 +339,124 @@ test("a mixed point and flow camera journey keeps both retained groups O(1) on W
   }
 });
 
+
+test("labeled retained points are pickable and show their labels @smoke", async ({ page }) => {
+  const { map } = await openRetainedPoints(page, "points=grid&zoom=11&labels=all", "wgpu");
+  const overlay = map.locator('[data-map-overlay-runtime="maps"]');
+  await expect(overlay).toHaveAttribute("data-map-overlay-label-projections", /^[1-9]/);
+  let blobs: Blob[] = [];
+  await expect
+    .poll(async () => {
+      blobs = await redBlobs(page, await map.screenshot());
+      return blobs.length;
+    })
+    .toBe(9);
+  // The Canvas label pass draws white text over each retained circle.
+  const labelPixels = await page.evaluate(async () => {
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+    const context = canvas.getContext("2d")!;
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    let opaque = 0;
+    for (let index = 3; index < data.length; index += 4) if (data[index]! > 0) opaque += 1;
+    return opaque;
+  });
+  expect(labelPixels).toBeGreaterThan(0);
+  const box = (await map.boundingBox())!;
+  // The middle point of the 3 x 3 grid is the blob nearest to their mean.
+  const meanX = blobs.reduce((sum, blob) => sum + blob.x, 0) / blobs.length;
+  const meanY = blobs.reduce((sum, blob) => sum + blob.y, 0) / blobs.length;
+  const center = blobs.reduce((best, blob) =>
+    Math.hypot(blob.x - meanX, blob.y - meanY) < Math.hypot(best.x - meanX, best.y - meanY)
+      ? blob
+      : best,
+  );
+  await page.mouse.move(box.x + center.x, box.y + center.y);
+  await expect(page.getByText("Picked p-1-1", { exact: true })).toBeVisible();
+  await expect(overlay).toHaveAttribute("data-map-overlay-backend", "wgpu-retained");
+});
+
+test("a 10,000-point journey with 50 labeled points projects only the labels on WebGPU @smoke", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const count = 10_000;
+  const labels = 50;
+  const { gpuValidation, map } = await openRetainedPoints(
+    page,
+    `points=dense&count=${count}&labels=${labels}&lon=12&lat=50&zoom=5`,
+    "wgpu",
+  );
+  await expect
+    .poll(() => page.evaluate(() => window.retainedPoints.stats()?.retainedPoints ?? 0))
+    .toBe(count);
+  const journey = await page.evaluate(async () => {
+    const probe = window.retainedPoints;
+    const overlay = document.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
+    const projections = () => Number(overlay.dataset.mapOverlayLabelProjections ?? 0);
+    const frame = () => new Promise(requestAnimationFrame);
+    await frame();
+    const before = probe.stats()!;
+    const beforeProjections = projections();
+    const steps: { ms: number; upload: number; frames: number; labelProjections: number }[] = [];
+    let previous = beforeProjections;
+    for (let step = 0; step < 30; step += 1) {
+      const started = performance.now();
+      probe.setViewState({
+        bearing: (step * 7) % 60,
+        center: [12 + Math.sin(step / 6) * 3, 50 + Math.cos(step / 6) * 2],
+        pitch: (step * 3) % 40,
+        zoom: 5 + (step % 10) * 0.4,
+      });
+      await frame();
+      const stats = probe.stats()!;
+      const current = projections();
+      steps.push({
+        frames: stats.retainedPointFrames ?? 0,
+        labelProjections: current - previous,
+        ms: performance.now() - started,
+        upload: stats.applicationUploadBytes ?? 0,
+      });
+      previous = current;
+    }
+    return { after: probe.stats()!, before, steps };
+  });
+  const sorted = journey.steps.map((step) => step.ms).sort((left, right) => left - right);
+  await testInfo.attach("retained-labeled-point-journey", {
+    body: JSON.stringify(
+      {
+        count,
+        labels,
+        before: journey.before,
+        after: journey.after,
+        presentationMs: {
+          p50: sorted[Math.floor(sorted.length * 0.5)],
+          p95: sorted[Math.floor(sorted.length * 0.95)],
+          max: sorted.at(-1),
+        },
+        steps: journey.steps,
+      },
+      null,
+      2,
+    ),
+    contentType: "application/json",
+  });
+  expect(gpuValidation).toEqual([]);
+  await expect(map.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-base-renderer",
+    "wgpu",
+  );
+  await expect(map.locator('[data-map-overlay-runtime="maps"]')).toHaveAttribute(
+    "data-map-overlay-backend",
+    "wgpu-retained",
+  );
+  // Labeled points are retained with the others: preparation and upload stay O(1).
+  expect(journey.after.retainedPointPreparations).toBe(journey.before.retainedPointPreparations);
+  expect(journey.after.retainedPointRebases).toBe(journey.before.retainedPointRebases);
+  expect(journey.after.retainedPointUploadBytes).toBe(journey.before.retainedPointUploadBytes);
+  for (const step of journey.steps) {
+    expect(step.upload).toBe(0);
+    expect(step.frames).toBeGreaterThan(0);
+    // Each camera frame projects the labeled points only: O(labels), not O(points).
+    expect(step.labelProjections).toBe(labels);
+  }
+});
