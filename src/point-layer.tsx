@@ -279,12 +279,16 @@ function PointFeatureLayer<
                   interactive: !isMeasuring,
                   opacity: 1,
                   radius,
-                  weight: selected ? 3 : 2,
+                  weight: selected || hovered ? 3 : 2,
                 });
 
                 const hover: FlatLayerEntryHover<boolean> = {
                   apply: (featureHovered) => {
-                    marker.setStyle?.({ className: getClassName(featureHovered) });
+                    marker.setStyle?.({
+                      className: getClassName(featureHovered),
+                      // The Maps runtime's hover delta, as real MapLibre paint.
+                      weight: selected ? 3 : featureHovered ? 3 : 2,
+                    });
                   },
                   feature,
                   state: hovered,

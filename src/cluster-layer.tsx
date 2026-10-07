@@ -162,7 +162,11 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
               );
             const createHover = (marker: FlatLayer): FlatLayerEntryHover<boolean> => ({
               apply: (featureHovered) => {
-                marker.setStyle?.({ className: getClassName(featureHovered) });
+                marker.setStyle?.({
+                  className: getClassName(featureHovered),
+                  // The Maps runtime's hover delta, as real MapLibre paint.
+                  weight: selected || featureHovered ? 3 : 2,
+                });
               },
               feature,
               state: hovered,
@@ -181,7 +185,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                     interactive: !isMeasuring,
                     opacity: 1,
                     radius: renderFeature.radius,
-                    weight: selected ? 3 : 2,
+                    weight: selected || hovered ? 3 : 2,
                   });
 
                   if (!isMeasuring) {
@@ -280,7 +284,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                   interactive: !isMeasuring,
                   opacity: 1,
                   radius: renderFeature.radius,
-                  weight: selected ? 3 : 2,
+                  weight: selected || hovered ? 3 : 2,
                 });
 
                 if (!isMeasuring) {

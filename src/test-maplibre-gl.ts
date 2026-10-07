@@ -425,14 +425,20 @@ export class Map {
 
   // The compatibility layers restyle in place through paint properties; mirror their
   // flat options (class name, opacity, ...) onto the mock layer.
-  setPaintProperty(id: string) {
+  setPaintProperty(id: string, property?: string, value?: unknown) {
     const layer = this.layers.get(id) as
       | { metadata?: { flatOptions?: Record<string, unknown> } }
       | undefined;
-    const mockLayer = this.mockLayers.get(id) as { options?: Record<string, unknown> } | undefined;
+    const mockLayer = this.mockLayers.get(id) as
+      | { options?: Record<string, unknown>; paint?: Record<string, unknown> }
+      | undefined;
 
     if (layer?.metadata?.flatOptions && mockLayer) {
       mockLayer.options = { ...mockLayer.options, ...layer.metadata.flatOptions };
+    }
+    // What MapLibre actually draws: tests read paint here, not the metadata class.
+    if (mockLayer && property !== undefined) {
+      mockLayer.paint = { ...mockLayer.paint, [property]: value };
     }
   }
 

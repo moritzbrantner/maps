@@ -194,11 +194,14 @@ export function GeoJsonLayer<
                   geometryKey,
                   hover: {
                     apply: (featureHovered) => {
-                      const className = getFlatGeoJsonClassName(featureHovered, entry.selected);
-
-                      for (const geometryLayer of entry.layers) {
-                        geometryLayer.setStyle?.({ className });
-                      }
+                      updateFlatGeoJsonCachedStyle(
+                        entry.layers,
+                        feature.geometry,
+                        entry.selected,
+                        style,
+                        getFlatGeoJsonClassName(featureHovered, entry.selected),
+                        featureHovered,
+                      );
                     },
                     feature,
                     state: hovered,
@@ -209,6 +212,8 @@ export function GeoJsonLayer<
                   signature,
                 };
 
+                // Created layers carry the selected width; a hovered feature also gets its delta.
+                if (hovered) entry.hover.apply(true);
                 return entry;
               },
               signature,
@@ -226,6 +231,7 @@ export function GeoJsonLayer<
                   selected,
                   style,
                   getFlatGeoJsonClassName(entry.hover.state, selected),
+                  entry.hover.state,
                 );
 
                 if (geometryUpdated) {
@@ -401,64 +407,85 @@ function updateFlatGeoJsonCachedStyle(
   selected: boolean,
   style: Required<GeoJsonLayerStyle>,
   className: string,
+  hovered = false,
 ) {
   switch (geometry.type) {
     case "Point":
-      return Boolean(layers[0]?.setStyle?.({ ...getFlatPointLayerStyle(style, selected), className }));
+      return Boolean(layers[0]?.setStyle?.({ ...getFlatPointLayerStyle(style, selected, hovered), className }));
     case "MultiPoint":
       if (layers.length !== geometry.coordinates.length) {
         return false;
       }
       return layers.every((layer) =>
-        Boolean(layer.setStyle?.({ ...getFlatPointLayerStyle(style, selected), className }))
+        Boolean(layer.setStyle?.({ ...getFlatPointLayerStyle(style, selected, hovered), className }))
       );
     case "LineString":
-      return Boolean(layers[0]?.setStyle?.({ ...getFlatLineLayerStyle(style, selected), className }));
+      return Boolean(layers[0]?.setStyle?.({ ...getFlatLineLayerStyle(style, selected, hovered), className }));
     case "MultiLineString":
       if (layers.length !== geometry.coordinates.length) {
         return false;
       }
       return layers.every((layer) =>
-        Boolean(layer.setStyle?.({ ...getFlatLineLayerStyle(style, selected), className }))
+        Boolean(layer.setStyle?.({ ...getFlatLineLayerStyle(style, selected, hovered), className }))
       );
     case "Polygon":
-      return Boolean(layers[0]?.setStyle?.({ ...getFlatPolygonLayerStyle(style, selected), className }));
+      return Boolean(layers[0]?.setStyle?.({ ...getFlatPolygonLayerStyle(style, selected, hovered), className }));
     case "MultiPolygon":
       if (layers.length !== geometry.coordinates.length) {
         return false;
       }
       return layers.every((layer) =>
-        Boolean(layer.setStyle?.({ ...getFlatPolygonLayerStyle(style, selected), className }))
+        Boolean(layer.setStyle?.({ ...getFlatPolygonLayerStyle(style, selected, hovered), className }))
       );
   }
 }
 
-function getFlatPointLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+/**
+ * Stroke widths follow the Maps runtime's interaction deltas: selected +1.5 (+1 for points),
+ * hovered +1, so hover changes MapLibre paint rather than only a metadata class.
+ */
+function interactionStrokeDelta(selected: boolean, hovered: boolean, selectedDelta: number) {
+  return selected ? selectedDelta : hovered ? 1 : 0;
+}
+
+function getFlatPointLayerStyle(
+  style: Required<GeoJsonLayerStyle>,
+  selected: boolean,
+  hovered = false,
+) {
   return {
     color: "#ffffff",
     fillColor: style.pointColor,
     fillOpacity: 0.94,
     opacity: 1,
     radius: style.pointRadius,
-    weight: selected ? 3 : 2,
+    weight: 2 + interactionStrokeDelta(selected, hovered, 1),
   };
 }
 
-function getFlatLineLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+function getFlatLineLayerStyle(
+  style: Required<GeoJsonLayerStyle>,
+  selected: boolean,
+  hovered = false,
+) {
   return {
     color: style.lineColor,
     opacity: style.lineOpacity,
-    weight: selected ? style.lineWidth + 1.5 : style.lineWidth,
+    weight: style.lineWidth + interactionStrokeDelta(selected, hovered, 1.5),
   };
 }
 
-function getFlatPolygonLayerStyle(style: Required<GeoJsonLayerStyle>, selected: boolean) {
+function getFlatPolygonLayerStyle(
+  style: Required<GeoJsonLayerStyle>,
+  selected: boolean,
+  hovered = false,
+) {
   return {
     color: style.polygonStrokeColor,
     fillColor: style.polygonFillColor,
     fillOpacity: style.polygonFillOpacity,
     opacity: 0.9,
-    weight: selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth,
+    weight: style.polygonStrokeWidth + interactionStrokeDelta(selected, hovered, 1.5),
   };
 }
 

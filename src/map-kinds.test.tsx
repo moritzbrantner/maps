@@ -3483,10 +3483,13 @@ describe("MapLibre Map View uncontrolled hover styling", () => {
     await hover(first!);
     expect(hasLayerClassName(first!, hoveredClassName)).toBe(true);
     expect(hasLayerClassName(second!, hoveredClassName)).toBe(false);
+    // Hover is visible MapLibre paint, not only a metadata class.
+    expect(paintOf(first!)["circle-stroke-width"]).toBe(3);
     expect(layers()).toContain(first);
 
     await unhover(first!);
     expect(hasLayerClassName(first!, hoveredClassName)).toBe(false);
+    expect(paintOf(first!)["circle-stroke-width"]).toBe(2);
     expect(layers()).toContain(first);
     expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
   });
@@ -3508,10 +3511,12 @@ describe("MapLibre Map View uncontrolled hover styling", () => {
 
     await hover(cluster!);
     expect(hasLayerClassName(cluster!, hoveredClassName)).toBe(true);
+    expect(paintOf(cluster!)["circle-stroke-width"]).toBe(3);
     expect(layers()).toContain(cluster);
 
     await unhover(cluster!);
     expect(hasLayerClassName(cluster!, hoveredClassName)).toBe(false);
+    expect(paintOf(cluster!)["circle-stroke-width"]).toBe(2);
     expect(layers()).toContain(cluster);
     expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
   });
@@ -3601,16 +3606,24 @@ describe("MapLibre Map View uncontrolled hover styling", () => {
     const path = layers().find((layer) => hasLayerClassName(layer, "mb-maps__geojson-feature"));
     expect(path).toBeTruthy();
 
+    // Created layers carry their width in their options until the first paint update.
+    const baseWidth = (path as { options?: { weight?: number } }).options?.weight;
     await hover(path!);
     expect(hasLayerClassName(path!, hoveredClassName)).toBe(true);
+    expect(paintOf(path!)["line-width"]).toBe(Number(baseWidth) + 1);
     expect(layers()).toContain(path);
 
     await unhover(path!);
     expect(hasLayerClassName(path!, hoveredClassName)).toBe(false);
+    expect(paintOf(path!)["line-width"]).toBe(Number(baseWidth));
     expect(layers()).toContain(path);
     expect(work()).toEqual({ groupClears: 0, layerRenders: 0 });
   });
 });
+
+function paintOf(layer: unknown): Record<string, unknown> {
+  return (layer as { paint?: Record<string, unknown> }).paint ?? {};
+}
 
 function hasLayerClassName(layer: { options?: { className?: unknown } }, className: string) {
   return typeof layer.options?.className === "string" && layer.options.className.includes(className);
