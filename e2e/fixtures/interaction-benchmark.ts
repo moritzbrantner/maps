@@ -541,9 +541,10 @@ async function mountMapsPoints(points: ReturnType<typeof densePoints>): Promise<
     return {
       applicationUploadBytes: raw.applicationUploadBytes ?? 0,
       retainedPointFrames: raw.retainedPointFrames ?? 0,
-      retainedPointPreparations: raw.retainedPointPreparations ?? 0,
-      retainedPointRebases: raw.retainedPointRebases ?? 0,
-      retainedPointUploadBytes: raw.retainedPointUploadBytes ?? 0,
+      // Missing stays NaN, never a real zero: the retained-work check rejects it.
+      retainedPointPreparations: raw.retainedPointPreparations ?? Number.NaN,
+      retainedPointRebases: raw.retainedPointRebases ?? Number.NaN,
+      retainedPointUploadBytes: raw.retainedPointUploadBytes ?? Number.NaN,
       retainedPoints: raw.retainedPoints ?? 0,
     };
   };
@@ -579,6 +580,9 @@ async function mountMapsPoints(points: ReturnType<typeof densePoints>): Promise<
 }
 
 /** MapLibre reference: an in-memory GeoJSON source and a circle layer, no basemap. */
+/** Engine error events of the point lanes (MapLibre reports source/worker errors as events). */
+const laneErrors: string[] = [];
+
 async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Promise<PointLane> {
   const maplibreModule = await import("maplibre-gl");
   const maplibregl =
@@ -617,6 +621,9 @@ async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Prom
     } as never,
     zoom: DENSE_POINT_VIEW.zoom,
   });
+  map.on("error", (event: { error?: { message?: string } }) =>
+    laneErrors.push(event.error?.message ?? "MapLibre error event"),
+  );
   const idle = () =>
     map.loaded() && !map.isMoving()
       ? Promise.resolve()
@@ -764,6 +771,8 @@ declare global {
        */
       pointJourney(steps?: number): Promise<PointJourneyResult>;
       pointRenderer(): string | null;
+      /** Error events the mounted point lane's engine reported. */
+      laneErrors(): string[];
       start(): void;
       stop(): Promise<Recording>;
     };
@@ -827,6 +836,7 @@ window.interactionBenchmark = {
     };
   },
   pointRenderer: () => mounted.pointRenderer?.() ?? null,
+  laneErrors: () => [...laneErrors],
   camera: () => mounted.camera(),
   presentCamera(state) {
     if (!mounted.presentCamera) throw new Error(`${engine} has no controlled camera command`);

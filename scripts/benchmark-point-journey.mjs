@@ -17,7 +17,8 @@
 //        [--repeats=3] [--gpu] [--json=benchmark-results/point-journey.json]
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,6 +100,10 @@ const RETAINED_COUNTERS = [
  */
 function retainedWorkViolations(journey) {
   if (!journey.before || !journey.after) return ["retained-work counters missing"];
+  const missing = RETAINED_COUNTERS.filter(
+    (key) => !Number.isFinite(journey.before[key]) || !Number.isFinite(journey.after[key]),
+  );
+  if (missing.length) return missing.map((key) => `${key} unavailable`);
   return RETAINED_COUNTERS.filter((key) => journey.after[key] !== journey.before[key]).map(
     (key) => `${key} +${journey.after[key] - journey.before[key]}`,
   );
@@ -207,7 +212,10 @@ async function pointPixels(page) {
 async function main() {
   // The Maps lanes load the WebGPU/WASM runtime from public/wasm, which is ignored
   // and only produced by `bun run build:wasm`.
-  if (!existsSync(path.join(rootDir, "public/wasm/maps_wasm.js")))
+  if (
+    ENGINES.some((engine) => engine.startsWith("maps-")) &&
+    !existsSync(path.join(rootDir, "public/wasm/maps_wasm.js"))
+  )
     throw new Error(
       "public/wasm/maps_wasm.js is missing: run `bun run build:wasm` first (the Maps lanes load it)",
     );
@@ -242,6 +250,7 @@ async function main() {
             await page.evaluate(() => window.interactionBenchmark.pointJourney());
             const journey = await page.evaluate(() => window.interactionBenchmark.pointJourney());
             const renderer = await page.evaluate(() => window.interactionBenchmark.pointRenderer());
+            errors.push(...(await page.evaluate(() => window.interactionBenchmark.laneErrors())));
             if (errors.length) throw new Error(`[${engine} ${count}] ${errors.join("; ")}`);
             const unfollowed = unfollowedAxes(journey);
             if (unfollowed.length)
@@ -302,7 +311,9 @@ async function main() {
     producer: "maps-point-journey",
     repository: "moritzbrantner/maps",
     revision: dirty ? null : revision,
-    source: { revision, dirty },
+    // The served WASM is an ignored build output: hash it so the evidence names the
+    // runtime actually measured, not only the source revision.
+    source: { revision, dirty, wasm: wasmProvenance() },
     generatedAt: new Date().toISOString(),
     status: "measured",
     description,
@@ -363,6 +374,18 @@ async function main() {
   writeFileSync(`${jsonPath}.tmp`, `${JSON.stringify(evidence, null, 2)}\n`);
   renameSync(`${jsonPath}.tmp`, jsonPath);
   console.log(`\nWrote ${path.relative(rootDir, jsonPath)}`);
+}
+
+function wasmProvenance() {
+  if (!ENGINES.some((engine) => engine.startsWith("maps-"))) return null;
+  return Object.fromEntries(
+    ["maps_wasm.js", "maps_wasm_bg.wasm"].map((file) => [
+      file,
+      `sha256:${createHash("sha256")
+        .update(readFileSync(path.join(rootDir, "public/wasm", file)))
+        .digest("hex")}`,
+    ]),
+  );
 }
 
 function sourceRevision() {
