@@ -17,7 +17,7 @@
 //        [--repeats=3] [--gpu] [--json=benchmark-results/point-journey.json]
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -186,7 +186,10 @@ function unfollowedAxes(journey) {
  * render result for every lane, independent of what the lane says about itself.
  */
 async function pointPixels(page) {
-  const png = await page.locator("#map").screenshot();
+  // A clipped page screenshot: an element screenshot waits for the element to be
+  // "stable" across frames, which a busy 100k-point main thread may never report.
+  const clip = await page.locator("#map").boundingBox();
+  const png = await page.screenshot({ clip, timeout: 120_000 });
   return page.evaluate(async (base64) => {
     const blob = await (await fetch(`data:image/png;base64,${base64}`)).blob();
     const bitmap = await createImageBitmap(blob);
@@ -202,6 +205,12 @@ async function pointPixels(page) {
 }
 
 async function main() {
+  // The Maps lanes load the WebGPU/WASM runtime from public/wasm, which is ignored
+  // and only produced by `bun run build:wasm`.
+  if (!existsSync(path.join(rootDir, "public/wasm/maps_wasm.js")))
+    throw new Error(
+      "public/wasm/maps_wasm.js is missing: run `bun run build:wasm` first (the Maps lanes load it)",
+    );
   const server = await serveProductionFixture();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const browserArgs = args.gpu ? HARDWARE_GPU_ARGS : SOFTWARE_GPU_ARGS;
@@ -210,7 +219,7 @@ async function main() {
   const runs = new Map();
   const lanes = new Map();
   let mapSize = null;
-  let adapter;
+  let adapter = null;
   try {
     // Round-robin: each repeat visits every lane once, so machine drift spreads evenly.
     for (let repeat = 0; repeat < REPEATS; repeat++)
@@ -252,7 +261,9 @@ async function main() {
                   `[maps-wgpu ${count}] camera journey redid retained work: ${violations.join(", ")}`,
                 );
             }
-            if (adapter === undefined) adapter = await observedAdapter(page);
+            // The Canvas2D lane hides navigator.gpu on purpose; probe from a lane that
+            // keeps WebGPU visible, and retry until one reports an adapter.
+            if (!adapter && engine !== "maps-canvas2d") adapter = await observedAdapter(page);
             const summary = summarize(journey);
             if (!runs.has(key)) runs.set(key, []);
             runs.get(key).push(summary);

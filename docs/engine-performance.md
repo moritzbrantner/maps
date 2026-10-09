@@ -238,23 +238,24 @@ never fails on timings. Pages runs it once per build and publishes
 `maps-point-journey`) on `/maps/stats/`. A failed run leaves that source
 unavailable and does not block the deploy.
 
-A local run with three repeats gave these medians (ms). Environment: Chromium
+A local run with three repeats of the production-built fixture (exact 100k-point
+spread) gave these medians (ms). The Maps lanes need `bun run build:wasm` first. Environment: Chromium
 SwiftShader software GPU, Linux x64, Ryzen 7 5700X, a machine shared with other
 builds. The numbers are descriptive and not a verdict:
 
 | Lane | Points | Present p50 | Present p95 | Settled p50 | Settled p95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Maps WebGPU (retained) | 10,000 | 202.9 | 314.3 | 202.9 | 314.3 |
-| Maps Canvas2D fallback | 10,000 | 30.7 | 55.9 | 30.7 | 55.9 |
-| MapLibre circle layer | 10,000 | 39.0 | 134.6 | 80.3 | 657.9 |
-| Leaflet Canvas markers | 10,000 | 16.6 | 22.5 | 16.6 | 22.5 |
-| Maps WebGPU (retained) | 100,000 | 1,776.5 | 2,538.2 | 1,776.5 | 2,538.3 |
-| Maps Canvas2D fallback | 100,000 | 260.8 | 425.1 | 260.9 | 425.1 |
-| MapLibre circle layer | 100,000 | 47.5 | 131.0 | 121.7 | 802.3 |
-| Leaflet Canvas markers | 100,000 | 162.2 | 242.5 | 162.2 | 242.6 |
+| Maps WebGPU (retained) | 10,000 | 230.0 | 323.2 | 230.0 | 323.2 |
+| Maps Canvas2D fallback | 10,000 | 27.7 | 84.4 | 27.7 | 84.4 |
+| MapLibre circle layer | 10,000 | 23.3 | 52.2 | 29.5 | 645.8 |
+| Leaflet Canvas markers | 10,000 | 16.7 | 31.0 | 16.7 | 31.0 |
+| Maps WebGPU (retained) | 100,000 | 1,339.7 | 2,105.7 | 1,339.7 | 2,105.7 |
+| Maps Canvas2D fallback | 100,000 | 225.4 | 412.7 | 225.4 | 412.7 |
+| MapLibre circle layer | 100,000 | 43.4 | 104.0 | 81.6 | 725.4 |
+| Leaflet Canvas markers | 100,000 | 150.8 | 201.2 | 150.8 | 201.2 |
 
 On both WebGPU journeys the retained counters stayed flat: zero point
-preparations and zero application upload bytes across the journey. The O(1)
+preparations, rebases and upload bytes across the journey (the script now fails otherwise). The O(1)
 work contract of #155 holds against the same workload the other lanes draw.
 SwiftShader rasterizes the WebGPU instances on the CPU, so the WebGPU lane is
 the slowest here. Those times measure the software rasterizer, not retained
