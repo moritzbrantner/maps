@@ -3,6 +3,9 @@
 // trusted browser events (scripts/benchmark-interactions.mjs); this page only mounts
 // the engine against the shared tile source and observes frames/input latency.
 import "maplibre-gl/dist/maplibre-gl.css";
+// Bundled worker URL: the production benchmark build does not ship MapLibre's
+// self-located worker file next to its chunk.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "leaflet/dist/leaflet.css";
 import {
   DENSE_POINT_VIEW,
@@ -294,6 +297,7 @@ async function mountMapLibre() {
   const maplibreModule = await import("maplibre-gl");
   const maplibregl =
     (maplibreModule as { default?: typeof maplibreModule }).default ?? maplibreModule;
+  maplibregl.setWorkerUrl(maplibreWorkerUrl);
   const map = new maplibregl.Map({
     container,
     style: (basemap === "vector" ? vectorStyle : rasterStyle) as never,
@@ -579,6 +583,7 @@ async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Prom
   const maplibreModule = await import("maplibre-gl");
   const maplibregl =
     (maplibreModule as { default?: typeof maplibreModule }).default ?? maplibreModule;
+  maplibregl.setWorkerUrl(maplibreWorkerUrl);
   const map = new maplibregl.Map({
     attributionControl: false,
     bearing: DENSE_POINT_VIEW.bearing,

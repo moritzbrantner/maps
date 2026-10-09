@@ -30,7 +30,9 @@ export function densePointJourneySteps(count: number): number {
 export function densePoints(count: number): DensePoint[] {
   let seed = 7;
   const random = () => {
-    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+    // 32-bit integer arithmetic keeps the LCG exact; a float product loses precision
+    // past 2^53 and makes 100k points repeat a few thousand positions.
+    seed = (Math.imul(seed, 1_103_515_245) + 12_345) & 0x7fff_ffff;
     return seed / 2_147_483_648;
   };
   return Array.from({ length: count }, (_, index) => ({

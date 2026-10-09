@@ -6,7 +6,7 @@
 // work only. Results are descriptive evidence, not a gate: software GPU rendering and
 // shared runners make wall-clock thresholds meaningless, so this script never fails on
 // timings. It does fail when a lane does not render, follow the journey, or (for the
-// Maps WebGPU lane) keeps the points retained.
+// Maps WebGPU lane) does not keep the points retained.
 //
 // Per step it records `presentMs` (camera command until the next animation-frame
 // callback, after the engine's synchronous draw) and `settledMs` (until the engine
@@ -22,7 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
-import { createServer } from "vite";
+import { build, loadConfigFromFile, preview } from "vite";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = Object.fromEntries(
@@ -78,10 +78,82 @@ function summarize(journey) {
     settledP95: percentile(settled, 95),
     settledTotal: settled.reduce((sum, value) => sum + value, 0),
     retainedPointPreparations: delta("retainedPointPreparations"),
+    retainedPointRebases: delta("retainedPointRebases"),
     retainedPointUploadBytes: delta("retainedPointUploadBytes"),
     applicationUploadBytes: delta("applicationUploadBytes"),
     retainedPointFrames: delta("retainedPointFrames"),
   };
+}
+
+/** Retained-work counters that must not move while only the camera changes. */
+const RETAINED_COUNTERS = [
+  "retainedPointPreparations",
+  "retainedPointRebases",
+  "retainedPointUploadBytes",
+];
+
+/**
+ * Counters that moved during the timed journey: the WebGPU lane must keep its points
+ * retained (no re-preparation, rebase or re-upload on camera changes), as in the
+ * retained-point acceptance spec.
+ */
+function retainedWorkViolations(journey) {
+  if (!journey.before || !journey.after) return ["retained-work counters missing"];
+  return RETAINED_COUNTERS.filter((key) => journey.after[key] !== journey.before[key]).map(
+    (key) => `${key} +${journey.after[key] - journey.before[key]}`,
+  );
+}
+
+/**
+ * The WebGPU adapter Chromium actually selected. `--enable-unsafe-webgpu` may fall back
+ * to SwiftShader even when hardware was requested, so the evidence records what ran.
+ */
+async function observedAdapter(page) {
+  return page.evaluate(async () => {
+    if (!navigator.gpu) return null;
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return null;
+    const info = adapter.info ?? {};
+    const fallback = Boolean(info.isFallbackAdapter ?? adapter.isFallbackAdapter);
+    const fields = [info.vendor, info.architecture, info.device, info.description];
+    const software = fallback || fields.some((field) => /swiftshader/i.test(field ?? ""));
+    return {
+      vendor: info.vendor ?? null,
+      architecture: info.architecture ?? null,
+      device: info.device ?? null,
+      description: info.description ?? null,
+      fallback,
+      kind: software ? "software" : "hardware",
+    };
+  });
+}
+
+/**
+ * Production build of the benchmark fixture, served by `vite preview`: the measured
+ * lanes run shipped code, not the development server's React dev runtime and checks.
+ */
+async function serveProductionFixture() {
+  const configFile = path.join(rootDir, "vite.config.ts");
+  const loaded = await loadConfigFromFile({ command: "build", mode: "production" }, configFile);
+  const outDir = path.join(rootDir, "node_modules/.cache/maps-point-journey");
+  const config = {
+    ...loaded.config,
+    configFile: false,
+    root: rootDir,
+    logLevel: "error",
+    mode: "production",
+    build: {
+      ...loaded.config.build,
+      emptyOutDir: true,
+      outDir,
+      rollupOptions: {
+        ...loaded.config.build?.rollupOptions,
+        input: { benchmark: path.join(rootDir, "e2e/fixtures/interaction-benchmark.html") },
+      },
+    },
+  };
+  await build(config);
+  return preview({ ...config, preview: { host: "127.0.0.1", port: 0, strictPort: false } });
 }
 
 /** Angular difference in degrees, ignoring whole turns. */
@@ -130,19 +202,7 @@ async function pointPixels(page) {
 }
 
 async function main() {
-  const server = await createServer({
-    configFile: path.join(rootDir, "vite.config.ts"),
-    root: rootDir,
-    logLevel: "error",
-    // Pre-bundle everything the fixture imports lazily: a dependency discovered
-    // mid-run makes Vite reload the page and destroys the measurement.
-    optimizeDeps: {
-      entries: ["e2e/fixtures/interaction-benchmark.html"],
-      include: ["leaflet", "react", "react/jsx-dev-runtime", "react-dom/client"],
-    },
-    server: { host: "127.0.0.1", port: 0 },
-  });
-  await server.listen();
+  const server = await serveProductionFixture();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const browserArgs = args.gpu ? HARDWARE_GPU_ARGS : SOFTWARE_GPU_ARGS;
   const browser = await chromium.launch({ args: browserArgs, headless: !args.headed });
@@ -150,6 +210,7 @@ async function main() {
   const runs = new Map();
   const lanes = new Map();
   let mapSize = null;
+  let adapter;
   try {
     // Round-robin: each repeat visits every lane once, so machine drift spreads evenly.
     for (let repeat = 0; repeat < REPEATS; repeat++)
@@ -184,6 +245,14 @@ async function main() {
             mapSize = { width: Math.round(box.width), height: Math.round(box.height) };
             if (engine === "maps-wgpu" && renderer !== "wgpu-retained")
               throw new Error(`[maps-wgpu ${count}] drew points with ${renderer}`);
+            if (engine === "maps-wgpu") {
+              const violations = retainedWorkViolations(journey);
+              if (violations.length)
+                throw new Error(
+                  `[maps-wgpu ${count}] camera journey redid retained work: ${violations.join(", ")}`,
+                );
+            }
+            if (adapter === undefined) adapter = await observedAdapter(page);
             const summary = summarize(journey);
             if (!runs.has(key)) runs.set(key, []);
             runs.get(key).push(summary);
@@ -198,7 +267,7 @@ async function main() {
         }
   } finally {
     await browser.close();
-    await server.close();
+    await new Promise((resolve) => server.httpServer.close(resolve));
   }
 
   const results = [];
@@ -216,7 +285,7 @@ async function main() {
   mkdirSync(path.dirname(jsonPath), { recursive: true });
   const { revision, dirty } = sourceRevision();
   const description =
-    "Deterministic dense-point camera journey (e2e/fixtures/dense-point-journey.ts) on the Maps retained path, MapLibre and Leaflet, without basemap tiles. presentMs: camera command to the next animation frame; settledMs: until every point for that camera is drawn. Headless Chromium (environment.gpu names the GPU mode); descriptive evidence, not a verdict or GPU FPS.";
+    "Deterministic dense-point camera journey (e2e/fixtures/dense-point-journey.ts) on the Maps retained path, MapLibre and Leaflet, without basemap tiles. presentMs: camera command to the next animation frame; settledMs: until every point for that camera is drawn. Production build served by vite preview in headless Chromium (environment.gpu names the observed WebGPU adapter kind); descriptive evidence, not a verdict or GPU FPS.";
   const evidence = {
     schemaVersion: 1,
     producer: "maps-point-journey",
@@ -239,7 +308,10 @@ async function main() {
     environment: {
       browser: `chromium ${browserVersion}`,
       browserArgs,
-      gpu: args.gpu ? "hardware" : "swiftshader",
+      // Requested GPU mode versus the WebGPU adapter Chromium actually selected.
+      gpuRequested: args.gpu ? "hardware" : "swiftshader",
+      gpu: adapter?.kind ?? "unavailable",
+      gpuAdapter: adapter ?? null,
       ci: Boolean(process.env.CI),
       cpus: os.cpus().length,
       cpuModel: os.cpus()[0]?.model ?? null,
