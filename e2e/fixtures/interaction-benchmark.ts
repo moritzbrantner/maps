@@ -4,6 +4,13 @@
 // the engine against the shared tile source and observes frames/input latency.
 import "maplibre-gl/dist/maplibre-gl.css";
 import "leaflet/dist/leaflet.css";
+import {
+  DENSE_POINT_VIEW,
+  densePointJourney,
+  densePointJourneySteps,
+  densePoints,
+  type DensePointCamera,
+} from "./dense-point-journey";
 
 export type BenchmarkEngine = "maps-wgpu" | "maps-canvas2d" | "maplibre" | "leaflet" | "canvas2d";
 type BenchmarkCamera = {
@@ -15,11 +22,21 @@ type BenchmarkCamera = {
 
 const params = new URLSearchParams(location.search);
 const engine = (params.get("engine") ?? "maps-wgpu") as BenchmarkEngine;
+/**
+ * `points=N` mounts the dense-point camera journey (#197) instead of a basemap: the same
+ * N deterministic points on every engine, no tiles, so the lanes compare application-point
+ * work only.
+ */
+const pointCount = params.has("points") ? Number(params.get("points")) : 0;
+if (params.has("points") && !(Number.isInteger(pointCount) && pointCount > 0))
+  throw new Error(`invalid points=${params.get("points")}`);
 const tileUrl = `${location.origin}/__bench_tiles/{z}/{x}/{y}.png`;
 const vectorTileUrl = `${location.origin}/__bench_vector/{z}/{x}/{y}.mvt`;
 /** `raster` (deterministic PNG tiles) or `vector` (deterministic Shortbread-like MVT). */
 const basemap = params.get("basemap") === "vector" ? "vector" : "raster";
-const initial = { center: [13.405, 52.52] as [number, number], zoom: 11 };
+const initial = pointCount
+  ? { center: DENSE_POINT_VIEW.center, zoom: DENSE_POINT_VIEW.zoom }
+  : { center: [13.405, 52.52] as [number, number], zoom: 11 };
 const container = document.getElementById("map")!;
 
 if (engine === "maps-canvas2d") {
@@ -89,9 +106,35 @@ type MountedEngine = {
   ready: Promise<void>;
   /** Synchronous controlled-camera presentation (Rust frame + backend render). */
   presentCamera?: (state: { center: [number, number]; zoom: number; bearing?: number }) => void;
+  /** Point journeys only: what the lane drew the points with. */
+  pointRenderer?: () => string | null;
 };
 
+/** One dense-point lane: applies journey cameras and reports when a step is fully drawn. */
+type PointLane = MountedEngine & {
+  /** Camera axes the engine honours; Leaflet has neither bearing nor pitch. */
+  cameraAxes: Array<keyof DensePointCamera>;
+  applyCamera(camera: DensePointCamera): void;
+  /** Resolves once every point for the current camera is drawn (async engines only). */
+  settled(): Promise<void>;
+  /** Maps lanes only: the renderer's work counters (retained preparation and upload). */
+  stats(): PointLaneStats | null;
+};
+
+type PointLaneStats = {
+  applicationUploadBytes: number;
+  retainedPointFrames: number;
+  retainedPointPreparations: number;
+  retainedPointRebases: number;
+  retainedPointUploadBytes: number;
+  retainedPoints: number;
+};
+
+const POINT_COLOR = "#ff0000";
+const POINT_RADIUS = 6;
+
 async function mountEngine(): Promise<MountedEngine> {
+  if (pointCount) return mountPointLane();
   switch (engine) {
     case "maps-wgpu":
     case "maps-canvas2d":
@@ -431,6 +474,208 @@ async function mountCanvas2dBaseline() {
   };
 }
 
+let pointLane: PointLane | null = null;
+
+async function mountPointLane(): Promise<PointLane> {
+  const points = densePoints(pointCount);
+  switch (engine) {
+    case "maps-wgpu":
+    case "maps-canvas2d":
+      return (pointLane = await mountMapsPoints(points));
+    case "maplibre":
+      return (pointLane = await mountMapLibrePoints(points));
+    case "leaflet":
+      return (pointLane = await mountLeafletPoints(points));
+    case "canvas2d":
+      throw new Error("the Canvas2D tile baseline has no point lane");
+  }
+}
+
+/** The retained-points composition (#155): Map View + Point Layer, no basemap tiles. */
+async function mountMapsPoints(points: ReturnType<typeof densePoints>): Promise<PointLane> {
+  const { configureMapsWasmPackage } = await import("../../src/aggregation-wasm");
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { MapView } = await import("../../src/map-view");
+  const { PointLayer } = await import("../../src/point-layer");
+  configureMapsWasmPackage("/wasm/maps_wasm.js");
+  type Controller = {
+    getRendererStats(): Partial<PointLaneStats> | null;
+    getViewState(): { bearing?: number; center: [number, number]; zoom: number };
+    setViewState(state: DensePointCamera): void;
+  };
+  let controller: Controller | null = null;
+  createRoot(container).render(
+    React.createElement(
+      MapView,
+      {
+        defaultViewState: DENSE_POINT_VIEW,
+        fitToData: false,
+        flatRuntime: "maps",
+        mapLabel: "Benchmark map",
+        mapStyle: { attribution: "", tiles: false },
+        onMapControllerReady: (next: unknown) => {
+          controller = next as Controller | null;
+        },
+        style: { height: "100%", width: "100%" },
+      },
+      React.createElement(PointLayer, {
+        pointColor: POINT_COLOR,
+        pointRadius: POINT_RADIUS,
+        points,
+      }),
+    ),
+  );
+  const overlay = () =>
+    container.querySelector<HTMLElement>('[data-map-overlay-runtime="maps"]')?.dataset
+      .mapOverlayBackend ?? null;
+  const stats = (): PointLaneStats | null => {
+    const raw = controller?.getRendererStats();
+    if (!raw) return null;
+    return {
+      applicationUploadBytes: raw.applicationUploadBytes ?? 0,
+      retainedPointFrames: raw.retainedPointFrames ?? 0,
+      retainedPointPreparations: raw.retainedPointPreparations ?? 0,
+      retainedPointRebases: raw.retainedPointRebases ?? 0,
+      retainedPointUploadBytes: raw.retainedPointUploadBytes ?? 0,
+      retainedPoints: raw.retainedPoints ?? 0,
+    };
+  };
+  const ready = waitFor(() => {
+    const map = container.querySelector<HTMLElement>("[data-map-ready]");
+    if (map?.dataset.mapReady !== "true" || !controller) return false;
+    // WebGPU must hold every point in its retained group before the journey starts;
+    // a lost device shows up as the Canvas fallback backend and is reported, not hidden.
+    const backend = overlay();
+    if (engine === "maps-wgpu" && backend === "wgpu-retained")
+      return stats()?.retainedPoints === points.length;
+    return backend !== null;
+  }, 120_000);
+  return {
+    applyCamera: (camera) => controller!.setViewState(camera),
+    camera() {
+      const state = controller!.getViewState();
+      return {
+        bearing: state.bearing ?? 0,
+        latitude: state.center[1],
+        longitude: state.center[0],
+        zoom: state.zoom,
+      };
+    },
+    cameraAxes: ["bearing", "center", "pitch", "zoom"],
+    pointRenderer: overlay,
+    ready,
+    // The retained path and the Canvas fallback draw every point in the camera frame.
+    settled: async () => {},
+    stats,
+  };
+}
+
+/** MapLibre reference: an in-memory GeoJSON source and a circle layer, no basemap. */
+async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Promise<PointLane> {
+  const maplibreModule = await import("maplibre-gl");
+  const maplibregl =
+    (maplibreModule as { default?: typeof maplibreModule }).default ?? maplibreModule;
+  const map = new maplibregl.Map({
+    attributionControl: false,
+    bearing: DENSE_POINT_VIEW.bearing,
+    center: DENSE_POINT_VIEW.center,
+    container,
+    pitch: DENSE_POINT_VIEW.pitch,
+    style: {
+      layers: [
+        { id: "background", paint: { "background-color": "#f9f4ee" }, type: "background" },
+        {
+          id: "points",
+          paint: { "circle-color": POINT_COLOR, "circle-radius": POINT_RADIUS },
+          source: "points",
+          type: "circle",
+        },
+      ],
+      sources: {
+        points: {
+          data: {
+            features: points.map((point) => ({
+              geometry: { coordinates: [point.longitude, point.latitude], type: "Point" },
+              properties: { id: point.id },
+              type: "Feature",
+            })),
+            type: "FeatureCollection",
+          },
+          type: "geojson",
+        },
+      },
+      version: 8,
+    } as never,
+    zoom: DENSE_POINT_VIEW.zoom,
+  });
+  const idle = () =>
+    map.loaded() && !map.isMoving()
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => map.once("idle", () => resolve()));
+  return {
+    applyCamera: (camera) => map.jumpTo(camera),
+    camera() {
+      const center = map.getCenter();
+      return {
+        bearing: map.getBearing(),
+        latitude: center.lat,
+        longitude: center.lng,
+        zoom: map.getZoom(),
+      };
+    },
+    cameraAxes: ["bearing", "center", "pitch", "zoom"],
+    pointRenderer: () => "maplibre-circle-layer",
+    ready: new Promise<void>((resolve) => map.once("idle", () => resolve())),
+    // GeoJSON tiles for a new zoom are cut in workers; the step settles when they are drawn.
+    settled: idle,
+    stats: () => null,
+  };
+}
+
+/** Leaflet reference: circle markers on its Canvas renderer, no basemap. */
+async function mountLeafletPoints(points: ReturnType<typeof densePoints>): Promise<PointLane> {
+  const leafletModule = await import("leaflet");
+  const L = (leafletModule as { default?: typeof leafletModule }).default ?? leafletModule;
+  const map = L.map(container, {
+    attributionControl: false,
+    fadeAnimation: false,
+    // Fractional journey zooms must not snap to integer levels.
+    zoomAnimation: false,
+    zoomControl: false,
+    zoomSnap: 0,
+  }).setView([DENSE_POINT_VIEW.center[1], DENSE_POINT_VIEW.center[0]], DENSE_POINT_VIEW.zoom);
+  const renderer = L.canvas();
+  const layer = L.layerGroup(
+    points.map((point) =>
+      L.circleMarker([point.latitude, point.longitude], {
+        fillColor: POINT_COLOR,
+        fillOpacity: 1,
+        radius: POINT_RADIUS,
+        renderer,
+        stroke: false,
+      }),
+    ),
+  ).addTo(map);
+  void layer;
+  const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  return {
+    applyCamera: (camera) =>
+      map.setView([camera.center[1], camera.center[0]], camera.zoom, { animate: false }),
+    camera() {
+      const center = map.getCenter();
+      return { bearing: null, latitude: center.lat, longitude: center.lng, zoom: map.getZoom() };
+    },
+    // Leaflet has no bearing or pitch: its lane follows centre and zoom only.
+    cameraAxes: ["center", "zoom"],
+    pointRenderer: () => "leaflet-canvas",
+    ready: frame().then(frame).then(() => undefined),
+    // The Canvas renderer redraws every marker in the frame after a view change.
+    settled: async () => {},
+    stats: () => null,
+  };
+}
+
 function waitFor(condition: () => boolean, timeoutMs = 20_000) {
   return new Promise<void>((resolve, reject) => {
     const started = performance.now();
@@ -498,14 +743,75 @@ declare global {
       camera(): BenchmarkCamera;
       presentationCost(frames: number, bearing?: number): Promise<number | null>;
       presentCamera(state: { center: [number, number]; zoom: number; bearing?: number }): void;
+      /**
+       * Runs `densePointJourney(steps)`, the cameras of the retained-point spec; by default
+       * with the spec's step count for this point count.
+       */
+      pointJourney(steps?: number): Promise<PointJourneyResult>;
+      pointRenderer(): string | null;
       start(): void;
       stop(): Promise<Recording>;
     };
   }
 }
 
+type PointJourneyResult = {
+  after: PointLaneStats | null;
+  before: PointLaneStats | null;
+  cameraAxes: Array<keyof DensePointCamera>;
+  /** Where the lane ended: proves it followed the journey (Leaflet ignores bearing/pitch). */
+  finalCamera: BenchmarkCamera;
+  /** The journey's last camera command. */
+  lastCamera: DensePointCamera;
+  points: number;
+  steps: Array<{
+    /** Camera command until the next animation frame callback (after the engine's draw). */
+    presentMs: number;
+    /** Camera command until the engine reports every point for that camera drawn. */
+    settledMs: number;
+    /** Maps lanes: application upload bytes and retained point frames of this step. */
+    applicationUploadBytes: number | null;
+    retainedPointFrames: number | null;
+  }>;
+};
+
 window.interactionBenchmark = {
   engine,
+  async pointJourney(stepCount) {
+    const lane = pointLane;
+    if (!lane) throw new Error("not a point journey page (missing points=N)");
+    const cameras = densePointJourney(stepCount ?? densePointJourneySteps(pointCount));
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    await frame();
+    await lane.settled();
+    const before = lane.stats();
+    const steps: PointJourneyResult["steps"] = [];
+    for (const camera of cameras) {
+      const started = performance.now();
+      lane.applyCamera(camera);
+      await frame();
+      const presentMs = performance.now() - started;
+      await lane.settled();
+      const settledMs = performance.now() - started;
+      const stats = lane.stats();
+      steps.push({
+        applicationUploadBytes: stats?.applicationUploadBytes ?? null,
+        presentMs,
+        retainedPointFrames: stats?.retainedPointFrames ?? null,
+        settledMs,
+      });
+    }
+    return {
+      after: lane.stats(),
+      before,
+      cameraAxes: lane.cameraAxes,
+      finalCamera: lane.camera(),
+      lastCamera: cameras.at(-1)!,
+      points: pointCount,
+      steps,
+    };
+  },
+  pointRenderer: () => mounted.pointRenderer?.() ?? null,
   camera: () => mounted.camera(),
   presentCamera(state) {
     if (!mounted.presentCamera) throw new Error(`${engine} has no controlled camera command`);

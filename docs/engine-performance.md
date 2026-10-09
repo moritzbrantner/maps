@@ -212,6 +212,53 @@ editor case) and the package build, then failed the unchanged 227,692-byte entry
 bundle against the 222,600-byte budget. That outstanding gate remains visible;
 the editor's earlier failure has not been diagnosed or claimed fixed.
 
+## Dense-point journey lanes (#197)
+
+`bun run bench:point-journey` (`scripts/benchmark-point-journey.mjs`) runs the
+deterministic dense-point camera journey of the retained-point acceptance spec
+(#155; cameras and points in `e2e/fixtures/dense-point-journey.ts`, shared by
+both) on four lanes of the comparative interaction page, without basemap tiles:
+the Maps retained path on WebGPU (`maps-wgpu`) and on its Canvas2D fallback
+(`maps-canvas2d`), MapLibre (in-memory GeoJSON source and circle layer) and
+Leaflet (circle markers on its Canvas renderer). 10,000 points take 40 camera
+steps and 100,000 points take 12, which pan, zoom, rotate and pitch. Leaflet has no bearing or
+pitch, so its lane follows centre and zoom only. Each lane runs one untimed warm
+journey and then a timed one, per repeat, in a fresh browser context.
+
+Per step it records `present` (camera command until the next
+animation-frame callback, after the engine's synchronous draw) and `settled`
+(until every point for that camera is drawn). MapLibre cuts GeoJSON tiles for a
+new zoom in workers, so it settles after it presents; the other lanes draw every
+point in the camera frame. The script fails when a lane does not render or
+follow the journey, or when the WebGPU lane does not hold the points retained.
+It never fails on timings. Pages runs it once per build and publishes
+`/maps/evidence/point-journey.json` (`project-evidence-v1`, producer
+`maps-point-journey`) on `/maps/stats/`. A failed run leaves that source
+unavailable and does not block the deploy.
+
+A local run with three repeats gave these medians (ms). Environment: Chromium
+SwiftShader software GPU, Linux x64, Ryzen 7 5700X, a machine shared with other
+builds. The numbers are descriptive and not a verdict:
+
+| Lane | Points | Present p50 | Present p95 | Settled p50 | Settled p95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Maps WebGPU (retained) | 10,000 | 202.9 | 314.3 | 202.9 | 314.3 |
+| Maps Canvas2D fallback | 10,000 | 30.7 | 55.9 | 30.7 | 55.9 |
+| MapLibre circle layer | 10,000 | 39.0 | 134.6 | 80.3 | 657.9 |
+| Leaflet Canvas markers | 10,000 | 16.6 | 22.5 | 16.6 | 22.5 |
+| Maps WebGPU (retained) | 100,000 | 1,776.5 | 2,538.2 | 1,776.5 | 2,538.3 |
+| Maps Canvas2D fallback | 100,000 | 260.8 | 425.1 | 260.9 | 425.1 |
+| MapLibre circle layer | 100,000 | 47.5 | 131.0 | 121.7 | 802.3 |
+| Leaflet Canvas markers | 100,000 | 162.2 | 242.5 | 162.2 | 242.6 |
+
+On both WebGPU journeys the retained counters stayed flat: zero point
+preparations and zero application upload bytes across the journey. The O(1)
+work contract of #155 holds against the same workload the other lanes draw.
+SwiftShader rasterizes the WebGPU instances on the CPU, so the WebGPU lane is
+the slowest here. Those times measure the software rasterizer, not retained
+work, and they say nothing about hardware-GPU presentation. `--gpu` switches
+to hardware-GPU flags for a local comparison on a real adapter.
+
 ## Evidence tooling repair — September 30
 
 The build now copies its optimized WASM and matching glue to `public/wasm`, so
