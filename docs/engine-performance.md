@@ -229,9 +229,11 @@ Per step it records `present` (camera command until the next
 animation-frame callback, after the engine's synchronous draw) and `settled`
 (until every point for that camera is drawn). MapLibre cuts GeoJSON tiles for a
 new zoom in workers, so it settles after it presents; the other lanes draw every
-point in the camera frame. The script fails when a lane does not render or
-follow the journey, or when the WebGPU lane does not hold the points retained.
-It never fails on timings. Pages runs it once per build and publishes
+point in the camera frame. The script fails when a lane draws no point pixels
+in a screenshot of its 1024×768 map, when it does not end on the journey's last
+camera on every axis it claims (centre and zoom, plus bearing and pitch except
+for Leaflet), or when the WebGPU lane does not hold the points retained. It
+never fails on timings. Pages runs it once per build and publishes
 `/maps/evidence/point-journey.json` (`project-evidence-v1`, producer
 `maps-point-journey`) on `/maps/stats/`. A failed run leaves that source
 unavailable and does not block the deploy.

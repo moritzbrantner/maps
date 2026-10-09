@@ -84,15 +84,49 @@ function summarize(journey) {
   };
 }
 
-/** The lane ended near the journey's final camera, on the axes it supports. */
-function followed(journey) {
+/** Angular difference in degrees, ignoring whole turns. */
+function angleDifference(left, right) {
+  const difference = (((left - right) % 360) + 540) % 360 - 180;
+  return Math.abs(difference);
+}
+
+/**
+ * Axes on which the lane did not end at the journey's last camera. Every axis the lane
+ * claims in `cameraAxes` is checked, so a lane that ignores bearing or pitch cannot pass
+ * as having run the claimed journey.
+ */
+function unfollowedAxes(journey) {
   const camera = journey.finalCamera;
-  const lastCamera = journey.lastCamera;
-  return (
-    Math.abs(camera.longitude - lastCamera.center[0]) < 1e-3 &&
-    Math.abs(camera.latitude - lastCamera.center[1]) < 1e-3 &&
-    Math.abs(camera.zoom - lastCamera.zoom) < 1e-3
-  );
+  const last = journey.lastCamera;
+  const checks = {
+    center: () =>
+      Math.abs(camera.longitude - last.center[0]) < 1e-3 &&
+      Math.abs(camera.latitude - last.center[1]) < 1e-3,
+    zoom: () => Math.abs(camera.zoom - last.zoom) < 1e-3,
+    bearing: () => Number.isFinite(camera.bearing) && angleDifference(camera.bearing, last.bearing) < 0.01,
+    pitch: () => Number.isFinite(camera.pitch) && Math.abs(camera.pitch - last.pitch) < 0.01,
+  };
+  return journey.cameraAxes.filter((axis) => !checks[axis]?.());
+}
+
+/**
+ * Point-coloured pixels in a PNG screenshot of the map, counted in the page: an observed
+ * render result for every lane, independent of what the lane says about itself.
+ */
+async function pointPixels(page) {
+  const png = await page.locator("#map").screenshot();
+  return page.evaluate(async (base64) => {
+    const blob = await (await fetch(`data:image/png;base64,${base64}`)).blob();
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext("2d");
+    context.drawImage(bitmap, 0, 0);
+    const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    let count = 0;
+    for (let index = 0; index < data.length; index += 4)
+      if (data[index] > 200 && data[index + 1] < 70 && data[index + 2] < 70) count++;
+    return count;
+  }, png.toString("base64"));
 }
 
 async function main() {
@@ -115,6 +149,7 @@ async function main() {
   const browserVersion = browser.version();
   const runs = new Map();
   const lanes = new Map();
+  let mapSize = null;
   try {
     // Round-robin: each repeat visits every lane once, so machine drift spreads evenly.
     for (let repeat = 0; repeat < REPEATS; repeat++)
@@ -138,14 +173,22 @@ async function main() {
             const journey = await page.evaluate(() => window.interactionBenchmark.pointJourney());
             const renderer = await page.evaluate(() => window.interactionBenchmark.pointRenderer());
             if (errors.length) throw new Error(`[${engine} ${count}] ${errors.join("; ")}`);
-            if (!followed(journey))
-              throw new Error(`[${engine} ${count}] did not follow the journey`);
+            const unfollowed = unfollowedAxes(journey);
+            if (unfollowed.length)
+              throw new Error(
+                `[${engine} ${count}] did not follow the journey on ${unfollowed.join(", ")}`,
+              );
+            const pixels = await pointPixels(page);
+            if (pixels === 0) throw new Error(`[${engine} ${count}] drew no point pixels`);
+            const box = await page.locator("#map").boundingBox();
+            mapSize = { width: Math.round(box.width), height: Math.round(box.height) };
             if (engine === "maps-wgpu" && renderer !== "wgpu-retained")
               throw new Error(`[maps-wgpu ${count}] drew points with ${renderer}`);
             const summary = summarize(journey);
             if (!runs.has(key)) runs.set(key, []);
             runs.get(key).push(summary);
             lanes.set(key, { renderer, cameraAxes: journey.cameraAxes });
+            summary.pointPixels = pixels;
             console.error(
               `#${repeat + 1} ${engine.padEnd(14)} ${String(count).padStart(6)} present p95=${fmt(summary.presentP95)}ms settled p95=${fmt(summary.settledP95)}ms renderer=${renderer}`,
             );
@@ -187,7 +230,9 @@ async function main() {
       journey: "e2e/fixtures/dense-point-journey.ts densePointJourney",
       points: POINTS,
       engines: ENGINES,
-      viewport: { width: 1100, height: 820, devicePixelRatio: 1 },
+      // The fixture's #map element, inside a 1100×820 page at device pixel ratio 1.
+      mapSize,
+      devicePixelRatio: 1,
       warmups: 1,
       repeats: REPEATS,
     },

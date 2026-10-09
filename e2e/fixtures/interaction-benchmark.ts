@@ -18,6 +18,8 @@ type BenchmarkCamera = {
   latitude: number;
   zoom: number;
   bearing: number | null;
+  /** Point journeys only; `null` where the engine has no pitch. */
+  pitch?: number | null;
 };
 
 const params = new URLSearchParams(location.search);
@@ -501,7 +503,7 @@ async function mountMapsPoints(points: ReturnType<typeof densePoints>): Promise<
   configureMapsWasmPackage("/wasm/maps_wasm.js");
   type Controller = {
     getRendererStats(): Partial<PointLaneStats> | null;
-    getViewState(): { bearing?: number; center: [number, number]; zoom: number };
+    getViewState(): { bearing?: number; center: [number, number]; pitch?: number; zoom: number };
     setViewState(state: DensePointCamera): void;
   };
   let controller: Controller | null = null;
@@ -559,6 +561,7 @@ async function mountMapsPoints(points: ReturnType<typeof densePoints>): Promise<
         bearing: state.bearing ?? 0,
         latitude: state.center[1],
         longitude: state.center[0],
+        pitch: state.pitch ?? 0,
         zoom: state.zoom,
       };
     },
@@ -621,6 +624,7 @@ async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Prom
         bearing: map.getBearing(),
         latitude: center.lat,
         longitude: center.lng,
+        pitch: map.getPitch(),
         zoom: map.getZoom(),
       };
     },
@@ -664,7 +668,13 @@ async function mountLeafletPoints(points: ReturnType<typeof densePoints>): Promi
       map.setView([camera.center[1], camera.center[0]], camera.zoom, { animate: false }),
     camera() {
       const center = map.getCenter();
-      return { bearing: null, latitude: center.lat, longitude: center.lng, zoom: map.getZoom() };
+      return {
+        bearing: null,
+        latitude: center.lat,
+        longitude: center.lng,
+        pitch: null,
+        zoom: map.getZoom(),
+      };
     },
     // Leaflet has no bearing or pitch: its lane follows centre and zoom only.
     cameraAxes: ["center", "zoom"],
