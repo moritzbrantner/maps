@@ -307,6 +307,32 @@ describe("Maps aggregation Rust authority", () => {
     expect(getMapsAggregationRuntimeStatus()).toBe("ready");
   });
 
+  test("a diagnostic handler that retries starts after the decisive failure settled", async () => {
+    loader.controlled = true;
+    const observed: string[] = [];
+    let retry: Promise<boolean> | null = null;
+    configureMapsAggregationRuntime({
+      onDiagnostic: (event) => {
+        if (event.mode !== "fallback" || retry) return;
+        observed.push(getMapsAggregationRuntimeStatus());
+        retry = initializeMapsAggregationWasm();
+      },
+    });
+    const first = initializeMapsAggregationWasm();
+
+    loader.queued[0].reject(new Error("first load failed"));
+    await expect(first).resolves.toBe(false);
+
+    // The fallback was in place when reported, and the retry keeps it until it settles.
+    expect(observed).toEqual(["unavailable"]);
+    expect(loader.queued).toHaveLength(2);
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+
+    loader.queued[1].resolve(createTestRuntime());
+    await expect(retry).resolves.toBe(true);
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+  });
+
   test("reports the explicit no-WASM fallback when an override cannot load", async () => {
     const diagnostics: MapsAggregationDiagnostic[] = [];
 
@@ -321,6 +347,68 @@ describe("Maps aggregation Rust authority", () => {
         fallbackReason: expect.any(String),
         mode: "fallback",
       }),
+    ]);
+  });
+});
+
+// Acceptance for #216: the `fallback` diagnostic reports a fallback that actually happened,
+// i.e. only the decisive (newest) failed load that moves the runtime to `unavailable`.
+describe("aggregation fallback diagnostics (#216)", () => {
+  function captureDiagnostics() {
+    const diagnostics: MapsAggregationDiagnostic[] = [];
+    configureMapsAggregationRuntime({ onDiagnostic: (event) => diagnostics.push(event) });
+    return diagnostics;
+  }
+
+  test("an older failure while a newer load succeeds reports no fallback", async () => {
+    loader.controlled = true;
+    const diagnostics = captureDiagnostics();
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    older.reject(new Error("older load failed"));
+    await expect(ensured).resolves.toBe(false);
+    newer.resolve(createTestRuntime());
+    await expect(direct).resolves.toBe(true);
+
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([]);
+  });
+
+  test("an older failure after a newer load installed its runtime reports no fallback", async () => {
+    loader.controlled = true;
+    const diagnostics = captureDiagnostics();
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    newer.resolve(createTestRuntime());
+    await expect(direct).resolves.toBe(true);
+    older.reject(new Error("older load failed"));
+    await ensured;
+
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([]);
+  });
+
+  test("overlapping failures report exactly one fallback, from the decisive load", async () => {
+    loader.controlled = true;
+    const diagnostics = captureDiagnostics();
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    older.reject(new Error("older load failed"));
+    await ensured;
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([]);
+
+    newer.reject(new Error("newer load failed"));
+    await expect(direct).resolves.toBe(false);
+
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([
+      expect.objectContaining({ fallbackReason: expect.stringContaining("newer load failed") }),
     ]);
   });
 });
