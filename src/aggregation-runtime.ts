@@ -100,9 +100,14 @@ let wasmLoadError: unknown = null;
 let pendingInitialization: Promise<boolean> | null = null;
 let runtimeStatus: MapsAggregationRuntimeStatus = "idle";
 let runtimeVersion = 0;
-// Bumped whenever the runtime is installed or reset directly, so an older load that settles
-// later cannot overwrite it.
-let loadGeneration = 0;
+// Bumped whenever the runtime is installed or reset directly, so a load started before that
+// cannot overwrite it when it settles.
+let installEpoch = 0;
+// Every load attempt (from `ensureMapsAggregationWasm` or a direct
+// `initializeMapsAggregationWasm` call) gets its own ordering token.
+let latestLoadAttempt = 0;
+// The attempt whose runtime is installed, so an older attempt cannot replace a newer one.
+let installedLoadAttempt = 0;
 const runtimeListeners = new Set<() => void>();
 
 function setWasmRuntime(runtime: MapsAggregationWasmRuntime | null, loadError: unknown) {
@@ -139,9 +144,20 @@ export function configureMapsAggregationRuntime(options: MapsAggregationLoaderOp
   };
 }
 
-export async function initializeMapsAggregationWasm(options: MapsAggregationLoaderOptions = {}) {
+/**
+ * Loads the aggregation WASM runtime and resolves to whether Rust clustering is available.
+ * Each call is its own load attempt with its own ordering token: a successful attempt installs
+ * its runtime unless a newer attempt already did (or the runtime was installed or reset
+ * directly since it started), and a failed attempt never replaces an installed runtime and
+ * reports `unavailable` only when it is the newest attempt. `ensureMapsAggregationWasm` reuses
+ * the attempt in flight.
+ */
+export function initializeMapsAggregationWasm(
+  options: MapsAggregationLoaderOptions = {},
+): Promise<boolean> {
   configureMapsAggregationRuntime(options);
-  const generation = loadGeneration;
+  const attempt = ++latestLoadAttempt;
+  const epoch = installEpoch;
 
   // A first load is pending; a retry after a failure keeps the explicit fallback in place
   // instead of flickering Map Layers back to the pending state.
@@ -149,21 +165,33 @@ export async function initializeMapsAggregationWasm(options: MapsAggregationLoad
     setRuntimeState(wasmRuntime, wasmLoadError, "loading");
   }
 
-  try {
-    const runtime = await loadMapsAggregationWasmRuntime(configuredOptions.wasmPackage);
-    if (generation !== loadGeneration) return wasmRuntime !== null;
-    setWasmRuntime(runtime, null);
-    return true;
-  } catch (error) {
-    if (generation !== loadGeneration) return wasmRuntime !== null;
-    setWasmRuntime(null, error);
-    configuredOptions.onDiagnostic?.({
-      backend: "wasm",
-      fallbackReason: getErrorMessage(error),
-      mode: "fallback",
-    });
-    return false;
-  }
+  const initialization = loadMapsAggregationWasmRuntime(configuredOptions.wasmPackage).then(
+    (runtime) => {
+      if (epoch !== installEpoch) return wasmRuntime !== null;
+      if (wasmRuntime && installedLoadAttempt > attempt) return true;
+      installedLoadAttempt = attempt;
+      setWasmRuntime(runtime, null);
+      return true;
+    },
+    (error: unknown) => {
+      if (epoch !== installEpoch || wasmRuntime) return wasmRuntime !== null;
+      configuredOptions.onDiagnostic?.({
+        backend: "wasm",
+        fallbackReason: getErrorMessage(error),
+        mode: "fallback",
+      });
+      // A newer attempt is still in flight or already settled; it decides the status.
+      if (attempt === latestLoadAttempt) setWasmRuntime(null, error);
+      return false;
+    },
+  );
+  const owned: Promise<boolean> = initialization.finally(() => {
+    // Settled attempts never block a later `ensureMapsAggregationWasm` retry.
+    if (pendingInitialization === owned) pendingInitialization = null;
+  });
+
+  pendingInitialization = owned;
+  return owned;
 }
 
 /**
@@ -171,22 +199,14 @@ export async function initializeMapsAggregationWasm(options: MapsAggregationLoad
  * to whether Rust clustering is available. Map Views call this on mount; consumers may await it
  * to sequence work after the runtime. While it loads, Map Layers stay pending (no aggregated
  * output); `createPointAggregationIndex` called directly in that window returns the unclustered
- * fallback.
+ * fallback. After a failed load, a later call retries.
  */
 export function ensureMapsAggregationWasm(): Promise<boolean> {
   if (wasmRuntime) {
     return Promise.resolve(true);
   }
 
-  // A failed load is reported once per attempt; a later Map View mount may retry.
-  if (!pendingInitialization) {
-    const initialization: Promise<boolean> = initializeMapsAggregationWasm().then((ready) => {
-      if (!ready && pendingInitialization === initialization) pendingInitialization = null;
-      return ready;
-    });
-    pendingInitialization = initialization;
-  }
-  return pendingInitialization;
+  return pendingInitialization ?? initializeMapsAggregationWasm();
 }
 
 /**
@@ -221,7 +241,7 @@ export function subscribeMapsAggregationRuntime(listener: () => void) {
 export function resetMapsAggregationRuntimeForTests() {
   configuredOptions = {};
   pendingInitialization = null;
-  loadGeneration += 1;
+  installEpoch += 1;
   setWasmRuntime(null, null);
 }
 
@@ -231,7 +251,7 @@ export function resetMapsAggregationRuntimeForTests() {
  */
 export function setMapsAggregationWasmRuntimeForTests(runtime: MapsAggregationWasmRuntime | null) {
   pendingInitialization = null;
-  loadGeneration += 1;
+  installEpoch += 1;
   setRuntimeState(runtime, null, runtime ? "ready" : "unavailable");
 }
 
