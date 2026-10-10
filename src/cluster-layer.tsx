@@ -28,8 +28,16 @@ import {
 } from "./flat-layer-reconciler";
 import { escapeHtml, joinClassNames, toLatLng } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
+import type { MapSurfaceContextValue } from "./map-surface-context";
 import { MapSurfaceContext } from "./map-view";
-import type { FlatLayer } from "./maplibre-compat";
+import type {
+  FlatCircleCollectionFeature,
+  FlatCircleCollectionLayer,
+  FlatLayer,
+  FlatLayerFactory,
+  FlatLayerGroup,
+  FlatPointerEvent,
+} from "./maplibre-compat";
 import {
   createPointClusterRenderFrame,
   type MapPointClusterRenderFeature,
@@ -75,9 +83,15 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
   const surfaceRef = useRef(surface);
   const flatFeatureCacheRef = useRef<Map<string, FlatClusterCacheEntry>>(new Map());
-  const { pending: aggregationRuntimePending, version: aggregationRuntimeVersion } =
-    useMapsAggregationRuntime();
+  const {
+    pending: aggregationRuntimePending,
+    status: aggregationRuntimeStatus,
+    version: aggregationRuntimeVersion,
+  } = useMapsAggregationRuntime();
   const indexRef = useRef<PointAggregationIndex<TProperties> | null>(null);
+  // True when the committed index is the explicit unclustered fallback (runtime `unavailable`).
+  const unclusteredFallbackRef = useRef(false);
+  const fallbackRef = useRef<FlatUnclusteredFallback<TProperties> | null>(null);
   const [indexVersion, setIndexVersion] = useState(0);
 
   // The index is created and disposed in one effect (never in render), so Strict Mode
@@ -88,6 +102,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   useEffect(() => {
     if (aggregationRuntimePending) {
       indexRef.current = null;
+      unclusteredFallbackRef.current = false;
       setIndexVersion((version) => version + 1);
       return;
     }
@@ -99,6 +114,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       radius: clusterRadius,
     });
     indexRef.current = index;
+    unclusteredFallbackRef.current = aggregationRuntimeStatus === "unavailable";
     setIndexVersion((version) => version + 1);
     return () => {
       if (indexRef.current === index) indexRef.current = null;
@@ -106,6 +122,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
     };
   }, [
     aggregationRuntimePending,
+    aggregationRuntimeStatus,
     aggregationRuntimeVersion,
     clusterRadius,
     deferredPoints,
@@ -121,6 +138,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   useEffect(() => {
     if (!isFlatSurface) {
       flatFeatureCacheRef.current.clear();
+      fallbackRef.current = null;
       return;
     }
 
@@ -136,6 +154,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
 
         if (!index) {
           // Pending aggregation runtime: nothing is aggregated yet, so nothing is drawn.
+          removeUnclusteredFallback(fallbackRef);
           reconcileFlatLayerEntries<FlatClusterCacheEntry>({
             cache: flatFeatureCacheRef.current,
             layer,
@@ -157,10 +176,50 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           onViewportAggregationChange,
         );
 
+        // Without the Rust runtime every visible point is its own feature, so the explicit
+        // fallback draws them as one batched MapLibre source and circle layer (#214) instead of
+        // a source and layer per point. Rust-clustered output keeps the per-feature path.
+        const unclustered = unclusteredFallbackRef.current;
+        const batchedPoints = unclustered
+          ? renderFrame.features.filter(
+              (renderFeature): renderFeature is MapPointClusterRenderFeature<TProperties> & {
+                kind: "point";
+              } => renderFeature.kind === "point",
+            )
+          : [];
+        const perFeature = unclustered
+          ? renderFrame.features.filter((renderFeature) => renderFeature.kind !== "point")
+          : renderFrame.features;
+
+        if (unclustered) {
+          renderUnclusteredFallback({
+            fallbackRef,
+            flat,
+            getFeatureId,
+            hoveredFeatureId,
+            isMeasuring,
+            layer,
+            map,
+            onFeatureContextMenu,
+            onFeatureHover,
+            onFeatureSelect,
+            onHoveredFeatureIdChange,
+            onSelectedFeatureIdChange,
+            points: batchedPoints,
+            renderFeatureContextMenu,
+            renderFeaturePopup,
+            renderFeatureTooltip,
+            selectedFeatureId,
+            surface: currentSurface,
+          });
+        } else {
+          removeUnclusteredFallback(fallbackRef);
+        }
+
         reconcileFlatLayerEntries<FlatClusterCacheEntry>({
           cache: flatFeatureCacheRef.current,
           layer,
-          plans: renderFrame.features.map((renderFeature) => {
+          plans: perFeature.map((renderFeature) => {
             const feature = renderFeature.feature;
             const selected = currentSurface.isFeatureSelected(
               feature,
@@ -403,16 +462,17 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       {
         onHoverChange: hoveredFeatureId
           ? undefined
-          : () =>
-              updateFlatLayerEntriesHover(flatFeatureCacheRef.current, (feature) =>
+          : () => {
+              const isHovered = (feature: AggregatedMapFeature<TProperties>) =>
                 Boolean(
-                  surfaceRef.current?.isFeatureHovered(
-                    feature as AggregatedMapFeature<TProperties>,
-                    hoveredFeatureId,
-                    getFeatureId,
-                  ),
-                ),
-              ),
+                  surfaceRef.current?.isFeatureHovered(feature, hoveredFeatureId, getFeatureId),
+                );
+
+              updateFlatLayerEntriesHover(flatFeatureCacheRef.current, (feature) =>
+                isHovered(feature as AggregatedMapFeature<TProperties>),
+              );
+              syncUnclusteredFallbackHover(fallbackRef.current, isHovered);
+            },
         preserveOnRender: true,
       },
     );
@@ -503,6 +563,217 @@ function emitViewportSummary(
   startTransition(() => {
     onViewportAggregationChange?.(summary);
   });
+}
+
+type FlatUnclusteredPoint<TProperties> = MapPointClusterRenderFeature<TProperties> & {
+  kind: "point";
+};
+
+type FlatUnclusteredFallbackHandlers<TProperties> = {
+  click(point: FlatUnclusteredPoint<TProperties>, event: FlatPointerEvent): void;
+  contextmenu(point: FlatUnclusteredPoint<TProperties>, event: FlatPointerEvent): void;
+  mouseout(): void;
+  mouseover(point: FlatUnclusteredPoint<TProperties>, event: FlatPointerEvent): void;
+};
+
+/** The batched fallback layer, its group, and what its pointer events currently resolve to. */
+type FlatUnclusteredFallback<TProperties> = {
+  collection: FlatCircleCollectionLayer;
+  group: FlatLayerGroup;
+  handlers: FlatUnclusteredFallbackHandlers<TProperties> | null;
+  pointsByKey: Map<string, FlatUnclusteredPoint<TProperties>>;
+};
+
+function renderUnclusteredFallback<TProperties>({
+  fallbackRef,
+  flat,
+  getFeatureId,
+  hoveredFeatureId,
+  isMeasuring,
+  layer,
+  map,
+  onFeatureContextMenu,
+  onFeatureHover,
+  onFeatureSelect,
+  onHoveredFeatureIdChange,
+  onSelectedFeatureIdChange,
+  points,
+  renderFeatureContextMenu,
+  renderFeaturePopup,
+  renderFeatureTooltip,
+  selectedFeatureId,
+  surface,
+}: Pick<
+  ClusterLayerProps<TProperties>,
+  | "getFeatureId"
+  | "hoveredFeatureId"
+  | "onFeatureContextMenu"
+  | "onFeatureHover"
+  | "onFeatureSelect"
+  | "onHoveredFeatureIdChange"
+  | "onSelectedFeatureIdChange"
+  | "renderFeatureContextMenu"
+  | "renderFeaturePopup"
+  | "renderFeatureTooltip"
+  | "selectedFeatureId"
+> & {
+  fallbackRef: MutableRefObject<FlatUnclusteredFallback<TProperties> | null>;
+  flat: Pick<FlatLayerFactory, "circleCollection">;
+  isMeasuring: boolean;
+  layer: FlatLayerGroup;
+  map: {
+    getContainer(): HTMLElement;
+    project: (coordinates: [number, number]) => { x: number; y: number };
+  };
+  points: readonly FlatUnclusteredPoint<TProperties>[];
+  surface: MapSurfaceContextValue;
+}) {
+  const pointsByKey = new Map<string, FlatUnclusteredPoint<TProperties>>();
+  let hoveredKey: string | null = null;
+  const features = points.map((point): FlatCircleCollectionFeature => {
+    pointsByKey.set(point.id, point);
+    const selected = surface.isFeatureSelected(point.feature, selectedFeatureId, getFeatureId);
+
+    if (
+      hoveredKey === null &&
+      surface.isFeatureHovered(point.feature, hoveredFeatureId, getFeatureId)
+    ) {
+      hoveredKey = point.id;
+    }
+
+    return {
+      className: joinClassNames("mb-maps__point-marker", selected && "mb-maps__feature--selected"),
+      color: "#ffffff",
+      fillColor: point.fillColor,
+      fillOpacity: 0.92,
+      key: point.id,
+      latLng: toLatLng(point.coordinates),
+      radius: point.radius,
+      weight: selected ? 3 : 2,
+    };
+  });
+
+  let fallback = fallbackRef.current;
+
+  // The layer group clears its layers on unmount or a map style reload; start over then.
+  if (fallback && (fallback.group !== layer || !layer.layers.includes(fallback.collection))) {
+    removeUnclusteredFallback(fallbackRef);
+    fallback = null;
+  }
+
+  if (!fallback) {
+    const created: FlatUnclusteredFallback<TProperties> = {
+      collection: flat.circleCollection(features),
+      group: layer,
+      handlers: null,
+      pointsByKey,
+    };
+    const resolve = (event: FlatPointerEvent = {}) =>
+      event.featureKey === undefined ? undefined : created.pointsByKey.get(event.featureKey);
+
+    created.collection
+      .on("click", (event) => {
+        const point = resolve(event);
+        if (point) created.handlers?.click(point, event ?? {});
+      })
+      .on("contextmenu", (event) => {
+        const point = resolve(event);
+        if (point) created.handlers?.contextmenu(point, event ?? {});
+      })
+      .on("mouseover", (event) => {
+        const point = resolve(event);
+        if (point) created.handlers?.mouseover(point, event ?? {});
+      })
+      .on("mouseout", () => {
+        created.handlers?.mouseout();
+      });
+    created.collection.addTo(layer);
+    fallbackRef.current = created;
+    fallback = created;
+  } else {
+    fallback.pointsByKey = pointsByKey;
+    fallback.collection.setFeatures(features);
+  }
+
+  fallback.collection.setHoveredKey(hoveredKey);
+  fallback.handlers = isMeasuring
+    ? null
+    : {
+        click(point, event) {
+          surface.handleFeatureClick(
+            point.feature,
+            getFlatFeaturePosition(map, point.coordinates, event),
+            { getFeatureId, onFeatureSelect, onSelectedFeatureIdChange, renderFeaturePopup },
+          );
+        },
+        contextmenu(point, event) {
+          suppressNativeContextMenu(event);
+          surface.handleFeatureContextMenu(
+            point.feature,
+            getFlatFeaturePosition(map, point.coordinates, event),
+            {
+              coordinates: point.coordinates,
+              getFeatureId,
+              onFeatureContextMenu,
+              onFeatureSelect,
+              onSelectedFeatureIdChange,
+              renderFeatureContextMenu,
+              renderFeaturePopup,
+            },
+          );
+        },
+        mouseout() {
+          map.getContainer().style.cursor = "";
+          surface.handleFeatureHover(null, null, {
+            getFeatureId,
+            onHoveredFeatureIdChange,
+            onFeatureHover,
+            renderFeatureTooltip,
+          });
+        },
+        mouseover(point, event) {
+          map.getContainer().style.cursor = "pointer";
+          surface.handleFeatureHover(
+            point.feature,
+            getFlatFeaturePosition(map, point.coordinates, event),
+            { getFeatureId, onHoveredFeatureIdChange, onFeatureHover, renderFeatureTooltip },
+          );
+        },
+      };
+}
+
+function syncUnclusteredFallbackHover<TProperties>(
+  fallback: FlatUnclusteredFallback<TProperties> | null,
+  isHovered: (feature: AggregatedMapFeature<TProperties>) => boolean,
+) {
+  if (!fallback) {
+    return;
+  }
+
+  let hoveredKey: string | null = null;
+
+  for (const [key, point] of fallback.pointsByKey) {
+    if (isHovered(point.feature)) {
+      hoveredKey = key;
+      break;
+    }
+  }
+
+  fallback.collection.setHoveredKey(hoveredKey);
+}
+
+function removeUnclusteredFallback<TProperties>(
+  fallbackRef: MutableRefObject<FlatUnclusteredFallback<TProperties> | null>,
+) {
+  const fallback = fallbackRef.current;
+
+  if (!fallback) {
+    return;
+  }
+
+  fallbackRef.current = null;
+  fallback.handlers = null;
+  fallback.group.removeLayer(fallback.collection);
 }
 
 function getFlatFeaturePosition(

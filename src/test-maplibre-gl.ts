@@ -22,6 +22,11 @@ export class Map {
   private activeLayerGroup: unknown = null;
   private fallbackLayerGroup: unknown = null;
   private layers = new globalThis.Map<string, unknown>();
+  // A circle collection (one MapLibre layer) is mirrored as one mock circle per feature.
+  private collectionMocks = new globalThis.Map<
+    string,
+    { group: unknown; layers: Array<{ remove?: () => void }> }
+  >();
   private mockLayers = new globalThis.Map<string, unknown>();
   private pendingFlatMarker: { remove?: () => void } | null = null;
   private maxBounds: [[number, number], [number, number]] | null = null;
@@ -105,6 +110,62 @@ export class Map {
     layer?.bindTooltip?.(label, options);
   }
 
+  __mbSetFlatCircleCollection(
+    layerId: string,
+    features: ReadonlyArray<{
+      className?: string;
+      color?: string;
+      fillColor?: string;
+      fillOpacity?: number;
+      latLng: [number, number];
+      radius?: number;
+      weight?: number;
+    }>,
+  ) {
+    const group = this.collectionMocks.get(layerId)?.group ?? this.getCurrentLayerGroup();
+
+    this.clearCollectionMocks(layerId);
+    this.collectionMocks.set(layerId, {
+      group,
+      layers: features.map(
+        ({ latLng, ...options }) =>
+          flatRuntime.circleMarker(latLng as never, options as never).addTo(group as never) as {
+            remove?: () => void;
+          },
+      ),
+    });
+  }
+
+  private clearCollectionMocks(layerId: string) {
+    const entry = this.collectionMocks.get(layerId);
+
+    if (!entry) {
+      return;
+    }
+
+    const group = entry.group as {
+      layers?: unknown[];
+      removeLayer?: (layer: unknown) => unknown;
+    } | null;
+
+    for (const layer of entry.layers) {
+      if (group?.removeLayer) {
+        group.removeLayer(layer);
+        continue;
+      }
+
+      const index = group?.layers?.indexOf(layer) ?? -1;
+
+      if (index >= 0) {
+        group!.layers!.splice(index, 1);
+      }
+
+      layer.remove?.();
+    }
+
+    this.collectionMocks.delete(layerId);
+  }
+
   __mbUpdateFlatImageOverlay(
     layerId: string,
     next: { bounds?: [[number, number], [number, number]]; opacity?: number; url?: string },
@@ -184,6 +245,11 @@ export class Map {
     const flatOptions = layer.metadata?.flatOptions ?? {};
 
     if (layer.type === "line" && (geometry?.type === "Polygon" || geometry?.type === "MultiPolygon")) {
+      return;
+    }
+
+    if (layer.type === "circle" && (source?.data as { type?: string } | undefined)?.type === "FeatureCollection") {
+      // Mirrored per feature by `__mbSetFlatCircleCollection`.
       return;
     }
 
@@ -414,6 +480,7 @@ export class Map {
   }
 
   removeLayer(id: string) {
+    this.clearCollectionMocks(id);
     (this.mockLayers.get(id) as { remove?: () => void } | undefined)?.remove?.();
     this.layers.delete(id);
     this.mockLayers.delete(id);

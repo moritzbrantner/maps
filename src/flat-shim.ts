@@ -11,6 +11,7 @@ export type LayerGroup = FlatLayerGroup;
 export type Map = FlatMapAdapter;
 export type PathOptions = FlatLayerOptions;
 
+export const circleCollection: FlatLayerFactory["circleCollection"] = unsupported;
 export const circleMarker: FlatLayerFactory["circleMarker"] = unsupported;
 export const divIcon: FlatLayerFactory["divIcon"] = unsupported;
 export const imageOverlay: FlatLayerFactory["imageOverlay"] = unsupported;
