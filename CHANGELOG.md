@@ -17,12 +17,24 @@
 
 ### Minor Changes
 
+- Exported `ensureMapsAggregationWasm()`, `getMapsAggregationRuntimeStatus()`,
+  `subscribeMapsAggregationRuntime()` and the `MapsAggregationRuntimeStatus`
+  type from the root and `core` entries. Consumers can await or observe the
+  Rust/WASM aggregation runtime (`idle`, `loading`, `ready`, `unavailable`).
 - `PointLayer` accepts `getPointLabel` to draw text centered on a point, as
   cluster layers draw their counts. On WebGPU, labeled points stay GPU-retained
   and camera frames project only the labeled points for the label pass.
 
 ### Patch Changes
 
+- Cluster layers (`ClusterLayer` on MapLibre and Maps Map Views,
+  `CanvasPointClusterLayer`) no longer draw every point while the aggregation
+  runtime is still loading. Before, a MapLibre style that loaded first drew a
+  dense dataset as one MapLibre source and layer per point. With 100,000 points
+  that blocked the main thread for minutes. The layers now stay pending (nothing
+  drawn, no viewport aggregation reported) until the runtime is ready, then draw
+  the Rust-clustered view. The unclustered fallback applies only once loading
+  has failed.
 - Imported `polygon-clipping` through its default export so Rollup-based
   bundlers (Vite 5) accept the package.
 - Map Views now publish camera and hover state separately from their stable

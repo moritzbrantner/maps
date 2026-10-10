@@ -40,6 +40,12 @@ export {
   type VisibleAggregationSummary,
 } from "./aggregation";
 export {
+  ensureMapsAggregationWasm,
+  getMapsAggregationRuntimeStatus,
+  subscribeMapsAggregationRuntime,
+  type MapsAggregationRuntimeStatus,
+} from "./aggregation-runtime";
+export {
   ClusteredMap,
   defaultRasterMapStyle,
   type ClusteredMapProps,

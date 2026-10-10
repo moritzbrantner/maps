@@ -1,6 +1,6 @@
 "use client";
 
-import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
+import { useMapsAggregationRuntime } from "./aggregation-runtime-react";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
@@ -94,10 +94,12 @@ export function CanvasPointClusterLayer<
   const hoveredIdRef = useRef<string | null>(null);
   const indexRef = useRef<PointAggregationIndex<TProperties> | null>(null);
   const [resizeVersion, setResizeVersion] = useState(0);
-  const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
+  const { pending: aggregationRuntimePending, version: aggregationRuntimeVersion } =
+    useMapsAggregationRuntime();
 
   useEffect(() => {
-    if (mode !== "clusters") {
+    // A pending aggregation runtime builds no index: nothing is drawn until Rust clusters (#212).
+    if (mode !== "clusters" || aggregationRuntimePending) {
       indexRef.current = null;
       return;
     }
@@ -116,7 +118,16 @@ export function CanvasPointClusterLayer<
       }
       index.dispose();
     };
-  }, [aggregationRuntimeVersion, clusterRadius, filterPoint, maxZoom, minZoom, mode, points]);
+  }, [
+    aggregationRuntimePending,
+    aggregationRuntimeVersion,
+    clusterRadius,
+    filterPoint,
+    maxZoom,
+    minZoom,
+    mode,
+    points,
+  ]);
 
   useEffect(() => {
     const container = surface?.maplibreMap?.getContainer();
@@ -143,10 +154,15 @@ export function CanvasPointClusterLayer<
       zoom: map.getZoom(),
     };
     const index = indexRef.current;
-    const frame =
-      mode === "clusters" && index
-        ? createPointClusterRenderFrame(index.getViewportAggregation(query), getFeatureId)
-        : createPointOnlyRenderFrame(points, query, getFeatureId);
+    if (mode === "clusters" && !index) {
+      // Pending aggregation runtime: nothing is aggregated yet, so nothing is drawn.
+      sceneRef.current = null;
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    const frame = index
+      ? createPointClusterRenderFrame(index.getViewportAggregation(query), getFeatureId)
+      : createPointOnlyRenderFrame(points, query, getFeatureId);
     const container = map.getContainer();
     const width = Math.max(1, container.clientWidth);
     const height = Math.max(1, container.clientHeight);
