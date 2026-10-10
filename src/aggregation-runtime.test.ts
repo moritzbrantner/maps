@@ -325,6 +325,68 @@ describe("Maps aggregation Rust authority", () => {
   });
 });
 
+// Acceptance for #216: the `fallback` diagnostic reports a fallback that actually happened,
+// i.e. only the decisive (newest) failed load that moves the runtime to `unavailable`.
+describe("aggregation fallback diagnostics (#216)", () => {
+  function captureDiagnostics() {
+    const diagnostics: MapsAggregationDiagnostic[] = [];
+    configureMapsAggregationRuntime({ onDiagnostic: (event) => diagnostics.push(event) });
+    return diagnostics;
+  }
+
+  test("an older failure while a newer load succeeds reports no fallback", async () => {
+    loader.controlled = true;
+    const diagnostics = captureDiagnostics();
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    older.reject(new Error("older load failed"));
+    await expect(ensured).resolves.toBe(false);
+    newer.resolve(createTestRuntime());
+    await expect(direct).resolves.toBe(true);
+
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([]);
+  });
+
+  test("an older failure after a newer load installed its runtime reports no fallback", async () => {
+    loader.controlled = true;
+    const diagnostics = captureDiagnostics();
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    newer.resolve(createTestRuntime());
+    await expect(direct).resolves.toBe(true);
+    older.reject(new Error("older load failed"));
+    await ensured;
+
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([]);
+  });
+
+  test("overlapping failures report exactly one fallback, from the decisive load", async () => {
+    loader.controlled = true;
+    const diagnostics = captureDiagnostics();
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    older.reject(new Error("older load failed"));
+    await ensured;
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([]);
+
+    newer.reject(new Error("newer load failed"));
+    await expect(direct).resolves.toBe(false);
+
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+    expect(diagnostics.filter((event) => event.mode === "fallback")).toEqual([
+      expect.objectContaining({ fallbackReason: expect.stringContaining("newer load failed") }),
+    ]);
+  });
+});
+
 function createPointRuntimeIndex(
   points: readonly MapsAggregationRuntimePoint[],
   queries: number[],
