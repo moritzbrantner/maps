@@ -117,7 +117,14 @@ function configureHostedRustRuntimePackage() {
   const moduleUrl = new URL(`${import.meta.env.BASE_URL}wasm/maps_wasm.js`, window.location.origin)
     .href;
   configureMapsWasmPackage(moduleUrl);
-  configureMapsAggregationRuntime({ wasmPackage: moduleUrl });
+  // #214: `aggregationWasm=missing` makes only the aggregation runtime fail to load, so the
+  // explicit unclustered fallback is exercised while the rest of the hosted runtime works.
+  const aggregationPackage =
+    new URLSearchParams(window.location.search).get("aggregationWasm") === "missing"
+      ? new URL(`${import.meta.env.BASE_URL}wasm/missing-aggregation.js`, window.location.origin)
+          .href
+      : moduleUrl;
+  configureMapsAggregationRuntime({ wasmPackage: aggregationPackage });
 }
 
 function isBenchmarksPath(pathname: string) {

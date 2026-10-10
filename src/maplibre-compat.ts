@@ -14,6 +14,8 @@ export type MapLibreMapStyle = string | StyleSpecification;
 
 export type FlatPointerEvent = {
   containerPoint?: { x: number; y: number };
+  /** For a circle collection: the key of the collection feature under the pointer. */
+  featureKey?: string;
   latlng?: { lat: number; lng: number };
   lngLat?: { lat: number; lng: number };
   originalEvent?: {
@@ -94,7 +96,41 @@ export type FlatMapAdapter = MapLibreMap & {
   setView: (latLng: [number, number] | { lat: number; lng: number }, zoom: number) => void;
 };
 
+/** One circle of a `circleCollection`; `key` is what pointer events report as `featureKey`. */
+export type FlatCircleCollectionFeature = {
+  /** DOM/test-double class name only; it is not part of the MapLibre source data. */
+  className?: string;
+  color?: string;
+  fillColor?: string;
+  fillOpacity?: number;
+  key: string;
+  latLng: [number, number];
+  radius?: number;
+  weight?: number;
+};
+
+/**
+ * Many circles drawn as one GeoJSON source and one circle layer. Pointer events
+ * (`click`, `contextmenu`, `mouseover`, `mouseout`) are hit-tested per circle and carry the
+ * circle's `featureKey`; `mouseover`/`mouseout` fire when the circle under the pointer changes.
+ */
+export type FlatCircleCollectionLayer = FlatLayer & {
+  /** Restyles one circle as hovered (or none) without replacing the collection data. */
+  setHoveredKey: (key: string | null) => FlatCircleCollectionLayer;
+  /** Replaces the circles in place; it re-sends the source data only when they changed. */
+  setFeatures: (features: readonly FlatCircleCollectionFeature[]) => FlatCircleCollectionLayer;
+};
+
+export type FlatCircleCollectionOptions = {
+  /** Stroke width of the hovered circle. */
+  hoverWeight?: number;
+};
+
 export type FlatLayerFactory = {
+  circleCollection: (
+    features: readonly FlatCircleCollectionFeature[],
+    options?: FlatCircleCollectionOptions,
+  ) => FlatCircleCollectionLayer;
   circleMarker: (latLng: [number, number], options?: FlatLayerOptions) => FlatLayer;
   divIcon: (options?: FlatDivIconOptions) => FlatDivIconOptions;
   imageOverlay: (
@@ -147,6 +183,9 @@ export function createMapLibreFlatLayerFactory(
   map: MapLibreMap,
 ): FlatLayerFactory {
   return {
+    circleCollection(features, options = {}) {
+      return new MapLibreCircleCollectionLayer(map, features, options);
+    },
     circleMarker(latLng, options = {}) {
       return new MapLibrePointLayer(map, latLngToLngLat(latLng), options);
     },
@@ -623,6 +662,326 @@ class MapLibrePointLayer extends MapLibreSourceLayer {
       type: "Feature",
     };
   }
+}
+
+/** Click/context-menu tolerance around the pointer, as for the single-circle layers. */
+const CIRCLE_COLLECTION_CLICK_TOLERANCE_PX = 6;
+
+class MapLibreCircleCollectionLayer extends MapLibreSourceLayer implements FlatCircleCollectionLayer {
+  private features: readonly FlatCircleCollectionFeature[];
+  private featuresByKey = new globalThis.Map<string, FlatCircleCollectionFeature>();
+  private readonly circleLayerId = `${this.id}:circles`;
+  private readonly publicHandlers = new globalThis.Map<string, Set<(event?: FlatPointerEvent) => void>>();
+  private mapHandlers: Array<{ event: string; handler: (event: unknown) => void }> = [];
+  private pointerKey: string | null = null;
+  private hoveredKey: string | null = null;
+
+  constructor(
+    map: MapLibreMap,
+    features: readonly FlatCircleCollectionFeature[],
+    private readonly options: FlatCircleCollectionOptions,
+  ) {
+    super(map);
+    this.features = features;
+    this.indexFeatures();
+  }
+
+  on(event: string, publicHandler: (event?: FlatPointerEvent) => void) {
+    let handlers = this.publicHandlers.get(event);
+
+    if (!handlers) {
+      handlers = new Set();
+      this.publicHandlers.set(event, handlers);
+    }
+
+    handlers.add(publicHandler);
+    return this;
+  }
+
+  off(event: string, publicHandler: (event?: FlatPointerEvent) => void) {
+    this.publicHandlers.get(event)?.delete(publicHandler);
+    return this;
+  }
+
+  setFeatures(features: readonly FlatCircleCollectionFeature[]) {
+    if (sameCircleCollectionFeatures(this.features, features)) {
+      return this;
+    }
+
+    this.features = features;
+    this.indexFeatures();
+
+    if (this.pointerKey !== null && !this.featuresByKey.has(this.pointerKey)) {
+      // The circle under a resting pointer is gone: leave it now, so hover state does not
+      // outlive it. The next pointer move enters whatever is there.
+      this.leave({});
+    }
+
+    if (this.hoveredKey !== null && !this.featuresByKey.has(this.hoveredKey)) {
+      this.applyHoverState(this.hoveredKey, false);
+      this.hoveredKey = null;
+    }
+
+    const source = this.map.getSource(this.sourceId) as GeoJSONSource | undefined;
+    source?.setData?.(this.getData());
+    this.syncTestCollection();
+    return this;
+  }
+
+  setHoveredKey(key: string | null) {
+    const next = key !== null && this.featuresByKey.has(key) ? key : null;
+
+    if (next === this.hoveredKey) {
+      return this;
+    }
+
+    if (this.hoveredKey !== null) {
+      this.applyHoverState(this.hoveredKey, false);
+    }
+
+    this.hoveredKey = next;
+
+    if (next !== null) {
+      this.applyHoverState(next, true);
+    }
+
+    return this;
+  }
+
+  remove() {
+    // A pointer resting on a circle leaves it when the collection goes away.
+    this.leave({});
+
+    for (const { event, handler } of this.mapHandlers) {
+      (this.map as unknown as EventedMap).off(event, handler);
+    }
+
+    this.mapHandlers = [];
+    this.hoveredKey = null;
+    super.remove();
+  }
+
+  protected render() {
+    removeMapLibreSourceIfExists(this.map, this.sourceId);
+    this.map.addSource(this.sourceId, {
+      data: this.getData(),
+      // Feature state (hover) is addressed by the collection key.
+      promoteId: "key",
+      type: "geojson",
+    } as never);
+
+    if (!this.layerIds.includes(this.circleLayerId)) {
+      this.layerIds.push(this.circleLayerId);
+    }
+
+    this.map.addLayer({
+      id: this.circleLayerId,
+      paint: {
+        "circle-color": ["coalesce", ["get", "fillColor"], "#0f172a"],
+        "circle-opacity": ["coalesce", ["get", "fillOpacity"], 1],
+        "circle-radius": ["coalesce", ["get", "radius"], 6],
+        "circle-stroke-color": ["coalesce", ["get", "color"], "#ffffff"],
+        "circle-stroke-width": [
+          "case",
+          ["boolean", ["feature-state", "hovered"], false],
+          this.options.hoverWeight ?? 3,
+          ["coalesce", ["get", "weight"], 1],
+        ],
+      },
+      source: this.sourceId,
+      type: "circle",
+    } as never);
+
+    this.syncTestCollection();
+
+    if (this.hoveredKey !== null) {
+      this.applyHoverState(this.hoveredKey, true);
+    }
+
+    this.listen("click", (event) => this.emitHit("click", event));
+    this.listen("contextmenu", (event) => this.emitHit("contextmenu", event));
+    this.listen("mousemove", (event) => this.trackPointer(event));
+    this.listen("mouseout", (event) => this.leave(event));
+  }
+
+  private listen(event: string, handler: (event: unknown) => void) {
+    (this.map as unknown as EventedMap).on(event, handler);
+    this.mapHandlers.push({ event, handler });
+  }
+
+  private emit(event: string, featureKey: string, mapEvent: unknown) {
+    const handlers = this.publicHandlers.get(event);
+
+    if (!handlers || handlers.size === 0) {
+      return;
+    }
+
+    const flatEvent = { ...toFlatPointerEvent(mapEvent), featureKey };
+
+    for (const handler of handlers) {
+      handler(flatEvent);
+    }
+  }
+
+  private emitHit(event: "click" | "contextmenu", mapEvent: unknown) {
+    const point = getMapEventPoint(mapEvent);
+    const key =
+      point &&
+      (this.hitTest(point, 0) ?? this.hitTest(point, CIRCLE_COLLECTION_CLICK_TOLERANCE_PX));
+
+    if (key) {
+      this.emit(event, key, mapEvent);
+    }
+  }
+
+  private trackPointer(mapEvent: unknown) {
+    const point = getMapEventPoint(mapEvent);
+    const key = point ? this.hitTest(point, 0) : null;
+
+    if (key === this.pointerKey) {
+      return;
+    }
+
+    const previous = this.pointerKey;
+    this.pointerKey = key;
+
+    if (previous !== null) {
+      this.emit("mouseout", previous, mapEvent);
+    }
+
+    if (key !== null) {
+      this.emit("mouseover", key, mapEvent);
+    }
+  }
+
+  private leave(mapEvent: unknown) {
+    const previous = this.pointerKey;
+
+    if (previous === null) {
+      return;
+    }
+
+    this.pointerKey = null;
+    this.emit("mouseout", previous, mapEvent);
+  }
+
+  /** The key of the circle nearest to the pointer among the rendered circles it hits. */
+  private hitTest(point: { x: number; y: number }, tolerance: number): string | null {
+    if (typeof this.map.queryRenderedFeatures !== "function" || !this.map.getLayer(this.circleLayerId)) {
+      return null;
+    }
+
+    const geometry =
+      tolerance > 0
+        ? ([
+            [point.x - tolerance, point.y - tolerance],
+            [point.x + tolerance, point.y + tolerance],
+          ] as [[number, number], [number, number]])
+        : ([point.x, point.y] as [number, number]);
+    const hits = this.map.queryRenderedFeatures(geometry, { layers: [this.circleLayerId] });
+    let nearestKey: string | null = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    for (const hit of hits) {
+      const key = (hit.properties as { key?: unknown } | null | undefined)?.key;
+      const feature = typeof key === "string" ? this.featuresByKey.get(key) : undefined;
+
+      if (!feature) {
+        continue;
+      }
+
+      const projected = this.map.project(latLngToLngLat(feature.latLng) as LngLatLike);
+      const distance = Math.hypot(projected.x - point.x, projected.y - point.y);
+
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestKey = feature.key;
+      }
+    }
+
+    return nearestKey;
+  }
+
+  private applyHoverState(key: string, hovered: boolean) {
+    if (!this.map.getLayer(this.circleLayerId) || !this.map.getSource(this.sourceId)) {
+      return;
+    }
+
+    this.map.setFeatureState({ id: key, source: this.sourceId }, { hovered });
+  }
+
+  private syncTestCollection() {
+    (
+      this.map as unknown as {
+        __mbSetFlatCircleCollection?: (
+          layerId: string,
+          features: readonly FlatCircleCollectionFeature[],
+        ) => void;
+      }
+    ).__mbSetFlatCircleCollection?.(this.circleLayerId, this.features);
+  }
+
+  private indexFeatures() {
+    this.featuresByKey = new globalThis.Map(this.features.map((feature) => [feature.key, feature]));
+  }
+
+  private getData(): GeoJSON.FeatureCollection {
+    return {
+      features: this.features.map((feature) => ({
+        geometry: {
+          coordinates: latLngToLngLat(feature.latLng),
+          type: "Point",
+        },
+        properties: {
+          color: feature.color,
+          fillColor: feature.fillColor,
+          fillOpacity: feature.fillOpacity,
+          key: feature.key,
+          radius: feature.radius,
+          weight: feature.weight,
+        },
+        type: "Feature",
+      })),
+      type: "FeatureCollection",
+    };
+  }
+}
+
+function sameCircleCollectionFeatures(
+  left: readonly FlatCircleCollectionFeature[],
+  right: readonly FlatCircleCollectionFeature[],
+) {
+  if (left === right) {
+    return true;
+  }
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index]!;
+    const b = right[index]!;
+
+    if (
+      a.key !== b.key ||
+      a.latLng[0] !== b.latLng[0] ||
+      a.latLng[1] !== b.latLng[1] ||
+      a.color !== b.color ||
+      a.fillColor !== b.fillColor ||
+      a.fillOpacity !== b.fillOpacity ||
+      a.radius !== b.radius ||
+      a.weight !== b.weight
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getMapEventPoint(event: unknown) {
+  return (event as { point?: { x: number; y: number } } | undefined)?.point ?? null;
 }
 
 class MapLibreLineLayer extends MapLibreSourceLayer {
