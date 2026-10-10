@@ -178,12 +178,14 @@ export function initializeMapsAggregationWasm(
       // A newer attempt is still in flight or already settled; it decides the status and
       // reports the fallback, so only the decisive failure reports one.
       if (attempt !== latestLoadAttempt) return false;
+      // Settle the status before calling out: a diagnostic handler that retries synchronously
+      // starts a newer attempt after this decisive failure instead of being overwritten by it.
+      setWasmRuntime(null, error);
       configuredOptions.onDiagnostic?.({
         backend: "wasm",
         fallbackReason: getErrorMessage(error),
         mode: "fallback",
       });
-      setWasmRuntime(null, error);
       return false;
     },
   );

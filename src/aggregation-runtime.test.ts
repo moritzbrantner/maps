@@ -307,6 +307,32 @@ describe("Maps aggregation Rust authority", () => {
     expect(getMapsAggregationRuntimeStatus()).toBe("ready");
   });
 
+  test("a diagnostic handler that retries starts after the decisive failure settled", async () => {
+    loader.controlled = true;
+    const observed: string[] = [];
+    let retry: Promise<boolean> | null = null;
+    configureMapsAggregationRuntime({
+      onDiagnostic: (event) => {
+        if (event.mode !== "fallback" || retry) return;
+        observed.push(getMapsAggregationRuntimeStatus());
+        retry = initializeMapsAggregationWasm();
+      },
+    });
+    const first = initializeMapsAggregationWasm();
+
+    loader.queued[0].reject(new Error("first load failed"));
+    await expect(first).resolves.toBe(false);
+
+    // The fallback was in place when reported, and the retry keeps it until it settles.
+    expect(observed).toEqual(["unavailable"]);
+    expect(loader.queued).toHaveLength(2);
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+
+    loader.queued[1].resolve(createTestRuntime());
+    await expect(retry).resolves.toBe(true);
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+  });
+
   test("reports the explicit no-WASM fallback when an override cannot load", async () => {
     const diagnostics: MapsAggregationDiagnostic[] = [];
 
