@@ -113,8 +113,26 @@ type SpatialGrid<TProperties = Record<string, unknown>> = {
 
 let scalarFieldWasmRuntime: MapsScalarFieldWasmRuntime | null = null;
 let scalarFieldWasmLoadError: unknown = null;
+// Bumped whenever the runtime is installed or reset directly, so a load started before that
+// cannot overwrite it when it settles.
+let scalarFieldInstallEpoch = 0;
+// Every `initializeMapsScalarFieldWasm` call gets its own ordering token.
+let latestScalarFieldLoadAttempt = 0;
+// The attempt whose runtime is installed, so an older attempt cannot replace a newer one.
+let installedScalarFieldLoadAttempt = 0;
 
+/**
+ * Loads the scalar-field WASM runtime and resolves to whether this attempt loaded it.
+ * Each call is its own load attempt with its own ordering token: a successful attempt installs
+ * its runtime unless a newer attempt already did (or the runtime was installed or reset
+ * directly since it started). A failed attempt never replaces an installed runtime; it records
+ * its load error only while no runtime is installed and it is the newest attempt.
+ */
 export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_MAPS_WASM_PACKAGE) {
+  const attempt = ++latestScalarFieldLoadAttempt;
+  const epoch = scalarFieldInstallEpoch;
+  let runtime: MapsScalarFieldWasmRuntime;
+
   try {
     const wasmModule = await importMapsWasmModule<MapsScalarFieldWasmModule>(packageName);
     const createGrid = wasmModule.createScalarFieldGrid;
@@ -123,7 +141,7 @@ export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_MAPS_W
       throw new Error("Maps WASM scalar field runtime is unavailable.");
     }
 
-    scalarFieldWasmRuntime = {
+    runtime = {
       createScalarFieldGrid(points, options) {
         const grid = createGrid(points, options);
 
@@ -134,21 +152,35 @@ export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_MAPS_W
         return grid;
       },
     };
-    scalarFieldWasmLoadError = null;
-    return true;
   } catch (error) {
-    scalarFieldWasmRuntime = null;
-    scalarFieldWasmLoadError = error;
+    if (
+      epoch === scalarFieldInstallEpoch &&
+      !scalarFieldWasmRuntime &&
+      attempt === latestScalarFieldLoadAttempt
+    ) {
+      scalarFieldWasmLoadError = error;
+    }
     return false;
   }
+
+  // The attempt succeeded either way; a direct install or reset since it started, or a newer
+  // installed attempt, keeps its state.
+  if (epoch !== scalarFieldInstallEpoch) return true;
+  if (scalarFieldWasmRuntime && installedScalarFieldLoadAttempt > attempt) return true;
+  installedScalarFieldLoadAttempt = attempt;
+  scalarFieldWasmRuntime = runtime;
+  scalarFieldWasmLoadError = null;
+  return true;
 }
 
 export function setMapsScalarFieldWasmRuntimeForTests(runtime: MapsScalarFieldWasmRuntime | null) {
+  scalarFieldInstallEpoch += 1;
   scalarFieldWasmRuntime = runtime;
   scalarFieldWasmLoadError = null;
 }
 
 export function resetMapsScalarFieldWasmRuntimeForTests() {
+  scalarFieldInstallEpoch += 1;
   scalarFieldWasmRuntime = null;
   scalarFieldWasmLoadError = null;
 }
