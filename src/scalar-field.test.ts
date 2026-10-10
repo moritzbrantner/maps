@@ -28,28 +28,22 @@ describe("scalar-field IDW interpolation", () => {
   });
 
   test("averages two equal-distance points", () => {
-    const interpolator = createIdwInterpolator(
-      [point("west", 0, 0, 10), point("east", 2, 0, 20)],
-      {
-        domainBounds: [0, -1, 2, 1],
-        interpolationK: 2,
-        valueMetric: "temperature",
-      },
-    );
+    const interpolator = createIdwInterpolator([point("west", 0, 0, 10), point("east", 2, 0, 20)], {
+      domainBounds: [0, -1, 2, 1],
+      interpolationK: 2,
+      valueMetric: "temperature",
+    });
 
     expect(interpolator.getValueAtCoordinate([1, 0])).toBeCloseTo(15, 8);
   });
 
   test("weights a closer point more strongly than a farther point", () => {
-    const interpolator = createIdwInterpolator(
-      [point("near", 0, 0, 0), point("far", 2, 0, 100)],
-      {
-        domainBounds: [0, -1, 2, 1],
-        interpolationK: 2,
-        interpolationPower: 2,
-        valueMetric: "temperature",
-      },
-    );
+    const interpolator = createIdwInterpolator([point("near", 0, 0, 0), point("far", 2, 0, 100)], {
+      domainBounds: [0, -1, 2, 1],
+      interpolationK: 2,
+      interpolationPower: 2,
+      valueMetric: "temperature",
+    });
 
     expect(interpolator.getValueAtCoordinate([0.5, 0])).toBeLessThan(20);
   });
@@ -144,11 +138,7 @@ describe("scalar-field IDW interpolation", () => {
   });
 
   test("is deterministic across repeated grid creation", () => {
-    const points = [
-      point("a", 0, 0, 0),
-      point("b", 2, 0, 20),
-      point("c", 1, 2, 10),
-    ];
+    const points = [point("a", 0, 0, 0), point("b", 2, 0, 20), point("c", 1, 2, 10)];
     const options = {
       domainBounds: [-1, -1, 3, 3] as [number, number, number, number],
       fieldColumns: 12,
@@ -304,6 +294,32 @@ describe("scalar-field IDW interpolation", () => {
     expect(grid.valueDomain?.[0]).toBeCloseTo(12, 10);
     expect(grid.valueDomain?.[1]).toBeCloseTo(12, 10);
     expect(grid.values[0]).toBeCloseTo(12, 10);
+  });
+
+  // Acceptance for #215: a later failed load never replaces an installed scalar-field runtime.
+  test("a failed later initialization keeps the installed WASM scalar field runtime", async () => {
+    let wasmCalls = 0;
+    try {
+      setMapsScalarFieldWasmRuntimeForTests({
+        createScalarFieldGrid() {
+          wasmCalls += 1;
+          return { bounds: [0, 0, 1, 1], columns: 1, rows: 1, valueDomain: [9, 9], values: [9] };
+        },
+      });
+
+      expect(await initializeMapsScalarFieldWasm("missing-package")).toBe(false);
+
+      const grid = createScalarFieldGrid([point("a", 0, 0, 3)], {
+        domainBounds: [0, 0, 1, 1],
+        fieldColumns: 1,
+        fieldRows: 1,
+        valueMetric: "temperature",
+      });
+      expect(wasmCalls).toBe(1);
+      expect(grid.values).toEqual([9]);
+    } finally {
+      resetMapsScalarFieldWasmRuntimeForTests();
+    }
   });
 
   test("repeated failed WASM initialization does not poison scalar field creation", async () => {
