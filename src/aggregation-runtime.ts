@@ -149,8 +149,8 @@ export function configureMapsAggregationRuntime(options: MapsAggregationLoaderOp
  * Each call is its own load attempt with its own ordering token: a successful attempt installs
  * its runtime unless a newer attempt already did (or the runtime was installed or reset
  * directly since it started), and a failed attempt never replaces an installed runtime and
- * reports `unavailable` only when it is the newest attempt. `ensureMapsAggregationWasm` reuses
- * the attempt in flight.
+ * reports `unavailable` and its `fallback` diagnostic only when it is the newest attempt.
+ * `ensureMapsAggregationWasm` reuses the attempt in flight.
  */
 export function initializeMapsAggregationWasm(
   options: MapsAggregationLoaderOptions = {},
@@ -175,13 +175,15 @@ export function initializeMapsAggregationWasm(
     },
     (error: unknown) => {
       if (epoch !== installEpoch || wasmRuntime) return wasmRuntime !== null;
+      // A newer attempt is still in flight or already settled; it decides the status and
+      // reports the fallback, so only the decisive failure reports one.
+      if (attempt !== latestLoadAttempt) return false;
       configuredOptions.onDiagnostic?.({
         backend: "wasm",
         fallbackReason: getErrorMessage(error),
         mode: "fallback",
       });
-      // A newer attempt is still in flight or already settled; it decides the status.
-      if (attempt === latestLoadAttempt) setWasmRuntime(null, error);
+      setWasmRuntime(null, error);
       return false;
     },
   );
