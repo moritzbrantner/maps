@@ -163,7 +163,9 @@ export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_MAPS_W
     return false;
   }
 
-  if (epoch !== scalarFieldInstallEpoch) return scalarFieldWasmRuntime !== null;
+  // The attempt succeeded either way; a direct install or reset since it started, or a newer
+  // installed attempt, keeps its state.
+  if (epoch !== scalarFieldInstallEpoch) return true;
   if (scalarFieldWasmRuntime && installedScalarFieldLoadAttempt > attempt) return true;
   installedScalarFieldLoadAttempt = attempt;
   scalarFieldWasmRuntime = runtime;

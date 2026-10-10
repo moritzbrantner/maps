@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   createIdwInterpolator,
@@ -12,6 +12,30 @@ import {
   type ScalarFieldGrid,
 } from "./scalar-field";
 import type { MapPoint } from "./aggregation";
+
+// The WASM module import is the network edge. Tests can queue controlled imports; otherwise the
+// real loader runs (and fails for the missing override package).
+const wasmImports = vi.hoisted(() => ({
+  controlled: false,
+  queued: [] as Array<{
+    reject: (error: unknown) => void;
+    resolve: (module: unknown) => void;
+  }>,
+}));
+
+vi.mock("./aggregation-wasm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./aggregation-wasm")>();
+
+  return {
+    ...actual,
+    importMapsWasmModule: (packageName?: string) => {
+      if (!wasmImports.controlled) return actual.importMapsWasmModule(packageName);
+      return new Promise((resolve, reject) => {
+        wasmImports.queued.push({ reject, resolve });
+      });
+    },
+  };
+});
 
 describe("scalar-field IDW interpolation", () => {
   afterEach(() => {
@@ -347,3 +371,71 @@ function point(id: string, longitude: number, latitude: number, temperature: num
     },
   };
 }
+
+describe("scalar-field WASM load ordering", () => {
+  afterEach(() => {
+    wasmImports.controlled = false;
+    wasmImports.queued.length = 0;
+    resetMapsScalarFieldWasmRuntimeForTests();
+  });
+
+  function wasmModule(value: number) {
+    return {
+      createScalarFieldGrid: () => ({
+        bounds: [0, 0, 1, 1],
+        columns: 1,
+        rows: 1,
+        valueDomain: [value, value],
+        values: [value],
+      }),
+    };
+  }
+
+  function gridValues() {
+    return createScalarFieldGrid([point("a", 0, 0, 3)], {
+      domainBounds: [0, 0, 1, 1],
+      fieldColumns: 1,
+      fieldRows: 1,
+      valueMetric: "temperature",
+    }).values;
+  }
+
+  test("a valid load that settles after a reset reports success and keeps the reset state", async () => {
+    wasmImports.controlled = true;
+    const load = initializeMapsScalarFieldWasm();
+
+    resetMapsScalarFieldWasmRuntimeForTests();
+    wasmImports.queued[0].resolve(wasmModule(7));
+
+    await expect(load).resolves.toBe(true);
+    expect(getMapsScalarFieldWasmLoadError()).toBeNull();
+    // Still the TypeScript grid: the reset left no runtime installed.
+    expect(gridValues()[0]).toBeCloseTo(3, 10);
+  });
+
+  test("an older successful load never replaces a runtime a newer load installed", async () => {
+    wasmImports.controlled = true;
+    const older = initializeMapsScalarFieldWasm();
+    const newer = initializeMapsScalarFieldWasm();
+
+    wasmImports.queued[1].resolve(wasmModule(2));
+    await expect(newer).resolves.toBe(true);
+    wasmImports.queued[0].resolve(wasmModule(1));
+    await expect(older).resolves.toBe(true);
+
+    expect(gridValues()).toEqual([2]);
+  });
+
+  test("overlapping failures record only the newest attempt's load error", async () => {
+    wasmImports.controlled = true;
+    const older = initializeMapsScalarFieldWasm();
+    const newer = initializeMapsScalarFieldWasm();
+
+    wasmImports.queued[1].reject(new Error("newer failed"));
+    await expect(newer).resolves.toBe(false);
+    wasmImports.queued[0].reject(new Error("older failed"));
+    await expect(older).resolves.toBe(false);
+
+    expect(getMapsScalarFieldWasmLoadError()).toEqual(new Error("newer failed"));
+  });
+});
