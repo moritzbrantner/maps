@@ -1,6 +1,6 @@
 "use client";
 
-import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
+import { useMapsAggregationRuntime } from "./aggregation-runtime-react";
 import {
   Children,
   Fragment,
@@ -302,7 +302,8 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const heatDescriptorsRef = useRef<Map<string, MapsHeatLayerDescriptor>>(new Map());
     const heatRuntimesRef = useRef<Map<string, MapsHeatLayerRenderState>>(new Map());
     const [heatRevision, setHeatRevision] = useState(0);
-    const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
+    const { pending: aggregationRuntimePending, version: aggregationRuntimeVersion } =
+      useMapsAggregationRuntime();
     // Hover is the only interaction state this overlay renders from: a hover change
     // repaints the retained snapshot, while camera changes arrive via `redraw()`.
     const hovered = useMapHoveredFeature();
@@ -367,7 +368,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       const activeHeatKeys = new Set<string>();
 
       for (const entry of entries) {
-        if (entry.kind === "cluster") {
+        // A pending aggregation runtime builds no cluster index, so the layer draws nothing
+        // until Rust clusters instead of every point individually (#212).
+        if (entry.kind === "cluster" && !aggregationRuntimePending) {
           const current = previousClusters.get(entry.runtimeKey);
           if (
             current &&
@@ -406,7 +409,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         heatRuntimesRef.current.delete(key);
         heatDescriptorsRef.current.delete(key);
       }
-    }, [aggregationRuntimeVersion, entries, heatRuntime]);
+    }, [aggregationRuntimePending, aggregationRuntimeVersion, entries, heatRuntime]);
 
     useEffect(() => {
       return () => {

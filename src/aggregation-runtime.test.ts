@@ -4,6 +4,8 @@ import { createPointAggregationIndex } from "./aggregation";
 import {
   configureMapsAggregationRuntime,
   createMapsAggregationRuntimeIndex,
+  ensureMapsAggregationWasm,
+  getMapsAggregationRuntimeStatus,
   initializeMapsAggregationWasm,
   resetMapsAggregationRuntimeForTests,
   setMapsAggregationWasmRuntimeForTests,
@@ -184,6 +186,38 @@ describe("Maps aggregation Rust authority", () => {
     expect(runtime?.getClusterExpansionZoom(5)).toBe(7);
     runtime?.dispose();
     expect(disposed).toBe(true);
+  });
+
+  test("reports a pending status while loading and settles on the explicit fallback", async () => {
+    configureMapsAggregationRuntime({ wasmPackage: "@moritzbrantner/maps-missing-wasm-test" });
+    expect(getMapsAggregationRuntimeStatus()).toBe("idle");
+
+    const loading = ensureMapsAggregationWasm();
+    expect(getMapsAggregationRuntimeStatus()).toBe("loading");
+    await expect(loading).resolves.toBe(false);
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+
+    // A retry keeps the settled fallback instead of returning Map Layers to pending.
+    const retry = ensureMapsAggregationWasm();
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+    await expect(retry).resolves.toBe(false);
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+  });
+
+  test("keeps a runtime installed while an older load is still settling", async () => {
+    configureMapsAggregationRuntime({ wasmPackage: "@moritzbrantner/maps-missing-wasm-test" });
+    const staleLoad = ensureMapsAggregationWasm();
+
+    setMapsAggregationWasmRuntimeForTests({
+      createIndex(points) {
+        return createPointRuntimeIndex(points, []);
+      },
+    });
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+
+    await staleLoad;
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+    await expect(ensureMapsAggregationWasm()).resolves.toBe(true);
   });
 
   test("reports the explicit no-WASM fallback when an override cannot load", async () => {
