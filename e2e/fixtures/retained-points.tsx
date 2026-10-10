@@ -9,6 +9,7 @@ import type { MapsRendererStats } from "../../src/maps-browser-runtime";
 import { FlowLayer } from "../../src/flow-layer";
 import { MapView } from "../../src/map-view";
 import { PointLayer } from "../../src/point-layer";
+import { densePoints } from "./dense-point-journey";
 
 configureMapsWasmPackage("/wasm/maps_wasm.js");
 
@@ -52,24 +53,10 @@ function grid(
   return points;
 }
 
-function dense(count: number): Point[] {
-  // Deterministic spread over Europe: a large static dataset, not a visual pattern.
-  let seed = 7;
-  const random = () => {
-    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
-    return seed / 2_147_483_648;
-  };
-  return Array.from({ length: count }, (_, index) => ({
-    id: `d-${index}`,
-    latitude: 40 + random() * 20,
-    longitude: -5 + random() * 35,
-  }));
-}
-
 const scenario = params.get("points") ?? "grid";
 const points: Point[] =
   scenario === "dense"
-    ? dense(Number(params.get("count") ?? 10_000))
+    ? densePoints(Number(params.get("count") ?? 10_000))
     : scenario === "antimeridian"
       ? [
           { id: "east-near", latitude: 0.01, longitude: 179.985 },

@@ -34,6 +34,13 @@
       "url": "/maps/evidence/engine-interaction.json"
     },
     {
+      "id": "point-journey",
+      "label": "Dense-point camera journey: Maps, MapLibre, Leaflet",
+      "kind": "project-evidence-v1",
+      "producer": "maps-point-journey",
+      "url": "/maps/evidence/point-journey.json"
+    },
+    {
       "id": "engine-benchmark",
       "label": "Rust/WASM engine benchmark",
       "kind": "project-evidence-v1",

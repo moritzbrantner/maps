@@ -51,6 +51,12 @@ jobs:
         mkdir -p dist/benchmarks
         cp dist/index.html dist/benchmarks/index.html
         bun run bench:engine:interaction -- --output dist/evidence/engine-interaction.json
+        # Dense-point journey lanes (#197): descriptive evidence that never blocks the deploy.
+        # A failed run publishes nothing, so /stats/ shows the source as unavailable.
+        if ! CI=1 bun run bench:point-journey -- --repeats=1 --json=dist/evidence/point-journey.json; then
+          echo "::warning::Point-journey benchmark failed; its evidence stays unavailable."
+          rm -f dist/evidence/point-journey.json
+        fi
         node .github-pages-template/bin/github-pages-template.mjs build --config ./pages.config.json --out ./dist --augment
         # Descriptive interaction benchmarks (SwiftShader, shared runner), appended to the
         # history published at /benchmarks/history.json. A failed run republishes the

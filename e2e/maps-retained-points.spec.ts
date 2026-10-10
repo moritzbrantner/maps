@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { densePointJourney, densePointJourneySteps } from "./fixtures/dense-point-journey";
+
 // #155: GPU-retained application points. Retained WebGPU instances must land where the
 // screen-projected Canvas fallback (Rust packed projection) draws the same points, and
 // dense camera journeys must not lower, project or upload per point.
@@ -169,10 +171,7 @@ test("retained points are pickable in every visible world copy @smoke", async ({
   );
 });
 
-for (const [count, journeySteps] of [
-  [10_000, 40],
-  [100_000, 12],
-] as const) {
+for (const count of [10_000, 100_000] as const) {
   test(`a ${count.toLocaleString("en")}-point camera journey does O(1) point work on WebGPU @smoke`, async ({
     page,
   }, testInfo) => {
@@ -186,20 +185,15 @@ for (const [count, journeySteps] of [
     await expect
       .poll(() => page.evaluate(() => window.retainedPoints.stats()?.retainedPoints ?? 0))
       .toBe(count);
-    const journey = await page.evaluate(async (stepCount) => {
+    const journey = await page.evaluate(async (cameras) => {
       const probe = window.retainedPoints;
       const frame = () => new Promise(requestAnimationFrame);
       await frame();
       const before = probe.stats()!;
       const steps: { ms: number; upload: number; frames: number }[] = [];
-      for (let step = 0; step < stepCount; step += 1) {
+      for (const camera of cameras) {
         const started = performance.now();
-        probe.setViewState({
-          bearing: (step * 7) % 60,
-          center: [12 + Math.sin(step / 6) * 3, 50 + Math.cos(step / 6) * 2],
-          pitch: (step * 3) % 40,
-          zoom: 5 + (step % 10) * 0.4,
-        });
+        probe.setViewState(camera);
         await frame();
         const stats = probe.stats()!;
         steps.push({
@@ -209,7 +203,7 @@ for (const [count, journeySteps] of [
         });
       }
       return { after: probe.stats()!, before, steps };
-    }, journeySteps);
+    }, densePointJourney(densePointJourneySteps(count)));
     const sorted = journey.steps.map((step) => step.ms).sort((left, right) => left - right);
     await testInfo.attach("retained-point-journey", {
       body: JSON.stringify(
@@ -267,21 +261,16 @@ test("a mixed point and flow camera journey keeps both retained groups O(1) on W
     )
     // Each flow is a line, a direction marker and two endpoint circles in one shape group.
     .toEqual([count, flowCount * 4]);
-  const journey = await page.evaluate(async () => {
+  // Retained shapes stay on unpitched cameras, so this journey pans, zooms and rotates.
+  const journey = await page.evaluate(async (cameras) => {
     const probe = window.retainedPoints;
     const frame = () => new Promise(requestAnimationFrame);
     await frame();
     const before = probe.stats()!;
     const steps: { ms: number; upload: number; pointFrames: number; shapeFrames: number }[] = [];
-    // Retained shapes stay on unpitched cameras, so this journey pans, zooms and rotates.
-    for (let step = 0; step < 30; step += 1) {
+    for (const camera of cameras) {
       const started = performance.now();
-      probe.setViewState({
-        bearing: (step * 7) % 60,
-        center: [12 + Math.sin(step / 6) * 3, 50 + Math.cos(step / 6) * 2],
-        pitch: 0,
-        zoom: 5 + (step % 10) * 0.4,
-      });
+      probe.setViewState(camera);
       await frame();
       const stats = probe.stats()!;
       steps.push({
@@ -292,7 +281,7 @@ test("a mixed point and flow camera journey keeps both retained groups O(1) on W
       });
     }
     return { after: probe.stats()!, before, steps };
-  });
+  }, densePointJourney(30, { pitched: false }));
   const sorted = journey.steps.map((step) => step.ms).sort((left, right) => left - right);
   await testInfo.attach("retained-point-flow-journey", {
     body: JSON.stringify(
@@ -389,7 +378,7 @@ test("a 10,000-point journey with 50 labeled points projects only the labels on 
   await expect
     .poll(() => page.evaluate(() => window.retainedPoints.stats()?.retainedPoints ?? 0))
     .toBe(count);
-  const journey = await page.evaluate(async () => {
+  const journey = await page.evaluate(async (cameras) => {
     const probe = window.retainedPoints;
     const overlay = document.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
     const projections = () => Number(overlay.dataset.mapOverlayLabelProjections ?? 0);
@@ -399,14 +388,9 @@ test("a 10,000-point journey with 50 labeled points projects only the labels on 
     const beforeProjections = projections();
     const steps: { ms: number; upload: number; frames: number; labelProjections: number }[] = [];
     let previous = beforeProjections;
-    for (let step = 0; step < 30; step += 1) {
+    for (const camera of cameras) {
       const started = performance.now();
-      probe.setViewState({
-        bearing: (step * 7) % 60,
-        center: [12 + Math.sin(step / 6) * 3, 50 + Math.cos(step / 6) * 2],
-        pitch: (step * 3) % 40,
-        zoom: 5 + (step % 10) * 0.4,
-      });
+      probe.setViewState(camera);
       await frame();
       const stats = probe.stats()!;
       const current = projections();
@@ -419,7 +403,7 @@ test("a 10,000-point journey with 50 labeled points projects only the labels on 
       previous = current;
     }
     return { after: probe.stats()!, before, steps };
-  });
+  }, densePointJourney(30));
   const sorted = journey.steps.map((step) => step.ms).sort((left, right) => left - right);
   await testInfo.attach("retained-labeled-point-journey", {
     body: JSON.stringify(
