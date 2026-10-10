@@ -49,16 +49,18 @@ describe("ClusterLayer hover cleanup", () => {
     expect(harness.map.container.style.cursor).toBe("");
   });
 
-  test("clears the hover of a per-feature entry that leaves the frame", async () => {
+  test("clears the hover a per-feature entry delivered when that entry leaves the frame", async () => {
     setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
-    const harness = createSurfaceHarness({ hoveredId: "a" });
+    const harness = createSurfaceHarness();
     const view = render(
       <MapSurfaceContext.Provider value={harness.surface}>
         <ClusterLayer points={POINTS} />
       </MapSurfaceContext.Provider>,
     );
     await act(async () => {});
-    expect(harness.hoverCalls).toEqual([]);
+
+    act(() => harness.map.fireOnPointLayer(0, "mouseenter"));
+    expect(harness.hoverCalls).toEqual(["a"]);
 
     view.rerender(
       <MapSurfaceContext.Provider value={harness.surface}>
@@ -67,8 +69,29 @@ describe("ClusterLayer hover cleanup", () => {
     );
     await act(async () => {});
 
-    expect(harness.hoverCalls).toEqual([null]);
+    expect(harness.hoverCalls).toEqual(["a", null]);
     expect(harness.map.container.style.cursor).toBe("");
+  });
+
+  test("leaves a controlled highlight alone when its entry leaves the frame", async () => {
+    setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+    // `a` is highlighted through `hoveredFeatureId`; this layer never delivered a hover for it.
+    const harness = createSurfaceHarness({ hoveredId: "a" });
+    const view = render(
+      <MapSurfaceContext.Provider value={harness.surface}>
+        <ClusterLayer hoveredFeatureId="a" points={POINTS} />
+      </MapSurfaceContext.Provider>,
+    );
+    await act(async () => {});
+
+    view.rerender(
+      <MapSurfaceContext.Provider value={harness.surface}>
+        <ClusterLayer hoveredFeatureId="a" points={POINTS.slice(1)} />
+      </MapSurfaceContext.Provider>,
+    );
+    await act(async () => {});
+
+    expect(harness.hoverCalls).toEqual([]);
   });
 });
 
@@ -154,6 +177,20 @@ function createTestMap() {
     fire(event: string, payload: unknown) {
       for (const handler of handlers.get(event) ?? []) handler(payload);
     },
+    /** Fires a layer-scoped event on the single-point layer drawn at `longitude`. */
+    fireOnPointLayer(longitude: number, event: string) {
+      for (const [layerId, layer] of layers) {
+        const data = sources.get(layer.source)?.data as {
+          geometry?: { coordinates: [number, number] };
+        };
+
+        if (data.geometry?.coordinates[0] === longitude) {
+          for (const handler of handlers.get(`${event}@${layerId}`) ?? []) {
+            handler({ point: project(data.geometry.coordinates) });
+          }
+        }
+      }
+    },
     getBounds: () => ({
       getEast: () => 180,
       getNorth: () => 85,
@@ -165,11 +202,13 @@ function createTestMap() {
     getSource: (id: string) => sources.get(id),
     getZoom: () => 4,
     off(event: string, ...args: unknown[]) {
-      handlers.get(event)?.delete(args.at(-1) as (event: unknown) => void);
+      const key = args.length > 1 ? `${event}@${String(args[0])}` : event;
+      handlers.get(key)?.delete(args.at(-1) as (event: unknown) => void);
     },
     on(event: string, ...args: unknown[]) {
-      if (!handlers.has(event)) handlers.set(event, new Set());
-      handlers.get(event)!.add(args.at(-1) as (event: unknown) => void);
+      const key = args.length > 1 ? `${event}@${String(args[0])}` : event;
+      if (!handlers.has(key)) handlers.set(key, new Set());
+      handlers.get(key)!.add(args.at(-1) as (event: unknown) => void);
     },
     project,
     queryRenderedFeatures(geometry: [number, number], options: { layers: string[] }) {

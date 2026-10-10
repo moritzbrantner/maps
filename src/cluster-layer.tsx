@@ -92,6 +92,8 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   // True when the committed index is the explicit unclustered fallback (runtime `unavailable`).
   const unclusteredFallbackRef = useRef(false);
   const fallbackRef = useRef<FlatUnclusteredFallback<TProperties> | null>(null);
+  // The per-feature entry whose hover this layer delivered (pointer entered, not yet left).
+  const deliveredHoverKeyRef = useRef<string | null>(null);
   const [indexVersion, setIndexVersion] = useState(0);
 
   // The index is created and disposed in one effect (never in render), so Strict Mode
@@ -152,11 +154,15 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           return;
         }
 
-        // A removed MapLibre layer never fires `mouseleave`, so when a hovered entry is dropped
-        // (its feature left the frame, or the runtime status changed) its hover is cleared here.
-        const hoveredEntryKeys = getHoveredEntryKeys(flatFeatureCacheRef.current);
+        // A removed MapLibre layer never fires `mouseleave`, so when the entry whose hover this
+        // layer delivered is dropped (its feature left the frame, or the runtime status changed),
+        // the hover is cleared here. A highlight from a controlled `hoveredFeatureId` that this
+        // layer never delivered is left alone.
         const clearDroppedHover = () => {
-          if (hoveredEntryKeys.some((key) => !flatFeatureCacheRef.current.has(key))) {
+          const deliveredKey = deliveredHoverKeyRef.current;
+
+          if (deliveredKey !== null && !flatFeatureCacheRef.current.has(deliveredKey)) {
+            deliveredHoverKeyRef.current = null;
             map.getContainer().style.cursor = "";
             currentSurface.handleFeatureHover(null, null, {
               getFeatureId,
@@ -332,7 +338,8 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                     marker.on(
                       "mouseover",
                       (event: { containerPoint?: { x: number; y: number } } = {}) => {
-                        map.getContainer().style.cursor = "pointer";
+                        deliveredHoverKeyRef.current = renderFeature.id;
+                      map.getContainer().style.cursor = "pointer";
                         currentSurface.handleFeatureHover(
                           feature,
                           getFlatFeaturePosition(map, renderFeature.coordinates, event),
@@ -346,6 +353,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                       },
                     );
                     marker.on("mouseout", () => {
+                      if (deliveredHoverKeyRef.current === renderFeature.id) {
+                        deliveredHoverKeyRef.current = null;
+                      }
                       map.getContainer().style.cursor = "";
                       currentSurface.handleFeatureHover(null, null, {
                         getFeatureId,
@@ -423,7 +433,8 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                   marker.on(
                     "mouseover",
                     (event: { containerPoint?: { x: number; y: number } } = {}) => {
-                      map.getContainer().style.cursor = "pointer";
+                      deliveredHoverKeyRef.current = renderFeature.id;
+                        map.getContainer().style.cursor = "pointer";
                       currentSurface.handleFeatureHover(
                         feature,
                         getFlatFeaturePosition(map, renderFeature.coordinates, event),
@@ -437,6 +448,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                     },
                   );
                   marker.on("mouseout", () => {
+                    if (deliveredHoverKeyRef.current === renderFeature.id) {
+                      deliveredHoverKeyRef.current = null;
+                    }
                     map.getContainer().style.cursor = "";
                     currentSurface.handleFeatureHover(null, null, {
                       getFeatureId,
@@ -787,18 +801,6 @@ function syncUnclusteredFallbackHover<TProperties>(
   }
 
   fallback.collection.setHoveredKey(hoveredKey);
-}
-
-function getHoveredEntryKeys(cache: Map<string, FlatClusterCacheEntry>) {
-  const keys: string[] = [];
-
-  for (const [key, entry] of cache) {
-    if (entry.hover.state) {
-      keys.push(key);
-    }
-  }
-
-  return keys;
 }
 
 function removeUnclusteredFallback<TProperties>(
