@@ -152,6 +152,21 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
           return;
         }
 
+        // A removed MapLibre layer never fires `mouseleave`, so when a hovered entry is dropped
+        // (its feature left the frame, or the runtime status changed) its hover is cleared here.
+        const hoveredEntryKeys = getHoveredEntryKeys(flatFeatureCacheRef.current);
+        const clearDroppedHover = () => {
+          if (hoveredEntryKeys.some((key) => !flatFeatureCacheRef.current.has(key))) {
+            map.getContainer().style.cursor = "";
+            currentSurface.handleFeatureHover(null, null, {
+              getFeatureId,
+              onHoveredFeatureIdChange,
+              onFeatureHover,
+              renderFeatureTooltip,
+            });
+          }
+        };
+
         if (!index) {
           // Pending aggregation runtime: nothing is aggregated yet, so nothing is drawn.
           removeUnclusteredFallback(fallbackRef);
@@ -160,6 +175,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             layer,
             plans: [],
           });
+          clearDroppedHover();
           return;
         }
 
@@ -458,6 +474,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             };
           }),
         });
+        clearDroppedHover();
       },
       {
         onHoverChange: hoveredFeatureId
@@ -581,6 +598,8 @@ type FlatUnclusteredFallback<TProperties> = {
   collection: FlatCircleCollectionLayer;
   group: FlatLayerGroup;
   handlers: FlatUnclusteredFallbackHandlers<TProperties> | null;
+  /** Whether a fallback circle's hover reached the Map View and still needs its leave. */
+  hoverDelivered: boolean;
   pointsByKey: Map<string, FlatUnclusteredPoint<TProperties>>;
 };
 
@@ -666,6 +685,7 @@ function renderUnclusteredFallback<TProperties>({
       collection: flat.circleCollection(features),
       group: layer,
       handlers: null,
+      hoverDelivered: false,
       pointsByKey,
     };
     const resolve = (event: FlatPointerEvent = {}) =>
@@ -696,50 +716,57 @@ function renderUnclusteredFallback<TProperties>({
   }
 
   fallback.collection.setHoveredKey(hoveredKey);
-  fallback.handlers = isMeasuring
-    ? null
-    : {
-        click(point, event) {
-          surface.handleFeatureClick(
-            point.feature,
-            getFlatFeaturePosition(map, point.coordinates, event),
-            { getFeatureId, onFeatureSelect, onSelectedFeatureIdChange, renderFeaturePopup },
-          );
+  // Leaving a hovered circle is always delivered (also after measuring started), so hover,
+  // tooltip and cursor never outlive the circle; other pointer events are inert while measuring.
+  const current = fallback;
+  current.handlers = {
+    click(point, event) {
+      if (isMeasuring) return;
+      surface.handleFeatureClick(
+        point.feature,
+        getFlatFeaturePosition(map, point.coordinates, event),
+        { getFeatureId, onFeatureSelect, onSelectedFeatureIdChange, renderFeaturePopup },
+      );
+    },
+    contextmenu(point, event) {
+      if (isMeasuring) return;
+      suppressNativeContextMenu(event);
+      surface.handleFeatureContextMenu(
+        point.feature,
+        getFlatFeaturePosition(map, point.coordinates, event),
+        {
+          coordinates: point.coordinates,
+          getFeatureId,
+          onFeatureContextMenu,
+          onFeatureSelect,
+          onSelectedFeatureIdChange,
+          renderFeatureContextMenu,
+          renderFeaturePopup,
         },
-        contextmenu(point, event) {
-          suppressNativeContextMenu(event);
-          surface.handleFeatureContextMenu(
-            point.feature,
-            getFlatFeaturePosition(map, point.coordinates, event),
-            {
-              coordinates: point.coordinates,
-              getFeatureId,
-              onFeatureContextMenu,
-              onFeatureSelect,
-              onSelectedFeatureIdChange,
-              renderFeatureContextMenu,
-              renderFeaturePopup,
-            },
-          );
-        },
-        mouseout() {
-          map.getContainer().style.cursor = "";
-          surface.handleFeatureHover(null, null, {
-            getFeatureId,
-            onHoveredFeatureIdChange,
-            onFeatureHover,
-            renderFeatureTooltip,
-          });
-        },
-        mouseover(point, event) {
-          map.getContainer().style.cursor = "pointer";
-          surface.handleFeatureHover(
-            point.feature,
-            getFlatFeaturePosition(map, point.coordinates, event),
-            { getFeatureId, onHoveredFeatureIdChange, onFeatureHover, renderFeatureTooltip },
-          );
-        },
-      };
+      );
+    },
+    mouseout() {
+      if (!current.hoverDelivered) return;
+      current.hoverDelivered = false;
+      map.getContainer().style.cursor = "";
+      surface.handleFeatureHover(null, null, {
+        getFeatureId,
+        onHoveredFeatureIdChange,
+        onFeatureHover,
+        renderFeatureTooltip,
+      });
+    },
+    mouseover(point, event) {
+      if (isMeasuring) return;
+      current.hoverDelivered = true;
+      map.getContainer().style.cursor = "pointer";
+      surface.handleFeatureHover(
+        point.feature,
+        getFlatFeaturePosition(map, point.coordinates, event),
+        { getFeatureId, onHoveredFeatureIdChange, onFeatureHover, renderFeatureTooltip },
+      );
+    },
+  };
 }
 
 function syncUnclusteredFallbackHover<TProperties>(
@@ -762,6 +789,18 @@ function syncUnclusteredFallbackHover<TProperties>(
   fallback.collection.setHoveredKey(hoveredKey);
 }
 
+function getHoveredEntryKeys(cache: Map<string, FlatClusterCacheEntry>) {
+  const keys: string[] = [];
+
+  for (const [key, entry] of cache) {
+    if (entry.hover.state) {
+      keys.push(key);
+    }
+  }
+
+  return keys;
+}
+
 function removeUnclusteredFallback<TProperties>(
   fallbackRef: MutableRefObject<FlatUnclusteredFallback<TProperties> | null>,
 ) {
@@ -772,8 +811,10 @@ function removeUnclusteredFallback<TProperties>(
   }
 
   fallbackRef.current = null;
-  fallback.handlers = null;
+  // Remove first, while the handlers are still attached: a pointer resting on a circle gets its
+  // `mouseout`, which clears the hovered feature, tooltip and cursor (#219 review).
   fallback.group.removeLayer(fallback.collection);
+  fallback.handlers = null;
 }
 
 function getFlatFeaturePosition(

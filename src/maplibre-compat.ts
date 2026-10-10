@@ -712,8 +712,9 @@ class MapLibreCircleCollectionLayer extends MapLibreSourceLayer implements FlatC
     this.indexFeatures();
 
     if (this.pointerKey !== null && !this.featuresByKey.has(this.pointerKey)) {
-      // The circle under the pointer is gone; the next pointer move re-enters whatever is there.
-      this.pointerKey = null;
+      // The circle under a resting pointer is gone: leave it now, so hover state does not
+      // outlive it. The next pointer move enters whatever is there.
+      this.leave({});
     }
 
     if (this.hoveredKey !== null && !this.featuresByKey.has(this.hoveredKey)) {
@@ -748,12 +749,14 @@ class MapLibreCircleCollectionLayer extends MapLibreSourceLayer implements FlatC
   }
 
   remove() {
+    // A pointer resting on a circle leaves it when the collection goes away.
+    this.leave({});
+
     for (const { event, handler } of this.mapHandlers) {
       (this.map as unknown as EventedMap).off(event, handler);
     }
 
     this.mapHandlers = [];
-    this.pointerKey = null;
     this.hoveredKey = null;
     super.remove();
   }

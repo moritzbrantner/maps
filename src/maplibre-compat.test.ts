@@ -149,6 +149,32 @@ describe("@moritzbrantner/maps maplibre compatibility", () => {
     ]);
   });
 
+  test("leaves a circle under a resting pointer when it is removed from the collection", () => {
+    const map = createCollectionTestMap();
+    const factory = createMapLibreFlatLayerFactory(
+      createTestMapLibre([]),
+      map as unknown as import("maplibre-gl").Map,
+    );
+    const collection = factory.circleCollection(createCollectionFeatures(3));
+    const events: string[] = [];
+    const record = (name: string) => (event?: FlatPointerEvent) =>
+      events.push(`${name}:${event?.featureKey}`);
+
+    collection.on("mouseover", record("over")).on("mouseout", record("out"));
+    collection.addTo(createTestLayerGroup() as never);
+
+    map.fire("mousemove", { point: { x: 20, y: 0 } });
+    // p-2 disappears while the pointer rests on it.
+    collection.setFeatures(createCollectionFeatures(2));
+    // The pointer moves within the now empty spot: nothing to leave again.
+    map.fire("mousemove", { point: { x: 21, y: 0 } });
+    // Hovering p-1, then the whole collection goes away.
+    map.fire("mousemove", { point: { x: 10, y: 0 } });
+    collection.remove?.();
+
+    expect(events).toEqual(["over:p-2", "out:p-2", "over:p-1", "out:p-1"]);
+  });
+
   test("ignores cleanup when MapLibre internals are already disposed", () => {
     const disposedMap = {
       getLayer() {
