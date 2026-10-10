@@ -10,9 +10,13 @@ import "./showcase.css";
 import "./showcase-stage.css";
 import "./project-links.css";
 
-import { initializeMapsAggregationWasm } from "../src/aggregation-runtime";
+import {
+  configureMapsAggregationRuntime,
+  initializeMapsAggregationWasm,
+} from "../src/aggregation-runtime";
 import { configureMapsWasmPackage } from "../src/aggregation-wasm";
 import { App } from "./App";
+import { MapsClusterRaceAcceptance } from "./MapsClusterRaceAcceptance";
 import { MapsOrientedRuntimeAcceptance } from "./MapsOrientedRuntimeAcceptance";
 import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
 import {
@@ -28,6 +32,17 @@ const queryClient = new QueryClient();
 void bootstrap();
 
 async function bootstrap() {
+  if (new URLSearchParams(window.location.search).get("acceptance") === "maps-cluster-race") {
+    // #212: mount before the aggregation runtime is ready; the Map View starts loading it.
+    configureHostedRustRuntimePackage();
+    createRoot(document.getElementById("root")!).render(
+      <StrictMode>
+        <MapsClusterRaceAcceptance />
+      </StrictMode>,
+    );
+    return;
+  }
+
   await initializeHostedRustRuntime();
 
   if (isBenchmarksPath(window.location.pathname)) {
@@ -93,6 +108,16 @@ async function initializeHostedRustRuntime() {
   markRustRuntimeUnavailable(
     "Rust/WASM could not initialize; the deterministic control path remains active.",
   );
+}
+
+function configureHostedRustRuntimePackage() {
+  if (import.meta.env.VITE_MAPS_WASM_SHOWCASE !== "1") {
+    return;
+  }
+  const moduleUrl = new URL(`${import.meta.env.BASE_URL}wasm/maps_wasm.js`, window.location.origin)
+    .href;
+  configureMapsWasmPackage(moduleUrl);
+  configureMapsAggregationRuntime({ wasmPackage: moduleUrl });
 }
 
 function isBenchmarksPath(pathname: string) {
