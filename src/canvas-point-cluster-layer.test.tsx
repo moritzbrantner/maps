@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { act, render } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const aggregationMock = vi.hoisted(() => {
   const resources: Array<{ dispose: ReturnType<typeof vi.fn> }> = [];
@@ -29,9 +29,21 @@ vi.mock("./aggregation", async (importOriginal) => {
   };
 });
 
+import {
+  resetMapsAggregationRuntimeForTests,
+  setMapsAggregationWasmRuntimeForTests,
+} from "./aggregation-runtime";
 import { CanvasPointClusterLayer } from "./canvas-point-cluster-layer";
+import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
+
+// Layers build no index while the aggregation runtime is pending (#212); these lifetime tests
+// start with a settled runtime.
+beforeEach(() => {
+  setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+});
 
 afterEach(() => {
+  resetMapsAggregationRuntimeForTests();
   aggregationMock.createPointAggregationIndex.mockClear();
   aggregationMock.resources.length = 0;
 });

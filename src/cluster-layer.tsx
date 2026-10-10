@@ -1,6 +1,6 @@
 "use client";
 
-import { useMapsAggregationRuntimeVersion } from "./aggregation-runtime-react";
+import { useMapsAggregationRuntime } from "./aggregation-runtime-react";
 import {
   startTransition,
   useContext,
@@ -75,15 +75,23 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
   const lastViewportSummaryKeyRef = useRef<string | null>(null);
   const surfaceRef = useRef(surface);
   const flatFeatureCacheRef = useRef<Map<string, FlatClusterCacheEntry>>(new Map());
-  const aggregationRuntimeVersion = useMapsAggregationRuntimeVersion();
+  const { pending: aggregationRuntimePending, version: aggregationRuntimeVersion } =
+    useMapsAggregationRuntime();
   const indexRef = useRef<PointAggregationIndex<TProperties> | null>(null);
   const [indexVersion, setIndexVersion] = useState(0);
 
   // The index is created and disposed in one effect (never in render), so Strict Mode
   // replays and replaced options release their WASM memory, and layer callbacks only
-  // ever read the committed index. The runtime version rebuilds it once Rust clustering
-  // becomes available.
+  // ever read the committed index. While the aggregation runtime is pending there is no
+  // index, so the layer renders nothing rather than every point as its own MapLibre layer
+  // (#212); the runtime version builds the Rust-clustered index once it is ready.
   useEffect(() => {
+    if (aggregationRuntimePending) {
+      indexRef.current = null;
+      setIndexVersion((version) => version + 1);
+      return;
+    }
+
     const index = createPointAggregationIndex(deferredPoints, {
       filterPoint,
       maxZoom,
@@ -96,7 +104,15 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
       if (indexRef.current === index) indexRef.current = null;
       index.dispose();
     };
-  }, [aggregationRuntimeVersion, clusterRadius, deferredPoints, filterPoint, maxZoom, minZoom]);
+  }, [
+    aggregationRuntimePending,
+    aggregationRuntimeVersion,
+    clusterRadius,
+    deferredPoints,
+    filterPoint,
+    maxZoom,
+    minZoom,
+  ]);
 
   useEffect(() => {
     surfaceRef.current = surface;
@@ -114,7 +130,17 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         const currentSurface = surfaceRef.current;
         const index = indexRef.current;
 
-        if (!currentSurface || !index) {
+        if (!currentSurface) {
+          return;
+        }
+
+        if (!index) {
+          // Pending aggregation runtime: nothing is aggregated yet, so nothing is drawn.
+          reconcileFlatLayerEntries<FlatClusterCacheEntry>({
+            cache: flatFeatureCacheRef.current,
+            layer,
+            plans: [],
+          });
           return;
         }
 

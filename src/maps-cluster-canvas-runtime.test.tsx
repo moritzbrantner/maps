@@ -4,10 +4,28 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ClusterLayer } from "./cluster-layer";
 import { MapView } from "./map-view";
 import {
+  getMapsAggregationRuntimeStatus,
   resetMapsAggregationRuntimeForTests,
   setMapsAggregationWasmRuntimeForTests,
+  type MapsAggregationWasmRuntime,
 } from "./aggregation-runtime";
 import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
+
+// The WASM loader is the network edge: by default it fails like the unbuilt source-tree
+// package, and a test can hold it back to observe the pending runtime state.
+const wasmLoader = vi.hoisted(() => ({
+  pending: null as null | Promise<unknown>,
+}));
+
+vi.mock("./aggregation-wasm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./aggregation-wasm")>();
+
+  return {
+    ...actual,
+    loadMapsAggregationWasmRuntime: (packageName?: string) =>
+      wasmLoader.pending ?? actual.loadMapsAggregationWasmRuntime(packageName),
+  };
+});
 
 vi.mock("./canvas-flat-runtime", async () => {
   const React = await import("react");
@@ -97,6 +115,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  wasmLoader.pending = null;
   resetMapsAggregationRuntimeForTests();
   vi.clearAllMocks();
 });
@@ -138,6 +157,52 @@ describe("Maps-owned ClusterLayer Canvas runtime", () => {
         expect.objectContaining({ visibleClusterCount: 1, visiblePointCount: 3 }),
       );
     });
+  });
+
+  test("draws nothing while the aggregation runtime loads, then the Rust-clustered view", async () => {
+    resetMapsAggregationRuntimeForTests();
+    let resolveRuntime: (runtime: MapsAggregationWasmRuntime) => void = () => {};
+    wasmLoader.pending = new Promise<MapsAggregationWasmRuntime>((resolve) => {
+      resolveRuntime = resolve;
+    });
+    const onViewportAggregationChange = vi.fn();
+    const points = [
+      { id: "a", label: "A", latitude: 0, longitude: 0 },
+      { id: "b", label: "B", latitude: 0.01, longitude: 0.01 },
+      { id: "c", label: "C", latitude: 0, longitude: 0.02 },
+    ];
+
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        initialViewState={{ center: [0, 0], zoom: 2 }}
+        mapLabel="Cluster runtime pending"
+        mapStyle={{ tiles: false }}
+      >
+        <ClusterLayer onViewportAggregationChange={onViewportAggregationChange} points={points} />
+      </MapView>,
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(getMapsAggregationRuntimeStatus()).toBe("loading");
+    expect(onViewportAggregationChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRuntime(createGridAggregationRuntimeForTests());
+    });
+
+    await waitFor(() => {
+      expect(onViewportAggregationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visibleClusterCount: 1, visiblePointCount: 3 }),
+      );
+    });
+    // The points were never reported point by point before Rust clustered them.
+    expect(onViewportAggregationChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ visibleClusterCount: 0, visibleUnclusteredCount: 3 }),
+    );
   });
 
   test("uses Rust viewport bounds and preserves orientation through cluster expansion", async () => {

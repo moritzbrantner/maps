@@ -134,9 +134,17 @@ controller?.fitPoints(points, { padding: 72 });
   and related map/runtime packages are included as package dependencies.
 - Rendering map components requires browser DOM APIs and WebGL/canvas support.
 - Point clustering runs in the Maps Rust/WASM runtime (`@moritzbrantner/maps/wasm`).
-  Map Views load it on mount, so the bundler must serve that WASM. Until it is
-  ready, and in SSR or `core`-only code, aggregation indexes return every point
-  unclustered.
+  Map Views load it on mount, so the bundler must serve that WASM. While it
+  loads, cluster layers are pending: they draw nothing and report no viewport
+  aggregation, then draw the Rust-clustered view once it is ready. They never
+  draw a dense dataset point by point in the meantime. If loading fails, cluster
+  layers fall back to unclustered points. `createPointAggregationIndex()` called
+  directly before the runtime is ready (including SSR and `core`-only code)
+  returns every point unclustered and reports a `fallback` diagnostic.
+  `ensureMapsAggregationWasm()` starts the load and resolves to whether Rust
+  clustering is available; `getMapsAggregationRuntimeStatus()` and
+  `subscribeMapsAggregationRuntime()` report `idle`, `loading`, `ready` or
+  `unavailable`.
 - React map entrypoints are client components and start with `"use client"`.
 - `@moritzbrantner/maps/styles.css` is compiled CSS that includes package styles
   and MapLibre GL CSS without Tailwind preflight/global reset.

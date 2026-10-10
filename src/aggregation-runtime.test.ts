@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createPointAggregationIndex } from "./aggregation";
 import {
   configureMapsAggregationRuntime,
   createMapsAggregationRuntimeIndex,
+  ensureMapsAggregationWasm,
+  getMapsAggregationRuntimeStatus,
   initializeMapsAggregationWasm,
   resetMapsAggregationRuntimeForTests,
   setMapsAggregationWasmRuntimeForTests,
@@ -11,11 +13,52 @@ import {
   type MapsAggregationRuntimeIndex,
   type MapsAggregationRuntimePoint,
   type MapsAggregationRuntimeResult,
+  type MapsAggregationWasmRuntime,
 } from "./aggregation-runtime";
 
+// The WASM loader is the network edge. Tests can queue controlled loads; otherwise the real
+// loader runs (and fails for the missing override package).
+const loader = vi.hoisted(() => ({
+  queued: [] as Array<{
+    promise: Promise<unknown>;
+    reject: (error: unknown) => void;
+    resolve: (runtime: unknown) => void;
+  }>,
+  controlled: false,
+}));
+
+vi.mock("./aggregation-wasm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./aggregation-wasm")>();
+
+  return {
+    ...actual,
+    loadMapsAggregationWasmRuntime: (packageName?: string) => {
+      if (!loader.controlled) return actual.loadMapsAggregationWasmRuntime(packageName);
+      let resolve: (runtime: unknown) => void = () => {};
+      let reject: (error: unknown) => void = () => {};
+      const promise = new Promise((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      loader.queued.push({ promise, reject, resolve });
+      return promise;
+    },
+  };
+});
+
 afterEach(() => {
+  loader.controlled = false;
+  loader.queued.length = 0;
   resetMapsAggregationRuntimeForTests();
 });
+
+function createTestRuntime(): MapsAggregationWasmRuntime {
+  return {
+    createIndex(points) {
+      return createPointRuntimeIndex(points, []);
+    },
+  };
+}
 
 describe("Maps aggregation Rust authority", () => {
   test("builds the Rust index once and reuses it as the viewport authority", () => {
@@ -184,6 +227,84 @@ describe("Maps aggregation Rust authority", () => {
     expect(runtime?.getClusterExpansionZoom(5)).toBe(7);
     runtime?.dispose();
     expect(disposed).toBe(true);
+  });
+
+  test("reports a pending status while loading and settles on the explicit fallback", async () => {
+    configureMapsAggregationRuntime({ wasmPackage: "@moritzbrantner/maps-missing-wasm-test" });
+    expect(getMapsAggregationRuntimeStatus()).toBe("idle");
+
+    const loading = ensureMapsAggregationWasm();
+    expect(getMapsAggregationRuntimeStatus()).toBe("loading");
+    await expect(loading).resolves.toBe(false);
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+
+    // A retry keeps the settled fallback instead of returning Map Layers to pending.
+    const retry = ensureMapsAggregationWasm();
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+    await expect(retry).resolves.toBe(false);
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+  });
+
+  test("keeps a runtime installed while an older load is still settling", async () => {
+    configureMapsAggregationRuntime({ wasmPackage: "@moritzbrantner/maps-missing-wasm-test" });
+    const staleLoad = ensureMapsAggregationWasm();
+
+    setMapsAggregationWasmRuntimeForTests({
+      createIndex(points) {
+        return createPointRuntimeIndex(points, []);
+      },
+    });
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+
+    await staleLoad;
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+    await expect(ensureMapsAggregationWasm()).resolves.toBe(true);
+  });
+
+  test("an older failing load never replaces a runtime a newer load installed", async () => {
+    loader.controlled = true;
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    newer.resolve(createTestRuntime());
+    await expect(direct).resolves.toBe(true);
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+
+    older.reject(new Error("older load failed"));
+    await expect(ensured).resolves.toBe(true);
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+  });
+
+  test("an older failing load leaves a newer load in flight to decide the status", async () => {
+    loader.controlled = true;
+    const ensured = ensureMapsAggregationWasm();
+    const direct = initializeMapsAggregationWasm();
+    const [older, newer] = loader.queued;
+
+    older.reject(new Error("older load failed"));
+    await expect(ensured).resolves.toBe(false);
+    expect(getMapsAggregationRuntimeStatus()).toBe("loading");
+
+    newer.resolve(createTestRuntime());
+    await expect(direct).resolves.toBe(true);
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
+  });
+
+  test("ensure retries after a host-initiated load failed", async () => {
+    loader.controlled = true;
+    const hostLoad = initializeMapsAggregationWasm();
+    // While the host load is in flight, ensure joins it instead of starting another.
+    expect(ensureMapsAggregationWasm()).toBe(hostLoad);
+    loader.queued[0].reject(new Error("host load failed"));
+    await expect(hostLoad).resolves.toBe(false);
+    expect(getMapsAggregationRuntimeStatus()).toBe("unavailable");
+
+    const retry = ensureMapsAggregationWasm();
+    expect(loader.queued).toHaveLength(2);
+    loader.queued[1].resolve(createTestRuntime());
+    await expect(retry).resolves.toBe(true);
+    expect(getMapsAggregationRuntimeStatus()).toBe("ready");
   });
 
   test("reports the explicit no-WASM fallback when an override cannot load", async () => {

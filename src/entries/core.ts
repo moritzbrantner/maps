@@ -18,6 +18,12 @@ export {
   type VisibleAggregationSummary,
 } from "../aggregation";
 export {
+  ensureMapsAggregationWasm,
+  getMapsAggregationRuntimeStatus,
+  subscribeMapsAggregationRuntime,
+  type MapsAggregationRuntimeStatus,
+} from "../aggregation-runtime";
+export {
   defaultRasterMapStyle,
   getMapBoundsCenter,
   mergeMapBounds,
