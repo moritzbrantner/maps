@@ -627,7 +627,13 @@ async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Prom
   const idle = () =>
     map.loaded() && !map.isMoving()
       ? Promise.resolve()
-      : new Promise<void>((resolve) => map.once("idle", () => resolve()));
+      : new Promise<void>((resolve, reject) => {
+          map.once("idle", () => resolve());
+          // A source/worker failure may never reach idle: fail instead of stalling.
+          map.once("error", (event: { error?: { message?: string } }) =>
+            reject(new Error(event.error?.message ?? "MapLibre error event")),
+          );
+        });
   return {
     applyCamera: (camera) => map.jumpTo(camera),
     camera() {
@@ -642,7 +648,13 @@ async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Prom
     },
     cameraAxes: ["bearing", "center", "pitch", "zoom"],
     pointRenderer: () => "maplibre-circle-layer",
-    ready: new Promise<void>((resolve) => map.once("idle", () => resolve())),
+    ready: new Promise<void>((resolve, reject) => {
+      map.once("idle", () => resolve());
+      // A source/worker failure may never reach idle: fail instead of stalling.
+      map.once("error", (event: { error?: { message?: string } }) =>
+        reject(new Error(event.error?.message ?? "MapLibre error event")),
+      );
+    }),
     // GeoJSON tiles for a new zoom are cut in workers; the step settles when they are drawn.
     settled: idle,
     stats: () => null,
@@ -691,7 +703,9 @@ async function mountLeafletPoints(points: ReturnType<typeof densePoints>): Promi
     // Leaflet has no bearing or pitch: its lane follows centre and zoom only.
     cameraAxes: ["center", "zoom"],
     pointRenderer: () => "leaflet-canvas",
-    ready: frame().then(frame).then(() => undefined),
+    ready: frame()
+      .then(frame)
+      .then(() => undefined),
     // The Canvas renderer redraws every marker in the frame after a view change.
     settled: async () => {},
     stats: () => null,

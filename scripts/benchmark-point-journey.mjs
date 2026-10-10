@@ -263,6 +263,8 @@ async function main() {
             mapSize = { width: Math.round(box.width), height: Math.round(box.height) };
             if (engine === "maps-wgpu" && renderer !== "wgpu-retained")
               throw new Error(`[maps-wgpu ${count}] drew points with ${renderer}`);
+            if (engine === "maps-canvas2d" && renderer !== "canvas2d")
+              throw new Error(`[maps-canvas2d ${count}] drew points with ${renderer}`);
             if (engine === "maps-wgpu") {
               const violations = retainedWorkViolations(journey);
               if (violations.length)
