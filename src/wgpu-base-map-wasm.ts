@@ -74,6 +74,18 @@ export type MapsWgpuBaseMapRenderer = {
    * Absent on renderers without retained point support; frames are then projected.
    */
   setRetainedPoints?(group: number, lonLat: Float64Array, paint: Float32Array): number;
+  /**
+   * Replaces points of a retained group in place (#189): strictly increasing point
+   * `indices`, their `[longitude, latitude]` pairs and paint records. Only those points are
+   * lowered and re-uploaded. Absent on renderers without in-place updates; the group is
+   * then replaced with `setRetainedPoints`.
+   */
+  updateRetainedPoints?(
+    group: number,
+    indices: Uint32Array,
+    lonLat: Float64Array,
+    paint: Float32Array,
+  ): number;
   evictRetainedPoints?(group: number): void;
   /**
    * Retains an application shape group on the GPU: polygons (#196), lines and direction
@@ -120,6 +132,12 @@ type MapsWgpuBaseMapWasmRenderer = {
   ): number;
   resize(width: number, height: number): void;
   setRetainedPoints(group: number, lonLat: Float64Array, paint: Float32Array): number;
+  updateRetainedPoints(
+    group: number,
+    indices: Uint32Array,
+    lonLat: Float64Array,
+    paint: Float32Array,
+  ): number;
   evictRetainedPoints(group: number): void;
   setRetainedPolygons(
     group: number,
@@ -255,6 +273,12 @@ export async function loadMapsWgpuBaseMapRenderer(
         return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           return renderer.setRetainedPoints(group, lonLat, paint);
+        });
+      },
+      updateRetainedPoints(group, indices, lonLat, paint) {
+        return runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          return renderer.updateRetainedPoints(group, indices, lonLat, paint);
         });
       },
       evictRetainedPoints(group) {

@@ -27,6 +27,10 @@
 
 ### Patch Changes
 
+- On WebGPU, changing some points of a GPU-retained point group, through new
+  data or hover/selection, now updates only those points on the GPU. The
+  renderer no longer re-uploads the whole group, and unchanged retained shape
+  groups are not re-sent.
 - Cluster layers (`ClusterLayer` on MapLibre and Maps Map Views,
   `CanvasPointClusterLayer`) no longer draw every point while the aggregation
   runtime is still loading. Before, a MapLibre style that loaded first drew a

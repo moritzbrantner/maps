@@ -1,6 +1,7 @@
 // Retained application point host (#155). The same points render through GPU-retained
 // instances (WebGPU) or the screen-projected Canvas fallback (no `navigator.gpu`), so the
 // two can be compared, and dense camera journeys can read the retained work counters.
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../styles.css";
 import { configureMapsWasmPackage } from "../../src/aggregation-wasm";
@@ -20,6 +21,8 @@ declare global {
   interface Window {
     retainedPoints: {
       controller: Controller | null;
+      /** Moves point `index` to `[longitude, latitude]`; the others keep their objects. */
+      movePoint(index: number, longitude: number, latitude: number): void;
       setViewState(state: MapViewState): void;
       stats(): MapsRendererStats | null;
     };
@@ -98,8 +101,13 @@ const flows = Array.from({ length: flowCount }, (_, index) => ({
   to: [-1 + (index % 10) * 3, 43 + Math.floor(index / 10) * 1.5] as [number, number],
 }));
 
+let movePoint: (index: number, longitude: number, latitude: number) => void = () => {};
+
 window.retainedPoints = {
   controller: null,
+  movePoint(index, longitude, latitude) {
+    movePoint(index, longitude, latitude);
+  },
   setViewState(state) {
     window.retainedPoints.controller?.setViewState(state);
   },
@@ -108,31 +116,40 @@ window.retainedPoints = {
   },
 };
 
-createRoot(document.getElementById("map")!).render(
-  <MapView
-    fitToData={false}
-    flatRuntime="maps"
-    mapLabel="Retained points map"
-    mapStyle={{ attribution: "", tiles: false }}
-    onMapControllerReady={(controller) => {
-      window.retainedPoints.controller = controller as Controller | null;
-    }}
-    style={{ height: 480, width: 640 }}
-    viewState={scenario === "dense" ? undefined : viewState}
-    defaultViewState={scenario === "dense" ? viewState : undefined}
-  >
-    <PointLayer
-      points={points}
-      getPointLabel={
-        labeledIds.size > 0
-          ? (feature) => (labeledIds.has(feature.point.id) ? "1" : null)
-          : undefined
-      }
-      pointColor="#ff0000"
-      // Labels sit inside a larger circle, so each point stays one red blob.
-      pointRadius={labelEvery > 0 ? 12 : 6}
-      renderFeatureTooltip={(feature) => <span>Picked {feature.point.id}</span>}
-    />
-    {flowCount > 0 ? <FlowLayer flowColor="#1d4ed8" flows={flows} showDirection /> : null}
-  </MapView>,
-);
+function RetainedPointsMap() {
+  const [current, setCurrent] = useState(points);
+  movePoint = (index, longitude, latitude) =>
+    setCurrent((previous) =>
+      previous.map((point, at) => (at === index ? { ...point, latitude, longitude } : point)),
+    );
+  return (
+    <MapView
+      fitToData={false}
+      flatRuntime="maps"
+      mapLabel="Retained points map"
+      mapStyle={{ attribution: "", tiles: false }}
+      onMapControllerReady={(controller) => {
+        window.retainedPoints.controller = controller as Controller | null;
+      }}
+      style={{ height: 480, width: 640 }}
+      viewState={scenario === "dense" ? undefined : viewState}
+      defaultViewState={scenario === "dense" ? viewState : undefined}
+    >
+      <PointLayer
+        points={current}
+        getPointLabel={
+          labeledIds.size > 0
+            ? (feature) => (labeledIds.has(feature.point.id) ? "1" : null)
+            : undefined
+        }
+        pointColor="#ff0000"
+        // Labels sit inside a larger circle, so each point stays one red blob.
+        pointRadius={labelEvery > 0 ? 12 : 6}
+        renderFeatureTooltip={(feature) => <span>Picked {feature.point.id}</span>}
+      />
+      {flowCount > 0 ? <FlowLayer flowColor="#1d4ed8" flows={flows} showDirection /> : null}
+    </MapView>
+  );
+}
+
+createRoot(document.getElementById("map")!).render(<RetainedPointsMap />);

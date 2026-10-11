@@ -9,6 +9,7 @@ import { FlowLayer } from "./flow-layer";
 import { GeoJsonLayer } from "./geojson-layer";
 import { PointLayer } from "./point-layer";
 import {
+  MAPS_RETAINED_POINT_PAINT_STRIDE,
   MAPS_RETAINED_POLYGON_PAINT_STRIDE,
   MAPS_RETAINED_SHAPE_CIRCLE,
   MAPS_RETAINED_SHAPE_DIRECTION_MARKER,
@@ -145,6 +146,7 @@ beforeEach(() => {
     evictVectorTile: vi.fn(),
     evictRetainedPoints: vi.fn(),
     setRetainedPoints: vi.fn((_group: number, lonLat: Float64Array) => lonLat.length / 2),
+    updateRetainedPoints: vi.fn((_group: number, indices: Uint32Array) => indices.length),
     evictRetainedPolygons: vi.fn(),
     setRetainedPolygons: vi.fn((_group: number, ringCounts: Uint32Array) => ringCounts.length),
     frameStats: vi.fn(() => ({
@@ -257,6 +259,33 @@ describe("GPU-retained application points (#155)", () => {
     expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
     expect(runtime.projectPacked).not.toHaveBeenCalled();
     expect(runtime.project).not.toHaveBeenCalled();
+  });
+
+  it("updates one changed point in place without re-uploading the group (#189)", async () => {
+    const points = createPoints(10_000);
+    const { rerenderPoints } = await mountPoints(points);
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
+
+    const moved = points.slice();
+    moved[4_321] = { ...points[4_321]!, latitude: 12.5, longitude: 3.25 };
+    rerenderPoints(moved);
+    await waitFor(() => expect(renderer.updateRetainedPoints).toHaveBeenCalledTimes(1));
+
+    // Only the changed point crosses the bridge; the 9,999 others stay on the GPU.
+    const [group, indices, lonLat, paint] = vi.mocked(renderer.updateRetainedPoints!).mock
+      .calls[0]!;
+    expect(group).toBe(1);
+    expect(Array.from(indices)).toEqual([4_321]);
+    expect(Array.from(lonLat)).toEqual([3.25, 12.5]);
+    expect(paint).toHaveLength(MAPS_RETAINED_POINT_PAINT_STRIDE);
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
+    expect(renderer.evictRetainedPoints).not.toHaveBeenCalled();
+
+    // An identical dataset changes nothing on the renderer.
+    rerenderPoints(moved.slice());
+    await waitFor(() => expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POINTS, 1, 1]));
+    expect(renderer.updateRetainedPoints).toHaveBeenCalledTimes(1);
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
   });
 
   it("re-lowers on data changes and falls back to Canvas when the device rejects a group", async () => {

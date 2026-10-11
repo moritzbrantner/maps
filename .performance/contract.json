@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "suite": "maps/benchmark-budgets",
   "description": "Representative map/geo processing contract. Existing p95 wall-clock budgets remain repository evidence, while future blocking protection should increasingly use deterministic work counters for topology, interpolation, grid and aggregation work.",
   "scenarios": [
@@ -130,6 +130,827 @@
           "blocking": false,
           "budget": { "max": 400 },
           "notes": "Historical local budget; index-build/query work counters should become the portable blocking signal."
+        }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "id": "retained-points-camera-pan",
+      "description": "Pan a north-up camera (maps-core FlatRasterRuntime.pan_by_pixels, 32 frames of (37, -23) CSS px from 0,0 at zoom 5, 800x600 viewport) over one unchanged GPU-retained application point group (#155), after its first draw. Each frame derives the RetainedView from the real maps-core frame plan, places the group and packs its frame uniforms like prepare_retained_point_draws. Oracle first: every checked point that maps-core projects into the viewport is drawn within 0.05 px of that projection by a packed frame uniform applied to its mirrored GPU instance, with its current paint (all points in the last frame, about 1,000 per earlier frame).",
+      "publicContract": "maps-wasm RetainedPointState (place/frames) behind MapsWgpuBaseMapRenderer.renderPacked",
+      "dimensions": {
+        "staticFeatures": {
+          "description": "retained points in the group, deterministic within longitude -30..30 and latitude -20..20"
+        }
+      },
+      "scalePoints": [
+        {
+          "staticFeatures": 1000
+        },
+        {
+          "staticFeatures": 10000
+        },
+        {
+          "staticFeatures": 100000
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepared-coordinates",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Points lowered from longitude/latitude into f64 Web Mercator (RetainedPointCounters.prepared). Data changes only; zero on camera frames."
+        },
+        {
+          "name": "encoded-instances",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Points encoded as f32 anchor offsets into GPU instances (RetainedPointCounters.encoded). Zero on ordinary camera frames: only the frame uniform moves."
+        },
+        {
+          "name": "instance-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Instance bytes written to the retained GPU buffer (RetainedPointCounters.upload_bytes), cross-checked against the executed uploads."
+        },
+        {
+          "name": "instance-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Full instance-buffer rebuilds (RetainedPointCounters.rebases): every rebuild is a counted local-frame rebase around a new anchor. None at ordinary zooms; see retained-points-camera-deep-pan-rebase."
+        },
+        {
+          "name": "instance-write-calls",
+          "unit": "calls",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "GPU instance-buffer write calls executed by the backend for this phase."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": {
+            "max": 32
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        },
+        {
+          "name": "frame-uniform-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 8192
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        }
+      ]
+    },
+    {
+      "id": "retained-points-camera-zoom-rotate-pitch",
+      "description": "Zoom, rotate and pitch the camera (maps-core FlatRasterRuntime.set_camera_state, 32 frames from zoom 5 to 8.2, bearing 0 to 128 degrees, pitch 0 to 60 degrees around 2,1) over one unchanged GPU-retained point group, after its first draw, with the same per-frame placement, uniform packing and projection oracle as retained-points-camera-pan (perspective-divided under pitch).",
+      "publicContract": "maps-wasm RetainedPointState (place/frames) behind MapsWgpuBaseMapRenderer.renderPacked",
+      "dimensions": {
+        "staticFeatures": {
+          "description": "retained points in the group, deterministic within longitude -30..30 and latitude -20..20"
+        }
+      },
+      "scalePoints": [
+        {
+          "staticFeatures": 1000
+        },
+        {
+          "staticFeatures": 10000
+        },
+        {
+          "staticFeatures": 100000
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepared-coordinates",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Points lowered from longitude/latitude into f64 Web Mercator (RetainedPointCounters.prepared). Data changes only; zero on camera frames."
+        },
+        {
+          "name": "encoded-instances",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Points encoded as f32 anchor offsets into GPU instances (RetainedPointCounters.encoded). Zero on ordinary camera frames: only the frame uniform moves."
+        },
+        {
+          "name": "instance-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Instance bytes written to the retained GPU buffer (RetainedPointCounters.upload_bytes), cross-checked against the executed uploads."
+        },
+        {
+          "name": "instance-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Full instance-buffer rebuilds (RetainedPointCounters.rebases): every rebuild is a counted local-frame rebase around a new anchor. None at ordinary zooms; see retained-points-camera-deep-pan-rebase."
+        },
+        {
+          "name": "instance-write-calls",
+          "unit": "calls",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "GPU instance-buffer write calls executed by the backend for this phase."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": {
+            "max": 32
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        },
+        {
+          "name": "frame-uniform-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 8192
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        }
+      ]
+    },
+    {
+      "id": "retained-points-camera-deep-pan-rebase",
+      "description": "Pan at zoom 15 (64 frames of 2,000 CSS px) over an unchanged retained point group laid out along the path, so the camera travels past the 32,768 px rebase distance (REBASE_DISTANCE_PX) three times. Explicit local-frame rebases are allowed, must be counted and are bounded by camera travel, not by frames or features: each rebase re-encodes the group once, so its upload is linear in features while the rebase count stays constant. Same projection oracle, with every point checked on each rebase frame.",
+      "publicContract": "maps-wasm RetainedPointState (place/frames) behind MapsWgpuBaseMapRenderer.renderPacked",
+      "dimensions": {
+        "staticFeatures": {
+          "description": "retained points in a band along the pan path"
+        }
+      },
+      "scalePoints": [
+        {
+          "staticFeatures": 1000
+        },
+        {
+          "staticFeatures": 10000
+        },
+        {
+          "staticFeatures": 100000
+        }
+      ],
+      "metrics": [
+        {
+          "name": "instance-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": {
+            "max": 3
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Counted local-frame rebases: floor(64 / (floor(32768 / 2000) + 1)) = 3 for this travel, at every size. A per-frame rebuild would be 64."
+        },
+        {
+          "name": "instance-write-calls",
+          "unit": "calls",
+          "signal": "operation-count",
+          "budget": {
+            "max": 3
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "One full buffer replacement per rebase."
+        },
+        {
+          "name": "prepared-coordinates",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "No re-lowering from longitude/latitude: rebases re-encode from the retained f64 world coordinates."
+        },
+        {
+          "name": "encoded-instances",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 300000
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Exactly rebases x features: a rebase re-encodes the group once. Declared linear in features; the constant rebase count is what keeps camera work bounded."
+        },
+        {
+          "name": "instance-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 14400000
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Exactly rebases x features x 48 bytes."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": {
+            "max": 64
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        },
+        {
+          "name": "frame-uniform-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 16384
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        }
+      ]
+    },
+    {
+      "id": "retained-points-update-features",
+      "description": "Update changed points of a drawn retained group in place (RetainedPointState.update behind updateRetainedPoints: new position 0.5 degrees east and 0.25 degrees south, new paint), spread across the group so no two are adjacent, then draw one camera frame. Oracle: in that frame every point that maps-core projects into the viewport, changed or not, is drawn at its current position with its current paint.",
+      "publicContract": "maps-wasm RetainedPointState.update behind MapsWgpuBaseMapRenderer.updateRetainedPoints",
+      "dimensions": {
+        "totalFeatures": {
+          "description": "retained points in the group"
+        },
+        "changedFeatures": {
+          "description": "points updated in place"
+        }
+      },
+      "scalePoints": [
+        {
+          "totalFeatures": 1000,
+          "changedFeatures": 1
+        },
+        {
+          "totalFeatures": 1000,
+          "changedFeatures": 10
+        },
+        {
+          "totalFeatures": 1000,
+          "changedFeatures": 100
+        },
+        {
+          "totalFeatures": 10000,
+          "changedFeatures": 1
+        },
+        {
+          "totalFeatures": 10000,
+          "changedFeatures": 10
+        },
+        {
+          "totalFeatures": 10000,
+          "changedFeatures": 100
+        },
+        {
+          "totalFeatures": 100000,
+          "changedFeatures": 1
+        },
+        {
+          "totalFeatures": 100000,
+          "changedFeatures": 10
+        },
+        {
+          "totalFeatures": 100000,
+          "changedFeatures": 100
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepared-coordinates",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 100
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Only the changed points are lowered (exactly changedFeatures)."
+        },
+        {
+          "name": "encoded-instances",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 100
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Only the changed points are re-encoded, around the group's current anchor (exactly changedFeatures)."
+        },
+        {
+          "name": "instance-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 4800
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Exactly changedFeatures x 48 bytes written in place."
+        },
+        {
+          "name": "instance-write-calls",
+          "unit": "calls",
+          "signal": "operation-count",
+          "budget": {
+            "max": 100
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "One write per contiguous run of changed points; non-adjacent here, so exactly changedFeatures."
+        },
+        {
+          "name": "instance-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "The update and the following camera frame never rebuild the group."
+        },
+        {
+          "name": "unrelated-instances-written",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 0
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Instance slots rewritten in the mirrored GPU buffer that do not belong to a changed point."
+        },
+        {
+          "name": "bridge-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 6000
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Argument bytes of the updateRetainedPoints call (u32 index, f64 longitude/latitude, 10 f32 paint values per changed point = 60 bytes)."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": {
+            "max": 1
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        },
+        {
+          "name": "frame-uniform-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 256
+          },
+          "growth": [
+            {
+              "dimension": "totalFeatures",
+              "bound": "constant"
+            },
+            {
+              "dimension": "changedFeatures",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        }
+      ]
+    },
+    {
+      "id": "retained-points-replace-dataset",
+      "description": "Replace a drawn retained group with a different dataset of the same size (RetainedPointState.prepare behind setRetainedPoints), then draw one camera frame. Legitimate O(N) work, declared linear, in contrast to the constant camera operations. Same projection oracle over every point.",
+      "publicContract": "maps-wasm RetainedPointState.prepare behind MapsWgpuBaseMapRenderer.setRetainedPoints",
+      "dimensions": {
+        "features": {
+          "description": "points in the replacement dataset"
+        }
+      },
+      "scalePoints": [
+        {
+          "features": 1000
+        },
+        {
+          "features": 10000
+        },
+        {
+          "features": 100000
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepared-coordinates",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 100000
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Every new point is lowered once (exactly features)."
+        },
+        {
+          "name": "encoded-instances",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 100000
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Encoded once on the first draw of the new data (exactly features)."
+        },
+        {
+          "name": "instance-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 4800000
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Exactly features x 48 bytes."
+        },
+        {
+          "name": "bridge-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 5600000
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Argument bytes of the setRetainedPoints call (56 bytes per point)."
+        },
+        {
+          "name": "instance-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": {
+            "max": 1
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "constant"
+            }
+          ],
+          "notes": "One full build for the new data."
+        },
+        {
+          "name": "instance-write-calls",
+          "unit": "calls",
+          "signal": "operation-count",
+          "budget": {
+            "max": 1
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "constant"
+            }
+          ],
+          "notes": "One buffer replacement."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": {
+            "max": 1
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        },
+        {
+          "name": "frame-uniform-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 256
+          },
+          "growth": [
+            {
+              "dimension": "features",
+              "bound": "constant"
+            }
+          ],
+          "notes": "Frame uniforms written: one per drawn world copy per camera frame (one copy at these zooms), at WebGPU's default 256-byte dynamic-offset stride."
+        }
+      ]
+    },
+    {
+      "id": "projected-points-camera-pan",
+      "description": "Comparison role, not a Maps failure: the screen-projected application path that the retained points replace (the path before #155, still the fallback where retention is unavailable). For 8 pan frames, every point is projected through maps-core FlatRasterRuntime.project_screen_batch, packed as one 48-byte circle record and re-encoded by prepare_application_geometry into one GPU circle instance. Oracle: a packed circle centre equals the maps-core projection.",
+      "publicContract": "maps-wasm prepare_application_geometry (packed application circles behind renderPacked)",
+      "dimensions": {
+        "staticFeatures": {
+          "description": "points projected every camera frame"
+        }
+      },
+      "scalePoints": [
+        {
+          "staticFeatures": 1000
+        },
+        {
+          "staticFeatures": 10000
+        },
+        {
+          "staticFeatures": 100000
+        }
+      ],
+      "metrics": [
+        {
+          "name": "projected-coordinates",
+          "unit": "points",
+          "signal": "operation-count",
+          "budget": {
+            "max": 800000
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Exactly frames x features: this is the per-camera O(N) work the retained operations must not show."
+        },
+        {
+          "name": "circle-bridge-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 38400000
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Packed circle records sent per frame: exactly frames x features x 48 bytes."
+        },
+        {
+          "name": "circle-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": {
+            "max": 44800000
+          },
+          "growth": [
+            {
+              "dimension": "staticFeatures",
+              "bound": "linear"
+            }
+          ],
+          "notes": "Circle instance bytes re-encoded for upload per frame (56 bytes per circle)."
         }
       ]
     }

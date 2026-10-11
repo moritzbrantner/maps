@@ -30,7 +30,10 @@ import {
 } from "./flat-runtime-wasm";
 import type { MapVectorRenderFrame } from "./map-render-frame";
 import type {
+  MapsRetainedApplicationPoints,
+  MapsRetainedApplicationPolygons,
   MapsRetainedApplicationRun,
+  MapsRetainedPointChanges,
   MapsWgpuApplicationFrame,
 } from "./wgpu-application-frame";
 import {
@@ -81,6 +84,9 @@ type MapsWgpuApplicationFrameFactory = (
  * Builders of the GPU-retained application paths, loaded with the wgpu transport: point
  * groups (#155) and shape groups of polygons (#196), lines and direction markers (#195).
  */
+/** The upload of a retained group that already holds what the frame needs. */
+const retainedGroupUnchanged = () => undefined;
+
 type MapsRetainedPointTransport = {
   runs: (
     frame: MapVectorRenderFrame<unknown>,
@@ -92,6 +98,16 @@ type MapsRetainedPointTransport = {
     width: number,
     height: number,
   ) => MapsWgpuApplicationFrame;
+  /** Changed points of a retained point group, or `null` when it must be replaced. */
+  pointChanges: (
+    previous: MapsRetainedApplicationPoints,
+    next: MapsRetainedApplicationPoints,
+  ) => MapsRetainedPointChanges | null;
+  /** Whether a retained shape group is unchanged. */
+  samePolygons: (
+    previous: MapsRetainedApplicationPolygons,
+    next: MapsRetainedApplicationPolygons,
+  ) => boolean;
 };
 
 export type MapsBaseRenderer = "pending" | "wgpu" | "canvas2d";
@@ -477,7 +493,9 @@ export function createMapsBrowserRuntime(
       packApplicationFrame = (frame, interaction) => packer.pack(frame, interaction);
       retainedPointTransport = {
         frame: transport.createMapsWgpuRetainedFrame,
+        pointChanges: transport.diffMapsRetainedPoints,
         runs: transport.createMapsRetainedApplicationRuns,
+        samePolygons: transport.sameMapsRetainedPolygons,
       };
       delete canvas.dataset.mapBaseRendererError;
     } catch (error) {
@@ -1043,6 +1061,8 @@ function createFrameSynchronizer({
     kinds: MapsRetainedApplicationRun["kind"][];
     primitives: readonly unknown[];
     renderer: MapsWgpuBaseMapRenderer;
+    // What each group holds, so data and interaction changes update groups in place.
+    runs: readonly MapsRetainedApplicationRun[];
     selected: ReadonlySet<string>;
   } | null = null;
   // The application frame that draws the retained group; any other frame replaced it.
@@ -1410,22 +1430,53 @@ function createFrameSynchronizer({
       sameIdSet(current.hovered, interaction.hoveredPrimitiveIds) &&
       sameIdSet(current.selected, interaction.selectedPrimitiveIds);
     if (!unchanged) {
-      const runs = retainedPointTransport.runs(frame, interaction, { shapes: !cameraPitched() });
-      const uploads = runs?.map((run, index) =>
-        run.kind === "points"
-          ? currentRenderer.setRetainedPoints &&
+      const transport = retainedPointTransport;
+      const runs = transport.runs(frame, interaction, { shapes: !cameraPitched() });
+      // Groups still retained on this renderer from the previous runs. A group of the same
+      // kind is kept: unchanged groups are not touched and point groups of the same size
+      // are updated in place, so one changed feature uploads one point (#189).
+      const previousRuns = current?.renderer === currentRenderer ? current.runs : [];
+      const uploads = runs?.map((run, index): (() => unknown) | undefined => {
+        const previous = previousRuns[index];
+        if (run.kind === "points") {
+          const changes =
+            previous?.kind === "points" && currentRenderer.updateRetainedPoints
+              ? transport.pointChanges(previous.points, run.points)
+              : null;
+          if (changes?.indices.length === 0) return retainedGroupUnchanged;
+          if (changes) {
+            return () =>
+              currentRenderer.updateRetainedPoints!(
+                index + 1,
+                changes.indices,
+                changes.lonLat,
+                changes.paint,
+              );
+          }
+          return (
+            currentRenderer.setRetainedPoints &&
             (() =>
               currentRenderer.setRetainedPoints!(index + 1, run.points.lonLat, run.points.paint))
-          : currentRenderer.setRetainedPolygons &&
-            (() =>
-              currentRenderer.setRetainedPolygons!(
-                index + 1,
-                run.polygons.ringCounts,
-                run.polygons.pointCounts,
-                run.polygons.lonLat,
-                run.polygons.paint,
-              )),
-      );
+          );
+        }
+        if (
+          previous?.kind === "polygons" &&
+          transport.samePolygons(previous.polygons, run.polygons)
+        ) {
+          return retainedGroupUnchanged;
+        }
+        return (
+          currentRenderer.setRetainedPolygons &&
+          (() =>
+            currentRenderer.setRetainedPolygons!(
+              index + 1,
+              run.polygons.ringCounts,
+              run.polygons.pointCounts,
+              run.polygons.lonLat,
+              run.polygons.paint,
+            ))
+        );
+      });
       if (!runs || !uploads || uploads.some((upload) => !upload)) {
         releaseRetainedPoints();
         return false;
@@ -1448,6 +1499,7 @@ function createFrameSynchronizer({
         kinds,
         primitives: frame.primitives.slice(),
         renderer: currentRenderer,
+        runs,
         selected: new Set(interaction.selectedPrimitiveIds ?? []),
       };
     }

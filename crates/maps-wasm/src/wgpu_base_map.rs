@@ -19,7 +19,10 @@ use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, ImageBitmap};
 
 use crate::retained_frame::LocalFrame;
-use crate::retained_points::{RETAINED_POINT_INSTANCE_SIZE, RetainedPoints, RetainedView};
+use crate::retained_points::{
+    InstanceUpload, RETAINED_POINT_INSTANCE_SIZE, RetainedPointCounters, RetainedPointState,
+    RetainedView,
+};
 use crate::retained_polygons::{
     RETAINED_POLYGON_COVER_VERTEX_COUNT, RETAINED_POLYGON_FILL_VERTEX_SIZE,
     RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonDraw, RetainedPolygons,
@@ -54,11 +57,11 @@ const VECTOR_SHADER: &str = include_str!("shaders/vector_basemap.wgsl");
 const RETAINED_POINTS_SHADER: &str = include_str!("shaders/retained_points.wgsl");
 const RETAINED_POLYGONS_SHADER: &str = include_str!("shaders/retained_polygons.wgsl");
 
-/// One retained application point group (#155): `f64` world truth in Rust, `f32` anchor
-/// offsets on the GPU. Camera frames only move the anchor's frame uniform.
+/// One retained application point group (#155): `f64` world truth and anchor in
+/// [`RetainedPointState`], `f32` anchor offsets on the GPU. Camera frames only move the
+/// anchor's frame uniform.
 struct RetainedPointGroup {
-    points: RetainedPoints,
-    anchor: Option<[f64; 2]>,
+    state: RetainedPointState,
     instances: Option<wgpu::Buffer>,
 }
 
@@ -66,17 +69,6 @@ impl RetainedResource for RetainedPointGroup {
     fn byte_size(&self) -> u64 {
         retained_bytes([&self.instances])
     }
-}
-
-/// Cumulative retained-point work, for O(1)-camera evidence.
-#[derive(Clone, Copy, Default)]
-struct RetainedPointCounters {
-    /// Points lowered from longitude/latitude (data changes only).
-    prepared: u64,
-    /// Anchor rebuilds of offsets (first draw and deterministic rebases).
-    rebases: u64,
-    /// Instance bytes written to GPU buffers.
-    upload_bytes: u64,
 }
 
 /// One retained application polygon group (#196): `f64` world rings in Rust, anchor-offset
@@ -1123,18 +1115,45 @@ impl MapsWgpuBaseMapRenderer {
         lon_lat: &[f64],
         paint: &[f32],
     ) -> Result<u32, JsValue> {
-        let points = RetainedPoints::lower(lon_lat, paint).map_err(JsValue::from_str)?;
-        let count = u32::try_from(points.len())
+        let count = u32::try_from(lon_lat.len() / 2)
             .map_err(|_| JsValue::from_str("too many retained points"))?;
-        self.retained_point_counters.prepared += u64::from(count);
+        let state = RetainedPointState::prepare(lon_lat, paint, &mut self.retained_point_counters)
+            .map_err(JsValue::from_str)?;
         self.retained_points.insert(
             group,
             RetainedPointGroup {
-                points,
-                anchor: None,
+                state,
                 instances: None,
             },
         );
+        Ok(count)
+    }
+
+    /// Replaces points of a retained group in place: the strictly increasing point
+    /// `indices`, their `[longitude, latitude]` pairs and paint records (as for
+    /// `setRetainedPoints`). Only those points are lowered and re-uploaded; the rest of the
+    /// group stays on the GPU untouched. Returns the number of updated points.
+    #[wasm_bindgen(js_name = updateRetainedPoints)]
+    pub fn update_retained_points(
+        &mut self,
+        group: u32,
+        indices: &[u32],
+        lon_lat: &[f64],
+        paint: &[f32],
+    ) -> Result<u32, JsValue> {
+        let count = u32::try_from(indices.len())
+            .map_err(|_| JsValue::from_str("too many retained point updates"))?;
+        let entry = self
+            .retained_points
+            .get_mut(&group)
+            .ok_or_else(|| JsValue::from_str("unknown retained point group"))?;
+        let upload = entry
+            .state
+            .update(indices, lon_lat, paint, &mut self.retained_point_counters)
+            .map_err(JsValue::from_str)?;
+        if let Some(upload) = upload {
+            apply_instance_upload(&self.device, &self.queue, &mut entry.instances, upload);
+        }
         Ok(count)
     }
 
@@ -1236,7 +1255,7 @@ impl MapsWgpuBaseMapRenderer {
             self.frame_stats.application_upload_bytes as f64,
             self.retained_points
                 .values()
-                .map(|group| group.points.len())
+                .map(|group| group.state.len())
                 .sum::<usize>() as f64,
             self.retained_point_counters.prepared as f64,
             self.retained_point_counters.rebases as f64,
@@ -1712,23 +1731,10 @@ impl MapsWgpuBaseMapRenderer {
             let Some(group) = self.retained_points.get_mut(&group_key) else {
                 continue;
             };
-            if view.needs_rebase(group.anchor) || group.instances.is_none() {
-                let anchor = view.center;
-                let bytes = group.points.instance_bytes(anchor);
-                group.instances = upload_retained_buffer(
-                    &self.device,
-                    &self.queue,
-                    "Maps retained point instances",
-                    wgpu::BufferUsages::VERTEX,
-                    &bytes,
-                );
-                group.anchor = Some(anchor);
-                self.retained_point_counters.rebases += 1;
-                self.retained_point_counters.upload_bytes += bytes.len() as u64;
+            if let Some(upload) = group.state.place(&view, &mut self.retained_point_counters) {
+                apply_instance_upload(&self.device, &self.queue, &mut group.instances, upload);
             }
-            if let Some(anchor) = group.anchor {
-                frames.extend(view.anchor_frames(anchor).map(|frame| (group_key, frame)));
-            }
+            frames.extend(group.state.frames(&view).map(|frame| (group_key, frame)));
         }
         let surface = [
             self.config.width as f32,
@@ -1790,7 +1796,7 @@ impl MapsWgpuBaseMapRenderer {
         let Some(instances) = &group.instances else {
             return 0;
         };
-        let count = group.points.len() as u32;
+        let count = group.state.len() as u32;
         let mut calls = 0;
         pass.set_pipeline(&self.retained_point_pipeline);
         pass.set_vertex_buffer(0, instances.slice(..));
@@ -1992,4 +1998,32 @@ fn premultiplied_blend_state() -> wgpu::BlendState {
 
 fn js_error(context: &str, error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&format!("{context}: {error}"))
+}
+
+/// Executes one retained point group's instance-buffer work decided by
+/// [`RetainedPointState`]: a full replacement or in-place writes of changed points.
+fn apply_instance_upload(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    instances: &mut Option<wgpu::Buffer>,
+    upload: InstanceUpload,
+) {
+    match upload {
+        InstanceUpload::Replace(bytes) => {
+            *instances = upload_retained_buffer(
+                device,
+                queue,
+                "Maps retained point instances",
+                wgpu::BufferUsages::VERTEX,
+                &bytes,
+            );
+        }
+        InstanceUpload::Patch(runs) => {
+            if let Some(buffer) = instances {
+                for (offset, bytes) in runs {
+                    queue.write_buffer(buffer, offset, &bytes);
+                }
+            }
+        }
+    }
 }
