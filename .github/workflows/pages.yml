@@ -35,7 +35,7 @@ jobs:
       setup_command: |
         bun install --frozen-lockfile
         bunx playwright install --with-deps chromium
-        cargo install wasm-bindgen-cli --version 0.2.129 --locked
+        bash scripts/install-wasm-bindgen-ci.sh
         rm -rf .github-pages-template
         git init .github-pages-template
         git -C .github-pages-template remote add origin https://github.com/moritzbrantner/github-pages-template.git
