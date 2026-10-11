@@ -140,6 +140,52 @@ for (const scenario of cases) {
   });
 }
 
+test("moving one retained point updates it in place and matches the Canvas fallback @smoke", async ({
+  browser,
+}) => {
+  // #189: a single-feature change lowers and uploads that point only (one 48-byte
+  // instance), never rebuilds the group, and the GPU draws it where Canvas does.
+  const positions: Record<string, Blob[]> = {};
+  for (const backend of ["wgpu", "canvas2d"] as const) {
+    const page = await browser.newPage();
+    const { gpuValidation, map } = await openRetainedPoints(page, "points=grid&zoom=11", backend);
+    await expect.poll(async () => (await redBlobs(page, await map.screenshot())).length).toBe(9);
+    const before = await page.evaluate(() => window.retainedPoints.stats());
+    // The centre point moves to the east of the grid's middle row.
+    await page.evaluate(() => window.retainedPoints.movePoint(4, 13.4 + 0.075, 52.5));
+    let blobs: Blob[] = [];
+    await expect
+      .poll(async () => {
+        blobs = await redBlobs(page, await map.screenshot());
+        return blobs.length === 9 && Math.max(...blobs.map((blob) => blob.x));
+      })
+      .toBeGreaterThan(480);
+    positions[backend] = blobs;
+    expect(gpuValidation).toEqual([]);
+    await expect(map.locator('[data-flat-runtime="maps"]')).toHaveAttribute(
+      "data-map-base-renderer",
+      backend,
+    );
+    if (backend === "wgpu") {
+      const after = await page.evaluate(() => window.retainedPoints.stats());
+      expect(after!.retainedPoints).toBe(9);
+      expect(after!.retainedPointPreparations - before!.retainedPointPreparations).toBe(1);
+      expect(after!.retainedPointRebases).toBe(before!.retainedPointRebases);
+      expect(after!.retainedPointUploadBytes - before!.retainedPointUploadBytes).toBe(48);
+    }
+    await page.close();
+  }
+  const retained = positions.wgpu!;
+  const projected = positions.canvas2d!;
+  expect(retained.length).toBe(projected.length);
+  for (const blob of projected) {
+    const nearest = Math.min(
+      ...retained.map((other) => Math.hypot(other.x - blob.x, other.y - blob.y)),
+    );
+    expect(nearest).toBeLessThan(0.75);
+  }
+});
+
 test("retained points are pickable in every visible world copy @smoke", async ({ page }) => {
   const { map } = await openRetainedPoints(
     page,

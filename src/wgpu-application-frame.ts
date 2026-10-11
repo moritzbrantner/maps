@@ -537,6 +537,72 @@ function createRetainedColorCache(): RetainedColor {
   };
 }
 
+/** Points of a retained point group replaced in place (`updateRetainedPoints`, #189). */
+export type MapsRetainedPointChanges = {
+  /** Strictly increasing indices of the changed points. */
+  indices: Uint32Array;
+  /** `[longitude, latitude]` per changed point. */
+  lonLat: Float64Array;
+  /** `MAPS_RETAINED_POINT_PAINT_STRIDE` values per changed point. */
+  paint: Float32Array;
+};
+
+/**
+ * The points of `next` that differ from `previous` in position or paint, for an in-place
+ * update of the retained group built from `previous`. `null` when the groups differ in
+ * size, or when more than half of the points changed, where replacing the group is no
+ * more work than updating it.
+ */
+export function diffMapsRetainedPoints(
+  previous: MapsRetainedApplicationPoints,
+  next: MapsRetainedApplicationPoints,
+): MapsRetainedPointChanges | null {
+  if (previous.count !== next.count) return null;
+  const stride = MAPS_RETAINED_POINT_PAINT_STRIDE;
+  const changed: number[] = [];
+  for (let index = 0; index < next.count; index += 1) {
+    let differs =
+      previous.lonLat[index * 2] !== next.lonLat[index * 2] ||
+      previous.lonLat[index * 2 + 1] !== next.lonLat[index * 2 + 1];
+    for (let value = index * stride; !differs && value < (index + 1) * stride; value += 1) {
+      differs = previous.paint[value] !== next.paint[value];
+    }
+    if (differs) {
+      changed.push(index);
+      if (changed.length * 2 > next.count) return null;
+    }
+  }
+  const indices = Uint32Array.from(changed);
+  const lonLat = new Float64Array(changed.length * 2);
+  const paint = new Float32Array(changed.length * stride);
+  changed.forEach((index, position) => {
+    lonLat.set(next.lonLat.subarray(index * 2, index * 2 + 2), position * 2);
+    paint.set(next.paint.subarray(index * stride, (index + 1) * stride), position * stride);
+  });
+  return { indices, lonLat, paint };
+}
+
+/** Whether two retained shape groups hold identical shapes and paint. */
+export function sameMapsRetainedPolygons(
+  previous: MapsRetainedApplicationPolygons,
+  next: MapsRetainedApplicationPolygons,
+): boolean {
+  const same = (left: ArrayLike<number>, right: ArrayLike<number>) => {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) return false;
+    }
+    return true;
+  };
+  return (
+    previous.count === next.count &&
+    same(previous.ringCounts, next.ringCounts) &&
+    same(previous.pointCounts, next.pointCounts) &&
+    same(previous.lonLat, next.lonLat) &&
+    same(previous.paint, next.paint)
+  );
+}
+
 /**
  * The retained form of a vector frame: its primitives split, in painter order, into runs of
  * consecutive circles (point groups) and consecutive polygons, lines, direction markers and
