@@ -1,10 +1,6 @@
 name: Maps Provisioning Comparison
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/provisioning-comparison.yml
-      - scripts/install-wasm-bindgen-ci.sh
   workflow_dispatch:
 
 permissions:
