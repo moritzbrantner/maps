@@ -47,6 +47,7 @@ jobs:
             wasm-bindgen --version
             wasm-opt --version
             cargo --version
+            node --test scripts/install-wasm-bindgen-ci.test.mjs
             bun run verify:rust
             bun run build:wasm
             bun install --frozen-lockfile
