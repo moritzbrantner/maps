@@ -262,6 +262,37 @@ the slowest here. Those times measure the software rasterizer, not retained
 work, and they say nothing about hardware-GPU presentation. `--gpu` switches
 to hardware-GPU flags for a local comparison on a real adapter.
 
+## Retained-point work contracts (#189)
+
+The O(1) camera contract of #155 is also a deterministic gate. `.performance/contract.json`
+(schemaVersion 2) declares `operations` in coding-tooling's shared vocabulary, and
+`scripts/collect-work-evidence.sh` is the root `performance:work` capability that
+`coding-tooling performance work` judges. The counters are owned by the resource:
+`RetainedPointState` in `crates/maps-wasm/src/retained_points.rs` decides every
+lowering, encode and upload of a retained point group and counts it in
+`RetainedPointCounters`, and the wgpu backend only executes the uploads it returns.
+`crates/maps-wasm/src/work_complexity.rs` drives that state with real `maps-core` camera
+frames at 1k, 10k and 100k points. It mirrors the GPU instance buffer by executing the
+returned uploads and checks a projection oracle before it records any work. Every visible
+point must be drawn within 0.05 px of its `maps-core` projection, with its current paint.
+
+| Operation | Bound |
+| --- | --- |
+| `retained-points-camera-pan`, `retained-points-camera-zoom-rotate-pitch` | No lowering, encoding, rebuilds or instance uploads; one 256-byte frame uniform per camera frame, constant in points |
+| `retained-points-camera-deep-pan-rebase` | Three counted rebases for the fixed travel, constant in points; each rebase re-encodes the group (linear) |
+| `retained-points-update-features` | Lowering, encoding, upload, write calls and call payload linear in changed points and constant in total points; no rebuilds and no unrelated instances written |
+| `retained-points-replace-dataset` | Declared linear: one lowering, encode and upload of every point |
+| `projected-points-camera-pan` | Comparison role: the screen-projected path projects, sends and uploads every point on every camera frame (linear) |
+
+Without `MAPS_WORK_EVIDENCE_DIR`, plain `cargo test` asserts the same bounds as exact
+formulas. A camera frame that re-encodes or re-uploads the points therefore fails the normal
+Rust gate as well as `performance work`. On WebGPU, `updateRetainedPoints` carries a data or
+hover/selection change of some points of a group to the renderer. The runtime compares the
+group's previous transport arrays with the new ones and sends only the changed points.
+Unchanged shape groups are not re-sent. Line, flow and polygon groups have no operation
+contracts yet. The JS side still rebuilds and compares the transport arrays of a changed
+frame, so JS-side materialization is linear in the group size.
+
 ## Evidence tooling repair — September 30
 
 The build now copies its optimized WASM and matching glue to `public/wasm`, so
