@@ -32,6 +32,7 @@ install_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/maps-wasm-bindgen-ci/bin"
 mkdir -p "$install_dir"
 install -m 0755 "$working_dir/wasm-bindgen-${version}-${target}/wasm-bindgen" "$install_dir/wasm-bindgen"
 "$install_dir/wasm-bindgen" --version
+export PATH="$install_dir:$PATH"
 if [[ -n "${GITHUB_PATH:-}" ]]; then
   printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
 else
