@@ -155,13 +155,23 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
         }
 
         // A removed MapLibre layer never fires `mouseleave`, so when the entry whose hover this
-        // layer delivered is dropped (its feature left the frame, or the runtime status changed),
-        // the hover is cleared here. A highlight from a controlled `hoveredFeatureId` that this
-        // layer never delivered is left alone.
+        // layer delivered is dropped (its feature left the frame, the runtime status changed, or
+        // reconciliation replaced it under the same key), the hover is cleared here. A highlight
+        // from a controlled `hoveredFeatureId` that this layer never delivered is left alone.
+        const deliveredKeyBefore = deliveredHoverKeyRef.current;
+        const deliveredEntryBefore =
+          deliveredKeyBefore === null
+            ? undefined
+            : flatFeatureCacheRef.current.get(deliveredKeyBefore);
         const clearDroppedHover = () => {
           const deliveredKey = deliveredHoverKeyRef.current;
 
-          if (deliveredKey !== null && !flatFeatureCacheRef.current.has(deliveredKey)) {
+          if (
+            deliveredKey !== null &&
+            (!flatFeatureCacheRef.current.has(deliveredKey) ||
+              (deliveredKey === deliveredKeyBefore &&
+                flatFeatureCacheRef.current.get(deliveredKey) !== deliveredEntryBefore))
+          ) {
             deliveredHoverKeyRef.current = null;
             map.getContainer().style.cursor = "";
             currentSurface.handleFeatureHover(null, null, {
