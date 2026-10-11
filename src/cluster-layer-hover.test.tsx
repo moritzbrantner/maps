@@ -93,7 +93,109 @@ describe("ClusterLayer hover cleanup", () => {
 
     expect(harness.hoverCalls).toEqual([]);
   });
+
+  // #221: reconciliation can replace the hovered entry under the same key when its signature
+  // changes. The dropped layer owned the delivered hover and never fires its leave, so the hover
+  // must be cleared, or re-delivered for the live replacement, instead of staying stuck.
+  test("clears or re-delivers the hover when `selectedFeatureId` replaces the hovered entry", async () => {
+    setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+    const harness = createSurfaceHarness();
+    const view = render(
+      <MapSurfaceContext.Provider value={harness.surface}>
+        <ClusterLayer points={POINTS} />
+      </MapSurfaceContext.Provider>,
+    );
+    await act(async () => {});
+
+    act(() => harness.map.fireOnPointLayer(0, "mouseenter"));
+    expect(harness.hoverCalls).toEqual(["a"]);
+    expect(harness.map.container.style.cursor).toBe("pointer");
+    const layersBefore = new Set(harness.map.layers.keys());
+
+    view.rerender(
+      <MapSurfaceContext.Provider value={harness.surface}>
+        <ClusterLayer points={POINTS} selectedFeatureId="a" />
+      </MapSurfaceContext.Provider>,
+    );
+    await act(async () => {});
+
+    // Precondition: the hovered entry really was replaced (a new MapLibre layer was drawn).
+    expect([...harness.map.layers.keys()].some((id) => !layersBefore.has(id))).toBe(true);
+    expectHoverClearedOrRedelivered(harness, { callsBefore: 1, id: "a", longitude: 0 });
+  });
+
+  test("clears or re-delivers the hover when a cluster's count replaces the hovered entry", async () => {
+    setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+    const harness = createSurfaceHarness();
+    const view = render(
+      <MapSurfaceContext.Provider value={harness.surface}>
+        <ClusterLayer getFeatureId={stableClusterId} points={CLUSTER_POINTS.slice(0, 2)} />
+      </MapSurfaceContext.Provider>,
+    );
+    await act(async () => {});
+
+    act(() => harness.map.fireOnPointLayer(0, "mouseenter"));
+    expect(harness.hoverCalls).toEqual([STABLE_CLUSTER_ID]);
+    expect(harness.map.container.style.cursor).toBe("pointer");
+    const layersBefore = new Set(harness.map.layers.keys());
+
+    // A third point joins the cluster: same key, new count, label, radius and colour.
+    view.rerender(
+      <MapSurfaceContext.Provider value={harness.surface}>
+        <ClusterLayer getFeatureId={stableClusterId} points={CLUSTER_POINTS} />
+      </MapSurfaceContext.Provider>,
+    );
+    await act(async () => {});
+
+    expect([...harness.map.layers.keys()].some((id) => !layersBefore.has(id))).toBe(true);
+    expectHoverClearedOrRedelivered(harness, {
+      callsBefore: 1,
+      id: STABLE_CLUSTER_ID,
+      longitude: 0,
+    });
+  });
 });
+
+const STABLE_CLUSTER_ID = "cluster-at-origin";
+
+// Points stacked at the origin always cluster together.
+const CLUSTER_POINTS = [
+  { id: "c1", label: "C1", latitude: 0, longitude: 0 },
+  { id: "c2", label: "C2", latitude: 0, longitude: 0 },
+  { id: "c3", label: "C3", latitude: 0, longitude: 0 },
+];
+
+/** Keys the origin cluster stably across count changes; points fall back to the default id. */
+const stableClusterId = (feature: { kind: string }) =>
+  feature.kind === "cluster" ? STABLE_CLUSTER_ID : "";
+
+/**
+ * The replacement must not leave a stale hover: after it, the layer either cleared the hover
+ * (hovered feature null, cursor reset) or delivered it again for the live replacement entry,
+ * whose own leave then clears it. Leaving the earlier delivery untouched is the #221 bug.
+ */
+function expectHoverClearedOrRedelivered(
+  harness: ReturnType<typeof createSurfaceHarness>,
+  { callsBefore, id, longitude }: { callsBefore: number; id: string; longitude: number },
+) {
+  const afterReplacement = harness.hoverCalls.slice(callsBefore);
+
+  expect(
+    afterReplacement,
+    "the replaced entry's hover was neither cleared nor re-delivered",
+  ).not.toEqual([]);
+
+  if (afterReplacement.at(-1) === null) {
+    expect(harness.map.container.style.cursor).toBe("");
+    return;
+  }
+
+  expect(afterReplacement.at(-1)).toBe(id);
+  expect(harness.map.container.style.cursor).toBe("pointer");
+  act(() => harness.map.fireOnPointLayer(longitude, "mouseleave"));
+  expect(harness.hoverCalls.at(-1)).toBeNull();
+  expect(harness.map.container.style.cursor).toBe("");
+}
 
 function createSurfaceHarness({ hoveredId = null }: { hoveredId?: string | null } = {}) {
   const map = createTestMap();
@@ -103,8 +205,12 @@ function createSurfaceHarness({ hoveredId = null }: { hoveredId?: string | null 
   );
   const groups = new Map<string, FlatLayerGroup>();
   const hoverCalls: Array<string | null> = [];
-  const featureId = (feature: unknown) =>
-    (feature as { point?: { id?: string } }).point?.id ?? null;
+  const featureId = (feature: unknown) => {
+    const candidate = feature as { kind?: string; point?: { id?: string } };
+
+    if (candidate.kind === "cluster") return STABLE_CLUSTER_ID;
+    return candidate.point?.id ?? null;
+  };
 
   const surface = {
     display: "flat",
@@ -112,7 +218,8 @@ function createSurfaceHarness({ hoveredId = null }: { hoveredId?: string | null 
       hoverCalls.push(feature ? featureId(feature) : null);
     }),
     isFeatureHovered: (feature: unknown) => hoveredId !== null && featureId(feature) === hoveredId,
-    isFeatureSelected: () => false,
+    isFeatureSelected: (feature: unknown, selectedId?: string | null) =>
+      selectedId != null && featureId(feature) === selectedId,
     registerMapLibreLayer: (id: string, renderLayer: (context: unknown) => void) => {
       let group = groups.get(id);
 
