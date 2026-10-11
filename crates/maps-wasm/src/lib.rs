@@ -29,6 +29,8 @@ mod wgpu_geometry;
     feature = "wgpu-base-map"
 ))]
 mod wgpu_retained;
+#[cfg(test)]
+mod work_complexity;
 
 use std::collections::BTreeMap;
 

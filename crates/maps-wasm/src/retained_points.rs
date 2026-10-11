@@ -37,6 +37,13 @@ pub(crate) struct RetainedPoints {
     paint: Vec<f32>,
 }
 
+/// Lowers one `[longitude, latitude]` pair through `maps-core` Web Mercator.
+fn lower_point(longitude: f64, latitude: f64) -> Result<[f64; 2], &'static str> {
+    project_web_mercator(longitude, latitude)
+        .map(|world| [world.x, world.y])
+        .ok_or("retained point coordinates must be finite")
+}
+
 impl RetainedPoints {
     /// Lowers `[longitude, latitude]` pairs once through `maps-core` Web Mercator.
     pub(crate) fn lower(lon_lat: &[f64], paint: &[f32]) -> Result<Self, &'static str> {
@@ -52,11 +59,7 @@ impl RetainedPoints {
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|&[longitude, latitude]| {
-                project_web_mercator(longitude, latitude)
-                    .map(|world| [world.x, world.y])
-                    .ok_or("retained point coordinates must be finite")
-            })
+            .map(|&[longitude, latitude]| lower_point(longitude, latitude))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             world,
@@ -68,24 +71,190 @@ impl RetainedPoints {
         self.world.len()
     }
 
+    /// Replaces the points at `indices` (strictly increasing, in range) with the given
+    /// `[longitude, latitude]` pairs and paint records, lowering only those points. Every
+    /// input is validated before anything changes.
+    pub(crate) fn replace(
+        &mut self,
+        indices: &[u32],
+        lon_lat: &[f64],
+        paint: &[f32],
+    ) -> Result<(), &'static str> {
+        if lon_lat.len() != indices.len() * 2
+            || paint.len() != indices.len() * RETAINED_POINT_PAINT_LENGTH
+        {
+            return Err("retained point updates and records do not match");
+        }
+        if !indices.windows(2).all(|pair| pair[0] < pair[1])
+            || indices
+                .last()
+                .is_some_and(|&last| last as usize >= self.world.len())
+        {
+            return Err("retained point update indices must be increasing and in range");
+        }
+        if !paint.iter().all(|value| value.is_finite()) {
+            return Err("retained point paint must be finite");
+        }
+        let world = lon_lat
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[longitude, latitude]| lower_point(longitude, latitude))
+            .collect::<Result<Vec<_>, _>>()?;
+        for ((&index, world), paint) in indices
+            .iter()
+            .zip(world)
+            .zip(paint.as_chunks::<RETAINED_POINT_PAINT_LENGTH>().0.iter())
+        {
+            let index = index as usize;
+            self.world[index] = world;
+            self.paint[index * RETAINED_POINT_PAINT_LENGTH..][..RETAINED_POINT_PAINT_LENGTH]
+                .copy_from_slice(paint);
+        }
+        Ok(())
+    }
+
+    /// Appends point `index` as one GPU instance around `anchor`: its wrapped world offset
+    /// as `f32`, then its paint record.
+    fn encode_instance(&self, index: usize, anchor: [f64; 2], bytes: &mut Vec<u8>) {
+        let world = self.world[index];
+        let offset = [
+            wrap_world_delta(world[0] - anchor[0]) as f32,
+            (world[1] - anchor[1]) as f32,
+        ];
+        let paint =
+            &self.paint[index * RETAINED_POINT_PAINT_LENGTH..][..RETAINED_POINT_PAINT_LENGTH];
+        for value in offset.into_iter().chain(paint.iter().copied()) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+
     /// GPU instances around `anchor`: wrapped world offsets as `f32`, then paint.
     pub(crate) fn instance_bytes(&self, anchor: [f64; 2]) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.len() * RETAINED_POINT_INSTANCE_SIZE as usize);
-        for (world, paint) in self.world.iter().zip(
-            self.paint
-                .as_chunks::<RETAINED_POINT_PAINT_LENGTH>()
-                .0
-                .iter(),
-        ) {
-            let offset = [
-                wrap_world_delta(world[0] - anchor[0]) as f32,
-                (world[1] - anchor[1]) as f32,
-            ];
-            for value in offset.into_iter().chain(paint.iter().copied()) {
-                bytes.extend_from_slice(&value.to_le_bytes());
-            }
+        for index in 0..self.len() {
+            self.encode_instance(index, anchor, &mut bytes);
         }
         bytes
+    }
+}
+
+/// Cumulative retained-point work, counted where the work is decided (#155, #189). The
+/// wgpu backend only executes the returned [`InstanceUpload`]s.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RetainedPointCounters {
+    /// Points lowered from longitude/latitude (data changes only).
+    pub(crate) prepared: u64,
+    /// Full instance-buffer builds around an anchor (first draw and deterministic rebases).
+    pub(crate) rebases: u64,
+    /// Points encoded as GPU instances (full builds and in-place updates).
+    pub(crate) encoded: u64,
+    /// In-place instance-buffer updates of changed points.
+    pub(crate) patches: u64,
+    /// Instance bytes written to GPU buffers.
+    pub(crate) upload_bytes: u64,
+}
+
+/// Instance-buffer work for one retained point group, executed by the GPU backend.
+#[derive(Debug, PartialEq)]
+pub(crate) enum InstanceUpload {
+    /// Replace the whole instance buffer (first draw or a deterministic rebase).
+    Replace(Vec<u8>),
+    /// Write each `(byte offset, bytes)` run into the existing instance buffer.
+    Patch(Vec<(u64, Vec<u8>)>),
+}
+
+/// CPU half of one retained point group: the retained world truth and the anchor its GPU
+/// instances are encoded around. Camera frames only place frames; instances are encoded
+/// when data changes, on the first draw and after a deterministic rebase.
+#[derive(Debug)]
+pub(crate) struct RetainedPointState {
+    points: RetainedPoints,
+    anchor: Option<[f64; 2]>,
+}
+
+impl RetainedPointState {
+    /// Lowers a new group (see [`RetainedPoints::lower`]); it is encoded on its first draw.
+    pub(crate) fn prepare(
+        lon_lat: &[f64],
+        paint: &[f32],
+        counters: &mut RetainedPointCounters,
+    ) -> Result<Self, &'static str> {
+        let points = RetainedPoints::lower(lon_lat, paint)?;
+        counters.prepared += points.len() as u64;
+        Ok(Self {
+            points,
+            anchor: None,
+        })
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    /// Replaces the points at `indices` in place (see [`RetainedPoints::replace`]). Only
+    /// the changed points are lowered and, once the group has instances, re-encoded around
+    /// the current anchor as a [`InstanceUpload::Patch`] of contiguous runs.
+    pub(crate) fn update(
+        &mut self,
+        indices: &[u32],
+        lon_lat: &[f64],
+        paint: &[f32],
+        counters: &mut RetainedPointCounters,
+    ) -> Result<Option<InstanceUpload>, &'static str> {
+        self.points.replace(indices, lon_lat, paint)?;
+        counters.prepared += indices.len() as u64;
+        let Some(anchor) = self.anchor else {
+            return Ok(None);
+        };
+        if indices.is_empty() {
+            return Ok(None);
+        }
+        let mut runs: Vec<(u64, Vec<u8>)> = Vec::new();
+        let mut previous: Option<u32> = None;
+        for &index in indices {
+            let contiguous = previous.is_some_and(|previous| previous + 1 == index);
+            if !contiguous {
+                runs.push((u64::from(index) * RETAINED_POINT_INSTANCE_SIZE, Vec::new()));
+            }
+            let run = &mut runs.last_mut().expect("a run was started").1;
+            self.points.encode_instance(index as usize, anchor, run);
+            previous = Some(index);
+        }
+        counters.encoded += indices.len() as u64;
+        counters.patches += 1;
+        counters.upload_bytes += indices.len() as u64 * RETAINED_POINT_INSTANCE_SIZE;
+        Ok(Some(InstanceUpload::Patch(runs)))
+    }
+
+    /// Prepares the group for a camera frame: rebuilds every instance around the view
+    /// centre on the first draw or when the camera has travelled past the rebase distance,
+    /// and otherwise does no per-point work.
+    pub(crate) fn place(
+        &mut self,
+        view: &RetainedView,
+        counters: &mut RetainedPointCounters,
+    ) -> Option<InstanceUpload> {
+        if !view.needs_rebase(self.anchor) {
+            return None;
+        }
+        let anchor = view.center;
+        let bytes = self.points.instance_bytes(anchor);
+        self.anchor = Some(anchor);
+        counters.rebases += 1;
+        counters.encoded += self.points.len() as u64;
+        counters.upload_bytes += bytes.len() as u64;
+        Some(InstanceUpload::Replace(bytes))
+    }
+
+    /// Local frames placing this group's anchor for the view: one per drawn world copy.
+    pub(crate) fn frames<'a>(
+        &self,
+        view: &'a RetainedView,
+    ) -> impl Iterator<Item = LocalFrame> + 'a {
+        self.anchor
+            .into_iter()
+            .flat_map(move |anchor| view.anchor_frames(anchor))
     }
 }
 
@@ -237,6 +406,83 @@ mod tests {
         let mut bad = paint();
         bad[0] = f32::INFINITY;
         assert!(RetainedPoints::lower(&[0.0, 0.0], &bad).is_err());
+    }
+
+    #[test]
+    fn updates_lower_and_encode_only_changed_points_in_contiguous_runs() {
+        let mut counters = RetainedPointCounters::default();
+        let lon_lat: Vec<f64> = (0..6).flat_map(|index| [f64::from(index), 0.0]).collect();
+        let mut state =
+            RetainedPointState::prepare(&lon_lat, &[paint(); 6].concat(), &mut counters).unwrap();
+        assert_eq!(counters.prepared, 6);
+
+        // Before the first draw an update only re-lowers; the draw encodes everything.
+        assert_eq!(
+            state.update(&[1], &[10.0, 1.0], &paint(), &mut counters),
+            Ok(None)
+        );
+        assert_eq!((counters.prepared, counters.encoded), (7, 0));
+        let view = view_at([0.0, 0.0], 0.001);
+        let Some(InstanceUpload::Replace(full)) = state.place(&view, &mut counters) else {
+            panic!("the first draw replaces the instances");
+        };
+        assert_eq!(full.len() as u64, 6 * RETAINED_POINT_INSTANCE_SIZE);
+        assert_eq!(state.place(&view, &mut counters), None);
+
+        // Adjacent indices share one write; the bytes match a full encode of the new data.
+        let mut moved = paint();
+        moved[0] = 9.0;
+        let upload = state
+            .update(
+                &[2, 3, 5],
+                &[20.0, 2.0, 30.0, 3.0, 50.0, 5.0],
+                &[moved; 3].concat(),
+                &mut counters,
+            )
+            .unwrap();
+        let Some(InstanceUpload::Patch(runs)) = upload else {
+            panic!("a drawn group is patched");
+        };
+        let size = RETAINED_POINT_INSTANCE_SIZE as usize;
+        let expected = state.points.instance_bytes(view.center);
+        assert_eq!(
+            runs,
+            vec![
+                (2 * size as u64, expected[2 * size..4 * size].to_vec()),
+                (5 * size as u64, expected[5 * size..6 * size].to_vec()),
+            ]
+        );
+        assert_eq!(counters.encoded, 6 + 3);
+        assert_eq!(counters.upload_bytes, 9 * RETAINED_POINT_INSTANCE_SIZE);
+        assert_eq!((counters.rebases, counters.patches), (1, 1));
+    }
+
+    #[test]
+    fn rejected_updates_change_nothing() {
+        let mut counters = RetainedPointCounters::default();
+        let mut state = RetainedPointState::prepare(
+            &[0.0, 0.0, 1.0, 1.0],
+            &[paint(), paint()].concat(),
+            &mut counters,
+        )
+        .unwrap();
+        let before = state.points.instance_bytes([0.5, 0.5]);
+        for (indices, lon_lat) in [
+            (&[1_u32, 0][..], &[5.0, 5.0, 6.0, 6.0][..]),
+            (&[1, 1], &[5.0, 5.0, 6.0, 6.0]),
+            (&[2], &[5.0, 5.0]),
+            (&[0, 1], &[5.0, 5.0, f64::NAN, 6.0]),
+            (&[0], &[5.0]),
+        ] {
+            let paint = vec![1.0; indices.len() * RETAINED_POINT_PAINT_LENGTH];
+            assert!(
+                state
+                    .update(indices, lon_lat, &paint, &mut counters)
+                    .is_err()
+            );
+        }
+        assert_eq!(state.points.instance_bytes([0.5, 0.5]), before);
+        assert_eq!(counters.prepared, 2);
     }
 
     #[test]
