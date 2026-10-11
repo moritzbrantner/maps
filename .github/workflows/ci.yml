@@ -73,7 +73,7 @@ jobs:
       use_environment_v1: false
       setup_command: |
         bun install --frozen-lockfile
-        cargo install wasm-bindgen-cli --version 0.2.129 --locked
+        bash scripts/install-wasm-bindgen-ci.sh
       build_command: |
         bun run build:package
         rm -rf public/wasm
