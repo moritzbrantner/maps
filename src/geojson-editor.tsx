@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type GeoJsonMapSource } from "./geojson-source";
 import {
@@ -242,12 +242,14 @@ type DragState<TProperties extends Record<string, unknown>> =
   | {
       features: Array<EditableFeature<TProperties>>;
       from: GeoJsonPosition;
+      map: FlatMapAdapter;
       type: "feature";
     }
   | {
       feature: EditableFeature<TProperties>;
       from: GeoJsonPosition;
       handle: GeoJsonVertexHandle;
+      map: FlatMapAdapter;
       type: "vertex";
     };
 
@@ -334,6 +336,7 @@ export function GeoJsonEditorLayer<
     createFeatureProperties,
     enableKeyboardShortcuts,
     featureCollection,
+    flatMap,
     getFeatureId,
     groupOptions,
     mode,
@@ -379,25 +382,27 @@ export function GeoJsonEditorLayer<
     [booleanPreview, features, mode, resolvedSelection],
   );
 
-  useEffect(() => {
+  // Input handlers read these refs, so they sync in the same commit as the props (#220).
+  useLayoutEffect(() => {
     draftRef.current = draft;
   }, [draft]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     snapTargetRef.current = snapTarget;
   }, [snapTarget]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     selectedHandleRef.current = resolvedSelection.vertexHandle ?? null;
   }, [resolvedSelection]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestRef.current = {
       booleanPreview,
       canEditFeature,
       createFeatureProperties,
       enableKeyboardShortcuts,
       featureCollection,
+      flatMap,
       getFeatureId,
       groupOptions,
       mode,
@@ -422,6 +427,7 @@ export function GeoJsonEditorLayer<
     createFeatureProperties,
     enableKeyboardShortcuts,
     featureCollection,
+    flatMap,
     getFeatureId,
     groupOptions,
     mode,
@@ -454,7 +460,9 @@ export function GeoJsonEditorLayer<
     return surface.registerInteractionMode(resolvedLayerId, "editing");
   }, [mode, resolvedLayerId, surface]);
 
-  useEffect(() => {
+  // Attach map input in the commit that exposes the map, so input delivered as soon as
+  // `data-map-ready` is observable reaches the editor (#220).
+  useLayoutEffect(() => {
     if (!surface || surface.display !== "flat" || !surface.flatMap) {
       return;
     }
@@ -556,7 +564,7 @@ export function GeoJsonEditorLayer<
     };
   }, [surface]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!enableKeyboardShortcuts || !surface || surface.display !== "flat") {
       return;
     }
@@ -729,8 +737,9 @@ export function GeoJsonEditorLayer<
   }
 
   function getSnappedCoordinate(coordinate: GeoJsonPosition) {
-    const map = flatMap;
     const current = latestRef.current;
+    // Read the latest map: stale layer handlers (bound before readiness) also snap (#220).
+    const map = current.flatMap;
 
     if (!map) {
       updateSnapTarget(null);
@@ -1356,6 +1365,7 @@ export function GeoJsonEditorLayer<
     dragRef.current = {
       features: selectedFeatures.length > 0 ? selectedFeatures : [feature],
       from: coordinate,
+      map,
       type: "feature",
     };
     map.dragging?.disable?.();
@@ -1385,6 +1395,7 @@ export function GeoJsonEditorLayer<
       feature,
       from: coordinate,
       handle,
+      map,
       type: "vertex",
     };
     map.dragging?.disable?.();
@@ -1393,11 +1404,14 @@ export function GeoJsonEditorLayer<
 
   function handleDragEnd(event: FlatFeaturePointerEvent = {}) {
     const drag = dragRef.current;
-    const map = flatMap;
 
-    if (!drag || !map) {
+    if (!drag) {
       return;
     }
+
+    // The map that started the drag, not this render's surface: a layer handler bound
+    // before the map became ready must still finish its drag (#220).
+    const map = drag.map;
 
     map.off("mouseup", handleDragEnd as never);
     map.dragging?.enable?.();

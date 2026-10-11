@@ -447,6 +447,81 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
     );
   });
 
+  test("handles line input delivered the moment the Map View reports editing readiness", async () => {
+    const onFeatureCollectionChange = vi.fn();
+
+    render(
+      <EditableGeoJsonMap
+        editMode="draw-line"
+        fitToData={false}
+        geoJson={emptyCollection}
+        mapLabel="Readiness line editor"
+        onFeatureCollectionChange={onFeatureCollectionChange}
+        showAttributionControl={false}
+      />,
+    );
+
+    const mapElement = screen.getByLabelText("Readiness line editor");
+    let deliveredAtReadiness = false;
+    const isEditingReady = () =>
+      mapElement.getAttribute("data-map-ready") === "true" &&
+      mapElement.classList.contains("mb-maps--editing");
+
+    expect(isEditingReady()).toBe(false);
+
+    // data-map-ready="true" with the editing state is the Map View's public readiness
+    // signal. Input delivered as soon as it is observable, before any further macrotask,
+    // must reach the GeoJSON Editor.
+    const observer = new MutationObserver(() => {
+      if (deliveredAtReadiness || !isEditingReady()) {
+        return;
+      }
+
+      deliveredAtReadiness = true;
+      observer.disconnect();
+
+      const map = flatMock.getMaps()[0];
+
+      act(() => {
+        map?.emit("click", { latlng: { lat: 1, lng: 2 } });
+        map?.emit("click", { latlng: { lat: 3, lng: 4 } });
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      });
+    });
+
+    observer.observe(mapElement, {
+      attributeFilter: ["class", "data-map-ready"],
+      attributes: true,
+    });
+
+    try {
+      await waitFor(() => {
+        expect(deliveredAtReadiness).toBe(true);
+      });
+    } finally {
+      observer.disconnect();
+    }
+
+    expect(onFeatureCollectionChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        features: [
+          expect.objectContaining({
+            geometry: {
+              coordinates: [
+                [2, 1],
+                [4, 3],
+              ],
+              type: "LineString",
+            },
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        type: "create",
+      }),
+    );
+  });
+
   test("draws and completes a closed polygon", async () => {
     const onFeatureCollectionChange = vi.fn();
 
