@@ -62,6 +62,14 @@ This is the **Maps product-intent authority** for owner-approved, consequential 
 
 - **1.13** [question] **Selection when changing historical dates.**  
   Unresolved 2026-10-13: if the viewer is inspecting a historical place or polity and changes to a date when it no longer applies, should the map (A) clear that selection and close its details, (B) retain those details visibly marked as out-of-period while clearing the map selection, or (C) automatically follow an explicitly sourced successor where one exists and otherwise clear the selection? Decision 1.10 establishes when historical continuity may be portrayed; it does not itself require following a successor.
+  Answered by Decision 1.14; retained for historical traceability.
+
+- **1.14 Retain inspected historical context without stale map selection.**  
+  Status: owner-approved 2026-10-13. **Answers 1.13 (option B).**  
+  If a viewer is inspecting a Historical Map View place or polity and moves the Map-Scoped Timeline to a date **outside that feature's applicable period**, clear its active geographic selection/highlight, hover and any popup tied to its now-inapplicable map geometry. **Keep the previously opened historical details available** in a separate context surface, visibly labeled **out of period**; identify the date/period to which the details refer and the map's newly selected date, preserving any supplied historical attribution. The retained panel must not suggest that the feature still exists on, is selectable at or occupies its former map location in the new period. Do **not** automatically select a successor (1.10) or rewind the map's date. A new applicable Map Feature selection may replace the retained context, and the viewer can dismiss it. Maps owns the coherent Map Feature selection, date-aware rendering and detached detail presentation; consumers own historical validity ranges, content, sources and translations. This behavior does not change the CShapes-Europe History demo's dated source snapshots under ADR 0005.
+
+- **1.15** [question] **Returning from retained out-of-period details to the historical map.**  
+  Unresolved 2026-10-13: once a viewer has kept the contextual details of a no-longer-active polity while examining a later date (1.14), should (A) the detail panel be purely informational and the viewer return by manually moving the timeline, (B) it offer an explicit **Show at its historical date** action that moves to a supported date and reselects the feature, or (C) show its evidenced historical date/period on a contextual mini-timeline from which viewers can jump to supported dates? All options must keep the current map date and selection unchanged until the viewer explicitly requests navigation; do not conflate historically evidenced feature lifetimes with automatically inferred successor identity.
 
 ## Evidence and boundaries
 
