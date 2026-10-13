@@ -118,6 +118,7 @@ controller?.fitPoints(points, { padding: 72 });
 - [GeoJSON](docs/geojson.md)
 - [GeoJSON Editor](docs/editor.md)
 - [Timeline And Temporal Maps](docs/timeline.md)
+- [Decision Atlas (Product Intent)](docs/DECISION-ATLAS.md)
 - [Performance](docs/performance.md)
 - [SSR And Next.js](docs/ssr-next.md)
 - [GeoJSON Transition Future Goals](docs/geojson-transition-future-goals.md)
