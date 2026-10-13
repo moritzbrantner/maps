@@ -54,6 +54,15 @@ This is the **Maps product-intent authority** for owner-approved, consequential 
 - **1.11** [question] **How should viewers explore competing reconstructions of the same historical territory?**  
   Unresolved 2026-10-13: when reputable historical sources disagree about a region's boundaries at a date, should a Map View (A) show the consuming application's selected sourced reconstruction and explain the disagreement in attribution/context; (B) let the viewer choose among separately sourced reconstructions, displaying one at a time; or (C) support visual side-by-side or overlaid comparisons of competing sourced reconstructions? All options must avoid blending alternative hypotheses into an apparently authoritative border, preserve date/provenance and respect the consumer's ownership of historical evidence.
 
+  Answered by Decision 1.12; retained for historical traceability.
+
+- **1.12 Use one curated sourced reconstruction, with alternative interpretations explained.**  
+  Status: owner-approved 2026-10-13. **Answers 1.11 (option A).**  
+  The Historical Map View presents **one historical boundary reconstruction chosen by its consuming application**, identifying its source, relevant date and uncertainty rather than implying scholarly consensus. Where credible competing reconstructions exist, the accompanying attributed context explains that alternatives exist and the meaningful disagreement. The application supplies the preferred boundary and explanatory evidence; Maps presents that information and its provenance. A viewer is **not required** to switch among competing boundary geometries or see side-by-side/overlaid alternatives. Where no defensible reconstruction exists, do not invent a polygon. This does not change the historical interpolation, source-date or CShapes-Europe demo policies in Decisions 1.3–1.10 and ADR 0005.
+
+- **1.13** [question] **Selection when changing historical dates.**  
+  Unresolved 2026-10-13: if the viewer is inspecting a historical place or polity and changes to a date when it no longer applies, should the map (A) clear that selection and close its details, (B) retain those details visibly marked as out-of-period while clearing the map selection, or (C) automatically follow an explicitly sourced successor where one exists and otherwise clear the selection? Decision 1.10 establishes when historical continuity may be portrayed; it does not itself require following a successor.
+
 ## Evidence and boundaries
 
 - The [existing History demo](https://moritzbrantner.github.io/maps/) already provides year selection and selectable polity geometry for CShapes-Europe-derived scenes at **1816, 1886, 1914, 1939, 1945, 1989 and 2019**, plus an explicitly illustrative WWII control scenario. This is evidence of existing behavior, not proof of support for council-era political boundaries.
