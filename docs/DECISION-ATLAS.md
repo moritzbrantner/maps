@@ -1,0 +1,26 @@
+# Maps Decision Atlas
+
+This is the **Maps product-intent authority** for owner-approved, consequential viewer and application-developer capabilities. It complements, rather than replaces, the existing [engine roadmap](engine-roadmap.md), [Map-Scoped Timeline reference](timeline.md), repository `AGENTS.md`, and accepted ADRs. Engine contracts and implementation sequencing remain in their existing owners.
+
+## Rules
+
+- Semantic entries are only **Decision** and **Question**. Headings organize capabilities.
+- Decisions record product intent, **not** proof of implementation. Questions are unresolved choices, **not** automatically blockers.
+- IDs never change or disappear. When answering a Question, retain it and append a Decision that explicitly `Answers <ID>`. When revising a Decision, preserve the original and append an explicit `Supersedes <ID>` Decision.
+- Keep reusable Maps geographic/viewer semantics here. Consumers such as `interactive-videos` own episode narratives, historical assertions, actual period datasets, translations, and integration-specific acceptance. GitHub issues track bounded work; tests and existing ADRs own engine and data-architecture invariants.
+
+## 1. Historical Map Views
+
+- **1.1 Interactive historical maps combine selectable locations with time-aware geography.**  
+  Status: owner-approved 2026-10-13, cross-repository steering from [interactive-videos Decision 3.18](https://github.com/moritzbrantner/interactive-videos/pull/58).  
+  A consuming application can show a **pannable, zoomable Map View**, let viewers **select locations and inspect information**, and use a **Map-Scoped Timeline** to select historical dates/epochs. The geographic scene can include **time-varying regional/political boundaries and time-relevant locations/markers** that change together as time changes. Controls and selections should stay coherent when users seek backward and forward. Map presentation must not suggest an unsupported historical boundary is exact; retain source/accuracy/illustrative metadata supplied with the data so the consuming viewer can distinguish sourced versus interpretive geometry. The Map Library supplies reusable view, layer, time and selection behavior; it does **not** supply or certify a universal history-of-the-world boundary dataset or take ownership of the Seven Councils' historical claims.
+
+- **1.2** [question] **Behavior between dated historical snapshots.**  
+  Unresolved 2026-10-13: for a historical Map View whose source contains only discrete dated boundary snapshots, should its selectable timeline (A) hold/snap to the previous *documented* snapshot with the effective source year conspicuously shown, (B) optionally interpolate transitions with a clear **illustrative interpolation** label, or (C) offer only the supported dates and mark intervening time unsupported? This is a reusable viewer contract, not a choice of source data. The current History demo's explicit CShapes-Europe policy in [ADR 0005](adr/0005-use-illustrative-history-demo-data.md) remains unchanged unless separately revised. A concrete consumer can still select exact dated snapshots while this broader rule is unresolved.
+
+## Evidence and boundaries
+
+- The [existing History demo](https://moritzbrantner.github.io/maps/) already provides year selection and selectable polity geometry for CShapes-Europe-derived scenes at **1816, 1886, 1914, 1939, 1945, 1989 and 2019**, plus an explicitly illustrative WWII control scenario. This is evidence of existing behavior, not proof of support for council-era political boundaries.
+- [ADR 0005](adr/0005-use-illustrative-history-demo-data.md) expressly forbids treating that post-1816, noncommercially licensed illustrative demo data as an authoritative historical boundary source or published Maps package data.
+- [Issue #172](https://github.com/moritzbrantner/maps/issues/172) tracks first-party Map-Scoped Timeline/temporal parity and [issue #170](https://github.com/moritzbrantner/maps/issues/170) covers mixed Map View interactions, camera and selection. Do not duplicate these foundational engines.
+- The consuming [interactive-videos series](https://github.com/moritzbrantner/interactive-videos/pull/58) owns the seven councils (325–787), the correctness and provenance of any era-appropriate historical geography, and the localized council/participant descriptions. Its Question **3.19** concerns handling uncertain council-era historical borders and must not be silently resolved by Maps renderer code.
