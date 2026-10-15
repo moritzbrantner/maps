@@ -1,5 +1,7 @@
 # Loading and materialization audit
 
+> **Archived point-in-time evidence.** This review describes the baseline and changes at the revisions below; it is not the current implementation plan. The [engine roadmap](../engine-roadmap.md) and [performance evidence](../engine-performance.md) describe the maintained contracts. Retain the original results and regression evidence here as history.
+
 Baseline: `c93ada2de836e0d2a92b52f665b2281549575f93` (initially clean working tree).
 Shared conventions sourceRevision: `e6acb5310afaf15c0cba24f87108f5f4ad1bedc3`.
 

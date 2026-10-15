@@ -1,5 +1,7 @@
 # Maps performance and architecture audit — 2026-09-23
 
+> **Historical review, not a current work queue.** Findings are tied to the commit and PRs named below. Several referenced issues, including #119 and #140, have since closed; inspect the current [engine roadmap](engine-roadmap.md), [performance contract](engine-performance.md), code, and tests before selecting new work. The original observations and evidence are preserved for provenance.
+
 Reviewed main `9e80522d9c64d86154133632ec781dcb8c135e11` and the existing
 retained-geometry work in PRs #133 and #134. This is a source-level audit with
 executed deterministic picking evidence, not a measured ranking of end-to-end
