@@ -1,5 +1,10 @@
 # Agent Development Contract
 
+## Product intent
+
+- Read [the Maps Decision Atlas](docs/DECISION-ATLAS.md) before making consequential Maps product/user-experience choices. Its semantic leaves are only Decisions and Questions; preserve stable IDs and historical answers/supersessions. Its entries express intent, not implementation completion. For a new owner-approved `/steer` answer, update the reviewable Atlas PR and reconcile bounded implementation issues; never silently merge intent.
+- Maps owns reusable map-domain semantics, Map View, Map Layer, Map-Scoped Timeline, and selection/viewer controls. Historical datasets, scholarly claims, episodic interpretation and translations belong to consuming applications such as `interactive-videos`; do not duplicate them as Maps product authority. Preserve ADR 0005's explicitly illustrative, post-1816 demo-data policy.
+
 This repository uses red/green development, but substantial engine work is organized around durable subsystem foundations rather than a micro-slice treadmill. Keep iterations testable and reviewable while ensuring each implementation body connects to a coherent runtime/evidence outcome.
 
 ## First-party engine program
