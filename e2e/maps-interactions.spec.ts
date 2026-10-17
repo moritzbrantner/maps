@@ -244,6 +244,10 @@ test("editor interaction selects, multi-selects, moves, reshapes, deletes, and d
   await expect.poll(() => getGeoJsonSelectionCount(page)).toBe(1);
   await expect(page.locator(".demo-editor-label input")).toHaveValue("Paris checkpoint");
 
+  // Selection rebuilds the rendered editor layers. Wait until the first feature's
+  // selected style and the second feature's hit target are both available.
+  await waitForEditorFeatureAtCoordinate(page, [2.3522, 48.8566], "mb-maps__editor-feature--selected");
+  await waitForEditorFeatureAtCoordinate(page, [7.4653, 50.0014], "mb-maps__editor-feature");
   const linePoint = await projectFeature(page, [7.4653, 50.0014]);
   await page.keyboard.down("Shift");
   await page.mouse.click(linePoint.x, linePoint.y);
@@ -493,6 +497,47 @@ async function projectFeature(page: Page, coordinate: [number, number]) {
   const box = await mapBox(page);
 
   return { x: box.x + point!.x, y: box.y + point!.y };
+}
+
+async function waitForEditorFeatureAtCoordinate(
+  page: Page,
+  coordinate: [number, number],
+  className: string,
+) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          ({ coordinate: value, className: expectedClassName }) => {
+            const browser = window as typeof window & {
+              __mbMapsDemo?: {
+                project?: (coordinate: [number, number]) => { x: number; y: number } | null;
+              };
+              __mbMapsDemoMap?: {
+                queryRenderedFeatures?: (point: [number, number]) => Array<{
+                  layer?: { metadata?: { flatOptions?: { className?: string } } };
+                }>;
+              };
+            };
+            const point = browser.__mbMapsDemo?.project?.(value);
+
+            if (!point) {
+              return false;
+            }
+
+            return (
+              browser.__mbMapsDemoMap?.queryRenderedFeatures?.([point.x, point.y]) ?? []
+            ).some((feature) =>
+              feature.layer?.metadata?.flatOptions?.className
+                ?.split(" ")
+                .includes(expectedClassName),
+            );
+          },
+          { className, coordinate },
+        ),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
 }
 
 async function waitForEditorHandleAtCoordinate(page: Page, coordinate: [number, number]) {
