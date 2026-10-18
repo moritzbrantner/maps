@@ -33,7 +33,6 @@ test("verified CLI hashes remain aligned with the pinned Nix flake", () => {
 
 test("all WASM producer workflows use verified precompiled tooling", () => {
   for (const path of [
-    ".github/workflows/browser.yml",
     ".github/workflows/pages.yml",
     ".github/workflows/ci.yml",
   ]) {
@@ -42,9 +41,9 @@ test("all WASM producer workflows use verified precompiled tooling", () => {
     assert.doesNotMatch(workflow, /cargo install wasm-bindgen-cli/, path);
   }
 
-  // The browser workflow builds WASM within the installer step, not in a later step.
+  // The browser validation job builds WASM immediately after installing the CLI.
   assert.match(
-    read(".github/workflows/browser.yml"),
+    read(".github/workflows/ci.yml"),
     /source scripts\/install-wasm-bindgen-ci\.sh\n\s+bun run build:wasm/,
   );
 });

@@ -12,6 +12,64 @@ permissions:
   packages: read
 
 jobs:
+  changes:
+    name: Validation scope
+    runs-on: ubuntu-24.04
+    outputs:
+      browser: ${{ steps.scope.outputs.browser }}
+      security: ${{ steps.scope.outputs.security }}
+      allow-skipped: ${{ steps.scope.outputs.allow-skipped }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Preserve conditional validation policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: python
+        run: |
+          import fnmatch
+          import json
+          import os
+          import subprocess
+
+          event = os.environ["EVENT_NAME"]
+          browser = security = event == "workflow_dispatch"
+          if not browser:
+              revision = [os.environ["BASE_SHA"], os.environ["HEAD_SHA"]]
+              if event == "pull_request":
+                  revision = ["...".join(revision)]
+              paths = subprocess.check_output([
+                  "git", "diff", "--name-only", "-z", *revision
+              ]).decode().split("\0")
+              browser_patterns = [
+                  "src/**", "crates/**", "demo/**", "e2e/**", "public/**", "scripts/**",
+                  "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "package.json", "bun.lock",
+                  "index.html", "playwright.config.*", "tsconfig*.json", "vite.config.*",
+                  ".github/workflows/browser.yml", ".github/workflows/ci.yml",
+              ]
+              browser = any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in browser_patterns)
+              security = event == "pull_request" and any(path in [
+                  "package.json", "bun.lock", ".github/workflows/security.yml", ".github/workflows/ci.yml"
+              ] for path in paths)
+          skipped = []
+          if event != "workflow_dispatch":
+              skipped.extend([
+                  "build-package", "wasm-package-validation", "package-validation",
+                  "browser-smoke", "runtime-evidence",
+              ])
+          if not browser:
+              skipped.append("browser-validation")
+          if not security:
+              skipped.append("dependency-audit")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"browser={str(browser).lower()}", file=output)
+              print(f"security={str(security).lower()}", file=output)
+              print(f"allow-skipped={json.dumps(skipped)}", file=output)
+
   fast-validation:
     name: Fast Validation
     permissions:
@@ -266,3 +324,87 @@ jobs:
           path: .runtime-profiler/maps-camera-world-pan-v1
           if-no-files-found: warn
           retention-days: 7
+
+  browser-validation:
+    needs: changes
+    if: ${{ needs.changes.outputs.browser == 'true' }}
+    name: Full Browser Validation
+    permissions:
+      contents: read
+      packages: read
+    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@3b15546083e66aeba487a2e653e3ffaacbfe7220 # workflow-standard-v1.3
+    with:
+      node_version: "24"
+      bun_version: "1.3.14"
+      bun_cache_dependency_path: bun.lock
+      install_command: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          expected_head="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --depth=1 origin "+refs/pull/${{ github.event.number }}/head:refs/remotes/origin/pr-head"
+          git checkout --detach refs/remotes/origin/pr-head
+          actual_head="$(git rev-parse HEAD)"
+          if [ "$actual_head" != "$expected_head" ]; then
+            echo "::error::Full Browser Tests checked out $actual_head instead of PR head $expected_head."
+            exit 1
+          fi
+        fi
+        bun install --frozen-lockfile
+      pre_command: |
+        bunx playwright install --with-deps chromium
+        rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown
+        rustup default 1.99.0
+        source scripts/install-wasm-bindgen-ci.sh
+        bun run build:wasm
+        rm -rf public/wasm
+        mkdir -p public/wasm
+        cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
+      e2e_command: bun run test:browser -- --project=chromium
+      install_playwright: false
+      artifact_paths: |
+        playwright-report
+        test-results
+      upload_artifacts_on: failure
+
+  dependency-audit:
+    needs: changes
+    if: ${{ needs.changes.outputs.security == 'true' }}
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Audit dependencies
+        run: bun run verify:audit
+
+  merge-ready:
+    name: merge-ready
+    if: ${{ always() }}
+    needs:
+      - changes
+      - fast-validation
+      - rust-validation
+      - build-package
+      - wasm-package-validation
+      - package-validation
+      - browser-smoke
+      - runtime-evidence
+      - browser-validation
+      - dependency-audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
+        with:
+          needs: ${{ toJSON(needs) }}
+          required: '["changes", "fast-validation", "rust-validation", "build-package", "wasm-package-validation", "package-validation", "browser-smoke", "runtime-evidence", "browser-validation", "dependency-audit"]'
+          allow-skipped: ${{ needs.changes.outputs.allow-skipped || '[]' }}
