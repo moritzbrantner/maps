@@ -135,7 +135,7 @@
     "three": "^0.185.0"
   },
   "devDependencies": {
-    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#e80d19ab0fc9599cbd911354d6c78ed578c3757c",
+    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#9adb59c23c44a021cbe37b742f08937884e427e1",
     "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#35ea57483456d4b6ecf233c8dae5a6e4eba5c661",
     "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.3",
