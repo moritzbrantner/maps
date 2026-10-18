@@ -30,6 +30,13 @@ bun run verify:fast
 `verify:fast` deliberately remains TypeScript/package focused and does not
 silently install Rust tooling.
 
+Pull requests expose one required `merge-ready` check. It waits for fast and
+Rust validation, plus full browser and dependency checks when their existing
+path scopes apply. Documentation-only changes keep fast and Rust validation;
+browser and dependency jobs may skip. Package and runtime-evidence jobs remain
+manual. Failed, cancelled, missing or unexpectedly skipped required jobs block
+merging.
+
 ## Rust Validation
 
 Changes under `crates/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, or
