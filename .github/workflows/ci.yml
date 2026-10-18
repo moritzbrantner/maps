@@ -43,7 +43,7 @@ jobs:
               if event == "pull_request":
                   revision = ["...".join(revision)]
               paths = subprocess.check_output([
-                  "git", "diff", "--name-only", "-z", *revision
+                  "git", "diff", "--no-renames", "--name-only", "-z", *revision
               ]).decode().split("\0")
               browser_patterns = [
                   "src/**", "crates/**", "demo/**", "e2e/**", "public/**", "scripts/**",
@@ -388,7 +388,7 @@ jobs:
         run: bun run verify:audit
 
   merge-ready:
-    name: merge-ready
+    name: ${{ github.event_name == 'pull_request' && 'merge-ready' || 'validation-summary' }}
     if: ${{ always() }}
     needs:
       - changes
