@@ -1,27 +1,65 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>moritzbrantner/coding-agent-conventions"],
+  "extends": [
+    "github>moritzbrantner/coding-agent-conventions"
+  ],
   "platformAutomerge": true,
   "packageRules": [
     {
       "groupName": "react",
-      "matchPackageNames": ["react", "react-dom", "@types/react", "@types/react-dom"]
+      "matchPackageNames": [
+        "react",
+        "react-dom",
+        "@types/react",
+        "@types/react-dom"
+      ]
     },
     {
       "groupName": "test tooling",
-      "matchPackageNames": ["vitest", "jsdom", "@playwright/test", "@testing-library/react"]
+      "matchPackageNames": [
+        "vitest",
+        "jsdom",
+        "@playwright/test",
+        "@testing-library/react"
+      ]
     },
     {
       "groupName": "build tooling",
-      "matchPackageNames": ["vite", "@vitejs/plugin-react", "tsup", "typescript", "tailwindcss", "@tailwindcss/vite"]
+      "matchPackageNames": [
+        "vite",
+        "@vitejs/plugin-react",
+        "tsup",
+        "typescript",
+        "tailwindcss",
+        "@tailwindcss/vite"
+      ]
     },
     {
       "groupName": "maps runtime",
-      "matchPackageNames": ["maplibre-gl", "three", "@turf/*", "supercluster", "d3-delaunay", "polygon-clipping"]
+      "matchPackageNames": [
+        "maplibre-gl",
+        "three",
+        "@turf/*",
+        "supercluster",
+        "d3-delaunay",
+        "polygon-clipping"
+      ]
     },
     {
       "groupName": "moritzbrantner packages",
-      "matchPackageNames": ["@moritzbrantner/*"]
+      "matchPackageNames": [
+        "@moritzbrantner/*"
+      ]
+    },
+    {
+      "description": "Crates from one git repository (e.g. 3d-lab) must move together; single-crate digest bumps split the graph across revisions.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "groupName": "git-pinned crate revisions"
     }
   ]
 }
