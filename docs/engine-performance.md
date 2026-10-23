@@ -312,7 +312,7 @@ readiness alone precedes registration of the editor's interaction capabilities.
 Syntax minification reduces the largest shared JavaScript chunk from 227,692 to
 218,704 bytes against the unchanged 222,600-byte limit. API and packed-consumer
 checks pass. The 497-test agent gate and all 35 Chromium smoke tests pass with
-the repaired fixtures. Validation uses the pinned Bun 1.3.14, wasm-bindgen 0.2.128,
+the repaired fixtures. Validation uses the pinned Bun 1.4.3, wasm-bindgen 0.2.128,
 Rust 1.98.1 and Binaryen 132.0.0; convention sourceRevision is recorded above.
 
 Full package validation still fails: compressed package 398,222 bytes exceeds
