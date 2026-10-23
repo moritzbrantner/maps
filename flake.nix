@@ -22,19 +22,19 @@
             if system == "x86_64-linux" then
               {
                 archive = "bun-linux-x64";
-                hash = "sha256-lR7iruhV8IWVruxiJSJqKY0/6oOj3NZGXAnLzN9+hI8=";
+                hash = "sha256-PnMFKNiXdfA/h/BcBnh8TfQJnQo38/JS57gpyyOBbhg=";
               }
             else
               {
                 archive = "bun-linux-aarch64";
-                hash = "sha256-on/7Y6gxA3WDbg1vZorhf6jY0YuIw3yCHGUzGXOhmjs=";
+                hash = "sha256-76mBPaXtckI7+Ef5FujSxHwNd2rdlyNUAmp14Q2pqiE=";
               };
 
           bun = pkgs.stdenvNoCC.mkDerivation {
             pname = "bun";
-            version = "1.3.14";
+            version = "1.4.3";
             src = pkgs.fetchurl {
-              url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/${bunAsset.archive}.zip";
+              url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/${bunAsset.archive}.zip";
               inherit (bunAsset) hash;
             };
             nativeBuildInputs = [

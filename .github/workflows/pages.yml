@@ -27,7 +27,7 @@ jobs:
       artifact_key: maps-example-pages-v4
       rust_toolchain: "1.99.0"
       rust_targets: wasm32-unknown-unknown
-      bun_version: "1.3.14"
+      bun_version: "1.4.3"
       node_version: "24"
       cache_bun: true
       bun_cache_dependency_path: bun.lock
@@ -89,7 +89,7 @@ jobs:
     uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@680d4f7bda61361b10865d8835bc7ef69a24061b
     with:
       node_version: "24"
-      bun_version: "1.3.14"
+      bun_version: "1.4.3"
       install_command: bun install --frozen-lockfile
       prebuilt_artifact_run_id: ${{ needs.build-example.outputs.producer_run_id }}
       prebuilt_artifact_receipt_name: ${{ needs.build-example.outputs.receipt_artifact_name }}
