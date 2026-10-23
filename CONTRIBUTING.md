@@ -2,11 +2,11 @@
 
 ## Prerequisites
 
-- Bun `1.4.3`, matching `packageManager` in `package.json`.
+- The latest stable Bun (`packageManager` in `package.json` is a minimum).
 - Node/npm available for `npm pack`.
-- Rust `1.99.0` with `clippy`, `rustfmt`, and the `wasm32-unknown-unknown`
-  target when changing Maps-owned Rust computation. `rust-toolchain.toml` pins
-  this repository toolchain.
+- Stable Rust with `clippy`, `rustfmt`, and the `wasm32-unknown-unknown`
+  target when changing Maps-owned Rust computation. `rust-toolchain.toml`
+  selects the `stable` channel.
 - `wasm-bindgen-cli` `0.2.129` when building or verifying the distributable
   Maps WASM artifact:
   `cargo install wasm-bindgen-cli --version 0.2.129 --locked`.

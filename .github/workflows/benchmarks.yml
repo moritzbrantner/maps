@@ -15,8 +15,8 @@ jobs:
       packages: read
     uses: moritzbrantner/reusable-workflows/.github/workflows/performance-validation.yml@3b15546083e66aeba487a2e653e3ffaacbfe7220 # workflow-standard-v1.3
     with:
-      node_version: "24"
-      bun_version: "1.4.3"
+      node_version: lts/*
+      bun_version: latest
       bun_cache_dependency_path: bun.lock
       build_command: bun run build
       benchmark_command: |
