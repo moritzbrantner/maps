@@ -77,8 +77,8 @@ jobs:
       packages: read
     uses: moritzbrantner/reusable-workflows/.github/workflows/fast-validation.yml@3b15546083e66aeba487a2e653e3ffaacbfe7220 # workflow-standard-v1.3
     with:
-      node_version: "24"
-      bun_version: "1.4.3"
+      node_version: lts/*
+      bun_version: latest
       bun_cache_dependency_path: bun.lock
       format_command: bun run format:check
       lint_command: bun run lint
@@ -123,10 +123,10 @@ jobs:
     with:
       source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       artifact_key: maps-browser-package-v1
-      rust_toolchain: "1.99.0"
+      rust_toolchain: stable
       rust_targets: wasm32-unknown-unknown
-      bun_version: "1.4.3"
-      node_version: "24"
+      bun_version: latest
+      node_version: lts/*
       cache_bun: true
       bun_cache_dependency_path: bun.lock
       use_environment_v1: false
@@ -164,11 +164,11 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: "1.4.3"
+          bun-version: latest
       - name: Set up Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
-          node-version: "24"
+          node-version: lts/*
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Install Chromium
@@ -206,8 +206,8 @@ jobs:
       packages: read
     uses: moritzbrantner/reusable-workflows/.github/workflows/integration-validation.yml@5e9fe1ab1fd5c8d91900a621bf8daabf879012a7
     with:
-      node_version: "24"
-      bun_version: "1.4.3"
+      node_version: lts/*
+      bun_version: latest
       bun_cache_dependency_path: bun.lock
       prebuilt_artifact_run_id: ${{ needs.build-package.outputs.producer_run_id }}
       prebuilt_artifact_receipt_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
@@ -238,8 +238,8 @@ jobs:
       packages: read
     uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@5e9fe1ab1fd5c8d91900a621bf8daabf879012a7
     with:
-      node_version: "24"
-      bun_version: "1.4.3"
+      node_version: lts/*
+      bun_version: latest
       bun_cache_dependency_path: bun.lock
       prebuilt_artifact_run_id: ${{ needs.build-package.outputs.producer_run_id }}
       prebuilt_artifact_receipt_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
@@ -281,15 +281,15 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: 1.99.0
+          toolchain: stable
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: "1.4.3"
+          bun-version: latest
       - name: Set up Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
-          node-version: "24"
+          node-version: lts/*
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Install Chromium
@@ -334,8 +334,8 @@ jobs:
       packages: read
     uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@3b15546083e66aeba487a2e653e3ffaacbfe7220 # workflow-standard-v1.3
     with:
-      node_version: "24"
-      bun_version: "1.4.3"
+      node_version: lts/*
+      bun_version: latest
       bun_cache_dependency_path: bun.lock
       install_command: |
         if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -351,8 +351,8 @@ jobs:
         bun install --frozen-lockfile
       pre_command: |
         bunx playwright install --with-deps chromium
-        rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown
-        rustup default 1.99.0
+        rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+        rustup default stable
         source scripts/install-wasm-bindgen-ci.sh
         bun run build:wasm
         rm -rf public/wasm
@@ -379,7 +379,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.3"
+          bun-version: latest
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
