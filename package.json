@@ -135,9 +135,9 @@
     "three": "^0.185.0"
   },
   "devDependencies": {
-    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#12de038073818cbdd08c23665643e629f721ff26",
-    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#80c53cc256c7d8a130c89ca63971c43798f5fb0d",
-    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#d7148b393a8ab3676824fa2f5d2745c28b8ea45f",
+    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#3a24d4db70bec76935e2579f2c04d6089fb68a19",
+    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#ae0ce34e4dcf3b5daeadc070b316dd39293013d0",
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#5abb78e3d012485f24f51f38612145f3c896df05",
     "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-query": "5.104.5",
