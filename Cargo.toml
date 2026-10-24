@@ -19,7 +19,7 @@ geojson = "=0.24.2"
 getrandom = "=0.4.3"
 maps-core = { path = "crates/maps-core" }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde-json = { package = "serde_json", version = "=1.0.151" }
+serde-json = { package = "serde_json", version = "=1.0.154" }
 serde-wasm-bindgen = "=0.6.5"
 supercluster = { version = "=3.0.8", features = ["cluster_metadata"] }
 three-d-camera = { git = "https://github.com/moritzbrantner/3d-lab.git", rev = "77122d13dbd06789dcce05473b0528e61ad69a44" }
