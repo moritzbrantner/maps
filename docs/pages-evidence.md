@@ -15,6 +15,26 @@ Until the runtime/Moonlight artifact is durably published to that URL for the ex
 
 This intentionally separates the presentation rollout from the next transport slice: publishing normalized `project-evidence-v1` runtime observations from CI without re-running or reinterpreting benchmarks in the browser.
 
+## Canonical kernel runtime publication
+
+The separate `kernel-runtime` source publishes profiler-owned kernel harness
+observations at `/maps/evidence/kernel-runtime.json`. It does not fill the
+unpublished camera/Moonlight URL or claim a renderer Fast verdict. The existing
+Pages build captures five canonical Bun processing scenarios, transports their
+validated immutable bundles under `/maps/evidence/kernels/<scenario>/candidate/`,
+and renders their process metrics through the shared `/stats/` and `/evidence/`
+surfaces. Each report links the upstream profiler's result explorer, which owns
+bundle validation and detailed inspection.
+
+Each `<scenario>.history.json` in that directory is retained across Pages builds
+by the pinned upstream history writer. The actual clean first parent is captured
+when it contains the committed workload entrypoints; the initial adoption's
+missing parent is unavailable, not a fabricated baseline. Existing history is
+never reset after a network/parse failure. Each score is descriptive adjacent
+revision evidence on a shared runner; Moonlight evaluation remains unavailable
+until a calibrated policy for that process workload is adopted. Per-kernel p95
+budgets continue to belong to the ordinary repository kernel gate.
+
 
 ## Benchmark lab
 

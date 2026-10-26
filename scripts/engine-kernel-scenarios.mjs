@@ -9,7 +9,6 @@ import {
 } from "../src/geojson-transition.ts";
 import { createScalarFieldGrid } from "../src/scalar-field.ts";
 
-
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -35,7 +34,11 @@ export function prepareKernelScenario(id) {
       const index = createTemporalGeoJsonPlaybackIndex(tracks, fixture.options);
       metadata = { coordinateCount: fixture.coordinateCount, strategy: fixture.options.strategy };
       run = () => {
-        const raw = getTemporalGeoJsonFeatureCollectionAtTime(tracks, fixture.time, fixture.options);
+        const raw = getTemporalGeoJsonFeatureCollectionAtTime(
+          tracks,
+          fixture.time,
+          fixture.options,
+        );
         return { raw, indexed: index.getFeatureCollectionAtTime(fixture.time) };
       };
       break;
@@ -45,32 +48,57 @@ export function prepareKernelScenario(id) {
       const count = fixture.coordinateCount;
       const complex = fixture.generator === "multipart-ring-transition-v1";
       const from = complex
-        ? createMultiPolygonFeatureCollection("source", [createRing(count, 12, 0, 0), createRing(count, 10, 32, 0)])
+        ? createMultiPolygonFeatureCollection("source", [
+            createRing(count, 12, 0, 0),
+            createRing(count, 10, 32, 0),
+          ])
         : createFeatureCollection("from", createRing(count, 20, 0, 0));
       const to = complex
-        ? createMultiPolygonFeatureCollection("target", [createRing(count, 10, 32, 0), createRing(count, 12, 0, 0), createRing(count, 8, 16, 18)])
+        ? createMultiPolygonFeatureCollection("target", [
+            createRing(count, 10, 32, 0),
+            createRing(count, 12, 0, 0),
+            createRing(count, 8, 16, 18),
+          ])
         : createFeatureCollection("to", createRing(count + 8, 24, 8, 6));
-      metadata = { algorithm: fixture.options.algorithm, coordinateCount: count,
-        ...(complex ? { partMatchingStrategy: fixture.options.partMatchingStrategy } : {}) };
-      run = () => interpolateGeoJsonTransitionPlan(createGeoJsonTransitionPlan(from, to, fixture.options), fixture.progress);
+      metadata = {
+        algorithm: fixture.options.algorithm,
+        coordinateCount: count,
+        ...(complex ? { partMatchingStrategy: fixture.options.partMatchingStrategy } : {}),
+      };
+      run = () =>
+        interpolateGeoJsonTransitionPlan(
+          createGeoJsonTransitionPlan(from, to, fixture.options),
+          fixture.progress,
+        );
       break;
     }
     case "europe-temperature-observations-v1": {
       const points = createTemperaturePoints();
       metadata = { cells: fixture.columns * fixture.rows, points: points.length };
-      run = () => createScalarFieldGrid(points, { ...fixture.options, fieldColumns: fixture.columns, fieldRows: fixture.rows });
+      run = () =>
+        createScalarFieldGrid(points, {
+          ...fixture.options,
+          fieldColumns: fixture.columns,
+          fieldRows: fixture.rows,
+        });
       break;
     }
     case "berlin-phyllotaxis-demand-v1": {
       const points = createMapPoints(fixture.pointCount);
       metadata = { pointCount: points.length };
-      run = () => createHeatMapDensityIndex(points, fixture.options).getFeatureCollection(fixture.query);
+      run = () =>
+        createHeatMapDensityIndex(points, fixture.options).getFeatureCollection(fixture.query);
       break;
     }
     default:
       throw new Error(`unknown kernel fixture generator: ${fixture.generator}`);
   }
-  return { scenario, metadata, run, scenarioSha256: createHash("sha256").update(bytes).digest("hex") };
+  return {
+    scenario,
+    metadata,
+    run,
+    scenarioSha256: createHash("sha256").update(bytes).digest("hex"),
+  };
 }
 
 export function measureKernelScenario(id) {
@@ -93,8 +121,11 @@ export function measureKernelScenario(id) {
     scenarioSha256: workload.scenarioSha256,
     observationSha256: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
     metadata: workload.metadata,
-    stats: { mean: samples.reduce((sum, value) => sum + value, 0) / samples.length,
-      min: samples[0], p95: samples[Math.ceil(samples.length * 0.95) - 1] },
+    stats: {
+      mean: samples.reduce((sum, value) => sum + value, 0) / samples.length,
+      min: samples[0],
+      p95: samples[Math.ceil(samples.length * 0.95) - 1],
+    },
   };
 }
 

@@ -13,6 +13,7 @@ const baselinePath = path.join(rootDir, "benchmark-baseline.json");
 const budgetMultiplier = Number(process.env.MAPS_BENCHMARK_BUDGET_MULTIPLIER ?? "1");
 const warnAsError = process.env.MAPS_BENCHMARK_WARN_AS_ERROR === "1";
 const updateBaseline = process.argv.includes("--update-baseline");
+const baseline = existsSync(baselinePath) ? JSON.parse(readFileSync(baselinePath, "utf8")) : null;
 const benchmarkThresholds = {
   "temporal-geojson-indexed-playback": {
     budgetMs: 25,
@@ -38,7 +39,10 @@ const benchmarkThresholds = {
 
 const benchmarks = kernelScenarioIds.map((id) => {
   const measured = measureKernelScenario(id);
-  return { ...measured, ...createBenchmarkResult(measured.name, measured.stats, measured.metadata) };
+  return {
+    ...measured,
+    ...createBenchmarkResult(measured.name, measured.stats, measured.metadata),
+  };
 });
 const failures = benchmarks.filter((item) => item.status === "failed");
 const warnings = benchmarks.filter((item) => item.status === "warning");
@@ -140,13 +144,7 @@ if (failures.length > 0 || (warnAsError && warnings.length > 0)) {
 }
 
 function readBenchmarkBaseline(name) {
-  if (!existsSync(baselinePath)) {
-    return null;
-  }
-
-  const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-
-  const entry = baseline.benchmarks?.[name] ?? null;
+  const entry = baseline?.benchmarks?.[name] ?? null;
 
   if (!entry) {
     return null;
@@ -169,14 +167,9 @@ function createBenchmarkResult(name, stats, metadata) {
   const thresholds = resolveBenchmarkThresholds(name);
   const baseline = readBenchmarkBaseline(name);
   const baselineP95Ms = baseline?.baselineP95Ms;
-  const baselineDeltaMs =
-    typeof baselineP95Ms === "number" ? stats.p95 - baselineP95Ms : undefined;
+  const baselineDeltaMs = typeof baselineP95Ms === "number" ? stats.p95 - baselineP95Ms : undefined;
   const status =
-    stats.p95 > thresholds.budgetMs
-      ? "failed"
-      : stats.p95 > thresholds.warnMs
-        ? "warning"
-        : "ok";
+    stats.p95 > thresholds.budgetMs ? "failed" : stats.p95 > thresholds.warnMs ? "warning" : "ok";
 
   return {
     baselineDeltaMs,

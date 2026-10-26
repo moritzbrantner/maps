@@ -5,119 +5,64 @@
       "id": "camera-world-pan-v1",
       "family": "camera-world",
       "reference": "maplibre",
-      "capabilities": [
-        "rust-core"
-      ],
-      "runtimePhases": [
-        "camera-update",
-        "projection-batch",
-        "visible-world"
-      ]
+      "capabilities": ["rust-core"],
+      "runtimePhases": ["camera-update", "projection-batch", "visible-world"]
     },
     {
       "id": "raster-tile-churn-v1",
       "family": "raster-tiles",
       "reference": "leaflet",
-      "capabilities": [
-        "rust-core",
-        "browser"
-      ],
-      "runtimePhases": [
-        "visible-tile",
-        "schedule",
-        "decode-upload",
-        "warm-cache"
-      ]
+      "capabilities": ["rust-core", "browser"],
+      "runtimePhases": ["visible-tile", "schedule", "decode-upload", "warm-cache"]
     },
     {
       "id": "dense-points-100k-v1",
       "family": "point-density",
       "reference": "maplibre",
-      "capabilities": [
-        "rust-wasm",
-        "browser"
-      ],
-      "runtimePhases": [
-        "index-build",
-        "aggregation",
-        "render-frame",
-        "paint",
-        "picking"
-      ]
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": ["index-build", "aggregation", "render-frame", "paint", "picking"]
     },
     {
       "id": "vector-city-style-v1",
       "family": "vector-tiles",
       "reference": "maplibre",
-      "capabilities": [
-        "rust-wasm",
-        "browser"
-      ],
-      "runtimePhases": [
-        "tile-decode-paint",
-        "warm-pan-zoom",
-        "frame-presentation"
-      ]
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": ["tile-decode-paint", "warm-pan-zoom", "frame-presentation"]
     },
     {
       "id": "temporal-geojson-indexed-playback-v1",
       "family": "temporal-kernel",
       "reference": "legacy-kernel-observations-at-748166c",
-      "capabilities": [
-        "bun-kernel"
-      ],
-      "runtimePhases": [
-        "raw-playback",
-        "indexed-playback"
-      ]
+      "capabilities": ["bun-kernel"],
+      "runtimePhases": ["raw-playback", "indexed-playback"]
     },
     {
       "id": "geojson-transition-topology-plan-v1",
       "family": "topology-kernel",
       "reference": "legacy-kernel-observations-at-748166c",
-      "capabilities": [
-        "bun-kernel"
-      ],
-      "runtimePhases": [
-        "plan",
-        "interpolate"
-      ]
+      "capabilities": ["bun-kernel"],
+      "runtimePhases": ["plan", "interpolate"]
     },
     {
       "id": "geojson-transition-complex-topology-plan-v1",
       "family": "topology-kernel",
       "reference": "legacy-kernel-observations-at-748166c",
-      "capabilities": [
-        "bun-kernel"
-      ],
-      "runtimePhases": [
-        "part-match",
-        "plan",
-        "interpolate"
-      ]
+      "capabilities": ["bun-kernel"],
+      "runtimePhases": ["part-match", "plan", "interpolate"]
     },
     {
       "id": "scalar-field-grid-v1",
       "family": "scalar-kernel",
       "reference": "legacy-kernel-observations-at-748166c",
-      "capabilities": [
-        "bun-kernel"
-      ],
-      "runtimePhases": [
-        "interpolate-grid"
-      ]
+      "capabilities": ["bun-kernel"],
+      "runtimePhases": ["interpolate-grid"]
     },
     {
       "id": "heat-map-density-index-v1",
       "family": "heat-kernel",
       "reference": "legacy-kernel-observations-at-748166c",
-      "capabilities": [
-        "bun-kernel"
-      ],
-      "runtimePhases": [
-        "index-build",
-        "viewport-query"
-      ]
+      "capabilities": ["bun-kernel"],
+      "runtimePhases": ["index-build", "viewport-query"]
     }
   ]
 }

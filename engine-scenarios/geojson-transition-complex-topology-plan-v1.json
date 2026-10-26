@@ -18,12 +18,7 @@
     "warmups": 2,
     "runs": 8
   },
-  "observations": [
-    "operation-output-sha256"
-  ],
-  "runtimePhases": [
-    "part-match",
-    "plan",
-    "interpolate"
-  ]
+  "observations": ["operation-output-sha256"],
+  "runtimePhases": ["part-match", "plan", "interpolate"],
+  "relatedKernelDiagnostics": ["bench:geojson-transition"]
 }

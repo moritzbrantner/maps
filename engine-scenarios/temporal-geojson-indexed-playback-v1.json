@@ -18,11 +18,7 @@
     "warmups": 2,
     "runs": 8
   },
-  "observations": [
-    "operation-output-sha256"
-  ],
-  "runtimePhases": [
-    "raw-playback",
-    "indexed-playback"
-  ]
+  "observations": ["operation-output-sha256"],
+  "runtimePhases": ["raw-playback", "indexed-playback"],
+  "relatedKernelDiagnostics": ["bench:temporal-geojson", "bench:performance"]
 }

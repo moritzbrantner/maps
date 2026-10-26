@@ -11,12 +11,7 @@
       "weightMetric": "demand"
     },
     "query": {
-      "bounds": [
-        5,
-        45,
-        16,
-        56
-      ],
+      "bounds": [5, 45, 16, 56],
       "zoom": 6
     }
   },
@@ -24,11 +19,7 @@
     "warmups": 2,
     "runs": 8
   },
-  "observations": [
-    "operation-output-sha256"
-  ],
-  "runtimePhases": [
-    "index-build",
-    "viewport-query"
-  ]
+  "observations": ["operation-output-sha256"],
+  "runtimePhases": ["index-build", "viewport-query"],
+  "relatedKernelDiagnostics": ["bench:heat-map", "bench:heat-layer", "bench:performance"]
 }

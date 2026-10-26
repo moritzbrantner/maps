@@ -109,6 +109,7 @@
     "verify:engine-camera:prepared": "node ./scripts/verify-engine-camera-parity.mjs",
     "verify:engine-camera": "bun run build:wasm && bun run verify:engine-camera:prepared",
     "verify:engine-browser-evidence": "node ./scripts/verify-engine-browser-evidence.ts",
+    "profile:engine-kernels": "bun ./scripts/profile-engine-kernel-evidence.mjs",
     "verify:engine-runtime-evidence": "node ./scripts/verify-engine-runtime-evidence.mjs",
     "verify:security-sensitive": "node ./scripts/verify-security-sensitive-patterns.mjs",
     "verify:audit": "bun audit --audit-level high",
