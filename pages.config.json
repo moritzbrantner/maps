@@ -27,6 +27,13 @@
   ],
   "evidenceSources": [
     {
+      "id": "kernel-runtime",
+      "label": "Canonical kernel harness runtime evidence",
+      "kind": "project-evidence-v1",
+      "producer": "runtime-profiler",
+      "url": "/maps/evidence/kernel-runtime.json"
+    },
+    {
       "id": "engine-interaction",
       "label": "Full map interaction benchmark",
       "kind": "project-evidence-v1",

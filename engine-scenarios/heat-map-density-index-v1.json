@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "heat-map-density-index-v1",
+  "kind": "kernel",
+  "legacyBenchmark": "heat-map-density-index",
+  "fixture": {
+    "generator": "berlin-phyllotaxis-demand-v1",
+    "pointCount": 10000,
+    "options": {
+      "radius": 56,
+      "weightMetric": "demand"
+    },
+    "query": {
+      "bounds": [5, 45, 16, 56],
+      "zoom": 6
+    }
+  },
+  "sampling": {
+    "warmups": 2,
+    "runs": 8
+  },
+  "observations": ["operation-output-sha256"],
+  "runtimePhases": ["index-build", "viewport-query"],
+  "relatedKernelDiagnostics": ["bench:heat-map", "bench:heat-layer", "bench:performance"]
+}

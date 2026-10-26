@@ -123,3 +123,66 @@ Do not optimize one number in isolation. Depending on scenario capability, evide
 - source-level hotspots where supported.
 
 Thresholds and release verdict policy remain outside runtime-profiler and belong in Moonlight/repository evaluation configuration.
+
+## Canonical kernel evidence and retained diagnostics
+
+The temporal/topology/scalar/heat workloads previously embedded in
+`verify-benchmark-budgets.mjs` now have canonical `engine-scenarios/*-v1.json`
+fixtures and matching `runtime-profiler-scenarios/` command scenarios.
+`scripts/engine-kernel-scenarios.mjs` is their single execution body. The ordinary
+`verify:benchmarks` gate and profiler target execute that same body through the
+existing public processing APIs. Pre-refactor Bun observations at `748166c` protect
+fixture, option and output equivalence; the gate retains its two warmups, eight
+measured runs, five p95 budgets, warnings and historical baseline unchanged.
+
+These are **kernel harness processes**, not browser Map Views. Profiler wall time
+includes Bun startup, imports, fixture/index setup and all repeated kernel calls;
+it cannot replace the gate's per-operation p95 or establish frame-rate/Fast
+acceptance. The old baseline is historical kernel evidence, not an architectural
+performance authority. Existing deterministic retained-work contracts and the
+canonical camera runtime/Moonlight path remain separate.
+
+Capture and publish the kernel evidence with the same pinned profiler checkout
+and CLI used by CI:
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler \
+RUNTIME_PROFILER_SOURCE=/path/to/pinned/runtime-profiler-checkout \
+  bun run profile:engine-kernels -- --output=.runtime-profiler/kernels-run-1
+```
+
+The command requires a fresh output directory and preserves all five validated
+immutable bundles. `--reference=/path/to/clean-parent-checkout` optionally captures
+the actual first-parent source with its own committed entrypoints and frozen
+dependencies. It requires equal kernel observations before asking the profiler
+to score strictly comparable bundles. No Maps environment/digest override exists.
+Missing parent entrypoints, changed observations or incomparable captures produce
+an unavailable comparison, never a passing score. Candidate capture failure fails
+the command. No new Moonlight thresholds are declared for these processes; their
+Moonlight evaluations are explicitly unavailable.
+
+`--previous-history=<directory-or-HTTPS-base>` extends existing per-scenario
+`runtime-profiler/score-history/v1` files through the **upstream**
+`scripts/append-score-history.mjs`. A missing remote history (404) starts a cohort;
+unreadable or malformed history fails rather than resetting it. Scores retain
+their upstream descriptive meaning and source/workload/environment identities;
+they are not release verdicts or controlled long-term trends. The first main
+revision adopting these entrypoints has no parent capture and records that gap.
+Development comparisons between the committed adapter and its own same-PR parent
+validate transport only, not performance against a previously accepted main.
+
+The remaining standalone commands are intentionally non-authoritative kernel
+diagnostics with distinct coverage, not competing runtime acceptance:
+
+| Command | Kernel property retained beyond the representative gate |
+| --- | --- |
+| `bench:temporal-geojson` | Raw/indexed playback across geometry sizes and three interpolation strategies. |
+| `bench:geojson-transition` | Plan versus interpolation cost across algorithms, multipart matching and geometry collections. |
+| `bench:scalar-field` | Grid, contour and image kernels at multiple sizes, with the explicit Canvas shim and optional WASM kernel. |
+| `bench:heat-layer` | SVG rasterization kernel across source counts, radii and brute-force/indexed density evaluation. |
+| `bench:heat-map` | Headless density/query/projection/SVG stages and cache-coverage diagnostics; its emulated viewport is not a first-party renderer. |
+| `bench:performance` | Low-level flat resampling, temporal points, density-index build and Voronoi kernels. |
+
+Their canonical family links are declared in each representative fixture's
+`relatedKernelDiagnostics`. None replaces canonical browser journeys, publishes
+a Moonlight verdict, or establishes first-party runtime authority.

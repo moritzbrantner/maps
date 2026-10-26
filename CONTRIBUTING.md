@@ -136,7 +136,7 @@ bun run verify:benchmarks
 Update baselines only when the regression or improvement is understood:
 
 ```sh
-bun run ./scripts/verify-benchmark-budgets.mjs --update-baseline
+bun run ./scripts/verify-engine-kernel-budgets.mjs --update-baseline
 ```
 
 Benchmark verification has warning thresholds and hard failure budgets. Warnings

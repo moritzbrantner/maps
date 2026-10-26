@@ -1,0 +1,42 @@
+[
+  {
+    "name": "temporal-geojson-indexed-playback",
+    "metadata": {
+      "coordinateCount": 512,
+      "strategy": "resample"
+    },
+    "sha256": "3ae6a04aa9db2a8c349870e00a8c4a66c289cdf82038446aa29dbe2df4301f4d"
+  },
+  {
+    "name": "geojson-transition-topology-plan",
+    "metadata": {
+      "algorithm": "topology-plan",
+      "coordinateCount": 256
+    },
+    "sha256": "d333fc96454c999d3e3f5ff39d576d839edf4a2cd7510b800b0a7ef3afe9466d"
+  },
+  {
+    "name": "geojson-transition-complex-topology-plan",
+    "metadata": {
+      "algorithm": "topology-plan",
+      "coordinateCount": 256,
+      "partMatchingStrategy": "auto"
+    },
+    "sha256": "aa11c092ef29be86c49afe3b157099b1f75678164b88957207c761477bc81af8"
+  },
+  {
+    "name": "scalar-field-grid",
+    "metadata": {
+      "cells": 64000,
+      "points": 10
+    },
+    "sha256": "64911e2bc956c5e620570b6d13acbf364b57955ea8a05a71a829154ae0192ce3"
+  },
+  {
+    "name": "heat-map-density-index",
+    "metadata": {
+      "pointCount": 10000
+    },
+    "sha256": "2794a86fdbb8570c12232e784e13a1cce6447f310ad3ed3eade5005adc6bfa97"
+  }
+]

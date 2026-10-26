@@ -1,0 +1,14 @@
+schema_version: runtime-profiler/scenario/v1
+id: maps-heat-map-density-index-v1
+target:
+  type: command
+  program: bun
+  args: [scripts/run-engine-kernel-scenario.mjs, heat-map-density-index-v1]
+  working_directory: ..
+  inherit_env: []
+run:
+  warmup_iterations: 1
+  measurement_iterations: 5
+  timeout_seconds: 45
+collectors:
+  - process
