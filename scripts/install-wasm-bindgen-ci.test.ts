@@ -71,3 +71,24 @@ test("parallel Git installation remains required and independent of prepared art
   assert.match(summary, /- git-install-validation/);
   assert.match(summary, /"git-install-validation"/);
 });
+
+
+test("browser consumers stage all receipt-covered locked dependency outputs", () => {
+  const ci = read(".github/workflows/ci.yml");
+  const producer = ci.split("  build-package:\n")[1]?.split("  wasm-package-validation:\n")[0];
+  assert.ok(producer);
+  assert.match(producer, /ci-browser-dependencies/);
+  for (const dependency of ["ui", "timeline-editor", "editor-core"]) {
+    assert.ok(producer.includes(`ci-browser-dependencies/${dependency}`));
+  }
+  for (const [job, next] of [["browser-smoke", "runtime-evidence"], ["browser-validation", "dependency-audit"]]) {
+    const consumer = ci.split(`  ${job}:\n`)[1]?.split(`  ${next}:\n`)[0];
+    assert.ok(consumer);
+    assert.match(consumer, /install_command: bun install --frozen-lockfile --ignore-scripts/);
+    assert.match(consumer, /prebuilt_artifact_digest:/);
+    assert.match(consumer, /prebuilt_identity_digest:/);
+    for (const dependency of ["ui", "timeline-editor", "editor-core"]) {
+      assert.ok(consumer.includes(`.artifacts/maps-browser-package/ci-browser-dependencies/${dependency}`));
+    }
+  }
+});

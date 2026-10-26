@@ -197,7 +197,7 @@ bun run verify:benchmarks
 
 CI runs Rust checks and clean Git-source installation as independent required
 jobs. Source-related changes build one verified package artifact for the full
-Chromium suite, split into two disjoint test shards on separate runners. Each
+Chromium suite, split into two complementary file groups on separate runners. Each
 runner keeps one software-GPU worker. The dispatch-only smoke/package/evidence
 jobs consume that same producer; they keep their existing separate assertions.
 See [CI execution and measurement](docs/ci-execution.md) for the reuse and timing

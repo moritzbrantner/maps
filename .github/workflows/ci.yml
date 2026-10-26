@@ -84,6 +84,7 @@ jobs:
     with:
       node_version: lts/*
       bun_version: latest
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
       format_command: bun run format:check
       lint_command: bun run lint
@@ -138,7 +139,9 @@ jobs:
         run: |
           nix develop --command bash -lc '
             set -euo pipefail
-            bun install --frozen-lockfile
+            # This checkout only hosts the verifier and reads the MapLibre source CSS.
+            # The separate verifier consumer still runs all real prepare scripts.
+            bun install --frozen-lockfile --ignore-scripts
             bun run verify:git-install
           '
 
@@ -153,25 +156,33 @@ jobs:
     uses: moritzbrantner/reusable-workflows/.github/workflows/build-artifact.yml@5e9fe1ab1fd5c8d91900a621bf8daabf879012a7
     with:
       source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      artifact_key: maps-browser-package-v1
+      artifact_key: ${{ github.event_name == 'workflow_dispatch' && 'maps-browser-package-v2' || 'maps-browser-runtime-v1' }}
       rust_toolchain: stable
       rust_targets: wasm32-unknown-unknown
       bun_version: latest
       node_version: lts/*
-      cache_bun: true
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
       use_environment_v1: false
       setup_command: |
         bun install --frozen-lockfile
         bash scripts/install-wasm-bindgen-ci.sh
       build_command: |
-        bun run build:package
-        rm -rf public/wasm
-        mkdir -p public/wasm
-        cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          bun run build:package
+        else
+          bun run build:wasm
+        fi
+        # Build the locked Git dependencies once, not in every browser consumer.
+        rm -rf ci-browser-dependencies
+        mkdir -p ci-browser-dependencies
+        cp -R node_modules/@moritzbrantner/ui/dist ci-browser-dependencies/ui
+        cp -R node_modules/@moritzbrantner/timeline-editor/dist ci-browser-dependencies/timeline-editor
+        cp -R node_modules/@moenarch/editor-core/dist ci-browser-dependencies/editor-core
       artifact_paths: |
-        dist
         public/wasm
+        ci-browser-dependencies
+        ${{ github.event_name == 'workflow_dispatch' && 'dist' || '' }}
       reuse_across_runs: true
       artifact_retention_days: 7
 
@@ -274,7 +285,9 @@ jobs:
     with:
       node_version: lts/*
       bun_version: latest
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
+      install_command: bun install --frozen-lockfile --ignore-scripts
       prebuilt_artifact_run_id: ${{ needs.build-package.outputs.producer_run_id }}
       prebuilt_artifact_receipt_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
       prebuilt_artifact_name: ${{ needs.build-package.outputs.artifact_name }}
@@ -287,6 +300,10 @@ jobs:
         rm -rf public/wasm
         mkdir -p public
         cp -R .artifacts/maps-browser-package/public/wasm public/wasm
+        rm -rf node_modules/@moritzbrantner/ui/dist node_modules/@moritzbrantner/timeline-editor/dist node_modules/@moenarch/editor-core/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/ui node_modules/@moritzbrantner/ui/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/timeline-editor node_modules/@moritzbrantner/timeline-editor/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/editor-core node_modules/@moenarch/editor-core/dist
         bun run test:browser:smoke
       install_playwright: true
       install_playwright_browsers: chromium
@@ -367,11 +384,17 @@ jobs:
       - changes
       - build-package
     if: ${{ needs.changes.outputs.browser == 'true' }}
-    name: Full Browser Validation (shard ${{ matrix.shard }}/2)
+    name: Full Browser Validation (${{ matrix.partition }})
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        include:
+          # These three slower files accounted for 363s; the complement for 365s.
+          # New/unrecognized files automatically run in the complement.
+          - partition: demo
+            selection: --grep=(maps-demo|maps-runtime|maps-engine-tiles)\.spec\.ts
+          - partition: engine
+            selection: --grep-invert=(maps-demo|maps-runtime|maps-engine-tiles)\.spec\.ts
     permissions:
       actions: read
       contents: read
@@ -380,7 +403,9 @@ jobs:
     with:
       node_version: lts/*
       bun_version: latest
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
+      install_command: bun install --frozen-lockfile --ignore-scripts
       prebuilt_artifact_run_id: ${{ needs.build-package.outputs.producer_run_id }}
       prebuilt_artifact_receipt_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
       prebuilt_artifact_name: ${{ needs.build-package.outputs.artifact_name }}
@@ -393,12 +418,16 @@ jobs:
         rm -rf public/wasm
         mkdir -p public
         cp -R .artifacts/maps-browser-package/public/wasm public/wasm
-        bun run test:browser -- --project=chromium --fully-parallel --workers=1 --shard=${{ matrix.shard }}/2
+        rm -rf node_modules/@moritzbrantner/ui/dist node_modules/@moritzbrantner/timeline-editor/dist node_modules/@moenarch/editor-core/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/ui node_modules/@moritzbrantner/ui/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/timeline-editor node_modules/@moritzbrantner/timeline-editor/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/editor-core node_modules/@moenarch/editor-core/dist
+        bun run test:browser -- --project=chromium --workers=1 '${{ matrix.selection }}'
       install_playwright: true
       install_playwright_browsers: chromium
       # One software GPU worker per runner; shards do not contend for the same CPU.
-      concurrency_group: maps-${{ github.ref }}-browser-full-${{ matrix.shard }}
-      artifact_name_suffix: -full-${{ matrix.shard }}
+      concurrency_group: maps-${{ github.ref }}-browser-full-${{ matrix.partition }}
+      artifact_name_suffix: -full-${{ matrix.partition }}
       artifact_paths: |
         playwright-report
         test-results
