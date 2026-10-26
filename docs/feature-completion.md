@@ -115,3 +115,36 @@ source lifecycle observations. Executed gates and measurements are recorded in
 the owning PR; an unavailable historical source-switch comparison remains
 unavailable and is not a comparative performance pass. This scoped work does not
 complete the general vector-style/cartography milestones.
+
+Executed at `f034eedf9a8ef39a84cf4ab5e4b048bb9a274ea9` (shared convention
+source revision `c104800c7aaeaea12d56f9093e71bdef6a2ce6fa`):
+
+- Rust/WASM gate passed; the source contract has five native integration tests.
+- `verify:agent` passed 64 files / 579 tests. Chromium smoke passed 70/70 on the
+  fresh isolated candidate; the later metadata-only refactor passed its 14
+  focused tests, typecheck and all eight affected browser cases.
+- The existing five-sample canonical interaction command stayed on WebGPU. Cold
+  A used one network request, two Rust decodes and one bucket build; after loading
+  B, five A revisits and five resolved-paint changes added **zero** requests,
+  decodes or bucket builds. A revision bump added one request, two decodes and one
+  bucket build. Warm A switch-to-ready latency was 17.9 ms median (17.3–22.1 ms).
+- Retaining A/B recorded 2,231,552 RGBA/MVT lower-bound bytes and 6,790,480 actual
+  GPU geometry-buffer bytes; retaining revision 2 increased these to 3,347,328
+  and 10,185,720 bytes. These exclude decoded JS object overhead, driver memory,
+  other GPU allocations and total browser memory. The privacy-coarsened reported
+  JS heap was 10 MB and cannot establish precise growth.
+- The canonical interaction frame interval p95 was 16.8 ms in this descriptive
+  software-GPU run. It is not GPU-completion FPS, a controlled historical
+  comparison or a Moonlight verdict. The parent source-switch comparison remains
+  unavailable. Capture SHA-256:
+  `4562ad2b871d98886c15304ae18a7e96f05fa54f740c94a6b1c6117dcb8d3585`.
+- Six SHA/byte-verified real MVT samples from the owning asset-tooling producer
+  passed both current Rust/WASM geographic and pixel decoders, including the
+  expected two water holes. Production ODbL bytes remain outside Maps Git.
+- Full package validation passed API, unit/integration, build, entry bundles and
+  clean packed consumers, then **failed the unchanged size gate**: compressed
+  package 466,311 > 446,000 bytes; WASM 678,690 > 625,500 bytes. Unpacked
+  1,600,239 < 1,752,500 bytes, 75 < 84 entries and both stylesheet budgets passed.
+  The equivalent main baseline was 442,200 compressed / 1,525,127 unpacked /
+  624,781 WASM bytes. This feature is not declared complete while required size
+  acceptance remains unresolved.
