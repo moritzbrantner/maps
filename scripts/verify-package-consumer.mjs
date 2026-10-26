@@ -35,6 +35,9 @@ try {
 
 function verifyFullViteConsumer(directory, packageTarball) {
   writePackage(directory, {
+    // Timeline's documented Git-source contract requires its trusted source
+    // prerequisites directly; Bun may skip transitive Git prepare scripts.
+    "@moenarch/editor-core": version("@moenarch/editor-core"),
     "@moritzbrantner/maps": `file:${packageTarball}`,
     "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
     "@moritzbrantner/ui": version("@moritzbrantner/ui"),
@@ -231,6 +234,7 @@ function hasRuntimeImport(contents, packageName) {
 
 function verifyNextStyleBoundaries(directory, packageTarball) {
   writePackage(directory, {
+    "@moenarch/editor-core": version("@moenarch/editor-core"),
     "@moritzbrantner/maps": `file:${packageTarball}`,
     "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
     "@moritzbrantner/ui": version("@moritzbrantner/ui"),

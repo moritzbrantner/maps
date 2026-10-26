@@ -242,3 +242,22 @@ runtime-profiler owns the real Chromium trace, normalized renderer-main/long-tas
 and hot-path summaries, explicit JS/WASM measures and strict comparability.
 See [the engine evidence contract](engine-evidence.md) for commands, immutable
 outputs, the separate process/Moonlight policy and unsupported attribution.
+
+## Canonical processing kernels
+
+The manifest also registers the exact five historical budget workloads:
+
+| Scenario | Measured operation |
+| --- | --- |
+| `temporal-geojson-indexed-playback-v1` | Raw plus indexed playback of 512-coordinate line/ring tracks at time 5. |
+| `geojson-transition-topology-plan-v1` | Topology plan plus interpolation of the 256-coordinate ring transition. |
+| `geojson-transition-complex-topology-plan-v1` | Auto-matched two-to-three-part polygon plan plus interpolation. |
+| `scalar-field-grid-v1` | 320×200 interpolation grid from ten fixed temperature observations. |
+| `heat-map-density-index-v1` | Build and query the 10,000-point deterministic density index. |
+
+These `bun-kernel` capabilities preserve existing processing boundaries and
+sampling, with committed pre-convergence output observations. The same execution
+body supplies kernel budgets and profiler command capture. They measure neither
+Map View presentation nor a first-party feature's Fast gate. The
+[evidence contract](engine-evidence.md#canonical-kernel-evidence-and-retained-diagnostics)
+defines the retained kernel diagnostics, immutable history and verdict boundary.

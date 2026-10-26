@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "geojson-transition-complex-topology-plan-v1",
+  "kind": "kernel",
+  "legacyBenchmark": "geojson-transition-complex-topology-plan",
+  "fixture": {
+    "generator": "multipart-ring-transition-v1",
+    "coordinateCount": 256,
+    "progress": 0.5,
+    "options": {
+      "algorithm": "topology-plan",
+      "maxCoordinatesPerRing": 256,
+      "minCoordinatesPerRing": 32,
+      "partMatchingStrategy": "auto"
+    }
+  },
+  "sampling": {
+    "warmups": 2,
+    "runs": 8
+  },
+  "observations": ["operation-output-sha256"],
+  "runtimePhases": ["part-match", "plan", "interpolate"],
+  "relatedKernelDiagnostics": ["bench:geojson-transition"]
+}
