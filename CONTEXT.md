@@ -34,6 +34,13 @@ A GeoJSON FeatureCollection accepted for display, conversion, editing,
 operations, or map-scoped timeline workflows.
 _Avoid_: canonical source model
 
+**Maps Tileset**:
+A versioned source-data descriptor identifying a logical source, immutable data
+revision, compatible vector schema/pyramid, coverage and provenance separately
+from transport, resolved paint and historical observation metadata. Maps owns
+activation and source-aware tile lifetime; see [the contract](docs/maps-tilesets.md).
+_Avoid_: style, dataset URL, historical snapshot as interchangeable source identity
+
 **Map Feature**:
 A selectable or hoverable rendered item on a map, such as a point, flow,
 cluster, or rendered geometry.

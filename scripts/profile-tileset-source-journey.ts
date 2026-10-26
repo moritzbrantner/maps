@@ -63,12 +63,14 @@ export async function profileTilesetSourceJourney(
     await sourcePage
       .getByRole("combobox", { name: "Tile source", exact: true })
       .selectOption(source);
-    await sourcePage.waitForFunction(
-      () =>
-        document
-          .querySelector("canvas[data-flat-runtime=maps]")
-          ?.getAttribute("data-map-source-state") === "ready",
-    );
+    await sourcePage.waitForFunction((choice) => {
+      const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-flat-runtime=maps]");
+      return (
+        canvas?.dataset.mapSourceState === "ready" &&
+        canvas.dataset.mapSourceId === `fixture-${choice === "b" ? "b" : "a"}` &&
+        canvas.dataset.mapSourceRevision === (choice === "a2" ? "2" : "1")
+      );
+    }, source);
   };
   for (let sample = 0; sample < samples; sample++) {
     await chooseSource("b");
@@ -94,6 +96,8 @@ export async function profileTilesetSourceJourney(
       "Dense canonical MVT on public Map View: cold A, B/A revisits, resolved-paint changes, revision bump. Tile churn correctness remains Rust/browser lifecycle checks; this is source-switch cost, not a camera-churn performance verdict.",
     samples,
     fixtureSha256: createHash("sha256").update(fixture).digest("hex"),
+    secondFixtureSha256: createHash("sha256").update(fixtureB).digest("hex"),
+    backend: await sourceCanvas.getAttribute("data-map-base-renderer"),
     observations: sourceObservations,
     memoryScope:
       "Chromium JS heap is descriptive and GC-dependent; decoded images are 512×512 RGBA per retained tile, plus MVT bytes, decoded pixel objects and GPU buckets. No process/GPU-total or controlled baseline verdict.",
@@ -103,6 +107,11 @@ export async function profileTilesetSourceJourney(
         "Parent public Map View cannot execute versioned-source switching; no comparable source-switch baseline.",
     },
   };
+  if (sourceNetworkRequests !== 3) {
+    throw new Error(
+      `Expected exactly cold A, B and revision-2 requests; received ${sourceNetworkRequests}`,
+    );
+  }
   await sourcePage.close();
   return sourceLifecycle;
 }
