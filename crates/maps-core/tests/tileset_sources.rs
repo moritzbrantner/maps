@@ -150,3 +150,59 @@ fn coverage_filters_requests_without_clamping_camera_or_confusing_world_placemen
     assert!(runtime.frame_plan().unwrap().requests.is_empty());
     assert_eq!(runtime.camera(), before_switch);
 }
+
+#[test]
+fn transport_refresh_reissues_pending_and_failed_tiles_but_preserves_ready_data() {
+    let camera =
+        MapCamera::new(0., 0., 0., 0., 0., ViewportSize::new(200., 200.).unwrap()).unwrap();
+    let mut runtime = FlatRasterRuntime::new(
+        camera,
+        RasterSourceSpec::new(0, 0, 512).unwrap(),
+        FlatRasterRuntimeLimits::new(1, 2, 1).unwrap(),
+    )
+    .unwrap();
+    let mut manifest = source("a", "r1");
+    manifest.max_zoom = 0;
+    runtime.activate_tileset(manifest.clone()).unwrap();
+    let first = runtime.frame_plan().unwrap();
+    assert_eq!(first.requests.len(), 1);
+    let tile = first.requests[0];
+    let identity = runtime.source_identity();
+
+    manifest.observation = Some(maps_core::TilesetObservation {
+        snapshot: "updated-metadata".into(),
+        effective_date: Some("1816-01-01".into()),
+    });
+    runtime.activate_tileset(manifest.clone()).unwrap();
+    assert!(runtime.frame_plan().unwrap().requests.is_empty());
+
+    manifest.transport = maps_core::TilesetTransport::Xyz {
+        url_template: "/refreshed/{z}/{x}/{y}.mvt?credential=new".into(),
+    };
+    runtime.activate_tileset(manifest.clone()).unwrap();
+    assert_eq!(runtime.frame_plan().unwrap().requests, vec![tile]);
+    assert_eq!(runtime.source_identity(), identity);
+
+    runtime.mark_failed(tile);
+    assert!(runtime.frame_plan().unwrap().requests.is_empty());
+    manifest.observation.as_mut().unwrap().snapshot = "another-observation".into();
+    runtime.activate_tileset(manifest.clone()).unwrap();
+    assert!(runtime.frame_plan().unwrap().requests.is_empty());
+
+    manifest.transport = maps_core::TilesetTransport::Xyz {
+        url_template: "/refreshed/{z}/{x}/{y}.mvt?credential=next".into(),
+    };
+    runtime.activate_tileset(manifest.clone()).unwrap();
+    assert_eq!(runtime.frame_plan().unwrap().requests, vec![tile]);
+    runtime.mark_loaded(tile);
+    assert!(runtime.frame_plan().unwrap().requests.is_empty());
+
+    manifest.transport = maps_core::TilesetTransport::Xyz {
+        url_template: "/another/{z}/{x}/{y}.mvt?credential=last".into(),
+    };
+    runtime.activate_tileset(manifest).unwrap();
+    assert!(runtime.frame_plan().unwrap().requests.is_empty());
+    assert_eq!(runtime.source_identity(), identity);
+    assert_eq!(runtime.camera(), camera);
+    assert!(runtime.take_source_evictions().is_empty());
+}

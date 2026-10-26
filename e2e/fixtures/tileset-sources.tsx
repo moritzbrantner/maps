@@ -20,12 +20,31 @@ declare global {
 const limits = new URLSearchParams(location.search).has("smallCache")
   ? { maxVisibleTiles: 1, cacheCapacity: 2, loadConcurrency: 1 }
   : undefined;
+const building = new URLSearchParams(location.search).has("building");
 const points = [{ id: "application-point", longitude: 0, latitude: 0 }];
 configureMapsWasmPackage("/wasm/maps_wasm.js");
 function Host() {
-  const [source, setSource] = useState(createFixtureTileset("a"));
+  const [source, setSource] = useState(() => {
+    const initial = createFixtureTileset("a");
+    return building
+      ? {
+          ...initial,
+          schema: {
+            ...initial.schema,
+            sourceLayers: [...initial.schema.sourceLayers, "buildings"],
+          },
+        }
+      : initial;
+  });
   const [selected, setSelected] = useState<string | null>(null);
-  const [style, setStyle] = useState<MapsVectorBasemapStyle>();
+  const [style, setStyle] = useState<MapsVectorBasemapStyle | undefined>(
+    building
+      ? {
+          building: { color: "#ff0000", opacity: 0 },
+          "building-outline": { color: "#000000", width: 8, opacity: 1 },
+        }
+      : undefined,
+  );
   return (
     <>
       <button onClick={() => setSource(createFixtureTileset("a"))}>Source A</button>
@@ -41,7 +60,50 @@ function Host() {
       >
         Unsupported schema
       </button>
+      <button
+        onClick={() =>
+          setSource((current) => ({
+            ...current,
+            transport: {
+              kind: "xyz",
+              urlTemplate: `${current.transport.urlTemplate}&credential=refreshed`,
+            },
+          }))
+        }
+      >
+        Refresh tile URL
+      </button>
+      <button
+        onClick={() =>
+          setSource((current) => ({
+            ...current,
+            observation: { snapshot: "updated-observation", effectiveDate: "1816-01-01" },
+          }))
+        }
+      >
+        Update observation
+      </button>
       <button onClick={() => setStyle({ "land-forest": { color: "#ff0000" } })}>Red forest</button>
+      <button
+        onClick={() =>
+          setStyle((current) => ({
+            ...current,
+            "building-outline": { color: "#000000", width: 8, opacity: 0 },
+          }))
+        }
+      >
+        Hide building outline
+      </button>
+      <button
+        onClick={() =>
+          setStyle((current) => ({
+            ...current,
+            "building-outline": { color: "#000000", width: 8, opacity: 0.5 },
+          }))
+        }
+      >
+        Half building outline
+      </button>
       <MapView
         flatRuntime="maps"
         fitToData={false}
@@ -61,6 +123,8 @@ function Host() {
           onSelectedFeatureIdChange={setSelected}
         />
       </MapView>
+      <output aria-label="Tile transport">{source.transport.urlTemplate}</output>
+      <output aria-label="Source observation">{source.observation?.snapshot ?? "none"}</output>
       <output aria-label="Selected Map Feature">{selected ?? "none"}</output>
     </>
   );

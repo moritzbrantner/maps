@@ -26,7 +26,11 @@ export function paintShortbreadTile(
       polygonFillColor: style.color,
       polygonFillOpacity: style.opacity,
       ...(kind === "building"
-        ? { polygonStrokeColor: outline.color, polygonStrokeWidth: outline.width }
+        ? {
+            polygonStrokeColor: outline.color,
+            polygonStrokeWidth: outline.width,
+            polygonStrokeOpacity: outline.opacity,
+          }
         : {}),
     };
   };
@@ -68,7 +72,7 @@ export function paintShortbreadTile(
       if ((style.polygonStrokeWidth ?? 0) > 0) {
         context.strokeStyle = style.polygonStrokeColor!;
         context.lineWidth = (style.polygonStrokeWidth! * SIZE) / 256;
-        context.globalAlpha = 1;
+        context.globalAlpha = style.polygonStrokeOpacity ?? 1;
         context.stroke();
       }
     }

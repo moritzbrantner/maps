@@ -16,10 +16,7 @@ import {
 } from "../src/vector-basemap";
 import { decodeShortbreadBasemap, type ShortbreadBasemapTile } from "../src/vector-tile-wasm";
 
-import {
-  POLYGON_PAINT_ORDER,
-  type ShortbreadFeatureProperties,
-} from "./shortbread-style";
+import { POLYGON_PAINT_ORDER, type ShortbreadFeatureProperties } from "./shortbread-style";
 export { getShortbreadBasemapStyle, type ShortbreadFeatureProperties } from "./shortbread-style";
 
 export const SHORTBREAD_TILE_URL = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt";

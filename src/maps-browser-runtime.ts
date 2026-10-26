@@ -1152,14 +1152,26 @@ function createFrameSynchronizer({
   function updateTileset() {
     const descriptor = tileset();
     if (!descriptor) return;
+    // Transport equality only controls browser I/O lifetime. Rust still supplies
+    // the resource namespace and clears its pending/failed state on a refresh.
+    const transportChanged =
+      JSON.stringify(activeDescriptor?.transport) !== JSON.stringify(descriptor.transport);
     const nextIdentity =
       descriptor === activeDescriptor ? sourceIdentity : runtime.activateTileset(descriptor);
     activeDescriptor = descriptor;
     const changed = sourceIdentity !== nextIdentity;
-    if (changed) {
-      // Rust validates before the current resources are touched.
-      for (const load of loads.values()) load.abort.abort();
+    if (changed || transportChanged) {
+      // Rust validates before any in-flight browser work is cancelled.
+      for (const load of loads.values()) {
+        load.abort.abort();
+      }
       loads.clear();
+      sourceFailures.clear();
+      delete canvas.dataset.mapBaseTileError;
+      sourceSwitchStarted = performance.now();
+      sourceSwitchMs = null;
+    }
+    if (changed) {
       const retained = new Map<string, { vector: VectorResource; image: ImageBitmap }>();
       for (const [key, image] of images) {
         const vector = vectors.get(key);
@@ -1170,10 +1182,6 @@ function createFrameSynchronizer({
       images.clear();
       vectors.clear();
       sourceIdentity = nextIdentity;
-      sourceSwitchStarted = performance.now();
-      sourceSwitchMs = null;
-      sourceFailures.clear();
-      delete canvas.dataset.mapBaseTileError;
       const restored = inactive.get(sourceIdentity);
       inactive.delete(sourceIdentity);
       configureVectorRenderer();
@@ -1184,7 +1192,8 @@ function createFrameSynchronizer({
       }
     }
     const nextStyleKey = JSON.stringify(tilesetStyle());
-    if (changed || styleKey !== nextStyleKey) {
+    const styleChanged = styleKey !== nextStyleKey;
+    if (changed || styleChanged) {
       styleKey = nextStyleKey;
       configureVectorRenderer();
       for (const [key, vector] of vectors) {
@@ -1192,6 +1201,8 @@ function createFrameSynchronizer({
         images.set(key, paintShortbreadTile(vector.pixels, tilesetStyle()));
       }
       invalidateRendered();
+    }
+    if (changed || transportChanged || styleChanged) {
       syncFrame();
     }
     publishSourceStats();

@@ -2,6 +2,7 @@
 // plus dense street geometry. No external tile service participates in verification.
 export function createShortbreadTileFixture({
   dense = false,
+  building = false,
   islandWest = 1024,
   islandEast = 3072,
   streetRows = 128,
@@ -33,6 +34,23 @@ export function createShortbreadTileFixture({
     layer("water_polygons", [feature(3, water)]),
     layer("land", [feature(3, land, true)], true),
   ];
+  if (building) {
+    layers.push(
+      layer("buildings", [
+        feature(
+          3,
+          polygon([
+            [
+              [1536, 1536],
+              [2560, 1536],
+              [2560, 2560],
+              [1536, 2560],
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
   if (dense) {
     const streets = [];
     for (let row = 0; row < streetRows; row++) {

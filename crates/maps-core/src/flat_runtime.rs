@@ -248,6 +248,12 @@ impl FlatRasterRuntime {
                 {
                     return Err(FlatRasterRuntimeError::InvalidSource);
                 }
+                // A transport refresh changes request lifetime, not data identity.
+                // Already decoded tiles remain ready under the same cache namespace.
+                if previous.transport != tileset.transport {
+                    self.pending.clear();
+                    self.failed.clear();
+                }
                 self.tileset = Some(tileset);
                 return Ok(());
             }
