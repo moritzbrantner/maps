@@ -36,11 +36,13 @@ const ACCEPTANCE_FLOWS = [
 
 export type MapsRuntimeAcceptanceProps = {
   includePolygon?: boolean;
+  maxZoom?: number;
   rasterTileUrl?: string;
 };
 
 export function MapsRuntimeAcceptance({
   includePolygon = true,
+  maxZoom,
   rasterTileUrl,
 }: MapsRuntimeAcceptanceProps = {}) {
   const [controller, setController] = useState<MapSurfaceController | null>(null);
@@ -73,6 +75,7 @@ export function MapsRuntimeAcceptance({
           tiles: rasterTileUrl ?? ACCEPTANCE_RASTER_TILE,
         }}
         maxBounds={[-25, 34, 35, 66]}
+        maxZoom={maxZoom}
         onMapControllerReady={setController}
         onViewStateChange={(next) => {
           setViewState(next);

@@ -274,7 +274,12 @@ export function summarizePoints(points: MapPoint[]) {
     `"use client";
 
 import "@moritzbrantner/maps/styles.css";
-import { ClusteredMap, type MapPoint } from "@moritzbrantner/maps";
+import { ClusteredMap, type MapPoint, type FlatMapRuntime } from "@moritzbrantner/maps";
+
+export const nativeRuntime: FlatMapRuntime = "maps";
+export const referenceRuntime: FlatMapRuntime = "maplibre";
+// @ts-expect-error The removed Three.js selector is intentionally not a packaged API.
+export const retiredRuntime: FlatMapRuntime = "webgl";
 
 export function ClientMap({ points }: { points: MapPoint[] }) {
   return <ClusteredMap fitToData={false} points={points} style={{ height: 320 }} />;

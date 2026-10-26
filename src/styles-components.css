@@ -27,19 +27,6 @@
     @apply bg-slate-950;
   }
 
-  .mb-maps__webgl-flat {
-    @apply touch-none select-none;
-    cursor: grab;
-  }
-
-  .mb-maps__webgl-flat:active {
-    cursor: grabbing;
-  }
-
-  .mb-maps__webgl-flat-canvas {
-    @apply block size-full;
-  }
-
   .mb-maps .maplibregl-ctrl-top-left {
     @apply left-4 top-4;
   }

@@ -52,7 +52,7 @@ import {
   serializeMapViewState,
   useControllableMapViewState,
 } from "./map-view-state";
-import { WebGlFlatRuntime, type FlatMapRuntime } from "./webgl-flat-runtime";
+
 import type { MapContextMenuContext, MapFeatureContextMenuContext } from "./map-interaction";
 import {
   MapHoverContext,
@@ -82,6 +82,8 @@ export {
   type MapInteractionMode,
   type MapSurfaceContextValue,
 } from "./map-surface-context";
+
+export type FlatMapRuntime = "maplibre";
 
 export type MapViewProps = MapViewportProps & {
   children?: ReactNode;
@@ -1018,24 +1020,6 @@ export function MapView({
         {usesMapLibreRuntime ? (
           <div ref={containerRef} className="mb-maps__canvas" />
         ) : null}
-        {mapDisplay === "flat" && flatRuntime === "webgl" ? (
-          <WebGlFlatRuntime
-            mapStyle={mapStyle}
-            maxBounds={resolvedMaxBounds ?? undefined}
-            maxZoom={resolvedMaxZoom}
-            viewState={currentViewState}
-            onContextMenu={(context) => {
-              handleMapContextMenu(context, {
-                onMapContextMenu,
-                renderMapContextMenu,
-              });
-            }}
-            onReady={() => {
-              setIsReady(true);
-            }}
-            onViewStateChange={setViewState}
-          />
-        ) : null}
         {mapChildren.layers}
         {mapChildren.overlays.length > 0 ? (
           <div className="mb-maps__overlays">{mapChildren.overlays}</div>
@@ -1058,7 +1042,6 @@ export function MapView({
   );
 }
 
-export type { FlatMapRuntime } from "./webgl-flat-runtime";
 
 export type {
   MapSurfaceController,

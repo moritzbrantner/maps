@@ -92,6 +92,35 @@ test("device loss preserves mixed Map Layers and selection on Canvas @smoke", as
   await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Flow acceptance-route");
 });
 
+test("Maps runtime preserves constrained navigation and picking after resize @smoke", async ({ page }) => {
+  await page.goto("/?e2e=1&acceptance=maps-runtime-constrained");
+  const map = page.getByLabel("Maps Rust runtime acceptance");
+  const canvas = map.locator('canvas[data-flat-runtime="maps"]');
+  const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+  const viewState = page.getByTestId("maps-runtime-view-state");
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  const before = await canvas.boundingBox();
+  expect(before).toBeTruthy();
+
+  await page.setViewportSize({ width: 780, height: 1000 });
+  await expect.poll(async () => (await canvas.boundingBox())?.width).toBeLessThan(before!.width);
+  await expect.poll(async () => canvas.evaluate((element) => element.width / devicePixelRatio)).toBeCloseTo(
+    (await canvas.boundingBox())!.width, 0,
+  );
+  await canvas.scrollIntoViewIfNeeded();
+  const bounds = (await overlay.boundingBox())!;
+  const point = await overlayPointPosition(page);
+  await page.mouse.click(bounds.x + point.x, bounds.y + point.y);
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Selected Berlin");
+  await page.keyboard.press("Escape");
+
+  await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.75);
+  await page.mouse.wheel(0, -10_000);
+  await expect.poll(async () => parseViewState(await viewState.textContent()).zoom).toBe(8);
+  await expect.poll(async () => isInsideAcceptanceBounds(parseViewState(await viewState.textContent()))).toBe(true);
+  await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+});
+
 test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ page }) => {
   await page.goto("/?e2e=1&acceptance=maps-runtime");
 

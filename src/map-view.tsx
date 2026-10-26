@@ -33,6 +33,12 @@ export function MapView(props: MapViewProps) {
     void ensureMapsAggregationWasm();
   }, []);
 
+  if (String(flatRuntime) === "webgl") {
+    throw new Error(
+      'flatRuntime="webgl" was retired; use flatRuntime="maps" with an explicit raster tile style. MapLibre-specific styles and interactions still require flatRuntime="maplibre".',
+    );
+  }
+
   if (mapDisplay === "flat" && flatRuntime === "maps") {
     return <MapsMapView {...props} flatRuntime="maps" mapDisplay="flat" />;
   }

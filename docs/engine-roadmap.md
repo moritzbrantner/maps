@@ -108,6 +108,13 @@ Deliverables:
 
 Exit criterion: a useful `MapView` renders and interacts with raster basemaps and application data with no MapLibre instance or runtime dependency in the execution path. This is Leaflet-class independence v1.
 
+The private Three.js `flatRuntime="webgl"` implementation is retired under #104.
+Its raster/navigation responsibilities use the existing `flatRuntime="maps"`
+Rust/WASM host and deterministic Canvas/WebGPU fallback; callers migrate
+explicitly as described in the [runtime notes](../README.md#migrating-the-retired-webgl-flat-map).
+The MapLibre default/reference, Globe Map and remaining MapLibre-only capability
+boundaries stay separate from this removal.
+
 ## Milestone C — Maps Rendering Platform
 
 Generalize the Maps-owned render architecture into a complete flat-map rendering platform.

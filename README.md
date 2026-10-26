@@ -139,7 +139,7 @@ controller?.fitPoints(points, { padding: 72 });
   `@moritzbrantner/maps/editor` and `@moritzbrantner/maps/timeline`
   entrypoints, which hold `EditableGeoJsonMap` and the GeoJSON timeline exports.
   The root entry does not import it.
-- MapLibre, Three, Turf helpers, d3-delaunay, polygon-clipping,
+- MapLibre, Turf helpers, d3-delaunay, polygon-clipping,
   and related map/runtime packages are included as package dependencies.
 - Rendering map components requires browser DOM APIs and WebGL/canvas support.
 - Point clustering runs in the Maps Rust/WASM runtime (`@moritzbrantner/maps/wasm`).
@@ -162,6 +162,28 @@ controller?.fitPoints(points, { padding: 72 });
 - `@moritzbrantner/maps/core` is intended for data-only usage and must remain
   free of React, DOM, MapLibre, Three, `@moritzbrantner/ui`, and timeline editor
   runtime imports.
+
+### Migrating the retired WebGL Flat Map
+
+`flatRuntime="webgl"` and its Three.js implementation have been removed. Select
+`flatRuntime="maps"` explicitly for the Rust/WASM camera and raster renderer:
+
+```tsx
+<MapView
+  flatRuntime="maps"
+  mapStyle={{ tiles: "https://tiles.example.com/{z}/{x}/{y}.png" }}
+  initialViewState={{ center: [13.405, 52.52], zoom: 6 }}
+/>
+```
+
+Use `mapStyle={{ tiles: false }}` for a tile-free Map View. Pass tile templates in
+the explicit raster style, not as a MapLibre style URL. Replace MapLibre-specific
+`onMapReady` calls with `onMapControllerReady` when using the Maps runtime.
+The removed selector fails with a migration error for JavaScript callers; it does
+not silently choose another runtime. MapLibre styles, editing/measurement and
+Globe Maps continue to use the existing MapLibre path. This removes the private
+Three.js renderer without changing the default runtime or claiming full MapLibre
+capability parity.
 
 ## Verification
 
