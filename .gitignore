@@ -24,3 +24,5 @@ public/wasm/
 public/evidence/
 .github-pages-template/
 public/benchmarks/
+
+.runtime-profiler/
