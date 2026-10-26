@@ -35,6 +35,12 @@ run("bun", ["run", "verify:engine-camera:prepared"], {
 capture("reference", referenceBundle);
 capture("candidate", candidateBundle);
 
+run("bun", ["run", "verify:engine-browser-evidence"], {
+  cwd: rootDir,
+  env: { ...process.env, MAPS_BROWSER_EVIDENCE_DIR: path.join(evidenceRoot, "browser") },
+  label: "Chromium trace evidence and strict comparability",
+});
+
 const score = run(runtimeProfiler, [
   "score",
   "--reference",

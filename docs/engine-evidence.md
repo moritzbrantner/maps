@@ -74,7 +74,19 @@ The selector name is declared as inherited environment in the profiler scenario 
 
 For this foundation milestone, Moonlight requires at least five measured samples, complete candidate execution, and a runtime score of at least 75. That threshold is a broad viability guard, not a package-size or microbenchmark optimization target. A lower score fails acceptance; valid but non-comparable evidence is inconclusive and therefore does not pass.
 
-The current runtime-profiler command collector records process wall time, process success/timeout state and supported process memory evidence around the real browser journey. Rich Chromium trace ingestion, long-task attribution, React render summaries and source-level browser hotspots remain runtime-profiler platform work. Maps does not fabricate those metrics locally or claim they are already covered by this milestone.
+The process collector continues to record process wall time, success/timeout state and supported process memory around the real browser journey. Its five-sample Moonlight policy remains separate from browser trace evidence.
+
+`runtime-profiler-scenarios/camera-world-pan-browser-v1.yaml` uses the same canonical camera identity with the shared `browser-chromium` collector. Both collectors execute `scripts/profile-engine-camera-journey.ts`; Maps arranges the built, local fixture and owns the camera operations, while runtime-profiler owns Chromium launch, CDP tracing, normalization, immutable bundle validation and browser comparability. The browser collector captures exactly one journey containing 12 scenario executions. It does not supply process samples or satisfy the five-sample Moonlight process policy.
+
+`verify:engine-runtime-evidence` also runs `verify:engine-browser-evidence` and preserves its `browser/` reference/candidate bundles plus the upstream `comparability.json` report in the existing artifact. The browser verifier requires real renderer-main tasks and normalized hot paths, all 12 explicit candidate boundary measures, and the upstream `comparable` result. Missing, incomplete or incompatible browser evidence fails this evidence command; comparable is an identity assessment, not a performance verdict. Run only browser evidence with:
+
+```sh
+bun run verify:engine-browser-evidence
+```
+
+This command expects an already built WASM package, the pinned runtime-profiler CLI, Node 24 or newer (for the TypeScript journey module), and installed Playwright Chromium. Output is immutable; choose a fresh `MAPS_BROWSER_EVIDENCE_DIR` for another run. The full command uses its existing `MAPS_RUNTIME_EVIDENCE_DIR` and nests browser bundles beneath it.
+
+The candidate emits ordinary User Timing measures named `runtime-profiler:js-to-wasm:camera-world-pan` around scenario serialization, the WASM call and returned observation. These describe the inclusive instrumented section, not isolated marshaling/copying overhead. Do not infer a separate WASM-to-JavaScript cost from it. Raw trace events remain artifacts; bounded long-task/hot-path/boundary summaries come from runtime-profiler. Trace durations include loading and fixture execution, while the explicit measure identifies only the scenario boundary section. React render summaries, source-file/line attribution, worker/GPU work and browser memory remain outside this shipped collector's scope and unavailable here. #76 therefore remains open for its richer attribution requirements.
 
 ## Comparability
 

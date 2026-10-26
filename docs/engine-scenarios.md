@@ -232,3 +232,13 @@ Maps owns the fixture and normalized map-domain observations. `runtime-profiler`
 ## Growth rule
 
 Add a new scenario only when it introduces a materially different workload family or acceptance boundary. Do not add scenarios merely because a new internal type, layer implementation or optimization exists.
+
+## Camera browser trace evidence
+
+The canonical `camera-world-pan-v1` workload is also captured through
+`runtime-profiler-scenarios/camera-world-pan-browser-v1.yaml`. The Maps-owned
+TypeScript journey arranges the same built local fixture used by process capture;
+runtime-profiler owns the real Chromium trace, normalized renderer-main/long-task
+and hot-path summaries, explicit JS/WASM measures and strict comparability.
+See [the engine evidence contract](engine-evidence.md) for commands, immutable
+outputs, the separate process/Moonlight policy and unsupported attribution.
