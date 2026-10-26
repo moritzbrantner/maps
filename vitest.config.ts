@@ -13,6 +13,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     include: [
+      "scripts/npm-pack-result.test.ts",
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
       "demo/**/*.test.ts",

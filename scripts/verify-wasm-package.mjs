@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
+import { parseNpmPackResult } from "./npm-pack-result.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
@@ -15,8 +16,7 @@ let preview;
 
 try {
   const pack = run("npm", ["pack", "--ignore-scripts", "--json"], rootDir);
-  // npm 10 runs `prepare` despite --ignore-scripts; its output precedes the JSON report.
-  const packInfo = JSON.parse(pack.stdout.slice(pack.stdout.lastIndexOf("\n[") + 1))[0];
+  const packInfo = parseNpmPackResult(pack.stdout);
   tarballPath = path.join(rootDir, packInfo.filename);
   const packedFiles = new Set(packInfo.files.map((file) => file.path));
   const requiredFiles = [
@@ -41,6 +41,7 @@ try {
         dependencies: {
           "@moritzbrantner/maps": `file:${tarballPath}`,
           vite: rootPackage.devDependencies.vite,
+          supercluster: rootPackage.devDependencies.supercluster,
         },
         scripts: {
           build: "vite build",
@@ -56,8 +57,12 @@ try {
     '<!doctype html><html><body><div id="root"></div><script type="module" src="/src/main.js"></script></body></html>',
   );
   writeFileSync(
+    path.join(tempRoot, "src", "supercluster-aggregation.ts"),
+    readFileSync(path.join(rootDir, "scripts", "engine-reference", "supercluster-aggregation.ts")),
+  );
+  writeFileSync(
     path.join(tempRoot, "src", "main.js"),
-    String.raw`import { createPointAggregationIndex } from "@moritzbrantner/maps/core";
+    String.raw`import { createSuperclusterReference } from "./supercluster-aggregation.ts";
 import init, {
   MapsPointAggregationIndex,
   normalizeMapPoints,
@@ -160,7 +165,7 @@ window.mapsWasmEvidence = (async () => {
 
 function runFixture(fixture) {
   const options = { ...DEFAULT_OPTIONS, ...(fixture.options ?? {}) };
-  const control = createPointAggregationIndex(fixture.points, options);
+  const control = createSuperclusterReference(fixture.points, options);
   const rustPoints = normalizeMapPoints(fixture.points);
   const rust = new MapsPointAggregationIndex(rustPoints, options);
 
@@ -187,7 +192,7 @@ function runDuplicateIdContract() {
     { id: "duplicate", label: "first", latitude: 48, longitude: 8, metrics: { count: 1 } },
     { id: "duplicate", label: "second", latitude: 49, longitude: 9, metrics: { count: 2 } },
   ];
-  const control = createPointAggregationIndex(points, DEFAULT_OPTIONS);
+  const control = createSuperclusterReference(points, DEFAULT_OPTIONS);
   const rustPoints = normalizeMapPoints(points);
   const rust = new MapsPointAggregationIndex(rustPoints, DEFAULT_OPTIONS);
 
@@ -431,7 +436,7 @@ function runPerformanceEvidence() {
     const rustPoints = normalizeForRust(points);
 
     const controlBuildStart = performance.now();
-    const control = createPointAggregationIndex(points, DEFAULT_OPTIONS);
+    const control = createSuperclusterReference(points, DEFAULT_OPTIONS);
     const controlBuildMs = performance.now() - controlBuildStart;
 
     const rustBuildStart = performance.now();

@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseNpmPackResult } from "./npm-pack-result.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
@@ -13,8 +14,7 @@ let tarballPath = null;
 
 try {
   const pack = run("npm", ["pack", "--ignore-scripts", "--json"], rootDir);
-  // npm 10 runs `prepare` despite --ignore-scripts; its output precedes the JSON report.
-  const packInfo = JSON.parse(pack.stdout.slice(pack.stdout.lastIndexOf("\n[") + 1))[0];
+  const packInfo = parseNpmPackResult(pack.stdout);
 
   tarballPath = path.join(rootDir, packInfo.filename);
 
@@ -35,6 +35,9 @@ try {
 
 function verifyFullViteConsumer(directory, packageTarball) {
   writePackage(directory, {
+    // Timeline's documented Git-source contract requires its trusted source
+    // prerequisites directly; Bun may skip transitive Git prepare scripts.
+    "@moenarch/editor-core": version("@moenarch/editor-core"),
     "@moritzbrantner/maps": `file:${packageTarball}`,
     "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
     "@moritzbrantner/ui": version("@moritzbrantner/ui"),
@@ -231,6 +234,7 @@ function hasRuntimeImport(contents, packageName) {
 
 function verifyNextStyleBoundaries(directory, packageTarball) {
   writePackage(directory, {
+    "@moenarch/editor-core": version("@moenarch/editor-core"),
     "@moritzbrantner/maps": `file:${packageTarball}`,
     "@moritzbrantner/timeline-editor": version("@moritzbrantner/timeline-editor"),
     "@moritzbrantner/ui": version("@moritzbrantner/ui"),

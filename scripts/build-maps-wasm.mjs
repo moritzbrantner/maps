@@ -52,6 +52,9 @@ run("wasm-opt", [
   "--enable-bulk-memory",
   "--enable-nontrapping-float-to-int",
   "--dae",
+  // Keep the existing optimization level's gzip behavior while deduplicating
+  // similar monomorphized bodies. Higher levels reduced raw bytes but grew gzip.
+  "--merge-similar-functions",
   "-o",
   optimizedWasmOutput,
 ]);

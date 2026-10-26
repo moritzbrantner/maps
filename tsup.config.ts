@@ -20,6 +20,9 @@ export default defineConfig({
   format: ["esm"],
   minifyWhitespace: true,
   minifySyntax: true,
+  // Compact local identifiers while preserving observable function/class names.
+  minifyIdentifiers: true,
+  keepNames: true,
   outDir: "dist",
   splitting: true,
 });

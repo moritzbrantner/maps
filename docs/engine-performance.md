@@ -325,3 +325,43 @@ remain open. No complete Fast verdict follows from these repairs.
 532,422 bytes (budget 534,000), compressed package 403,498 (405,500), unpacked
 1,622,346 (1,626,000). This was the owner's decision. The per-PR WASM attribution is in
 `scripts/verify-package-size.mjs`; the largest step is #151's tile prefetch (+25,560 bytes).
+
+## Package acceptance repair — 2026-10-26
+
+The package gate at `e8eace88a03baff2e43c42f8ce367e8aaef02bfa` exceeded all
+three aggregate size limits. With the same runtime features, exports and package
+contents, identifier minification with preserved function/class names and the
+Binaryen `merge-similar-functions` pass produce:
+
+| Artifact boundary | Before | After | Unchanged limit |
+| --- | ---: | ---: | ---: |
+| npm compressed package | 455,498 bytes | 445,314 bytes | 446,000 bytes |
+| npm unpacked package | 1,790,144 bytes | 1,534,263 bytes | 1,752,500 bytes |
+| WebGPU-enabled Maps WASM | 633,382 bytes | 624,781 bytes | 625,500 bytes |
+
+These are local package-size observations, not runtime-performance or Fast
+acceptance. The build still includes the complete public entrypoints, declarations,
+fallback styles and WebGPU runtime. Its 59 WASM exports are unchanged. The CSS is
+regenerated with the already-pinned Tailwind 4.3.3 rather than the stale 4.3.0
+generated output; no stylesheet source or dependency version changed.
+
+The measurements used Rust 1.99.0, wasm-bindgen 0.2.129, Binaryen 132, tsup 8.5.1,
+Bun 1.4.3 and npm 12.2.0 on Linux x64. A single post-link run on the same Rust
+input took 22.70 seconds for the previous `-O1` command and 10.19 seconds with
+the additional merge pass. These uncontrolled samples do not establish a build-time
+speedup. `-Oz` was rejected: it reduced raw WASM to 597,417 bytes but increased
+its gzip size and failed the complete compressed-package gate.
+
+Packed-consumer checks follow Timeline Editor's established Git-source install
+contract: the optional source peer's exact UI and editor-core prerequisites are
+listed and trusted directly. This handles Bun's skipped transitive Git preparation
+without adding a new Maps peer or weakening optional-peer coverage. The shared
+npm pack parser accepts both npm 10's array and npm 12's package-keyed envelope.
+The broader representative Fast acceptance in #169 remains open.
+
+The packed-WASM verifier uses Supercluster 8.0.1 only in its disposable reference
+fixture. It cannot use an uninitialized `createPointAggregationIndex()` as a
+clustering oracle: the approved #47 no-WASM/SSR contract intentionally returns
+unclustered points. The reference adapter is outside all package entries and
+retains the canonical, seeded, metric, expansion, leaf and large-index checks;
+it does not restore a JavaScript production clustering authority.
