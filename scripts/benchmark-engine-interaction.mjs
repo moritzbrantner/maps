@@ -1,3 +1,4 @@
+import { WEBGPU_SWIFTSHADER_ARGS } from "../e2e/helpers/webgpu-args.ts";
 import { profileTilesetSourceJourney } from "./profile-tileset-source-journey.ts";
 // Full-page descriptive frame pacing; not a GPU completion/FPS or Moonlight verdict.
 import { chromium } from "@playwright/test";
@@ -58,7 +59,7 @@ const server = await preview({
 let browser;
 let evidence;
 try {
-  const args = ["--enable-unsafe-swiftshader", "--enable-unsafe-webgpu", "--use-gl=swiftshader"];
+  const args = WEBGPU_SWIFTSHADER_ARGS;
   browser = await chromium.launch({ args });
   const page = await browser.newPage({
     viewport: { width: scenario.viewport.width, height: scenario.viewport.height },

@@ -59,5 +59,5 @@ export {
 export { type HeatFieldRenderMode } from "../heat-layer";
 export { FlatGeoJsonMap, type FlatGeoJsonMapProps } from "../flat-geojson-map";
 
-export { validateMapsTileset, type MapsTileset } from "../maps-tileset";
+export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "../maps-tileset";
 export { type MapsVectorBasemapStyle } from "../maps-tileset-style";

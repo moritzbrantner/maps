@@ -10,7 +10,11 @@ export function createFixtureTileset(
     sourceId: `fixture-${source}`,
     dataRevision: revision,
     format: "mvt",
-    schema: { id: "shortbread", version: "1.0", sourceLayers: ["water_polygons", "land"] },
+    schema: {
+      id: "shortbread",
+      version: "1.0",
+      sourceLayers: ["water_polygons", "land", "streets"],
+    },
     transport: {
       kind: "xyz",
       urlTemplate: `${baseUrl}tilesets/fixture-${source}.mvt?z={z}&x={x}&y={y}`,

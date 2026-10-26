@@ -1,12 +1,10 @@
 /** Versioned data-only contract; style and historical interpretation are separate inputs. */
-export type MapsTileset = {
+export type MapsTilesetMetadata = {
   version: 1;
   sourceId: string;
   dataRevision: string;
   format: "mvt";
   schema: { id: "shortbread"; version: "1.0"; sourceLayers: readonly string[] };
-  /** Future archive transports extend this boundary, without changing canonical tile identity. */
-  transport: { kind: "xyz"; urlTemplate: string };
   projection: "web-mercator";
   scheme: "xyz";
   /** West, south, east, north. West > east denotes antimeridian coverage. */
@@ -18,6 +16,12 @@ export type MapsTileset = {
   license: string;
   provenance: string;
   observation?: { snapshot: string; effectiveDate?: string };
+};
+
+/** A metadata-valid artifact becomes activatable only with a supported transport. */
+export type MapsTileset = MapsTilesetMetadata & {
+  /** Future archive transports extend this boundary, without changing canonical tile identity. */
+  transport: { kind: "xyz"; urlTemplate: string };
 };
 
 const SOURCE_LAYERS = [
@@ -32,23 +36,24 @@ const SOURCE_LAYERS = [
 ];
 const MERCATOR_LATITUDE = 85.0511287798066;
 
-/** Parse untrusted manifests before any browser side effects. Rust validates again at its boundary. */
-export function validateMapsTileset(input: unknown): MapsTileset {
-  const fail = (message: string): never => {
-    throw new Error(`Maps Tileset: ${message}`);
-  };
-  const record = (value: unknown): Record<string, unknown> => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return fail("expected manifest object");
-    }
-    return value as Record<string, unknown>;
-  };
-  const text = (value: unknown): string => {
-    if (typeof value !== "string" || !value.trim() || value.length > 4096) {
-      return fail("required metadata is missing or too long");
-    }
-    return value;
-  };
+const fail = (message: string): never => {
+  throw new Error(`Maps Tileset: ${message}`);
+};
+const record = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fail("expected manifest object");
+  }
+  return value as Record<string, unknown>;
+};
+const text = (value: unknown): string => {
+  if (typeof value !== "string" || !value.trim() || value.length > 4096) {
+    return fail("required metadata is missing or too long");
+  }
+  return value;
+};
+
+/** Validate/copy common producer metadata. This does not grant archive or activation support. */
+export function validateMapsTilesetMetadata(input: unknown): MapsTilesetMetadata {
   const value = record(input);
   if (
     value.version !== 1 ||
@@ -70,18 +75,6 @@ export function validateMapsTileset(input: unknown): MapsTileset {
     layers.some((layer) => typeof layer !== "string" || !SOURCE_LAYERS.includes(layer))
   ) {
     return fail("unsupported Shortbread source layers");
-  }
-  const transport = record(value.transport);
-  if (transport.kind !== "xyz" || typeof transport.urlTemplate !== "string") {
-    return fail("unsupported transport; expected XYZ");
-  }
-  const urlTemplate = transport.urlTemplate;
-  if (
-    urlTemplate.length > 8192 ||
-    !["{z}", "{x}", "{y}"].every((token) => urlTemplate.includes(token)) ||
-    !/^(https?:\/\/|\/)/.test(urlTemplate)
-  ) {
-    fail("XYZ requires an HTTP(S) or root-relative z/x/y template");
   }
   const minZoom = value.minZoom;
   const maxZoom = value.maxZoom;
@@ -128,7 +121,6 @@ export function validateMapsTileset(input: unknown): MapsTileset {
     dataRevision: text(value.dataRevision),
     format: "mvt",
     schema: { id: "shortbread", version: "1.0", sourceLayers: [...layers] },
-    transport: { kind: "xyz", urlTemplate },
     projection: "web-mercator",
     scheme: "xyz",
     bounds: [west!, south!, east!, north!],
@@ -149,4 +141,23 @@ export function validateMapsTileset(input: unknown): MapsTileset {
         }
       : {}),
   };
+}
+
+/** Validate the complete activatable source; metadata validity alone is insufficient. */
+export function validateMapsTileset(input: unknown): MapsTileset {
+  const metadata = validateMapsTilesetMetadata(input);
+  const value = record(input);
+  const transport = record(value.transport);
+  if (transport.kind !== "xyz" || typeof transport.urlTemplate !== "string") {
+    return fail("unsupported transport; expected XYZ");
+  }
+  const urlTemplate = transport.urlTemplate;
+  if (
+    urlTemplate.length > 8192 ||
+    !["{z}", "{x}", "{y}"].every((token) => urlTemplate.includes(token)) ||
+    !/^(https?:\/\/|\/)/.test(urlTemplate)
+  ) {
+    fail("XYZ requires an HTTP(S) or root-relative z/x/y template");
+  }
+  return { ...metadata, transport: { kind: "xyz", urlTemplate } };
 }

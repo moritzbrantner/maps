@@ -207,7 +207,14 @@ export function EngineInspector() {
             <option value="a2">Fixture A · revision 2</option>
           </select>
           {activeTileset ? (
-            <dl className="engine-inspector__list">
+            <dl
+              className="engine-inspector__list"
+              data-map-source-stats-id={stats?.tileset?.descriptor.sourceId}
+              data-map-source-stats-state={stats?.tileset?.state}
+              data-map-source-stats-revision={stats?.tileset?.descriptor.dataRevision}
+              data-map-source-rgba-mvt-bytes={stats?.tileset?.retainedBytes}
+              data-map-source-gpu-buffer-bytes={stats?.retainedVectorBytes}
+            >
               <Row
                 label="Source / revision"
                 value={`${activeTileset.sourceId} / ${activeTileset.dataRevision}`}

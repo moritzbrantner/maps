@@ -42,5 +42,23 @@ describe("Maps Tileset", () => {
 
 it("validates the producer-facing documented manifest", async () => {
   const { default: manifest } = await import("../docs/fixtures/maps-tileset-v1.json");
-  expect(validateMapsTileset(manifest).schema.sourceLayers).toEqual(["water_polygons", "land", "streets"]);
+  expect(validateMapsTileset(manifest).schema.sourceLayers).toEqual([
+    "water_polygons",
+    "land",
+    "streets",
+  ]);
+});
+
+it("validates metadata without inventing an activatable transport", async () => {
+  const { validateMapsTilesetMetadata } = await import("./maps-tileset");
+  const { transport, ...metadata } = fixtureTileset;
+  expect(validateMapsTileset({ ...metadata, transport })).toEqual(fixtureTileset);
+  expect(validateMapsTilesetMetadata(metadata)).toEqual(metadata);
+  expect(() => validateMapsTileset(metadata)).toThrow(/Maps Tileset/);
+  expect(() => validateMapsTilesetMetadata({ ...metadata, dataRevision: "" })).toThrow(
+    /Maps Tileset/,
+  );
+  expect(() =>
+    validateMapsTilesetMetadata({ ...metadata, schema: { ...metadata.schema, version: "2" } }),
+  ).toThrow(/Shortbread/);
 });

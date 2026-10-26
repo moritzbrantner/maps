@@ -38,10 +38,26 @@ export async function profileTilesetSourceJourney(
     if (!(await readySource())) {
       throw new Error(`Source ${phase} did not become ready`);
     }
+    await sourcePage.waitForFunction(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-flat-runtime=maps]");
+      const inspected = document.querySelector<HTMLElement>("[data-map-source-stats-id]");
+      return (
+        inspected?.dataset.mapSourceStatsState === "ready" &&
+        canvas?.dataset.mapSourceId === inspected?.dataset.mapSourceStatsId &&
+        canvas?.dataset.mapSourceRevision === inspected?.dataset.mapSourceStatsRevision
+      );
+    });
     const observation = await sourcePage.evaluate(() => {
       const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-flat-runtime=maps]")!;
+      const inspected = document.querySelector<HTMLElement>("[data-map-source-stats-id]")!;
       const numeric = (key: string) => Number(canvas.dataset[key]);
       return {
+        backend: canvas.dataset.mapBaseRenderer,
+        retainedRgbaAndMvtBytesLowerBound: Number(inspected.dataset.mapSourceRgbaMvtBytes),
+        gpuBufferBytes:
+          inspected.dataset.mapSourceGpuBufferBytes === undefined
+            ? null
+            : Number(inspected.dataset.mapSourceGpuBufferBytes),
         sourceId: canvas.dataset.mapSourceId,
         revision: canvas.dataset.mapSourceRevision,
         requests: numeric("mapSourceRequests"),
@@ -100,7 +116,7 @@ export async function profileTilesetSourceJourney(
     backend: await sourceCanvas.getAttribute("data-map-base-renderer"),
     observations: sourceObservations,
     memoryScope:
-      "Chromium JS heap is descriptive and GC-dependent; decoded images are 512×512 RGBA per retained tile, plus MVT bytes, decoded pixel objects and GPU buckets. No process/GPU-total or controlled baseline verdict.",
+      "Chromium JS heap is descriptive, privacy-coarsened and GC-dependent; retained RGBA/MVT lower-bound bytes and actual retained GPU geometry-buffer sizes are separate metrics; decoded images are 512×512 RGBA per retained tile, plus MVT bytes, decoded pixel objects and GPU buckets. No process/GPU-total or controlled baseline verdict.",
     comparison: {
       status: "unavailable",
       reason:

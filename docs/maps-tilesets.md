@@ -17,6 +17,18 @@ before browser effects. Rust validates the authoritative source contract again
 when activating it. Unsupported format/schema/transport and malformed metadata
 fail explicitly; they do not start a MapLibre instance or silently change sources.
 
+## Producer metadata without transport
+
+`MapsTilesetMetadata` and `validateMapsTilesetMetadata` expose the same data
+fields and validation body without a transport requirement, through `core`,
+`flat` and root exports. A Maps-specific artifact recipe can verify those common
+fields before a reader exists, keeping its archive reference in asset-owned
+output. **Metadata-valid is not activatable**: it proves neither PMTiles support
+nor an archive-to-source binding. `validateMapsTileset` composes the common
+metadata validator with the currently supported XYZ transport. #269 owns the
+PMTiles transport case and its binding; producers must not fabricate an XYZ URL
+merely to satisfy a full-source validator.
+
 ## Manifest version 1
 
 A complete local example lives in
