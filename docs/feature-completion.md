@@ -148,3 +148,34 @@ source revision `c104800c7aaeaea12d56f9093e71bdef6a2ce6fa`):
   The equivalent main baseline was 442,200 compressed / 1,525,127 unpacked /
   624,781 WASM bytes. This feature is not declared complete while required size
   acceptance remains unresolved.
+
+The `f034eed` capture and producer decoder proof above are historical, scoped
+observations. They predate the following correctness repair and are not new-head
+performance claims; the decoder and shared data-field contract did not change.
+
+Follow-up executable repair `4b8eda5eca95196fafba56b4ea61f998544ece36`:
+
+- Same-identity XYZ URL/credential refresh now clears Rust pending/failed work,
+  aborts old browser loads and reissues missing tiles without evicting ready
+  decoded data or GPU buckets. Metadata/date-only and style-only updates do not
+  restart the network. Non-cooperative old responses cannot overwrite or remove
+  replacement work.
+- Canvas now applies the resolved building-outline opacity, matching WebGPU at
+  opacity 0, 0.5 and 1 without fetching, decoding or rebuilding buckets.
+- The native regression first failed with no replacement request; both public
+  URL-refresh regressions first failed (no new request / old HTTP 401 remained).
+  The Canvas outline regression first showed opaque black instead of the
+  underlying `[196, 216, 180]` color at opacity zero. These cases then passed.
+- Required Rust/WASM and agent gates passed (64 files / 579 tests), as did all
+  six native source tests, fourteen public source browser cases, the complete
+  76-test Chromium smoke suite, and `format:check`. The two formatting failures
+  observed in the earlier PR CI were repaired in the same change.
+- Full package validation again passed API, tests, build, entry bundles and clean
+  packed consumers, then failed only the unchanged size ceilings: **466,500 >
+  446,000 compressed bytes; 678,727 > 625,500 WASM bytes**. Unpacked 1,600,423 <
+  1,752,500 bytes, 75 < 84 entries, and both stylesheet limits passed.
+  Candidate growth over the same main baseline is 24,300 compressed, 75,296
+  unpacked and 53,946 WASM bytes. WASM SHA-256:
+  `2440c4b5e2cc8bb8992adb364e2961c21eb48e9b2bf34dfc475cb600e8945971`.
+  The existing #268.Q1 decision remains open; no ceiling was changed and the
+  feature is not declared complete or mergeable.

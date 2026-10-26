@@ -274,3 +274,10 @@ non-cooperative reversed responses, camera/application selection and Inspector
 failures. The canonical interaction command records dense-fixture source switch
 observations in its existing artifact; descriptive measurements and an unavailable
 historical source-switch comparison are reported separately.
+
+Same-revision XYZ transport refresh is also covered on the public Map View:
+pending non-cooperative old responses and failed credential URLs are replaced,
+while loaded data, opaque source identity and camera remain unchanged. Observation
+metadata and resolved paint do not restart requests. A deterministic building
+fixture checks outline opacity at 0, 0.5 and 1 on WebGPU and Canvas without new
+requests, decodes or bucket builds.

@@ -69,12 +69,21 @@ source resources are evicted first when the global budget is exceeded; evictions
 release their Canvas images, decoded data, bytes and GPU buckets. The renderer
 stores resources under the Rust-supplied namespace and does not choose retention.
 
+Refreshing an XYZ URL or credentials for the same data identity clears Rust's
+pending/failed request state and aborts outgoing browser loads, then requests the
+missing tiles through the new transport. Already loaded decoded data and GPU
+buckets remain retained under the same namespace. A metadata/date-only change
+preserves pending work and failure suppression; a style-only change also leaves
+network lifetime unchanged.
+
 The browser aborts outgoing requests and checks their exact load handle before
 accepting any result, including non-cooperative transports that resolve after
 abort or after A → B → A. A cache hit restores decoded Canvas data and GPU buckets
 without a request, decode or bucket build. Resolved-paint changes update the GPU
 palette and repaint the retained Canvas representation without fetching or
-re-decoding tiles. Rust's source-aware completion boundary rejects a different
+re-decoding tiles. Canvas and WebGPU both honor the resolved building-outline
+opacity, including hidden and partially transparent outlines. Rust's source-aware
+completion boundary rejects a different
 source namespace as well.
 
 `tileLimits` exposes the existing Rust `maxVisibleTiles`, `cacheCapacity` and
