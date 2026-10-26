@@ -2,7 +2,9 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "allowImportingTsExtensions": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -16,6 +18,7 @@
     "scripts/npm-pack-result.ts",
     "scripts/npm-pack-result.test.ts",
     "scripts/profile-engine-camera-journey.ts",
-    "scripts/verify-engine-browser-evidence.ts"
+    "scripts/verify-engine-browser-evidence.ts",
+    "scripts/profile-tileset-source-journey.ts"
   ]
 }

@@ -186,3 +186,20 @@ diagnostics with distinct coverage, not competing runtime acceptance:
 Their canonical family links are declared in each representative fixture's
 `relatedKernelDiagnostics`. None replaces canonical browser journeys, publishes
 a Moonlight verdict, or establishes first-party runtime authority.
+
+## Versioned tileset observations
+
+`bench:engine:interaction` includes `sourceLifecycle` observations from the public
+Map View in the existing Engine Inspector, using the canonical dense
+`vector-city-style-v1` fixture. Actual network requests, Rust decode calls,
+bucket builds, bounded resource reuse, switch-to-ready latency and descriptive
+Chromium JS heap are recorded for cold A, B/A revisits, resolved-paint changes and
+an immutable revision change. Two decoder calls per cold WebGPU tile are reported:
+the retained GPU bucket decode and the existing Canvas fallback representation.
+Warm source/style changes must not repeat either decode or GPU bucket creation.
+
+These observations do not provide total browser/GPU memory or controlled timing
+comparisons. The parent lacks the public source-switch capability; that historical
+comparison is explicitly unavailable. No Maps-generated success substitutes for
+runtime-profiler comparability or a Moonlight evaluation. Rust and Chromium tile
+churn checks remain correctness evidence, not camera-churn performance scores.

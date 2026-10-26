@@ -104,6 +104,8 @@ export type MapsWgpuBaseMapRenderer = {
   /** Style table from `createMapsVectorBasemapStyleTable`. */
   setVectorStyle(table: Float32Array): void;
   setVectorMaxZoom(maxZoom: number): void;
+  setVectorSource(source: string): void;
+  evictVectorSourceTile(source: string, tile: MapsRasterTileId): void;
   uploadTile(tile: MapsRasterTileId, image: ImageBitmap): void;
   /**
    * Decodes Shortbread MVT bytes into tile-local GPU buckets (Rust) and retains them.
@@ -148,6 +150,8 @@ type MapsWgpuBaseMapWasmRenderer = {
   ): number;
   evictRetainedPolygons(group: number): void;
   setVectorMaxZoom(maxZoom: number): void;
+  setVectorSource(source: string): void;
+  evictVectorSourceTile(source: string, z: number, x: number, y: number): void;
   setVectorStyle(table: Float32Array): void;
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
   uploadVectorTile(z: number, x: number, y: number, bytes: Uint8Array): number;
@@ -305,6 +309,8 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.resize(width, height);
         });
       },
+      setVectorSource(source) { assertLive(disposed); renderer.setVectorSource(source); },
+      evictVectorSourceTile(source, tile) { assertLive(disposed); renderer.evictVectorSourceTile(source, tile.z, tile.x, tile.y); },
       setVectorMaxZoom(maxZoom) {
         assertLive(disposed);
         renderer.setVectorMaxZoom(maxZoom);

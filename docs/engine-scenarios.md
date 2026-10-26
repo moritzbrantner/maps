@@ -261,3 +261,16 @@ body supplies kernel budgets and profiler command capture. They measure neither
 Map View presentation nor a first-party feature's Fast gate. The
 [evidence contract](engine-evidence.md#canonical-kernel-evidence-and-retained-diagnostics)
 defines the retained kernel diagnostics, immutable history and verdict boundary.
+
+## Versioned source lifecycle
+
+The existing `vector-city-style-v1` / `raster-tile-churn-v1` families also exercise
+versioned Maps Tilesets through the public Map View. See
+[`maps-tilesets.md`](maps-tilesets.md) for the manifest and source transport seam.
+`crates/maps-core/tests/tileset_sources.rs` covers source namespaces, global
+retention, coverage and canonical world placement. `e2e/maps-tileset-sources.spec.ts`
+covers both backends, A → B → A, resolved-paint reuse, revision changes,
+non-cooperative reversed responses, camera/application selection and Inspector
+failures. The canonical interaction command records dense-fixture source switch
+observations in its existing artifact; descriptive measurements and an unavailable
+historical source-switch comparison are reported separately.

@@ -1,5 +1,8 @@
 "use client";
 
+import { validateMapsTileset, type MapsTileset } from "./maps-tileset";
+import type { MapsVectorBasemapStyle } from "./maps-tileset-style";
+
 import {
   startTransition,
   useCallback,
@@ -57,6 +60,9 @@ import type { MapViewProps as LegacyMapViewProps } from "./map-view-maplibre";
 
 export type MapsMapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   flatRuntime?: "maps";
+  tileset?: MapsTileset;
+  tilesetStyle?: MapsVectorBasemapStyle;
+  tileLimits?: import("./flat-runtime-wasm").MapsFlatRasterRuntimeConfig["limits"];
   /** Decoder for tile pixels, scoped to this Map View runtime. */
   createTileImageLoader?: () => MapsTileImageLoader;
 };
@@ -65,6 +71,9 @@ export function MapsMapView({
   children,
   className,
   createTileImageLoader,
+  tileset,
+  tilesetStyle,
+  tileLimits,
   dataBounds = null,
   defaultViewState,
   fitBoundsPadding = 56,
@@ -85,7 +94,8 @@ export function MapsMapView({
   style,
   viewState,
 }: MapsMapViewProps) {
-  const resolvedMapStyle = useMemo(() => resolveMapsRuntimeStyle(mapStyle), [mapStyle]);
+  const activeTileset = useMemo(() => tileset ? validateMapsTileset(tileset) : undefined, [tileset]);
+  const resolvedMapStyle = useMemo(() => activeTileset ? { tiles: false as const } : resolveMapsRuntimeStyle(mapStyle), [mapStyle, activeTileset]);
   const tileSource = useMemo(() => resolveTileLayerOptions(resolvedMapStyle), [resolvedMapStyle]);
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
@@ -537,13 +547,13 @@ export function MapsMapView({
   }
 
   const rootClassName = joinClassNames("mb-maps", className);
-  const attribution =
+  const attribution = activeTileset?.attribution ?? (
     tileSource?.options.attribution ??
     (typeof resolvedMapStyle !== "string" &&
     "attribution" in resolvedMapStyle &&
     typeof resolvedMapStyle.attribution === "string"
       ? resolvedMapStyle.attribution
-      : undefined);
+      : undefined));
   const fallbackCursor = typeof style?.cursor === "string" ? style.cursor : "";
 
   return (
@@ -633,6 +643,9 @@ export function MapsMapView({
         }}
       >
         <MapsCanvasFlatRuntime
+          tileset={activeTileset}
+          tilesetStyle={tilesetStyle}
+          tileLimits={tileLimits}
           createTileImageLoader={createTileImageLoader}
           mapStyle={resolvedMapStyle}
           maxBounds={maxBounds}

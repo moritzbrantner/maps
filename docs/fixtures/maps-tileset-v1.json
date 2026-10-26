@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "sourceId": "example-regional-basemap",
+  "dataRevision": "sha256:0b66941d80eda393d088a28a48d4d2835508ff12d84c08a3e82d6f55ebefb391",
+  "format": "mvt",
+  "schema": {
+    "id": "shortbread",
+    "version": "1.0",
+    "sourceLayers": ["water_polygons", "land", "streets"]
+  },
+  "transport": {
+    "kind": "xyz",
+    "urlTemplate": "/example-regional-basemap/{z}/{x}/{y}.mvt"
+  },
+  "projection": "web-mercator",
+  "scheme": "xyz",
+  "bounds": [5, 45, 17, 56],
+  "minZoom": 0,
+  "maxZoom": 14,
+  "tileSize": 512,
+  "attribution": "Example fixture attribution; replace with the actual data attribution",
+  "license": "CC0-1.0",
+  "provenance": "Illustrative contract example; digest and coverage are examples, not an available dataset",
+  "observation": {
+    "snapshot": "example-snapshot"
+  }
+}

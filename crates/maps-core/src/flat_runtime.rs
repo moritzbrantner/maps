@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::{
-    GeographicCoordinate, MapCamera, MapViewportBounds, ScreenCoordinate, TileId, ViewportSize,
-    WorldCoordinate, project_web_mercator, unproject_web_mercator,
+    GeographicCoordinate, MapCamera, MapViewportBounds, MapsTileset, ScreenCoordinate, TileId,
+    ViewportSize, WorldCoordinate, project_web_mercator, unproject_web_mercator,
 };
 
 const CAMERA_TILE_SIZE: f64 = 512.0;
@@ -146,6 +146,7 @@ pub enum FlatRasterRuntimeError {
     InvalidCamera,
     InvalidLimits,
     InvalidSource,
+    InvalidTileset(&'static str),
     InvalidBounds,
     UnsupportedCamera,
     TileCoverOverflow { required: usize, limit: usize },
@@ -157,6 +158,7 @@ impl fmt::Display for FlatRasterRuntimeError {
             Self::InvalidCamera => write!(formatter, "invalid flat raster camera"),
             Self::InvalidLimits => write!(formatter, "invalid flat raster runtime limits"),
             Self::InvalidSource => write!(formatter, "invalid flat raster source"),
+            Self::InvalidTileset(message) => write!(formatter, "Maps Tileset: {message}"),
             Self::InvalidBounds => write!(formatter, "invalid flat raster fit bounds"),
             Self::UnsupportedCamera => write!(
                 formatter,
@@ -192,6 +194,9 @@ pub struct FlatRasterRuntime {
     render_margin: f64,
     last_request_camera: MapCamera,
     prefetch_offset: Option<(i64, i64)>,
+    tileset: Option<MapsTileset>,
+    inactive_tiles: VecDeque<(String, TileId)>,
+    scoped_evictions: Vec<(String, TileId)>,
 }
 
 impl FlatRasterRuntime {
@@ -222,7 +227,66 @@ impl FlatRasterRuntime {
             render_margin: 0.0,
             last_request_camera: camera,
             prefetch_offset: None,
+            tileset: None,
+            inactive_tiles: VecDeque::new(),
+            scoped_evictions: Vec::new(),
         })
+    }
+
+    /// Replaces only source-dependent state; the geographic camera is retained.
+    /// Inactive decoded resources share the same hard cache budget as active tiles.
+    pub fn activate_tileset(&mut self, tileset: MapsTileset) -> Result<(), FlatRasterRuntimeError> {
+        tileset
+            .validate()
+            .map_err(FlatRasterRuntimeError::InvalidTileset)?;
+        let next = tileset.identity();
+        if let Some(previous) = &self.tileset {
+            if previous.identity() == next {
+                if previous.source_spec() != tileset.source_spec()
+                    || previous.bounds != tileset.bounds
+                    || previous.schema != tileset.schema
+                {
+                    return Err(FlatRasterRuntimeError::InvalidSource);
+                }
+                self.tileset = Some(tileset);
+                return Ok(());
+            }
+            let previous_key = previous.identity();
+            self.inactive_tiles.extend(
+                self.ready_lru
+                    .drain(..)
+                    .map(|tile| (previous_key.clone(), tile)),
+            );
+        } else {
+            self.ready_lru.clear();
+        }
+        self.ready.clear();
+        self.inactive_tiles.retain(|(identity, tile)| {
+            if identity == &next {
+                self.ready.insert(*tile);
+                self.ready_lru.push_back(*tile);
+                false
+            } else {
+                true
+            }
+        });
+        self.source = tileset.source_spec();
+        self.tileset = Some(tileset);
+        self.pending.clear();
+        self.failed.clear();
+        self.visible.clear();
+        self.prefetch_offset = None;
+        self.last_request_camera = self.camera;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn source_identity(&self) -> Option<String> {
+        self.tileset.as_ref().map(MapsTileset::identity)
+    }
+
+    pub fn take_source_evictions(&mut self) -> Vec<(String, TileId)> {
+        std::mem::take(&mut self.scoped_evictions)
     }
 
     #[must_use]
@@ -682,8 +746,18 @@ impl FlatRasterRuntime {
             .iter()
             .map(|placement| placement.tile)
             .collect::<BTreeSet<_>>();
-        let (placements, overscan) =
+        let (mut placements, overscan) =
             self.surface_placements(viewport_placements, &visible_tiles)?;
+        let covers = |tile: &TileId| {
+            self.tileset
+                .as_ref()
+                .is_none_or(|source| source.covers(*tile))
+        };
+        placements.retain(|placement| covers(&placement.tile));
+        let visible_tiles = visible_tiles
+            .into_iter()
+            .filter(covers)
+            .collect::<BTreeSet<_>>();
         let center = project_web_mercator(self.camera.longitude, self.camera.latitude)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         self.update_prefetch_offset(center);
@@ -698,13 +772,19 @@ impl FlatRasterRuntime {
             }
             _ => center,
         };
-        let request_tiles = buffered_request_cover(
+        let mut request_tiles = buffered_request_cover(
             &visible_tiles,
             prefetch_center,
             self.limits.cache_capacity,
             REQUEST_PREFETCH_RADIUS_TILES,
             tile_offset,
         );
+
+        request_tiles.retain(|tile| {
+            self.tileset
+                .as_ref()
+                .is_none_or(|source| source.covers(*tile))
+        });
 
         let mut cancellations = self
             .pending
@@ -953,7 +1033,11 @@ impl FlatRasterRuntime {
     fn prune_cache(&mut self, protected: &BTreeSet<TileId>) -> Vec<TileId> {
         let mut evictions = Vec::new();
 
-        while self.ready_lru.len() > self.limits.cache_capacity {
+        while self.ready_lru.len() + self.inactive_tiles.len() > self.limits.cache_capacity {
+            if let Some(entry) = self.inactive_tiles.pop_front() {
+                self.scoped_evictions.push(entry);
+                continue;
+            }
             let candidate_index = self
                 .ready_lru
                 .iter()

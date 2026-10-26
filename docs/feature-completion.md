@@ -104,3 +104,14 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 4. Complete vector-source/style features one vertical layer family at a time: develop, parity-test, then optimize.
 5. Complete labels/symbols the same way.
 6. Retire MapLibre responsibilities immediately after their replacements pass all three gates; do not defer convergence indefinitely.
+
+### Versioned Maps Tilesets (#268)
+
+The public source contract and source-aware runtime have focused Rust/TypeScript
+and Chromium coverage, including both renderers, warm data/style reuse,
+revision changes, reversed responses, camera/application selection and bounded
+eviction. The existing canonical interaction artifact now includes dense-fixture
+source lifecycle observations. Executed gates and measurements are recorded in
+the owning PR; an unavailable historical source-switch comparison remains
+unavailable and is not a comparative performance pass. This scoped work does not
+complete the general vector-style/cartography milestones.

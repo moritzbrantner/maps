@@ -2,6 +2,8 @@
 // plus dense street geometry. No external tile service participates in verification.
 export function createShortbreadTileFixture({
   dense = false,
+  islandWest = 1024,
+  islandEast = 3072,
   streetRows = 128,
   pointsPerStreet = 256,
 } = {}) {
@@ -13,10 +15,10 @@ export function createShortbreadTileFixture({
       [0, 4096],
     ],
     [
-      [1024, 1024],
-      [1024, 3072],
-      [3072, 3072],
-      [3072, 1024],
+      [islandWest, 1024],
+      [islandWest, 3072],
+      [islandEast, 3072],
+      [islandEast, 1024],
     ],
   ]);
   const land = polygon([

@@ -1,3 +1,4 @@
+import type { MapsTileset } from "./maps-tileset";
 import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
 import type { MapBounds, MapViewState } from "./map-display";
 
@@ -96,6 +97,9 @@ export type MapsFlatRasterRuntimeConfig = {
 };
 
 export type MapsFlatRasterRuntime = {
+  activateTileset(source: MapsTileset): string;
+  takeSourceEvictions(): Array<[source: string, z: number, x: number, y: number]>;
+  markSourceLoaded(source: string, tile: MapsRasterTileId): void;
   dispose(): void;
   fitBounds(bounds: MapBounds, padding: number, maxZoom: number): void;
   /** Advances scheduling; dispatch the returned work and retain the frame for reads/redraws. */
@@ -115,6 +119,9 @@ export type MapsFlatRasterRuntime = {
 };
 
 type MapsFlatRasterWasmRuntime = {
+  activateTileset(source: MapsTileset): string;
+  takeSourceEvictions(): Array<[source: string, z: number, x: number, y: number]>;
+  markSourceLoaded(source: string, z: number, x: number, y: number): void;
   fitBounds(
     west: number,
     south: number,
@@ -168,6 +175,9 @@ export async function loadMapsFlatRasterRuntime(
   let disposed = false;
 
   return {
+    activateTileset(source) { assertLive(disposed); return runtime.activateTileset(source); },
+    takeSourceEvictions() { assertLive(disposed); return runtime.takeSourceEvictions(); },
+    markSourceLoaded(source, tile) { assertLive(disposed); runtime.markSourceLoaded(source, tile.z, tile.x, tile.y); },
     dispose() {
       if (disposed) return;
       disposed = true;

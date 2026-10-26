@@ -1,9 +1,10 @@
 "use client";
 
+import { getShortbreadClassStyle } from "../src/maps-tileset-style";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FeatureCollection, LineString, Polygon } from "geojson";
 import type { MapsRasterTileId } from "../src/flat-runtime-wasm";
-import type { GeoJsonLayerStyle } from "../src/geojson-layer";
 import type {
   MapsCanvasFlatRuntimeController,
   MapsRetainedVectorBasemap,
@@ -17,7 +18,6 @@ import { decodeShortbreadBasemap, type ShortbreadBasemapTile } from "../src/vect
 
 import {
   POLYGON_PAINT_ORDER,
-  getShortbreadBasemapStyle,
   type ShortbreadFeatureProperties,
 } from "./shortbread-style";
 export { getShortbreadBasemapStyle, type ShortbreadFeatureProperties } from "./shortbread-style";
@@ -321,45 +321,7 @@ function useRetainedVectorBasemap(
 }
 
 /** The same Shortbread style as `getShortbreadBasemapStyle`, per retained style class. */
-export function getShortbreadClassStyle(
-  styleClass: MapsVectorBasemapStyleClass,
-): MapsVectorBasemapClassStyle {
-  const fill = (style: GeoJsonLayerStyle) => ({
-    color: style.polygonFillColor ?? "#000000",
-    opacity: style.polygonFillOpacity ?? 1,
-  });
-  const line = (style: GeoJsonLayerStyle) => ({
-    color: style.lineColor ?? "#000000",
-    opacity: style.lineOpacity ?? 1,
-    width: style.lineWidth ?? 1,
-  });
-  switch (styleClass) {
-    case "ocean":
-    case "land":
-    case "site":
-    case "water":
-    case "building":
-      return fill(getShortbreadBasemapStyle(styleClass));
-    case "land-forest":
-      return fill(getShortbreadBasemapStyle("land", "forest"));
-    case "water-glacier":
-      return fill(getShortbreadBasemapStyle("water", "glacier"));
-    case "building-outline": {
-      const building = getShortbreadBasemapStyle("building");
-      return {
-        color: building.polygonStrokeColor ?? "#000000",
-        opacity: 1,
-        width: building.polygonStrokeWidth ?? 0,
-      };
-    }
-    case "water-line":
-      return line(getShortbreadBasemapStyle("water"));
-    case "coast":
-    case "street":
-    case "boundary":
-      return line(getShortbreadBasemapStyle(styleClass));
-  }
-}
+export { getShortbreadClassStyle } from "../src/maps-tileset-style";
 
 function createShortbreadStyleTable(override: ShortbreadBasemapOptions["styleOverride"]) {
   return createMapsVectorBasemapStyleTable((styleClass) => {

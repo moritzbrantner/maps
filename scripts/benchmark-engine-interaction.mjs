@@ -1,3 +1,4 @@
+import { profileTilesetSourceJourney } from "./profile-tileset-source-journey.ts";
 // Full-page descriptive frame pacing; not a GPU completion/FPS or Moonlight verdict.
 import { chromium } from "@playwright/test";
 import { preview } from "vite";
@@ -164,6 +165,19 @@ try {
     longTaskCount: longTasks.length,
     longTaskMs: longTasks.reduce((a, b) => a + b, 0),
   };
+  const sourceLifecycle = await profileTilesetSourceJourney(
+    browser,
+    `http://127.0.0.1:${server.httpServer.address().port}`,
+    scenario.viewport,
+    fixture,
+    createShortbreadTileFixture({
+      ...scenario.fixture,
+      dense: true,
+      islandWest: 256,
+      islandEast: 1536,
+    }),
+    samples,
+  );
   evidence = {
     schemaVersion: 1,
     producer: "maps-engine-interaction",
@@ -200,6 +214,7 @@ try {
     summary,
     rendered,
     results,
+    sourceLifecycle,
     metrics: [
       {
         id: "interaction-scope",

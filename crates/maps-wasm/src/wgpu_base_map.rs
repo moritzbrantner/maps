@@ -170,6 +170,9 @@ pub struct MapsWgpuBaseMapRenderer {
     vector_style_buffer: wgpu::Buffer,
     vector_style_bind_group: wgpu::BindGroup,
     vector_tiles: RetainedSet<RasterTileKey, VectorTileBuffers>,
+    vector_source: String,
+    inactive_vector_tiles:
+        std::collections::BTreeMap<String, RetainedSet<RasterTileKey, VectorTileBuffers>>,
     retained_points: RetainedSet<u32, RetainedPointGroup>,
     retained_point_pipeline: wgpu::RenderPipeline,
     retained_point_uniforms: FrameUniforms,
@@ -936,6 +939,8 @@ impl MapsWgpuBaseMapRenderer {
             vector_style_buffer,
             vector_style_bind_group,
             vector_tiles: RetainedSet::new(),
+            vector_source: String::new(),
+            inactive_vector_tiles: std::collections::BTreeMap::new(),
             retained_points: RetainedSet::new(),
             retained_point_pipeline,
             retained_point_uniforms,
@@ -1199,6 +1204,40 @@ impl MapsWgpuBaseMapRenderer {
         self.retained_polygons.evict(&group);
     }
 
+    /// Resource namespace supplied by the Maps core authority. This backend never
+    /// derives source identity or decides cache retention.
+    #[wasm_bindgen(js_name = setVectorSource)]
+    pub fn set_vector_source(&mut self, source: String) {
+        if self.vector_source == source {
+            return;
+        }
+        let previous = std::mem::replace(
+            &mut self.vector_tiles,
+            self.inactive_vector_tiles
+                .remove(&source)
+                .unwrap_or_else(RetainedSet::new),
+        );
+        if !previous.is_empty() {
+            self.inactive_vector_tiles.insert(
+                std::mem::replace(&mut self.vector_source, source.clone()),
+                previous,
+            );
+        }
+        self.vector_source = source;
+    }
+
+    #[wasm_bindgen(js_name = evictVectorSourceTile)]
+    pub fn evict_vector_source_tile(&mut self, source: &str, z: u8, x: u32, y: u32) {
+        if source == self.vector_source {
+            self.vector_tiles.evict(&(z, x, y));
+        } else if let Some(tiles) = self.inactive_vector_tiles.get_mut(source) {
+            tiles.evict(&(z, x, y));
+            if tiles.is_empty() {
+                self.inactive_vector_tiles.remove(source);
+            }
+        }
+    }
+
     #[wasm_bindgen(js_name = evictVectorTile)]
     pub fn evict_vector_tile(&mut self, z: u8, x: u32, y: u32) {
         self.vector_tiles.evict(&(z, x, y));
@@ -1230,7 +1269,10 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = frameStats)]
     pub fn frame_stats(&self) -> Vec<f64> {
         let (mut features, mut triangles, mut segments) = (0_u64, 0_u64, 0_u64);
-        for tile in self.vector_tiles.values() {
+        for tile in std::iter::once(&self.vector_tiles)
+            .chain(self.inactive_vector_tiles.values())
+            .flat_map(|tiles| tiles.values())
+        {
             features += u64::from(tile.feature_count);
             triangles += tile
                 .fill_groups
@@ -1247,11 +1289,17 @@ impl MapsWgpuBaseMapRenderer {
             f64::from(self.frame_stats.raster_tiles),
             f64::from(self.frame_stats.vector_tiles),
             f64::from(self.frame_stats.draw_calls),
-            self.vector_tiles.len() as f64,
+            std::iter::once(&self.vector_tiles)
+                .chain(self.inactive_vector_tiles.values())
+                .map(|tiles| tiles.len())
+                .sum::<usize>() as f64,
             features as f64,
             triangles as f64,
             segments as f64,
-            self.vector_tiles.byte_size() as f64,
+            std::iter::once(&self.vector_tiles)
+                .chain(self.inactive_vector_tiles.values())
+                .map(|tiles| tiles.byte_size())
+                .sum::<u64>() as f64,
             self.frame_stats.application_upload_bytes as f64,
             self.retained_points
                 .values()

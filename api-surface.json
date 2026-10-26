@@ -240,7 +240,9 @@
     "MapSizeLegend",
     "MapSizeLegendProps",
     "MapsScalarFieldWasmRuntime",
+    "MapsTileset",
     "MapSurfaceController",
+    "MapsVectorBasemapStyle",
     "MapView",
     "MapViewportProps",
     "MapViewProps",
@@ -313,6 +315,7 @@
     "useMapFrame",
     "validateGeoJsonEditableGeometry",
     "validateGeoJsonMapSource",
+    "validateMapsTileset",
     "ViewportAggregation",
     "ViewportAggregationQuery",
     "VisibleAggregationSummary"
@@ -449,6 +452,7 @@
     "MapPointFilter",
     "MapsAggregationRuntimeStatus",
     "MapsScalarFieldWasmRuntime",
+    "MapsTileset",
     "MapSurfaceController",
     "MapViewportProps",
     "MapViewState",
@@ -501,6 +505,7 @@
     "TemporalMapTrack",
     "unionGeoJsonFeatures",
     "validateGeoJsonMapSource",
+    "validateMapsTileset",
     "ViewportAggregation",
     "ViewportAggregationQuery",
     "VisibleAggregationSummary"
@@ -581,7 +586,9 @@
     "IndexedMapFlow",
     "MapDisplayMode",
     "MapFlow",
+    "MapsTileset",
     "MapSurfaceController",
+    "MapsVectorBasemapStyle",
     "MapViewportProps",
     "MapViewState",
     "MapViewStateChangeContext",
@@ -589,7 +596,8 @@
     "PointMapFeature",
     "PointMapProps",
     "RasterMapStyle",
-    "resolveHeatMapPointWeight"
+    "resolveHeatMapPointWeight",
+    "validateMapsTileset"
   ],
   "./geojson": [
     "clipGeoJsonToPolygon",
