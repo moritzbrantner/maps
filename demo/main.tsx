@@ -62,6 +62,8 @@ async function bootstrap() {
 
   if (acceptanceMode === "maps-runtime") {
     content = <MapsRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-constrained") {
+    content = <MapsRuntimeAcceptance maxZoom={8} />;
   } else if (acceptanceMode === "maps-runtime-wgpu-strokes") {
     content = <MapsRuntimeAcceptance includePolygon={false} />;
   } else if (acceptanceMode === "maps-runtime-raster-fetch") {

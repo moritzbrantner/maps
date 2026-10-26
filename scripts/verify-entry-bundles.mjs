@@ -39,6 +39,7 @@ verifyMissingImports("flat", [
 // Bundlers (Rollup/Vite) resolve dynamically imported chunks too and fail on named imports from
 // a missing optional peer, so nothing the root entry reaches may import it.
 verifyMissingImports("index", ["@moritzbrantner/timeline-editor"], { transitive: true });
+verifyMissingImports("index", ["three"], { transitive: true });
 verifyDefaultOnlyImports(["polygon-clipping"]);
 verifyBundleBudgets();
 

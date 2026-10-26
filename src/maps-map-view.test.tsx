@@ -118,6 +118,13 @@ afterEach(() => {
 });
 
 describe("Maps-owned MapView runtime", () => {
+  test("rejects the retired WebGL selector with an explicit migration", () => {
+    expect(() => {
+      // @ts-expect-error JavaScript callers can still pass the removed selector.
+      render(<MapView flatRuntime="webgl" mapStyle={{ tiles: false }} />);
+    }).toThrow('flatRuntime="webgl" was retired; use flatRuntime="maps"');
+  });
+
   test("mounts the Maps runtime and routes controller view-state changes", async () => {
     let controller: MapSurfaceController | null = null;
     const onViewStateChange = vi.fn();

@@ -12,6 +12,8 @@
     "noUnusedParameters": true
   },
   "include": [
+    "scripts/npm-pack-result.ts",
+    "scripts/npm-pack-result.test.ts",
     "scripts/profile-engine-camera-journey.ts",
     "scripts/verify-engine-browser-evidence.ts"
   ]

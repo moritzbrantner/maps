@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseNpmPackResult } from "./npm-pack-result.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
@@ -13,8 +14,7 @@ let tarballPath = null;
 
 try {
   const pack = run("npm", ["pack", "--ignore-scripts", "--json"], rootDir);
-  // npm 10 runs `prepare` despite --ignore-scripts; its output precedes the JSON report.
-  const packInfo = JSON.parse(pack.stdout.slice(pack.stdout.lastIndexOf("\n[") + 1))[0];
+  const packInfo = parseNpmPackResult(pack.stdout);
 
   tarballPath = path.join(rootDir, packInfo.filename);
 
@@ -270,7 +270,12 @@ export function summarizePoints(points: MapPoint[]) {
     `"use client";
 
 import "@moritzbrantner/maps/styles.css";
-import { ClusteredMap, type MapPoint } from "@moritzbrantner/maps";
+import { ClusteredMap, type MapPoint, type FlatMapRuntime } from "@moritzbrantner/maps";
+
+export const nativeRuntime: FlatMapRuntime = "maps";
+export const referenceRuntime: FlatMapRuntime = "maplibre";
+// @ts-expect-error The removed Three.js selector is intentionally not a packaged API.
+export const retiredRuntime: FlatMapRuntime = "webgl";
 
 export function ClientMap({ points }: { points: MapPoint[] }) {
   return <ClusteredMap fitToData={false} points={points} style={{ height: 320 }} />;

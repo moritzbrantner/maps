@@ -38,7 +38,6 @@
       "groupName": "maps runtime",
       "matchPackageNames": [
         "maplibre-gl",
-        "three",
         "@turf/*",
         "supercluster",
         "d3-delaunay",

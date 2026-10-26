@@ -50,17 +50,6 @@ import {
   useMapHoveredFeature,
   useMapSurfaceViewState,
 } from "./map-surface-context";
-import {
-  buildWebGlFlatTileUrl,
-  coordinateToWebGlFlatWorldPoint,
-  getVisibleWebGlFlatTiles,
-  getWebGlFlatBoundsMinZoom,
-  getWebGlFlatViewport,
-  getWebGlFlatZoom,
-  panWebGlFlatViewState,
-  resolveWebGlFlatTileSource,
-  webGlFlatWorldPointToCoordinate,
-} from "./webgl-flat-runtime";
 import { createFlowPathCoordinates } from "./flow-layer";
 import type { FlowLayerFeature } from "./flow-layer";
 import {
@@ -2947,60 +2936,6 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     });
   });
 
-  test("roundtrips WebGL flat Mercator projection", () => {
-    const coordinate: [number, number] = [13.405, 52.52];
-    const worldPoint = coordinateToWebGlFlatWorldPoint(coordinate, 8);
-    const roundtrip = webGlFlatWorldPointToCoordinate(worldPoint, 8);
-
-    expect(roundtrip[0]).toBeCloseTo(coordinate[0], 6);
-    expect(roundtrip[1]).toBeCloseTo(coordinate[1], 6);
-  });
-
-  test("selects visible WebGL flat raster tiles", () => {
-    const source = resolveWebGlFlatTileSource({
-      maxZoom: 12,
-      tiles: "https://tiles.example.test/{z}/{x}/{y}.png",
-    });
-
-    expect(source).toBeTruthy();
-
-    const viewport = getWebGlFlatViewport(
-      {
-        center: [13.405, 52.52],
-        zoom: 6,
-      },
-      {
-        height: 720,
-        width: 1280,
-      },
-    );
-    const tiles = getVisibleWebGlFlatTiles(viewport, source!);
-
-    expect(tiles.length).toBeGreaterThan(0);
-    expect(tiles.length).toBeLessThanOrEqual(256);
-    expect(buildWebGlFlatTileUrl(source!, tiles[0]!)).toMatch(
-      /^https:\/\/tiles\.example\.test\/\d+\/\d+\/\d+\.png$/,
-    );
-    expect(viewport.bounds[0]).toBeLessThan(viewport.bounds[2]);
-    expect(viewport.bounds[1]).toBeLessThan(viewport.bounds[3]);
-  });
-
-  test("pans and zooms WebGL flat view state", () => {
-    const initial = { center: [13.405, 52.52] as [number, number], zoom: 6 };
-    const panned = panWebGlFlatViewState(initial.center, initial.zoom, 80, -40);
-
-    expect(panned.center[0]).toBeLessThan(initial.center[0]);
-    expect(panned.center[1]).toBeLessThan(initial.center[1]);
-    expect(getWebGlFlatZoom(4, -1000)).toBeGreaterThan(4);
-    expect(getWebGlFlatZoom(4, -1000, 5)).toBe(5);
-    expect(
-      getWebGlFlatBoundsMinZoom([-25, 34, 35, 66], {
-        height: 620,
-        width: 960,
-      }),
-    ).toBeGreaterThan(3);
-  });
-
   test("clamps MapView view state to maxZoom", async () => {
     let controller: import("./map-display").MapSurfaceController | null = null;
 
@@ -3058,43 +2993,6 @@ describe("@moritzbrantner/maps additional map kinds", () => {
       expect(controller?.getViewState().center).toEqual([35, 66]);
       expect(controller?.getViewState().zoom).toBeGreaterThan(1);
     });
-  });
-
-  test("mounts WebGL flat MapView without creating a Flat map", async () => {
-    const onViewStateChange = vi.fn();
-
-    render(
-      <MapView
-        flatRuntime="webgl"
-        initialViewState={{ center: [13.405, 52.52], zoom: 6 }}
-        mapLabel="WebGL flat map"
-        mapStyle={{ tiles: false }}
-        onViewStateChange={onViewStateChange}
-      />,
-    );
-
-    const map = screen.getByLabelText("WebGL flat map");
-
-    await waitFor(() => {
-      expect(map.getAttribute("data-map-ready")).toBe("true");
-    });
-
-    expect(map.querySelector('[data-flat-runtime="webgl"]')).toBeTruthy();
-    expect(flatMock.getMaps()).toHaveLength(0);
-
-    fireEvent.wheel(map.querySelector('[data-flat-runtime="webgl"]')!, {
-      deltaY: -120,
-    });
-
-    expect(onViewStateChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        zoom: expect.any(Number),
-      }),
-      expect.objectContaining({
-        display: "flat",
-        reason: "zoom",
-      }),
-    );
   });
 
   test("renders weighted flat flow lines with endpoints", async () => {
