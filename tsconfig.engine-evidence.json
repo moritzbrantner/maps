@@ -13,6 +13,7 @@
   },
   "include": [
     "scripts/engine-reference/supercluster-aggregation.ts",
+    "scripts/install-wasm-bindgen-ci.test.ts",
     "scripts/npm-pack-result.ts",
     "scripts/npm-pack-result.test.ts",
     "scripts/profile-engine-camera-journey.ts",
