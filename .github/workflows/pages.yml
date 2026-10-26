@@ -41,11 +41,11 @@ jobs:
         git -C .github-pages-template remote add origin https://github.com/moritzbrantner/github-pages-template.git
         git -C .github-pages-template fetch --depth 1 origin 28321ce9f7214f504a3e454dcfeca5e53eeb6cdc
         git -C .github-pages-template checkout --detach FETCH_HEAD
-        git init .runtime-profiler-source
-        git -C .runtime-profiler-source remote add origin https://github.com/moritzbrantner/runtime-profiler.git
-        git -C .runtime-profiler-source fetch --depth 1 origin 5fa0e1b652e95003ccad11f32a4df67b96eac6f8
-        git -C .runtime-profiler-source checkout --detach FETCH_HEAD
-        cargo install --path .runtime-profiler-source --locked --root "$RUNNER_TEMP/maps-profiler"
+        git init "$RUNNER_TEMP/maps-runtime-profiler-source"
+        git -C "$RUNNER_TEMP/maps-runtime-profiler-source" remote add origin https://github.com/moritzbrantner/runtime-profiler.git
+        git -C "$RUNNER_TEMP/maps-runtime-profiler-source" fetch --depth 1 origin 5fa0e1b652e95003ccad11f32a4df67b96eac6f8
+        git -C "$RUNNER_TEMP/maps-runtime-profiler-source" checkout --detach FETCH_HEAD
+        cargo install --path "$RUNNER_TEMP/maps-runtime-profiler-source" --locked --root "$RUNNER_TEMP/maps-profiler"
         git fetch --deepen=1 origin "$(git rev-parse HEAD)"
         git worktree add --detach "$RUNNER_TEMP/maps-kernel-reference" HEAD^
         if [ -f "$RUNNER_TEMP/maps-kernel-reference/scripts/run-engine-kernel-scenario.mjs" ]; then
@@ -65,7 +65,7 @@ jobs:
         # immutable bundles, strict comparison and history; these shared-runner
         # process observations are descriptive, separate from the kernel gate.
         RUNTIME_PROFILER_BIN="$RUNNER_TEMP/maps-profiler/bin/runtime-profiler" \
-          RUNTIME_PROFILER_SOURCE="$PWD/.runtime-profiler-source" \
+          RUNTIME_PROFILER_SOURCE="$RUNNER_TEMP/maps-runtime-profiler-source" \
           bun run profile:engine-kernels -- \
           --reference="$RUNNER_TEMP/maps-kernel-reference" \
           --output=dist/evidence/kernels \
