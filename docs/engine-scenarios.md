@@ -216,6 +216,15 @@ Runtime phases:
 - glyph upload;
 - rendering.
 
+## Constrained-runtime browser evidence
+
+`e2e/maps-runtime.spec.ts` exercises device loss on the real Rust/WASM + WebGPU
+application path for #60. It destroys the browser GPU device while the camera is
+idle, then requires Canvas rendering of points, clusters, polygon fills and flows
+without changing the camera or selected Map Feature. Picking continues on the
+Canvas path with the same feature identity and no MapLibre instance. This is
+bounded fallback correctness evidence, not renderer performance acceptance.
+
 ## Evidence ownership
 
 Maps owns the fixture and normalized map-domain observations. `runtime-profiler` owns runtime capture and immutable evidence bundles. Moonlight owns baseline/candidate evaluation policy. Renderer-specific diagnostic fields may be included as evidence, but they do not become semantic truth.

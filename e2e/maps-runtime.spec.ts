@@ -8,6 +8,7 @@ const VISIBLE_RASTER_TILE = Buffer.from(
 declare global {
   // Declaration merging types the browser-only fault-injection probe.
   interface Window {
+    destroyMapsGpuDevices: () => Promise<number>;
     rasterLoadProbe: {
       requests: { url: string; signal: AbortSignal }[];
       releaseCancelled: () => void;
@@ -15,6 +16,81 @@ declare global {
     };
   }
 }
+
+test("device loss preserves mixed Map Layers and selection on Canvas @smoke", async ({
+  page,
+}, info) => {
+  // Capture the real browser device at its external creation boundary. Destroying it
+  // exercises Dawn, Rust's lost-device callback and the production fallback together.
+  await page.addInitScript(() => {
+    type Device = { destroy(): void; lost: Promise<unknown> };
+    const devices: Device[] = [];
+    const adapter = Reflect.get(globalThis, "GPUAdapter").prototype;
+    const requestDevice = adapter.requestDevice;
+    adapter.requestDevice = async function (...args: unknown[]) {
+      const device: Device = await requestDevice.apply(this, args);
+      devices.push(device);
+      return device;
+    };
+    window.destroyMapsGpuDevices = async () => {
+      for (const device of devices) device.destroy();
+      await Promise.all(devices.map((device) => device.lost));
+      return devices.length;
+    };
+  });
+  await page.goto("/?e2e=1&acceptance=maps-runtime");
+  const map = page.getByLabel("Maps Rust runtime acceptance");
+  const base = map.locator('canvas[data-flat-runtime="maps"]');
+  const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+  const viewState = page.getByTestId("maps-runtime-view-state");
+  await expect(base).toHaveAttribute("data-map-base-renderer", "wgpu");
+  await expect(overlay).toHaveAttribute("data-map-overlay-backend", "wgpu");
+  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
+  const bounds = (await overlay.boundingBox())!;
+  const point = await overlayPointPosition(page);
+  await page.mouse.click(bounds.x + point.x, bounds.y + point.y);
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Selected Berlin");
+  const cameraBeforeLoss = await viewState.textContent();
+
+  expect(await page.evaluate(() => window.destroyMapsGpuDevices())).toBeGreaterThan(0);
+  // The idle-camera device monitor must recover without a camera or pointer event.
+  await expect(base).toHaveAttribute("data-map-base-renderer", "canvas2d");
+  await expect(overlay).toHaveAttribute("data-map-overlay-backend", "canvas2d");
+  await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
+  await expect(viewState).toHaveText(cameraBeforeLoss!);
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Selected Berlin");
+  await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+  const samplePositions = [
+    point,
+    await overlayFlowPosition(page),
+    await polygonPickPosition(page),
+    await overlayClusterPosition(page),
+  ];
+  // Every primitive family must have visible Canvas pixels after the GPU disappears.
+  expect(
+    await overlay.evaluate((element, positions) => {
+      const canvas = element as HTMLCanvasElement;
+      const context = canvas.getContext("2d")!;
+      const scaleX = canvas.width / canvas.clientWidth;
+      const scaleY = canvas.height / canvas.clientHeight;
+      return positions.map(
+        ({ x, y }) =>
+          context.getImageData(Math.round(x * scaleX), Math.round(y * scaleY), 1, 1).data[3]! > 0,
+      );
+    }, samplePositions),
+  ).toEqual([true, true, true, true]);
+  await info.attach("device-loss-canvas", {
+    body: await map.screenshot(),
+    contentType: "image/png",
+  });
+
+  const flow = await overlayFlowPosition(page);
+  await page.mouse.click(bounds.x + flow.x, bounds.y + flow.y);
+  await expect(page.getByTestId("maps-runtime-interaction")).toHaveText(
+    "flow:click:acceptance-flow",
+  );
+  await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Flow acceptance-route");
+});
 
 test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ page }) => {
   await page.goto("/?e2e=1&acceptance=maps-runtime");
