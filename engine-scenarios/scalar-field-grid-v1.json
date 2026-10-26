@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "scalar-field-grid-v1",
+  "kind": "kernel",
+  "legacyBenchmark": "scalar-field-grid",
+  "fixture": {
+    "generator": "europe-temperature-observations-v1",
+    "columns": 320,
+    "rows": 200,
+    "options": {
+      "domainBounds": [
+        -25,
+        34,
+        35,
+        66
+      ],
+      "interpolationK": 10,
+      "interpolationPower": 2,
+      "valueMetric": "temperature"
+    }
+  },
+  "sampling": {
+    "warmups": 2,
+    "runs": 8
+  },
+  "observations": [
+    "operation-output-sha256"
+  ],
+  "runtimePhases": [
+    "interpolate-grid"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "temporal-geojson-indexed-playback-v1",
+  "kind": "kernel",
+  "legacyBenchmark": "temporal-geojson-indexed-playback",
+  "fixture": {
+    "generator": "line-and-ring-v1",
+    "coordinateCount": 512,
+    "time": 5,
+    "options": {
+      "maxCoordinatesPerLine": 256,
+      "maxCoordinatesPerRing": 256,
+      "minResampleCoordinates": 32,
+      "strategy": "resample"
+    }
+  },
+  "sampling": {
+    "warmups": 2,
+    "runs": 8
+  },
+  "observations": [
+    "operation-output-sha256"
+  ],
+  "runtimePhases": [
+    "raw-playback",
+    "indexed-playback"
+  ]
+}

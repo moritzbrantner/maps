@@ -113,7 +113,7 @@
     "verify:audit": "bun audit --audit-level high",
     "verify:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --lib --tests --locked && cargo check -p maps-wasm --target wasm32-unknown-unknown --locked",
     "verify:wasm-package": "bun run build:package && node ./scripts/verify-wasm-package.mjs && bun run verify:engine-camera:prepared",
-    "verify:benchmarks": "bun run ./scripts/verify-benchmark-budgets.mjs",
+    "verify:benchmarks": "bun run ./scripts/verify-engine-kernel-budgets.mjs",
     "verify:entry-bundles": "node ./scripts/verify-entry-bundles.mjs",
     "verify:package-consumer": "node ./scripts/verify-package-consumer.mjs",
     "verify:package-size": "node ./scripts/verify-package-size.mjs",
