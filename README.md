@@ -22,6 +22,14 @@ Binaryen is installed as part of the build dependencies. The repository's
 install instead of producing an incomplete package. Ordinary checkout installs
 and packing existing build output do not run this build.
 
+For the optional editor/timeline peer installed from Git, follow
+[Timeline Editor's source-install contract](https://github.com/moritzbrantner/timeline-editor#install):
+also list and trust its exact pinned `@moritzbrantner/ui` and
+`@moenarch/editor-core` Git dependencies directly. Bun can skip a trusted
+transitive Git dependency's `prepare`; installing only the timeline peer can
+leave its required runtime exports unbuilt. This is a source-install requirement,
+not an additional Maps runtime peer.
+
 Import the stylesheet once in your app shell:
 
 ```ts

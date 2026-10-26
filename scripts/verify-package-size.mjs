@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseNpmPackResult } from "./npm-pack-result.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Re-measured on main 1740615 after Milestone D (#138, 486,433-byte WASM) for #187:
@@ -41,9 +42,7 @@ if (pack.status !== 0) {
 let packageInfo;
 
 try {
-  // npm 10 runs `prepare` despite --ignore-scripts; its output precedes the JSON report.
-  const parsed = JSON.parse(pack.stdout.slice(pack.stdout.lastIndexOf("\n[") + 1));
-  packageInfo = parsed[0];
+  packageInfo = parseNpmPackResult(pack.stdout);
 } catch (error) {
   console.error("Package size verification failed: could not parse npm pack JSON output.");
   console.error(error instanceof Error ? error.message : String(error));

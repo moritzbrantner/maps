@@ -19,6 +19,11 @@ timeline exports (`@moritzbrantner/maps/timeline`):
 bun add @moritzbrantner/timeline-editor
 ```
 
+When using commit-pinned Git sources instead of registry packages, follow
+[Timeline Editor's install contract](https://github.com/moritzbrantner/timeline-editor#install).
+List and trust its pinned UI and `@moenarch/editor-core` Git prerequisites
+directly alongside the timeline package so Bun builds their runtime exports.
+
 For core-only server or data usage:
 
 ```sh
