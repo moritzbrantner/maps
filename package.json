@@ -136,9 +136,9 @@
     "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
-    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#898f0ab8c61b6188fc87f758d1b057580a683672",
-    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#79d0a84330ceae8ae52f368f2497468f0a8b9ae5",
-    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#a0abbd5821c3e6698c0498059a7fbb0aa86c83d5",
+    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#62e1e03c3fc077a9ddd8d701e985ae3a507b0bd3",
+    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#7c8372028abadf25a57d5c8ccaf4de425b0bbd3c",
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#47425e078fbcd7ca51cf64a50ffad3bfb4204d8d",
     "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-query": "5.104.5",
