@@ -7,6 +7,7 @@ import {
   type MapsPanVelocity,
 } from "./canvas-flat-inertia";
 import { drawCanvasRasterTile } from "./canvas-raster-projective";
+import { fadeRasterPlacements } from "./raster-tile-transition";
 import {
   areMapsViewStatesEqual,
   createMapsViewStateEchoTracker,
@@ -1050,6 +1051,7 @@ function createFrameSynchronizer({
   onCameraFrame: () => void;
 }) {
   let disposed = false;
+  const tileLoadedAt = new Map<string, number>();
   let rendererRetryFrame: number | null = null;
   let deviceLossMonitorTimer: number | null = null;
   let lastFrame: MapsFlatRasterFrame | null = null;
@@ -1316,12 +1318,22 @@ function createFrameSynchronizer({
       ? { height: frame.camera.height, width: frame.camera.width }
       : null;
     const currentRenderer = renderer();
+    const now = performance.now();
+    const available = new Set(
+      frame.placements.filter((p) => images.has(p.tile.key)).map((p) => p.tile.key),
+    );
+    const { placements, animating: fading } = fadeRasterPlacements(
+      frame.placements,
+      available,
+      tileLoadedAt,
+      now,
+    );
     stats.renders += 1;
     if (currentRenderer) {
       try {
         const started = performance.now();
         const drawnTiles = currentRenderer.render(
-          frame.placements,
+          placements,
           frame.renderCamera,
           applicationFrame,
           margin,
@@ -1340,6 +1352,7 @@ function createFrameSynchronizer({
         cancelRendererRetry();
         retainRenderedFrame(frame, viewportOnly);
         setDrawnTiles(drawnTiles);
+        if (fading) requestRender();
         return;
       } catch {
         failRenderer();
@@ -1349,10 +1362,17 @@ function createFrameSynchronizer({
     cancelRendererRetry();
     frameStats = null;
     const started = performance.now();
-    const drawnTiles = drawCanvasFrame(fallbackCanvas, images, frame, margin, viewportOnly);
+    const drawnTiles = drawCanvasFrame(
+      fallbackCanvas,
+      images,
+      { ...frame, placements },
+      margin,
+      viewportOnly,
+    );
     stats.lastRenderMs = performance.now() - started;
     retainRenderedFrame(frame, viewportOnly);
     setDrawnTiles(drawnTiles);
+    if (fading) requestRender();
   }
 
   function recordFrameStats(currentRenderer: MapsWgpuBaseMapRenderer) {
@@ -1551,6 +1571,7 @@ function createFrameSynchronizer({
       loads.delete(tile.key);
     }
     for (const tile of frame.evictions) {
+      tileLoadedAt.delete(tile.key);
       invalidateRendered(tile.key);
       const currentRenderer = renderer();
       if (currentRenderer) {
@@ -1595,6 +1616,7 @@ function createFrameSynchronizer({
             loads.delete(tile.key);
 
             images.set(tile.key, image);
+            tileLoadedAt.set(tile.key, performance.now());
             delete canvas.dataset.mapBaseTileError;
             const currentRenderer = renderer();
             if (currentRenderer) {
@@ -1767,6 +1789,7 @@ function drawCanvasFrame(
     if (viewportOnly && placement.visible === false) continue;
     const image = images.get(placement.tile.key);
     if (!image) continue;
+    context.globalAlpha = placement.opacity ?? 1;
     if (
       drawCanvasRasterTile(
         context,
@@ -1780,6 +1803,7 @@ function drawCanvasFrame(
     ) {
       drawnTiles += 1;
     }
+    context.globalAlpha = 1;
   }
 
   return drawnTiles;
