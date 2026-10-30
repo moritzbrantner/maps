@@ -26,15 +26,16 @@ pub(super) type RasterTileKey = (u8, u32, u32);
 /// view-projection elements, the render-surface margin (CSS px per side), the
 /// viewport clip width/height (CSS px; 0 draws the whole surface) and the CSS-to-
 /// physical pixel ratio, followed by one [`PACKED_TILE_DRAW_STRIDE`] record per
-/// placement (z, x, y, local west, local north, local size).
+/// placement (z, x, y, local west, local north, local size, opacity).
 const PACKED_TILE_DRAW_HEADER_LENGTH: usize = 20;
-const PACKED_TILE_DRAW_STRIDE: usize = 6;
+const PACKED_TILE_DRAW_STRIDE: usize = 7;
 
 pub(super) struct WgpuRasterTilePlacement {
     pub(super) key: Option<RasterTileKey>,
     pub(super) local_west: f64,
     pub(super) local_north: f64,
     pub(super) local_size: f64,
+    pub(super) opacity: f32,
 }
 
 fn packed_tile_key(z: f64, x: f64, y: f64) -> Option<RasterTileKey> {
@@ -139,6 +140,7 @@ fn unpack_tile_draw(record: &[f64; PACKED_TILE_DRAW_STRIDE]) -> WgpuRasterTilePl
         local_west: record[3],
         local_north: record[4],
         local_size: record[5],
+        opacity: record[6] as f32,
     }
 }
 
@@ -330,8 +332,12 @@ pub(super) fn append_tile_vertices(
         placement.local_west,
         placement.local_north,
         placement.local_size,
+        f64::from(placement.opacity),
     ];
-    if values.iter().any(|value| !value.is_finite()) || placement.local_size <= 0.0 {
+    if values.iter().any(|value| !value.is_finite())
+        || placement.local_size <= 0.0
+        || !(0.0..=1.0).contains(&placement.opacity)
+    {
         return Err("invalid raster tile local placement");
     }
 
@@ -347,10 +353,10 @@ pub(super) fn append_tile_vertices(
     }
 
     for vertex in [
-        [left, top, 0.0, 0.0],
-        [left, bottom, 0.0, 1.0],
-        [right, top, 1.0, 0.0],
-        [right, bottom, 1.0, 1.0],
+        [left, top, 0.0, 0.0, placement.opacity],
+        [left, bottom, 0.0, 1.0, placement.opacity],
+        [right, top, 1.0, 0.0, placement.opacity],
+        [right, bottom, 1.0, 1.0, placement.opacity],
     ] {
         for value in vertex {
             output.extend_from_slice(&value.to_le_bytes());
@@ -1420,7 +1426,7 @@ mod raster_geometry_tests {
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ];
         let mut packed = matrix.to_vec();
-        packed.extend([12.0, 99.0, 50.0, 2.0, 2.0, 3.0, 1.0, 100.0, 200.0, 64.0]);
+        packed.extend([12.0, 99.0, 50.0, 2.0, 2.0, 3.0, 1.0, 100.0, 200.0, 64.0, 0.5]);
 
         let (camera, clip, mut placements) = unpack_tile_draws(&packed).unwrap();
         assert_eq!(
@@ -1433,6 +1439,7 @@ mod raster_geometry_tests {
         );
         let tile = placements.next().unwrap();
         assert_eq!(tile.key, Some((2, 3, 1)));
+        assert_eq!(tile.opacity, 0.5);
         assert!(placements.next().is_none());
         let mut vertices = Vec::new();
         append_tile_vertices(&mut vertices, &tile).unwrap();
@@ -1445,8 +1452,8 @@ mod raster_geometry_tests {
         assert_eq!(
             values,
             [
-                100.0, 200.0, 0.0, 0.0, 100.0, 136.0, 0.0, 1.0, 164.0, 200.0, 1.0, 0.0, 164.0,
-                136.0, 1.0, 1.0
+                100.0, 200.0, 0.0, 0.0, 0.5, 100.0, 136.0, 0.0, 1.0, 0.5,
+                164.0, 200.0, 1.0, 0.0, 0.5, 164.0, 136.0, 1.0, 1.0, 0.5
             ]
         );
         assert_eq!(camera_uniform_bytes(camera)[..4], [0, 0, 128, 63]);
@@ -1476,6 +1483,7 @@ mod raster_geometry_tests {
                 local_west: west,
                 local_north: north,
                 local_size: size,
+                opacity: 1.0,
             };
             assert!(append_tile_vertices(&mut Vec::new(), &tile).is_err());
         }
