@@ -1362,7 +1362,11 @@ mod tests {
             .iter()
             .position(|placement| placement.tile.z == 4)
             .unwrap();
-        assert!(ready.placements[..first_child].iter().any(|p| p.tile.z == 3));
+        assert!(
+            ready.placements[..first_child]
+                .iter()
+                .any(|p| p.tile.z == 3)
+        );
     }
 
     #[test]
