@@ -906,9 +906,10 @@ impl FlatRasterRuntime {
         let mut tiles = BTreeMap::new();
         for placement in placements {
             let tile = placement.tile;
-            if self.ready.contains(&tile) {
-                continue;
-            }
+            // Even a ready replacement needs its loaded ancestor underneath it
+            // while the browser renderer crossfades the new pixels into place.
+            // Descendants, by contrast, only fill genuinely missing cover.
+            let replacement_ready = self.ready.contains(&tile);
             for z in (self.source.min_zoom..tile.z).rev() {
                 let shift = tile.z - z;
                 let parent = TileId {
@@ -923,6 +924,9 @@ impl FlatRasterRuntime {
                         .or_insert(placement.visible);
                     break;
                 }
+            }
+            if replacement_ready {
+                continue;
             }
             for descendant in &self.ready {
                 if descendant.z > tile.z
@@ -1351,12 +1355,14 @@ mod tests {
             runtime.mark_loaded(tile);
         }
         let ready = runtime.frame_plan().unwrap();
-        assert!(
-            ready
-                .placements
-                .iter()
-                .all(|placement| placement.tile.z == 4)
-        );
+        // Loaded parent coverage stays beneath exact children so the browser
+        // can crossfade them without a white flash.
+        let first_child = ready
+            .placements
+            .iter()
+            .position(|placement| placement.tile.z == 4)
+            .unwrap();
+        assert!(ready.placements[..first_child].iter().any(|p| p.tile.z == 3));
     }
 
     #[test]
