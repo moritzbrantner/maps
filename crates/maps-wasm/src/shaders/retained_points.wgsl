@@ -3,7 +3,8 @@
 // strokes stay in CSS px, like the screen-projected application circles.
 struct RetainedFrame {
   matrix: mat4x4<f32>,
-  // Physical surface width/height (px) and the CSS-to-physical pixel ratio.
+  // Physical surface width/height (px), the CSS-to-physical pixel ratio, and the clip w of
+  // the map center under a pitched camera (0 when unpitched).
   surface: vec4<f32>,
 };
 
@@ -53,7 +54,10 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, input: PointInput) -> Verte
     output.stroke_color = vec4<f32>(0.0);
     return output;
   }
-  let outer_clip = vec2<f32>(outer * frame.surface.z * 2.0) / frame.surface.xy;
+  // MapLibre `circle-pitch-scale: map` (#328): a pitched camera passes its center depth in
+  // `surface.w` and circles scale with `center depth / w`; the antialiasing blur does not.
+  let depth_scale = select(1.0, frame.surface.w / center.w, frame.surface.w > 0.0);
+  let outer_clip = vec2<f32>(outer * depth_scale * frame.surface.z * 2.0) / frame.surface.xy;
   output.position = vec4<f32>(center.xy / center.w + local * outer_clip, 0.0, 1.0);
   output.local = local;
   output.fill_ratio = 2.0;

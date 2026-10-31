@@ -28,6 +28,12 @@ mod wgpu_geometry;
     target_os = "unknown",
     feature = "wgpu-base-map"
 ))]
+mod wgpu_mipmaps;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "wgpu-base-map"
+))]
 mod wgpu_retained;
 #[cfg(test)]
 mod work_complexity;

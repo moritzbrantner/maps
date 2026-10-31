@@ -3,8 +3,9 @@
 use serde::Deserialize;
 use std::borrow::Cow;
 
-/// Clip position (2 x f32), RGBA (4 x f32), edge (2 x f32): see `shaders/application.wgsl`.
-pub(super) const APPLICATION_VERTEX_SIZE: u64 = 32;
+/// Homogeneous clip position `(x, y, w)` (3 x f32), RGBA (4 x f32), edge (2 x f32): see
+/// `shaders/application.wgsl`.
+pub(super) const APPLICATION_VERTEX_SIZE: u64 = 36;
 /// The edge of fills and markers: never faded.
 const FILL_EDGE: [f32; 2] = [0.0, 1.0e6];
 pub(super) const APPLICATION_CIRCLE_INSTANCE_SIZE: u64 = 56;
@@ -249,6 +250,35 @@ impl WgpuApplicationFrame {
             }
         }
     }
+
+    /// Takes line and polygon points from the render surface back onto the flat map plane
+    /// of a pitched camera, where they are stroked like MapLibre's tile geometry. Circles
+    /// and direction markers stay screen-aligned.
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", feature = "wgpu-base-map")),
+        allow(dead_code)
+    )]
+    pub(super) fn place_on_ground(
+        &mut self,
+        ground: &GroundPerspective,
+    ) -> Result<(), &'static str> {
+        let lines = self
+            .lines
+            .iter_mut()
+            .flat_map(|line| line.points.iter_mut());
+        let polygons = self
+            .polygons
+            .iter_mut()
+            .flat_map(|polygon| polygon.rings.iter_mut().flatten());
+        for point in lines.chain(polygons) {
+            let (x, y) = ground
+                .flat(point.x, point.y)
+                .ok_or("wgpu application point lies beyond the horizon")?;
+            point.x = x;
+            point.y = y;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -384,9 +414,114 @@ pub(super) fn append_tile_vertices(
     Ok(())
 }
 
+/// The pitched camera's map plane, seen from the application frame (#328).
+///
+/// MapLibre draws circles, lines and fills as tile geometry on the ground: line widths and
+/// joins are extruded on the map plane and shrink with distance, and circles scale with
+/// `camera_to_center_distance / w` (`circle-pitch-scale: map`). Under a pitched render camera
+/// the application frame's screen points are taken back to the flat, north-up plane at the
+/// camera zoom (CSS px, +y south), stroked there, and every vertex is projected with the
+/// homography `flat -> clip` read from the render camera's view-projection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GroundPerspective {
+    /// Rows of the `flat (x, y, 1) -> clip (x, y, w)` homography.
+    forward: [[f64; 3]; 3],
+    inverse: [[f64; 3]; 3],
+    /// Clip `w` (eye depth, CSS px) of the map center: MapLibre's `camera_to_center_distance`.
+    center_depth: f64,
+    width: f64,
+    height: f64,
+}
+
+impl GroundPerspective {
+    /// The ground homography of `view_projection` (column-major, local map plane in CSS px,
+    /// +y north) for a `width` x `height` CSS-px surface; `None` for an unpitched camera, whose
+    /// clip `w` does not vary over the map plane.
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", feature = "wgpu-base-map")),
+        allow(dead_code)
+    )]
+    pub(super) fn new(view_projection: [f32; 16], width: f64, height: f64) -> Option<Self> {
+        let m = |column: usize, row: usize| f64::from(view_projection[column * 4 + row]);
+        if m(0, 3) == 0.0 && m(1, 3) == 0.0 {
+            return None;
+        }
+        let forward = [
+            [m(0, 0), -m(1, 0), m(3, 0)],
+            [m(0, 1), -m(1, 1), m(3, 1)],
+            [m(0, 3), -m(1, 3), m(3, 3)],
+        ];
+        let inverse = invert_3x3(forward)?;
+        let center_depth = m(3, 3);
+        if center_depth.is_nan() || center_depth <= 0.0 || !width.is_finite() || !height.is_finite()
+        {
+            return None;
+        }
+        Some(Self {
+            forward,
+            inverse,
+            center_depth,
+            width,
+            height,
+        })
+    }
+
+    /// Homogeneous clip position `(x, y, w)` of a flat-plane point.
+    fn clip(&self, x: f64, y: f64) -> [f64; 3] {
+        self.forward.map(|row| row[0] * x + row[1] * y + row[2])
+    }
+
+    /// The flat-plane point under a surface CSS-px position.
+    pub(super) fn flat(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let ndc = [x / self.width * 2.0 - 1.0, 1.0 - y / self.height * 2.0, 1.0];
+        let [fx, fy, fw] = self
+            .inverse
+            .map(|row| row[0] * ndc[0] + row[1] * ndc[1] + row[2] * ndc[2]);
+        if !fw.is_finite() || fw.abs() <= f64::EPSILON {
+            return None;
+        }
+        let point = (fx / fw, fy / fw);
+        (point.0.is_finite() && point.1.is_finite()).then_some(point)
+    }
+
+    /// MapLibre's `circle-pitch-scale: map` factor at a surface CSS-px position.
+    fn depth_scale(&self, x: f64, y: f64) -> Option<f64> {
+        let (fx, fy) = self.flat(x, y)?;
+        let [_, _, w] = self.clip(fx, fy);
+        let scale = self.center_depth / w;
+        (scale.is_finite() && scale > 0.0).then_some(scale)
+    }
+}
+
+fn invert_3x3(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let minor =
+        |r0: usize, r1: usize, c0: usize, c1: usize| m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0];
+    let adjugate = [
+        [minor(1, 2, 1, 2), -minor(0, 2, 1, 2), minor(0, 1, 1, 2)],
+        [-minor(1, 2, 0, 2), minor(0, 2, 0, 2), -minor(0, 1, 0, 2)],
+        [minor(1, 2, 0, 1), -minor(0, 2, 0, 1), minor(0, 1, 0, 1)],
+    ];
+    let determinant =
+        m[0][0] * adjugate[0][0] + m[0][1] * adjugate[1][0] + m[0][2] * adjugate[2][0];
+    if !determinant.is_finite() || determinant.abs() <= f64::MIN_POSITIVE {
+        return None;
+    }
+    Some(adjugate.map(|row| row.map(|value| value / determinant)))
+}
+
+/// Where application vertices are written: the screen (surface CSS px), or the flat map
+/// plane of a pitched camera.
+#[derive(Clone, Copy, Debug)]
+struct ApplicationSpace {
+    width: f64,
+    height: f64,
+    ground: Option<GroundPerspective>,
+}
+
 pub(super) fn prepare_application_geometry(
     frame: &WgpuApplicationFrame,
     pixel_ratio: f64,
+    ground: Option<GroundPerspective>,
 ) -> Result<ApplicationGeometry, &'static str> {
     if !frame.width.is_finite()
         || !frame.height.is_finite()
@@ -395,6 +530,12 @@ pub(super) fn prepare_application_geometry(
     {
         return Err("invalid wgpu application frame extent");
     }
+    let screen = ApplicationSpace {
+        width: frame.width,
+        height: frame.height,
+        ground: None,
+    };
+    let space = ApplicationSpace { ground, ..screen };
 
     let mut geometry = ApplicationGeometry::default();
     let entries = frame
@@ -413,8 +554,7 @@ pub(super) fn prepare_application_geometry(
                     / APPLICATION_CIRCLE_INSTANCE_SIZE) as u32;
                 append_application_circle_instance(
                     &mut geometry.circle_instances,
-                    frame.width,
-                    frame.height,
+                    space,
                     pixel_ratio,
                     &frame
                         .circle(index)
@@ -433,8 +573,7 @@ pub(super) fn prepare_application_geometry(
                     (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
                 append_application_line(
                     &mut geometry.triangle_vertices,
-                    frame.width,
-                    frame.height,
+                    space,
                     pixel_ratio,
                     frame
                         .lines
@@ -457,10 +596,10 @@ pub(super) fn prepare_application_geometry(
             APPLICATION_DIRECTION_MARKER => {
                 let first_vertex =
                     (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
+                // Markers stay screen-aligned arrows, like MapLibre's viewport-aligned icons.
                 append_application_direction_marker(
                     &mut geometry.triangle_vertices,
-                    frame.width,
-                    frame.height,
+                    screen,
                     frame
                         .direction_markers
                         .get(index)
@@ -480,8 +619,7 @@ pub(super) fn prepare_application_geometry(
             APPLICATION_POLYGON => {
                 let draw = append_application_polygon(
                     &mut geometry.triangle_vertices,
-                    frame.width,
-                    frame.height,
+                    space,
                     pixel_ratio,
                     frame
                         .polygons
@@ -542,8 +680,7 @@ fn append_application_draw(draws: &mut Vec<ApplicationDraw>, draw: ApplicationDr
 
 fn append_application_circle_instance(
     output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
+    space: ApplicationSpace,
     pixel_ratio: f64,
     circle: &WgpuApplicationCircle,
 ) -> Result<(), &'static str> {
@@ -560,13 +697,21 @@ fn append_application_circle_instance(
 
     // MapLibre circles: the stroke lies outside the radius.
     let outer_radius = circle.radius + circle.stroke_width;
+    let ApplicationSpace { width, height, .. } = space;
+    // Under pitch the circle stays screen-aligned but scales with its depth.
+    let depth_scale = match space.ground {
+        Some(ground) => ground
+            .depth_scale(circle.x, circle.y)
+            .ok_or("wgpu application circle lies beyond the horizon")?,
+        None => 1.0,
+    };
     let center_clip = [
         (circle.x / width * 2.0 - 1.0) as f32,
         (1.0 - circle.y / height * 2.0) as f32,
     ];
     let outer_clip = [
-        (outer_radius / width * 2.0) as f32,
-        (outer_radius / height * 2.0) as f32,
+        (outer_radius * depth_scale / width * 2.0) as f32,
+        (outer_radius * depth_scale / height * 2.0) as f32,
     ];
     if center_clip
         .into_iter()
@@ -603,8 +748,7 @@ fn append_application_circle_instance(
 
 fn append_application_direction_marker(
     output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
+    space: ApplicationSpace,
     marker: &WgpuApplicationDirectionMarker,
 ) -> Result<(), &'static str> {
     if [marker.x, marker.y, marker.angle, marker.size]
@@ -626,7 +770,7 @@ fn append_application_direction_marker(
     for (local_x, local_y) in local_points {
         let x = marker.x + local_x * cosine - local_y * sine;
         let y = marker.y + local_x * sine + local_y * cosine;
-        append_application_vertex(output, width, height, x, y, marker.color, FILL_EDGE)?;
+        append_application_vertex(output, space, x, y, marker.color, FILL_EDGE)?;
     }
     Ok(())
 }
@@ -656,8 +800,7 @@ fn stroke_edges(half_width: f64, pixel_ratio: f64) -> StrokeEdges {
 
 fn append_application_polygon(
     output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
+    space: ApplicationSpace,
     pixel_ratio: f64,
     polygon: &WgpuApplicationPolygon,
 ) -> Result<PolygonDraw, &'static str> {
@@ -698,8 +841,7 @@ fn append_application_polygon(
                 for vertex in [anchor, point, next] {
                     append_application_vertex(
                         output,
-                        width,
-                        height,
+                        space,
                         vertex.x,
                         vertex.y,
                         polygon.fill_color,
@@ -722,7 +864,7 @@ fn append_application_polygon(
             (max_x, max_y),
             (min_x, max_y),
         ] {
-            append_application_vertex(output, width, height, x, y, polygon.fill_color, FILL_EDGE)?;
+            append_application_vertex(output, space, x, y, polygon.fill_color, FILL_EDGE)?;
         }
     }
 
@@ -737,26 +879,26 @@ fn append_application_polygon(
                 let start_right = (start.x - offset.0, start.y - offset.1);
                 let end_left = (end.x + offset.0, end.y + offset.1);
                 let end_right = (end.x - offset.0, end.y - offset.1);
-                for (point, edge) in [
-                    (start_left, edges.left),
-                    (start_right, edges.right),
-                    (end_left, edges.left),
-                    (start_right, edges.right),
-                    (end_right, edges.right),
-                    (end_left, edges.left),
+                let (start_centre, end_centre) = ((start.x, start.y), (end.x, end.y));
+                for (centre, point, edge) in [
+                    (start_centre, start_left, edges.left),
+                    (start_centre, start_right, edges.right),
+                    (end_centre, end_left, edges.left),
+                    (start_centre, start_right, edges.right),
+                    (end_centre, end_right, edges.right),
+                    (end_centre, end_left, edges.left),
                 ] {
-                    append_application_vertex(
+                    append_stroke_vertex(
                         output,
-                        width,
-                        height,
-                        point.0,
-                        point.1,
+                        space,
+                        point,
+                        (centre, point),
                         polygon.stroke_color,
                         edge,
                     )?;
                 }
                 // Round joins, as MapLibre's `line-join: round` outline layer.
-                append_round_join(output, width, height, start, polygon.stroke_color, edges)?;
+                append_round_join(output, space, start, polygon.stroke_color, edges)?;
             }
         }
         draw.stroke_count = vertex_index(output) - draw.stroke_first;
@@ -781,8 +923,7 @@ fn open_polygon_ring(ring: &[WgpuApplicationPoint]) -> Cow<'_, [WgpuApplicationP
 
 fn append_round_join(
     output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
+    space: ApplicationSpace,
     center: WgpuApplicationPoint,
     color: [f32; 4],
     edges: StrokeEdges,
@@ -792,34 +933,25 @@ fn append_round_join(
     for segment in 0..segments {
         let angle_a = std::f64::consts::TAU * segment as f64 / segments as f64;
         let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / segments as f64;
-        append_application_vertex(
-            output,
-            width,
-            height,
-            center.x,
-            center.y,
-            color,
-            edges.centre,
-        )?;
-        for angle in [angle_a, angle_b] {
-            append_application_vertex(
-                output,
-                width,
-                height,
+        let centre = (center.x, center.y);
+        let rim = |angle: f64| {
+            (
                 center.x + radius * angle.cos(),
                 center.y + radius * angle.sin(),
-                color,
-                edges.left,
-            )?;
-        }
+            )
+        };
+        let (a, b) = (rim(angle_a), rim(angle_b));
+        let middle = rim((angle_a + angle_b) / 2.0);
+        append_stroke_vertex(output, space, centre, (centre, middle), color, edges.centre)?;
+        append_stroke_vertex(output, space, a, (centre, a), color, edges.left)?;
+        append_stroke_vertex(output, space, b, (centre, b), color, edges.left)?;
     }
     Ok(())
 }
 
 fn append_application_line(
     output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
+    space: ApplicationSpace,
     pixel_ratio: f64,
     line: &WgpuApplicationLine,
 ) -> Result<(), &'static str> {
@@ -865,15 +997,16 @@ fn append_application_line(
         let end_left = (end.x + end_offset.0, end.y + end_offset.1);
         let end_right = (end.x - end_offset.0, end.y - end_offset.1);
 
-        for (point, edge) in [
-            (start_left, edges.left),
-            (start_right, edges.right),
-            (end_left, edges.left),
-            (start_right, edges.right),
-            (end_right, edges.right),
-            (end_left, edges.left),
+        let (start_centre, end_centre) = ((start.x, start.y), (end.x, end.y));
+        for (centre, point, edge) in [
+            (start_centre, start_left, edges.left),
+            (start_centre, start_right, edges.right),
+            (end_centre, end_left, edges.left),
+            (start_centre, start_right, edges.right),
+            (end_centre, end_right, edges.right),
+            (end_centre, end_left, edges.left),
         ] {
-            append_application_vertex(output, width, height, point.0, point.1, line.color, edge)?;
+            append_stroke_vertex(output, space, point, (centre, point), line.color, edge)?;
         }
 
         start_offset = end_offset;
@@ -885,23 +1018,14 @@ fn append_application_line(
     let first = points[0];
     append_round_line_cap(
         output,
-        width,
-        height,
+        space,
         first,
         (-first_direction.0, -first_direction.1),
         line.color,
         edges,
     )?;
     let last = *points.last().expect("line has at least two points");
-    append_round_line_cap(
-        output,
-        width,
-        height,
-        last,
-        current_direction,
-        line.color,
-        edges,
-    )?;
+    append_round_line_cap(output, space, last, current_direction, line.color, edges)?;
 
     Ok(())
 }
@@ -977,8 +1101,7 @@ fn line_join_offset(
 
 fn append_round_line_cap(
     output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
+    space: ApplicationSpace,
     center: WgpuApplicationPoint,
     outward: (f64, f64),
     color: [f32; 4],
@@ -993,19 +1116,52 @@ fn append_round_line_cap(
         let angle_b = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * fraction_b;
         let a = point_on_oriented_circle(center, outward, normal, radius, angle_a);
         let b = point_on_oriented_circle(center, outward, normal, radius, angle_b);
-        append_application_vertex(
-            output,
-            width,
-            height,
-            center.x,
-            center.y,
-            color,
-            edges.centre,
-        )?;
-        append_application_vertex(output, width, height, a.0, a.1, color, edges.left)?;
-        append_application_vertex(output, width, height, b.0, b.1, color, edges.left)?;
+        let middle =
+            point_on_oriented_circle(center, outward, normal, radius, (angle_a + angle_b) / 2.0);
+        let centre = (center.x, center.y);
+        append_stroke_vertex(output, space, centre, (centre, middle), color, edges.centre)?;
+        append_stroke_vertex(output, space, a, (centre, a), color, edges.left)?;
+        append_stroke_vertex(output, space, b, (centre, b), color, edges.left)?;
     }
     Ok(())
+}
+
+/// A stroke vertex at `at`, whose extrusion runs from the stroke centre `extrusion.0` to
+/// `extrusion.1` (the vertex itself on the stroke boundary, a boundary point for a centre).
+///
+/// On the ground plane of a pitched camera the stroke fades over one screen pixel the way
+/// MapLibre's line shader measures it (`v_gamma_scale`): the extrusion's clip-space length
+/// over the extruded vertex's `w`. The vertex carries the reciprocal of that screen extent
+/// as a negative edge extent, interpolated across the stroke like MapLibre's varying.
+fn append_stroke_vertex(
+    output: &mut Vec<u8>,
+    space: ApplicationSpace,
+    at: (f64, f64),
+    (centre, extruded): ((f64, f64), (f64, f64)),
+    color: [f32; 4],
+    edge: [f32; 2],
+) -> Result<(), &'static str> {
+    let Some(ground) = space.ground else {
+        return append_application_vertex(output, space, at.0, at.1, color, edge);
+    };
+    let ground_outset = (extruded.0 - centre.0).hypot(extruded.1 - centre.1);
+    let [cx, cy, _] = ground.clip(centre.0, centre.1);
+    let [ex, ey, ew] = ground.clip(extruded.0, extruded.1);
+    let screen_outset =
+        ((ex - cx) / ew * space.width * 0.5).hypot((ey - cy) / ew * space.height * 0.5);
+    // `edge[1]` is the outset in physical px on a flat map: scale it by the projection.
+    let extent = f64::from(edge[1]) * screen_outset / ground_outset;
+    if !(extent.is_finite() && extent > 0.0) {
+        return Err("wgpu application stroke has no screen extent");
+    }
+    append_application_vertex(
+        output,
+        space,
+        at.0,
+        at.1,
+        color,
+        [edge[0], (-1.0 / extent) as f32],
+    )
 }
 
 fn point_on_oriented_circle(
@@ -1025,22 +1181,25 @@ fn point_on_oriented_circle(
 
 fn append_application_vertex(
     output: &mut Vec<u8>,
-    width: f64,
-    height: f64,
+    space: ApplicationSpace,
     x: f64,
     y: f64,
     color: [f32; 4],
     edge: [f32; 2],
 ) -> Result<(), &'static str> {
-    let clip_x = (x / width * 2.0 - 1.0) as f32;
-    let clip_y = (1.0 - y / height * 2.0) as f32;
-    if !clip_x.is_finite() || !clip_y.is_finite() {
+    let clip = match space.ground {
+        Some(ground) => ground.clip(x, y).map(|value| value as f32),
+        None => [
+            (x / space.width * 2.0 - 1.0) as f32,
+            (1.0 - y / space.height * 2.0) as f32,
+            1.0,
+        ],
+    };
+    if clip.iter().any(|value| !value.is_finite()) {
         return Err("wgpu application position is not representable as f32");
     }
 
-    output.extend_from_slice(&clip_x.to_le_bytes());
-    output.extend_from_slice(&clip_y.to_le_bytes());
-    for value in color.into_iter().chain(edge) {
+    for value in clip.into_iter().chain(color).chain(edge) {
         output.extend_from_slice(&value.to_le_bytes());
     }
     Ok(())
@@ -1064,6 +1223,61 @@ pub(super) fn camera_uniform_bytes(view_projection: [f32; 16]) -> [u8; 64] {
 #[cfg(test)]
 mod application_geometry_tests {
     use super::*;
+
+    fn camera(pitch: f64) -> maps_core::MapCamera {
+        maps_core::MapCamera::new(
+            10.4,
+            51.2,
+            5.55,
+            -20.0,
+            pitch,
+            maps_core::ViewportSize::new(720.0, 480.0).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn ground_perspective_is_the_pitched_camera_seen_from_its_flat_plane() {
+        assert_eq!(
+            GroundPerspective::new(
+                camera(0.0)
+                    .local_render_frame()
+                    .unwrap()
+                    .view_projection_elements(),
+                720.0,
+                480.0,
+            ),
+            None
+        );
+
+        let pitched = camera(50.0);
+        let frame = pitched.local_render_frame().unwrap();
+        let ground = GroundPerspective::new(frame.view_projection_elements(), 720.0, 480.0)
+            .expect("pitched ground");
+        let flat_camera = maps_core::MapCamera::new(
+            10.4,
+            51.2,
+            5.55,
+            0.0,
+            0.0,
+            maps_core::ViewportSize::new(720.0, 480.0).unwrap(),
+        )
+        .unwrap();
+        for (longitude, latitude) in [(10.4, 51.2), (7.6, 52.0), (12.4, 49.2)] {
+            let screen = frame.project(longitude, latitude).unwrap();
+            let flat = flat_camera.project_screen(longitude, latitude).unwrap();
+            let (x, y) = ground.flat(screen.x, screen.y).unwrap();
+            // The flat plane is centred on the map center: CSS px east and south of it.
+            assert!((x - (flat.x - 360.0)).abs() < 1.0e-3, "x {x} vs {}", flat.x);
+            assert!((y - (flat.y - 240.0)).abs() < 1.0e-3, "y {y} vs {}", flat.y);
+        }
+
+        // Circles at the center keep their size; nearer ones (lower on screen) grow.
+        let center = ground.depth_scale(360.0, 240.0).unwrap();
+        assert!((center - 1.0).abs() < 1.0e-5, "center scale {center}");
+        assert!(ground.depth_scale(360.0, 460.0).unwrap() > 1.1);
+        assert!(ground.depth_scale(360.0, 20.0).unwrap() < 0.9);
+    }
 
     /// Builds a frame through the packed transport: one record per circle and one
     /// painter-order run per entry (consecutive runs are not merged here, so tests also
@@ -1208,7 +1422,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
 
         assert!(geometry.triangle_vertices.is_empty());
         assert_eq!(
@@ -1234,7 +1448,7 @@ mod application_geometry_tests {
             vec![polygon],
             100.0,
         );
-        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
         let [ApplicationDraw::Polygon(draw)] = geometry.draws[..] else {
             panic!("expected one polygon draw, got {:?}", geometry.draws);
         };
@@ -1318,7 +1532,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        assert!(prepare_application_geometry(&frame, 1.0).is_err());
+        assert!(prepare_application_geometry(&frame, 1.0, None).is_err());
     }
 
     #[test]
@@ -1337,7 +1551,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
 
         assert!(matches!(
             geometry.draws[..],
@@ -1372,7 +1586,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
         let line_vertices =
             (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
 
@@ -1409,7 +1623,7 @@ mod application_geometry_tests {
         );
         frame.order = vec![APPLICATION_CIRCLE, 0, count];
 
-        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
 
         assert_eq!(
             geometry.draws,
@@ -1437,7 +1651,7 @@ mod application_geometry_tests {
         frame
             .attach_packed(&[0.0; 12], &[APPLICATION_CIRCLE, 0, 2])
             .unwrap();
-        assert!(prepare_application_geometry(&frame, 1.0).is_err());
+        assert!(prepare_application_geometry(&frame, 1.0, None).is_err());
     }
 }
 
