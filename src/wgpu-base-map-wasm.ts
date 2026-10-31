@@ -7,8 +7,8 @@ import type {
 import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 
 // Mirrors PACKED_TILE_DRAW_HEADER_LENGTH / PACKED_TILE_DRAW_STRIDE in
-// crates/maps-wasm/src/wgpu_base_map.rs.
-const PACKED_TILE_DRAW_HEADER_LENGTH = 20;
+// crates/maps-wasm/src/wgpu_geometry.rs.
+const PACKED_TILE_DRAW_HEADER_LENGTH = 22;
 const PACKED_TILE_DRAW_STRIDE = 7;
 
 // Async hosts can overlap while replacing a renderer on the same DOM canvas.
@@ -254,6 +254,10 @@ export async function loadMapsWgpuBaseMapRenderer(
           tileDraws[18] = viewportClip?.height ?? 0;
           // Same ratio the host uses to size the canvas backing store.
           tileDraws[19] = Math.max(1, globalThis.devicePixelRatio || 1);
+          // Pixel-grid alignment of raster tiles applies at rest only, as in MapLibre.
+          const alignment = viewportClip ? undefined : renderCamera.rasterAlignment;
+          tileDraws[20] = alignment?.[0] ?? 0;
+          tileDraws[21] = alignment?.[1] ?? 0;
           let length = PACKED_TILE_DRAW_HEADER_LENGTH;
           for (const placement of placements) {
             if (viewportClip && placement.visible === false) continue;

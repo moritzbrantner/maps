@@ -24,10 +24,11 @@ pub(super) type RasterTileKey = (u8, u32, u32);
 
 /// Packed tile draw input shared with `src/wgpu-base-map-wasm.ts`: 16
 /// view-projection elements, the render-surface margin (CSS px per side), the
-/// viewport clip width/height (CSS px; 0 draws the whole surface) and the CSS-to-
-/// physical pixel ratio, followed by one [`PACKED_TILE_DRAW_STRIDE`] record per
-/// placement (z, x, y, local west, local north, local size, opacity).
-const PACKED_TILE_DRAW_HEADER_LENGTH: usize = 20;
+/// viewport clip width/height (CSS px; 0 draws the whole surface), the CSS-to-
+/// physical pixel ratio and the raster pixel-grid alignment x, y (local CSS px, 0
+/// in motion), followed by one [`PACKED_TILE_DRAW_STRIDE`] record per placement
+/// (z, x, y, local west, local north, local size, opacity).
+const PACKED_TILE_DRAW_HEADER_LENGTH: usize = 22;
 const PACKED_TILE_DRAW_STRIDE: usize = 7;
 
 pub(super) struct WgpuRasterTilePlacement {
@@ -87,6 +88,7 @@ pub(super) fn unpack_tile_draws(
     (
         [f32; 16],
         SurfaceClip,
+        RasterAlignment,
         impl Iterator<Item = WgpuRasterTilePlacement> + '_,
     ),
     &'static str,
@@ -119,6 +121,13 @@ pub(super) fn unpack_tile_draws(
     if !pixel_ratio.is_finite() || pixel_ratio <= 0.0 {
         return Err("invalid wgpu pixel ratio");
     }
+    let alignment = [header[20], header[21]];
+    if alignment
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() > 1.0)
+    {
+        return Err("invalid wgpu raster alignment");
+    }
     Ok((
         view_projection,
         SurfaceClip {
@@ -126,6 +135,7 @@ pub(super) fn unpack_tile_draws(
             viewport,
             pixel_ratio,
         },
+        alignment,
         records
             .as_chunks::<PACKED_TILE_DRAW_STRIDE>()
             .0
@@ -324,9 +334,13 @@ pub(super) struct ApplicationGeometry {
     pub(super) draws: Vec<ApplicationDraw>,
 }
 
+/// Local-plane offset (CSS px, +x east, +y north) added to raster tile quads only.
+pub(super) type RasterAlignment = [f64; 2];
+
 pub(super) fn append_tile_vertices(
     output: &mut Vec<u8>,
     placement: &WgpuRasterTilePlacement,
+    [align_x, align_y]: RasterAlignment,
 ) -> Result<(), &'static str> {
     let values = [
         placement.local_west,
@@ -341,10 +355,12 @@ pub(super) fn append_tile_vertices(
         return Err("invalid raster tile local placement");
     }
 
-    let left = placement.local_west as f32;
-    let top = placement.local_north as f32;
-    let right = (placement.local_west + placement.local_size) as f32;
-    let bottom = (placement.local_north - placement.local_size) as f32;
+    let west = placement.local_west + align_x;
+    let north = placement.local_north + align_y;
+    let left = west as f32;
+    let top = north as f32;
+    let right = (west + placement.local_size) as f32;
+    let bottom = (north - placement.local_size) as f32;
     if [left, top, right, bottom]
         .into_iter()
         .any(|value| !value.is_finite())
@@ -1427,10 +1443,10 @@ mod raster_geometry_tests {
         ];
         let mut packed = matrix.to_vec();
         packed.extend([
-            12.0, 99.0, 50.0, 2.0, 2.0, 3.0, 1.0, 100.0, 200.0, 64.0, 0.5,
+            12.0, 99.0, 50.0, 2.0, 0.25, -0.5, 2.0, 3.0, 1.0, 100.0, 200.0, 64.0, 0.5,
         ]);
 
-        let (camera, clip, mut placements) = unpack_tile_draws(&packed).unwrap();
+        let (camera, clip, alignment, mut placements) = unpack_tile_draws(&packed).unwrap();
         assert_eq!(
             clip,
             SurfaceClip {
@@ -1444,7 +1460,7 @@ mod raster_geometry_tests {
         assert_eq!(tile.opacity, 0.5);
         assert!(placements.next().is_none());
         let mut vertices = Vec::new();
-        append_tile_vertices(&mut vertices, &tile).unwrap();
+        append_tile_vertices(&mut vertices, &tile, alignment).unwrap();
         let values: Vec<f32> = vertices
             .as_chunks::<4>()
             .0
@@ -1454,8 +1470,8 @@ mod raster_geometry_tests {
         assert_eq!(
             values,
             [
-                100.0, 200.0, 0.0, 0.0, 0.5, 100.0, 136.0, 0.0, 1.0, 0.5, 164.0, 200.0, 1.0, 0.0,
-                0.5, 164.0, 136.0, 1.0, 1.0, 0.5
+                100.25, 199.5, 0.0, 0.0, 0.5, 100.25, 135.5, 0.0, 1.0, 0.5, 164.25, 199.5, 1.0,
+                0.0, 0.5, 164.25, 135.5, 1.0, 1.0, 0.5
             ]
         );
         assert_eq!(camera_uniform_bytes(camera)[..4], [0, 0, 128, 63]);
@@ -1466,7 +1482,7 @@ mod raster_geometry_tests {
     #[test]
     fn malformed_packed_draws_and_unrepresentable_tile_geometry_fail_closed() {
         assert!(unpack_tile_draws(&[]).is_err());
-        assert!(unpack_tile_draws(&[0.0; 21]).is_err());
+        assert!(unpack_tile_draws(&[0.0; 23]).is_err());
         for (margin, width, height, pixel_ratio) in [
             (-1.0, 0.0, 0.0, 1.0),
             (f64::NAN, 0.0, 0.0, 1.0),
@@ -1475,8 +1491,14 @@ mod raster_geometry_tests {
             (0.0, 0.0, 0.0, 0.0),
             (0.0, 0.0, 0.0, f64::NAN),
         ] {
-            let mut packed = [0.0; 20];
-            packed[16..].copy_from_slice(&[margin, width, height, pixel_ratio]);
+            let mut packed = [0.0; 22];
+            packed[16..20].copy_from_slice(&[margin, width, height, pixel_ratio]);
+            assert!(unpack_tile_draws(&packed).is_err());
+        }
+        for alignment in [f64::NAN, 2.0] {
+            let mut packed = [0.0; 22];
+            packed[19] = 1.0;
+            packed[21] = alignment;
             assert!(unpack_tile_draws(&packed).is_err());
         }
         for (west, north, size) in [(0.0, 0.0, 0.0), (f64::NAN, 0.0, 1.0), (f64::MAX, 0.0, 1.0)] {
@@ -1487,7 +1509,7 @@ mod raster_geometry_tests {
                 local_size: size,
                 opacity: 1.0,
             };
-            assert!(append_tile_vertices(&mut Vec::new(), &tile).is_err());
+            assert!(append_tile_vertices(&mut Vec::new(), &tile, [0.0, 0.0]).is_err());
         }
     }
 }

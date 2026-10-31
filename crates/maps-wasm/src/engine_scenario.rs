@@ -66,12 +66,12 @@ struct WasmFlatRasterRuntimeLimits {
 ///   zoom, bearing, pitch, width, height; 16 view-projection elements; visible
 ///   bounds west, south, east, north, crosses-antimeridian (0/1), spans-full-world
 ///   (0/1); placement, request, cancellation and eviction counts; surface margin;
-///   overscan (0/1);
+///   overscan (0/1); raster alignment x, y (local CSS px);
 /// - placements, [`PACKED_PLACEMENT_STRIDE`] values each: z, x, y, world copy,
 ///   local west, local north, local size, screen x, screen y, screen width,
 ///   screen height, visible (0/1);
 /// - requests, cancellations and evictions, [`PACKED_TILE_STRIDE`] values each: z, x, y.
-pub const PACKED_FRAME_HEADER_LENGTH: usize = 35;
+pub const PACKED_FRAME_HEADER_LENGTH: usize = 37;
 pub const PACKED_PLACEMENT_STRIDE: usize = 12;
 pub const PACKED_TILE_STRIDE: usize = 3;
 
@@ -111,6 +111,8 @@ fn pack_frame_plan(camera: MapCamera, plan: &RasterFramePlan) -> Vec<f64> {
         plan.evictions.len() as f64,
         plan.surface_margin,
         f64::from(u8::from(plan.overscan)),
+        plan.render_camera.raster_alignment[0],
+        plan.render_camera.raster_alignment[1],
     ]);
     for placement in &plan.placements {
         packed.extend_from_slice(&[
@@ -458,6 +460,7 @@ mod tests {
         ];
         assert_eq!(&packed[29..33], &counts.map(|count| count as f64));
         assert_eq!(&packed[33..35], &[96.0, 1.0]);
+        assert_eq!(&packed[35..37], &plan.render_camera.raster_alignment);
         let tiles_start = PACKED_FRAME_HEADER_LENGTH + counts[0] * PACKED_PLACEMENT_STRIDE;
         assert_eq!(
             packed.len(),

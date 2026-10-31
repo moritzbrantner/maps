@@ -1,7 +1,7 @@
 use super::wgpu_geometry::{
     APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw,
-    POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterTileKey, SurfaceClip, WgpuApplicationFrame,
-    WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
+    POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey, SurfaceClip,
+    WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
     prepare_application_geometry, unpack_tile_draws,
 };
 
@@ -1334,7 +1334,7 @@ impl MapsWgpuBaseMapRenderer {
         circle_data: &[f32],
         order: &[u32],
     ) -> Result<usize, JsValue> {
-        let (view_projection, clip, placements) =
+        let (view_projection, clip, alignment, placements) =
             unpack_tile_draws(tile_draws).map_err(JsValue::from_str)?;
         let application_frame = if application_frame.is_null() || application_frame.is_undefined() {
             None
@@ -1365,6 +1365,7 @@ impl MapsWgpuBaseMapRenderer {
             application_frame,
             view_projection,
             clip,
+            alignment,
         );
         self.frame_placements = placements_buffer;
         self.frame_vertices = vertices;
@@ -1378,10 +1379,11 @@ impl MapsWgpuBaseMapRenderer {
         application_frame: Option<WgpuApplicationFrame>,
         view_projection: [f32; 16],
         clip: SurfaceClip,
+        alignment: RasterAlignment,
     ) -> Result<usize, JsValue> {
         vertices.reserve(placements.len() * 4 * VERTEX_SIZE as usize);
         for placement in placements {
-            append_tile_vertices(vertices, placement).map_err(JsValue::from_str)?;
+            append_tile_vertices(vertices, placement, alignment).map_err(JsValue::from_str)?;
         }
 
         let required = vertices.len() as u64;

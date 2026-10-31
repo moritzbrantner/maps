@@ -60,11 +60,6 @@ export const KEVELAER_CHAPEL: LngLat = [6.2474, 51.5823];
 const MAP_SIZE = { height: 480, width: 720 };
 
 // Known gaps measured when the gate landed (2026-10-31). Each blocks its gate's removal.
-const RASTER: KnownGap = {
-  gate: "image",
-  issue: 308,
-  reason: "raster tile level (floor vs MapLibre's round) and resampling stripes",
-};
 const OVERLAY: KnownGap = {
   gate: "image",
   issue: 309,
@@ -86,7 +81,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
     capability: "single source point: hover, select, clear, pan, wheel zoom",
-    knownGaps: [RASTER, OVERLAY, PICKING, WHEEL],
+    knownGaps: [PICKING, WHEEL],
     name: "source-location",
     origin: "historical-source-atlas#63 source-location map (#232)",
     size: MAP_SIZE,
@@ -102,7 +97,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.4, 51.2], zoom: 5.55 },
     capability: "territory polygons, clustered sites and seat points: select and hover",
-    knownGaps: [RASTER, OVERLAY, PICKING, WHEEL],
+    knownGaps: [OVERLAY, PICKING, WHEEL],
     name: "church-site-discovery",
     origin: "church-atlas#8 site discovery (#232)",
     size: MAP_SIZE,
@@ -119,7 +114,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.6 },
     capability: "raster tile zoom level and parent/child crossfade end state (#303)",
-    knownGaps: [RASTER, WHEEL],
+    knownGaps: [WHEEL],
     name: "zoom-crossfade",
     origin: "maps#303 zoom-gap crossfade",
     size: MAP_SIZE,
@@ -132,7 +127,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [11.2, 50.6], zoom: 5.2 },
     capability: "point labels placed on their points",
-    knownGaps: [RASTER, LABELS],
+    knownGaps: [LABELS],
     name: "labels",
     origin: "PointLayer getPointLabel",
     size: MAP_SIZE,
@@ -145,7 +140,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.4 },
     capability: "density clusters: placement, counts, cluster and point picking",
-    knownGaps: [RASTER, OVERLAY, PICKING, WHEEL],
+    knownGaps: [OVERLAY, PICKING, WHEEL],
     name: "clusters",
     origin: "demo/RendererComparison cluster journey",
     size: MAP_SIZE,
