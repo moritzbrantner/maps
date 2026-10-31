@@ -75,6 +75,9 @@ const oracle: OracleApi = {
 };
 window.__oracle = oracle;
 
+/** Declared before `style` is built at module load, which reads it for `line-dash-caps-joins`. */
+const alpineLineCache: { collection: ReturnType<typeof buildAlpineLines> | null } = { collection: null };
+
 const rasterSource = (pattern: string) => ({
   maxzoom: 19,
   tileSize: 256,
@@ -691,11 +694,9 @@ type AlpineFeature = {
   type: "Feature";
 };
 
-let alpineLineCollection: ReturnType<typeof buildAlpineLines> | null = null;
-
 /** One stable collection: a new object per render would make layers rebuild their data. */
 function alpineLines() {
-  return (alpineLineCollection ??= buildAlpineLines());
+  return (alpineLineCache.collection ??= buildAlpineLines());
 }
 
 /** Rivers, roads and borders of the Natural Earth extract, with stable ids for picking. */

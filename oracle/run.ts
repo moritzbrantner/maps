@@ -298,7 +298,12 @@ async function openFixture(browser: Browser, scenario: Scenario, runtime: Runtim
     viewport: { height: scenario.size.height, width: scenario.size.width },
   });
   const errors: string[] = [];
+  /** Console errors only explain a readiness timeout; page errors fail the capture. */
+  const consoleErrors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
+  });
   await page.route(`${TILE_ORIGIN}/**`, (route) => {
     const served = serveTile(decodeURIComponent(new URL(route.request().url()).pathname));
     if (!served) return route.fulfill({ status: 404 });
@@ -306,7 +311,10 @@ async function openFixture(browser: Browser, scenario: Scenario, runtime: Runtim
   });
   const query = new URLSearchParams({ runtime, scenario: scenario.name });
   await page.goto(`${baseUrl}/oracle/index.html?${query}`);
-  await waitReady(page, runtime);
+  await waitReady(page, runtime).catch((error: Error) => {
+    const logged = [...errors, ...consoleErrors.slice(0, 5)];
+    throw new Error(`${error.message}${logged.length ? `; page errors: ${logged.join(" | ")}` : ""}`);
+  });
   return { errors, page };
 }
 
@@ -393,7 +401,15 @@ async function waitReady(page: Page, runtime: Runtime) {
       },
       undefined,
       { timeout: 30_000 },
-    );
+    ).catch(async (error: Error) => {
+      const state = await page.evaluate(() => {
+        const map = window.__oracle?.maplibre;
+        return map
+          ? { areTilesLoaded: map.areTilesLoaded(), isMoving: map.isMoving(), loaded: map.loaded() }
+          : null;
+      });
+      throw new Error(`${error.message}; maplibre ${JSON.stringify(state)}`);
+    });
   }
   await page.waitForFunction(() => window.__oracle?.controller !== null, undefined, { timeout: 10_000 });
   await settle(page, runtime);
