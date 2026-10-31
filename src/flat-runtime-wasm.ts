@@ -32,6 +32,8 @@ export type MapsRasterRenderCamera = {
 
 export type MapsRasterTilePlacement = {
   tile: MapsRasterTileId;
+  /** Presentation-only alpha for a newly loaded tile (default 1). */
+  opacity?: number;
   worldCopy: number;
   localWest: number;
   localNorth: number;

@@ -9,7 +9,7 @@ import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 // Mirrors PACKED_TILE_DRAW_HEADER_LENGTH / PACKED_TILE_DRAW_STRIDE in
 // crates/maps-wasm/src/wgpu_base_map.rs.
 const PACKED_TILE_DRAW_HEADER_LENGTH = 20;
-const PACKED_TILE_DRAW_STRIDE = 6;
+const PACKED_TILE_DRAW_STRIDE = 7;
 
 // Async hosts can overlap while replacing a renderer on the same DOM canvas.
 // Only the latest request may change that canvas or submit work to its surface.
@@ -263,6 +263,7 @@ export async function loadMapsWgpuBaseMapRenderer(
             tileDraws[length + 3] = placement.localWest;
             tileDraws[length + 4] = placement.localNorth;
             tileDraws[length + 5] = placement.localSize;
+            tileDraws[length + 6] = placement.opacity ?? 1;
             length += PACKED_TILE_DRAW_STRIDE;
           }
           return renderer.renderPacked(

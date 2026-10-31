@@ -19,7 +19,7 @@ concurrency:
 jobs:
   changes:
     name: Validation scope
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       browser: ${{ steps.scope.outputs.browser }}
       security: ${{ steps.scope.outputs.security }}
@@ -93,7 +93,7 @@ jobs:
 
   rust-validation:
     name: Rust Validation
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Check out repository
@@ -117,7 +117,7 @@ jobs:
 
   git-install-validation:
     name: Git Install Validation
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Check out repository
@@ -193,7 +193,7 @@ jobs:
       - fast-validation
       - rust-validation
       - build-package
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       actions: read
@@ -209,7 +209,7 @@ jobs:
         with:
           bun-version: latest
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: lts/*
       - name: Install dependencies
@@ -321,7 +321,7 @@ jobs:
       - fast-validation
       - rust-validation
       - build-package
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       actions: read
@@ -341,7 +341,7 @@ jobs:
         with:
           bun-version: latest
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: lts/*
       - name: Install dependencies
@@ -470,7 +470,7 @@ jobs:
       - runtime-evidence
       - browser-validation
       - dependency-audit
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
         with:
