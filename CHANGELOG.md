@@ -27,6 +27,13 @@
 
 ### Patch Changes
 
+- The Maps flat runtime now draws overlay circles and strokes as MapLibre does.
+  A circle's stroke lies outside its radius, and the circle edge and the
+  fill-to-stroke edge fade over one device pixel. Polygon outlines and lines
+  fade over one device pixel at their edges. Cluster bubbles use MapLibre's 0.9
+  fill opacity. The Canvas fallback also draws circle strokes outside the
+  radius. The MapLibre oracle's church-site-discovery and clusters scenarios
+  now pass their image gate (#309).
 - The Maps flat runtime now picks raster tile levels and places raster tiles
   as MapLibre does: the covering zoom is rounded instead of floored (zoom 4.6
   with 256 px tiles shows z6), and at rest raster tiles snap to the pixel grid.

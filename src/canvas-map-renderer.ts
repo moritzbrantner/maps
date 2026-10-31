@@ -379,10 +379,16 @@ function drawCircle<TFeature>(
   context.fillStyle = primitive.fillColor;
   context.globalAlpha = primitive.fillOpacity;
   context.fill();
-  context.globalAlpha = primitive.strokeOpacity;
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
-  context.strokeStyle = primitive.strokeColor;
-  context.stroke();
+  // MapLibre circles (#309): the stroke lies outside the radius.
+  const strokeWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  if (strokeWidth > 0) {
+    context.beginPath();
+    context.arc(scene.x, scene.y, primitive.radius + strokeWidth / 2, 0, Math.PI * 2);
+    context.globalAlpha = primitive.strokeOpacity;
+    context.lineWidth = strokeWidth;
+    context.strokeStyle = primitive.strokeColor;
+    context.stroke();
+  }
   context.globalAlpha = 1;
 
   if (primitive.label) {
