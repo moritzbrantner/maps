@@ -19,14 +19,14 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // #161 stencil polygons and encoded-sRGB blending +2,746; #196 retained polygons (fan, cover and
 // screen-extruded stroke pipelines) +16,264 -> 623,829 WASM, compressed package 444,281,
 // unpacked 1,750,305.
-// Keep a small margin for artifact metadata variation.
+// #268 (owner decision): the compressed package and WASM runtime sizes are measured and
+// reported only, not blocking ceilings; reducing them is a loading-strategy concern
+// ("make it work, make it right, make it fast"). Keep a small margin for the rest.
 const budgets = {
-  compressedSize: 446_000,
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
   unpackedSize: 1_752_500,
-  wasmRuntimeSize: 625_500,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
@@ -70,12 +70,12 @@ for (const filePath of requiredFiles) {
   }
 }
 
-checkBudget("compressed package size", packageInfo?.size, budgets.compressedSize, "bytes");
+checkPresent("compressed package size", packageInfo?.size);
 checkBudget("unpacked package size", packageInfo?.unpackedSize, budgets.unpackedSize, "bytes");
 checkBudget("package entry count", files.length, budgets.entryCount, "entries");
 checkBudget("styles.css size", stylesheet?.size, budgets.stylesheetSize, "bytes");
 checkBudget("styles.full.css size", fullStylesheet?.size, budgets.fullStylesheetSize, "bytes");
-checkBudget("Maps WASM runtime size", wasmRuntime?.size, budgets.wasmRuntimeSize, "bytes");
+checkPresent("Maps WASM runtime size", wasmRuntime?.size);
 
 console.log("Package size summary:");
 console.log(`- compressed size: ${formatBytes(packageInfo?.size)}`);
@@ -98,13 +98,16 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-function checkBudget(label, actual, max, unit) {
+function checkPresent(label, actual) {
   if (typeof actual !== "number") {
     errors.push(`${label} is missing from npm pack output`);
-    return;
+    return false;
   }
+  return true;
+}
 
-  if (actual > max) {
+function checkBudget(label, actual, max, unit) {
+  if (checkPresent(label, actual) && actual > max) {
     errors.push(`${label} is ${actual} ${unit}, above budget ${max} ${unit}`);
   }
 }
