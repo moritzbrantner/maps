@@ -1,3 +1,4 @@
+import { drawMarkerLabel } from "./canvas-map-renderer";
 import type {
   MapPointClusterRenderFeature,
   MapPointClusterRenderFrame,
@@ -64,8 +65,6 @@ export function drawCanvasPointClusterScene<TProperties = Record<string, unknown
   options: CanvasPointClusterDrawOptions = {},
 ) {
   context.clearRect(0, 0, scene.width, scene.height);
-  context.textAlign = "center";
-  context.textBaseline = "middle";
 
   for (const candidate of scene.features) {
     const { renderFeature, x, y } = candidate;
@@ -82,10 +81,6 @@ export function drawCanvasPointClusterScene<TProperties = Record<string, unknown
     context.strokeStyle = "#ffffff";
     context.stroke();
 
-    if (renderFeature.kind === "cluster") {
-      context.fillStyle = "#ffffff";
-      context.font = "600 12px system-ui, sans-serif";
-      context.fillText(renderFeature.label, x, y);
-    }
+    if (renderFeature.kind === "cluster") drawMarkerLabel(context, renderFeature.label, x, y);
   }
 }

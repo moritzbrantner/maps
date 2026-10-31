@@ -72,6 +72,7 @@ beforeEach(() => {
     clearRect: vi.fn(),
     fillRect: vi.fn(),
     fillText: vi.fn(),
+    measureText: vi.fn(() => ({ fontBoundingBoxAscent: 11, fontBoundingBoxDescent: 3, width: 40 })),
     beginPath: vi.fn(),
     arc: vi.fn(),
     fill: vi.fn(),
@@ -340,7 +341,7 @@ describe("GPU-retained labeled points (#204)", () => {
     // Labeled points stay in the one retained group, in painter order.
     expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
     expect(vi.mocked(renderer.setRetainedPoints!).mock.calls[0]![1]).toHaveLength(2_000);
-    await waitFor(() => expect(context.fillText).toHaveBeenCalledWith("point-100", 104, 300));
+    await waitFor(() => expect(context.fillText).toHaveBeenCalledWith("point-100", 86, 304));
     const projectionsAfterMount = Number(overlay.dataset.mapOverlayLabelProjections);
 
     vi.mocked(runtime.project).mockClear();
@@ -365,8 +366,13 @@ describe("GPU-retained labeled points (#204)", () => {
     expect(runtime.project).not.toHaveBeenCalled();
     expect(Number(overlay.dataset.mapOverlayLabelProjections) - projectionsAfterMount).toBe(100);
     expect(context.fillText).toHaveBeenCalledTimes(100);
-    // The last frame's label follows the camera: center [5, 0], zoom 5.
-    expect(context.fillText).toHaveBeenLastCalledWith("point-900", 300 + (-41 - 5) * 5, 200 + 25 * 5);
+    // The last frame's label follows the camera: center [5, 0], zoom 5. The text box is the
+    // MapLibre marker's (left edge 18 px left of the point, baseline 4 px below it).
+    expect(context.fillText).toHaveBeenLastCalledWith(
+      "point-900",
+      300 + (-41 - 5) * 5 - 18,
+      200 + 25 * 5 + 4,
+    );
   });
 });
 

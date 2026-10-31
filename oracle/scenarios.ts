@@ -59,9 +59,6 @@ export const KEVELAER_CHAPEL: LngLat = [6.2474, 51.5823];
 
 const MAP_SIZE = { height: 480, width: 720 };
 
-// Known gaps measured when the gate landed (2026-10-31). Each blocks its gate's removal.
-const LABELS: KnownGap = { gate: "image", issue: 310, reason: "label glyphs and placement" };
-
 export const scenarios: Scenario[] = [
   {
     camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
@@ -118,7 +115,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [11.2, 50.6], zoom: 5.2 },
     capability: "point labels placed on their points",
-    knownGaps: [LABELS],
+    knownGaps: [],
     name: "labels",
     origin: "PointLayer getPointLabel",
     size: MAP_SIZE,
