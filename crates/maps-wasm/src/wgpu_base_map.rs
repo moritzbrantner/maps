@@ -395,6 +395,11 @@ impl MapsWgpuBaseMapRenderer {
                 offset: 8,
                 shader_location: 1,
             },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 24,
+                shader_location: 2,
+            },
         ];
         let application_vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: APPLICATION_VERTEX_SIZE,
@@ -1403,7 +1408,7 @@ impl MapsWgpuBaseMapRenderer {
 
         let application_geometry = application_frame
             .as_ref()
-            .map(prepare_application_geometry)
+            .map(|frame| prepare_application_geometry(frame, clip.pixel_ratio))
             .transpose()
             .map_err(JsValue::from_str)?
             .unwrap_or_default();

@@ -1,8 +1,10 @@
 struct CircleInput {
   @location(0) center_clip: vec2<f32>,
   @location(1) outer_clip: vec2<f32>,
+  // Fill radius over outer radius, or 2 without a stroke.
   @location(2) fill_ratio: f32,
-  @location(3) stroke_inner_ratio: f32,
+  // One physical pixel over the outer radius: MapLibre's antialiasing blur.
+  @location(3) blur: f32,
   @location(4) fill_color: vec4<f32>,
   @location(5) stroke_color: vec4<f32>,
 };
@@ -11,7 +13,7 @@ struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) local: vec2<f32>,
   @location(1) fill_ratio: f32,
-  @location(2) stroke_inner_ratio: f32,
+  @location(2) blur: f32,
   @location(3) fill_color: vec4<f32>,
   @location(4) stroke_color: vec4<f32>,
 };
@@ -31,7 +33,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, input: CircleInput) -> Vert
   output.position = vec4<f32>(input.center_clip + local * input.outer_clip, 0.0, 1.0);
   output.local = local;
   output.fill_ratio = input.fill_ratio;
-  output.stroke_inner_ratio = input.stroke_inner_ratio;
+  output.blur = input.blur;
   output.fill_color = input.fill_color;
   output.stroke_color = input.stroke_color;
   return output;
@@ -41,33 +43,18 @@ fn premultiplied(color: vec4<f32>) -> vec4<f32> {
   return vec4<f32>(color.rgb * color.a, color.a);
 }
 
-fn over(foreground: vec4<f32>, background: vec4<f32>) -> vec4<f32> {
-  return foreground + background * (1.0 - foreground.a);
+fn hermite(t: f32) -> f32 {
+  let x = clamp(t, 0.0, 1.0);
+  return x * x * (3.0 - 2.0 * x);
 }
 
+// MapLibre's circle fragment: a one-pixel smoothstep at the outer edge and between fill
+// and stroke, both inside their radii.
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let distance = length(input.local);
-  if distance > 1.0 {
-    discard;
-  }
-
-  let fill = premultiplied(input.fill_color);
-  if distance < input.stroke_inner_ratio {
-    return fill;
-  }
-
-  if input.stroke_inner_ratio <= 1.0 {
-    let stroke = premultiplied(input.stroke_color);
-    if input.fill_ratio > 0.0 && distance <= input.fill_ratio {
-      return over(stroke, fill);
-    }
-    return stroke;
-  }
-
-  // Browsers (Tint) reject a function ending in `discard`: end with a return.
-  if distance > input.fill_ratio {
-    discard;
-  }
-  return fill;
+  let opacity = hermite((1.0 - distance) / input.blur);
+  let stroke = hermite((distance - input.fill_ratio + input.blur) / input.blur);
+  let color = mix(premultiplied(input.fill_color), premultiplied(input.stroke_color), stroke);
+  return color * opacity;
 }

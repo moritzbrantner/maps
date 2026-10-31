@@ -3,7 +3,10 @@
 use serde::Deserialize;
 use std::borrow::Cow;
 
-pub(super) const APPLICATION_VERTEX_SIZE: u64 = 24;
+/// Clip position (2 x f32), RGBA (4 x f32), edge (2 x f32): see `shaders/application.wgsl`.
+pub(super) const APPLICATION_VERTEX_SIZE: u64 = 32;
+/// The edge of fills and markers: never faded.
+const FILL_EDGE: [f32; 2] = [0.0, 1.0e6];
 pub(super) const APPLICATION_CIRCLE_INSTANCE_SIZE: u64 = 56;
 const LINE_CAP_SEGMENTS: usize = 12;
 const MAX_LINE_MITER_SCALE: f64 = 4.0;
@@ -383,6 +386,7 @@ pub(super) fn append_tile_vertices(
 
 pub(super) fn prepare_application_geometry(
     frame: &WgpuApplicationFrame,
+    pixel_ratio: f64,
 ) -> Result<ApplicationGeometry, &'static str> {
     if !frame.width.is_finite()
         || !frame.height.is_finite()
@@ -411,6 +415,7 @@ pub(super) fn prepare_application_geometry(
                     &mut geometry.circle_instances,
                     frame.width,
                     frame.height,
+                    pixel_ratio,
                     &frame
                         .circle(index)
                         .ok_or("invalid wgpu circle order index")?,
@@ -430,6 +435,7 @@ pub(super) fn prepare_application_geometry(
                     &mut geometry.triangle_vertices,
                     frame.width,
                     frame.height,
+                    pixel_ratio,
                     frame
                         .lines
                         .get(index)
@@ -476,6 +482,7 @@ pub(super) fn prepare_application_geometry(
                     &mut geometry.triangle_vertices,
                     frame.width,
                     frame.height,
+                    pixel_ratio,
                     frame
                         .polygons
                         .get(index)
@@ -537,6 +544,7 @@ fn append_application_circle_instance(
     output: &mut Vec<u8>,
     width: f64,
     height: f64,
+    pixel_ratio: f64,
     circle: &WgpuApplicationCircle,
 ) -> Result<(), &'static str> {
     if [circle.x, circle.y, circle.radius, circle.stroke_width]
@@ -550,7 +558,8 @@ fn append_application_circle_instance(
         return Err("invalid wgpu application circle");
     }
 
-    let outer_radius = circle.radius + circle.stroke_width / 2.0;
+    // MapLibre circles: the stroke lies outside the radius.
+    let outer_radius = circle.radius + circle.stroke_width;
     let center_clip = [
         (circle.x / width * 2.0 - 1.0) as f32,
         (1.0 - circle.y / height * 2.0) as f32,
@@ -566,23 +575,24 @@ fn append_application_circle_instance(
     {
         return Err("wgpu application circle is not representable as f32");
     }
-    let (fill_ratio, stroke_inner_ratio) = if outer_radius > 0.0 {
+    // MapLibre: no stroke below 0.01 px; a one-physical-pixel smoothstep at each edge.
+    let (fill_ratio, blur) = if outer_radius > 0.0 {
         (
-            (circle.radius / outer_radius) as f32,
-            if circle.stroke_width > 0.0 {
-                ((circle.radius - circle.stroke_width / 2.0).max(0.0) / outer_radius) as f32
+            if circle.stroke_width >= 0.01 {
+                (circle.radius / outer_radius) as f32
             } else {
                 2.0
             },
+            (1.0 / (pixel_ratio * outer_radius)) as f32,
         )
     } else {
-        (0.0, 2.0)
+        (2.0, 1.0)
     };
 
     for value in center_clip
         .into_iter()
         .chain(outer_clip)
-        .chain([fill_ratio, stroke_inner_ratio])
+        .chain([fill_ratio, blur])
         .chain(circle.fill_color)
         .chain(circle.stroke_color)
     {
@@ -616,15 +626,39 @@ fn append_application_direction_marker(
     for (local_x, local_y) in local_points {
         let x = marker.x + local_x * cosine - local_y * sine;
         let y = marker.y + local_x * sine + local_y * cosine;
-        append_application_vertex(output, width, height, x, y, marker.color)?;
+        append_application_vertex(output, width, height, x, y, marker.color, FILL_EDGE)?;
     }
     Ok(())
+}
+
+/// MapLibre's line antialiasing (#309): a stroke extends half a physical pixel past its half
+/// width, fading linearly over one pixel.
+#[derive(Clone, Copy)]
+struct StrokeEdges {
+    /// Half width plus the antialiasing outset (CSS px).
+    outset: f64,
+    /// Vertex edges at the stroke centre, its left and its right boundary.
+    centre: [f32; 2],
+    left: [f32; 2],
+    right: [f32; 2],
+}
+
+fn stroke_edges(half_width: f64, pixel_ratio: f64) -> StrokeEdges {
+    let outset = half_width + 0.5 / pixel_ratio;
+    let extent = (outset * pixel_ratio) as f32;
+    StrokeEdges {
+        outset,
+        centre: [0.0, extent],
+        left: [1.0, extent],
+        right: [-1.0, extent],
+    }
 }
 
 fn append_application_polygon(
     output: &mut Vec<u8>,
     width: f64,
     height: f64,
+    pixel_ratio: f64,
     polygon: &WgpuApplicationPolygon,
 ) -> Result<PolygonDraw, &'static str> {
     if polygon.rings.is_empty()
@@ -669,6 +703,7 @@ fn append_application_polygon(
                         vertex.x,
                         vertex.y,
                         polygon.fill_color,
+                        FILL_EDGE,
                     )?;
                 }
                 min_x = min_x.min(point.x);
@@ -687,28 +722,28 @@ fn append_application_polygon(
             (max_x, max_y),
             (min_x, max_y),
         ] {
-            append_application_vertex(output, width, height, x, y, polygon.fill_color)?;
+            append_application_vertex(output, width, height, x, y, polygon.fill_color, FILL_EDGE)?;
         }
     }
 
     if polygon.stroke_width > 0.0 && polygon.stroke_color[3] > 0.0 && !rings.is_empty() {
         draw.stroke_first = vertex_index(output);
-        let half_width = polygon.stroke_width / 2.0;
+        let edges = stroke_edges(polygon.stroke_width / 2.0, pixel_ratio);
         for ring in &rings {
             for (index, &start) in ring.iter().enumerate() {
                 let end = ring[(index + 1) % ring.len()];
-                let offset = line_endpoint_offset(unit_direction(start, end)?, half_width);
+                let offset = line_endpoint_offset(unit_direction(start, end)?, edges.outset);
                 let start_left = (start.x + offset.0, start.y + offset.1);
                 let start_right = (start.x - offset.0, start.y - offset.1);
                 let end_left = (end.x + offset.0, end.y + offset.1);
                 let end_right = (end.x - offset.0, end.y - offset.1);
-                for point in [
-                    start_left,
-                    start_right,
-                    end_left,
-                    start_right,
-                    end_right,
-                    end_left,
+                for (point, edge) in [
+                    (start_left, edges.left),
+                    (start_right, edges.right),
+                    (end_left, edges.left),
+                    (start_right, edges.right),
+                    (end_right, edges.right),
+                    (end_left, edges.left),
                 ] {
                     append_application_vertex(
                         output,
@@ -717,17 +752,11 @@ fn append_application_polygon(
                         point.0,
                         point.1,
                         polygon.stroke_color,
+                        edge,
                     )?;
                 }
-                // Canvas strokes polygon rings with round joins.
-                append_round_join(
-                    output,
-                    width,
-                    height,
-                    start,
-                    half_width,
-                    polygon.stroke_color,
-                )?;
+                // Round joins, as MapLibre's `line-join: round` outline layer.
+                append_round_join(output, width, height, start, polygon.stroke_color, edges)?;
             }
         }
         draw.stroke_count = vertex_index(output) - draw.stroke_first;
@@ -755,14 +784,23 @@ fn append_round_join(
     width: f64,
     height: f64,
     center: WgpuApplicationPoint,
-    radius: f64,
     color: [f32; 4],
+    edges: StrokeEdges,
 ) -> Result<(), &'static str> {
     let segments = 2 * LINE_CAP_SEGMENTS;
+    let radius = edges.outset;
     for segment in 0..segments {
         let angle_a = std::f64::consts::TAU * segment as f64 / segments as f64;
         let angle_b = std::f64::consts::TAU * (segment + 1) as f64 / segments as f64;
-        append_application_vertex(output, width, height, center.x, center.y, color)?;
+        append_application_vertex(
+            output,
+            width,
+            height,
+            center.x,
+            center.y,
+            color,
+            edges.centre,
+        )?;
         for angle in [angle_a, angle_b] {
             append_application_vertex(
                 output,
@@ -771,6 +809,7 @@ fn append_round_join(
                 center.x + radius * angle.cos(),
                 center.y + radius * angle.sin(),
                 color,
+                edges.left,
             )?;
         }
     }
@@ -781,6 +820,7 @@ fn append_application_line(
     output: &mut Vec<u8>,
     width: f64,
     height: f64,
+    pixel_ratio: f64,
     line: &WgpuApplicationLine,
 ) -> Result<(), &'static str> {
     if !line.stroke_width.is_finite()
@@ -802,10 +842,11 @@ fn append_application_line(
         return Err("wgpu application line has no non-degenerate segment");
     }
 
-    let half_width = line.stroke_width / 2.0;
+    let edges = stroke_edges(line.stroke_width / 2.0, pixel_ratio);
+    let outset = edges.outset;
     let first_direction = unit_direction(points[0], points[1])?;
     let mut current_direction = first_direction;
-    let mut start_offset = line_endpoint_offset(current_direction, half_width);
+    let mut start_offset = line_endpoint_offset(current_direction, outset);
 
     for index in 0..points.len() - 1 {
         let start = points[index];
@@ -816,23 +857,23 @@ fn append_application_line(
             None
         };
         let end_offset = next_direction.map_or_else(
-            || line_endpoint_offset(current_direction, half_width),
-            |next| line_join_offset(current_direction, next, half_width),
+            || line_endpoint_offset(current_direction, outset),
+            |next| line_join_offset(current_direction, next, outset),
         );
         let start_left = (start.x + start_offset.0, start.y + start_offset.1);
         let start_right = (start.x - start_offset.0, start.y - start_offset.1);
         let end_left = (end.x + end_offset.0, end.y + end_offset.1);
         let end_right = (end.x - end_offset.0, end.y - end_offset.1);
 
-        for point in [
-            start_left,
-            start_right,
-            end_left,
-            start_right,
-            end_right,
-            end_left,
+        for (point, edge) in [
+            (start_left, edges.left),
+            (start_right, edges.right),
+            (end_left, edges.left),
+            (start_right, edges.right),
+            (end_right, edges.right),
+            (end_left, edges.left),
         ] {
-            append_application_vertex(output, width, height, point.0, point.1, line.color)?;
+            append_application_vertex(output, width, height, point.0, point.1, line.color, edge)?;
         }
 
         start_offset = end_offset;
@@ -848,8 +889,8 @@ fn append_application_line(
         height,
         first,
         (-first_direction.0, -first_direction.1),
-        half_width,
         line.color,
+        edges,
     )?;
     let last = *points.last().expect("line has at least two points");
     append_round_line_cap(
@@ -858,8 +899,8 @@ fn append_application_line(
         height,
         last,
         current_direction,
-        half_width,
         line.color,
+        edges,
     )?;
 
     Ok(())
@@ -940,10 +981,11 @@ fn append_round_line_cap(
     height: f64,
     center: WgpuApplicationPoint,
     outward: (f64, f64),
-    radius: f64,
     color: [f32; 4],
+    edges: StrokeEdges,
 ) -> Result<(), &'static str> {
     let normal = (-outward.1, outward.0);
+    let radius = edges.outset;
     for segment in 0..LINE_CAP_SEGMENTS {
         let fraction_a = segment as f64 / LINE_CAP_SEGMENTS as f64;
         let fraction_b = (segment + 1) as f64 / LINE_CAP_SEGMENTS as f64;
@@ -951,9 +993,17 @@ fn append_round_line_cap(
         let angle_b = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * fraction_b;
         let a = point_on_oriented_circle(center, outward, normal, radius, angle_a);
         let b = point_on_oriented_circle(center, outward, normal, radius, angle_b);
-        append_application_vertex(output, width, height, center.x, center.y, color)?;
-        append_application_vertex(output, width, height, a.0, a.1, color)?;
-        append_application_vertex(output, width, height, b.0, b.1, color)?;
+        append_application_vertex(
+            output,
+            width,
+            height,
+            center.x,
+            center.y,
+            color,
+            edges.centre,
+        )?;
+        append_application_vertex(output, width, height, a.0, a.1, color, edges.left)?;
+        append_application_vertex(output, width, height, b.0, b.1, color, edges.left)?;
     }
     Ok(())
 }
@@ -980,6 +1030,7 @@ fn append_application_vertex(
     x: f64,
     y: f64,
     color: [f32; 4],
+    edge: [f32; 2],
 ) -> Result<(), &'static str> {
     let clip_x = (x / width * 2.0 - 1.0) as f32;
     let clip_y = (1.0 - y / height * 2.0) as f32;
@@ -989,7 +1040,7 @@ fn append_application_vertex(
 
     output.extend_from_slice(&clip_x.to_le_bytes());
     output.extend_from_slice(&clip_y.to_le_bytes());
-    for value in color {
+    for value in color.into_iter().chain(edge) {
         output.extend_from_slice(&value.to_le_bytes());
     }
     Ok(())
@@ -1157,7 +1208,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
 
         assert!(geometry.triangle_vertices.is_empty());
         assert_eq!(
@@ -1183,7 +1234,7 @@ mod application_geometry_tests {
             vec![polygon],
             100.0,
         );
-        let geometry = prepare_application_geometry(&frame).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
         let [ApplicationDraw::Polygon(draw)] = geometry.draws[..] else {
             panic!("expected one polygon draw, got {:?}", geometry.draws);
         };
@@ -1267,7 +1318,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        assert!(prepare_application_geometry(&frame).is_err());
+        assert!(prepare_application_geometry(&frame, 1.0).is_err());
     }
 
     #[test]
@@ -1286,7 +1337,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
 
         assert!(matches!(
             geometry.draws[..],
@@ -1321,7 +1372,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
         let line_vertices =
             (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
 
@@ -1358,7 +1409,7 @@ mod application_geometry_tests {
         );
         frame.order = vec![APPLICATION_CIRCLE, 0, count];
 
-        let geometry = prepare_application_geometry(&frame).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0).unwrap();
 
         assert_eq!(
             geometry.draws,
@@ -1386,7 +1437,7 @@ mod application_geometry_tests {
         frame
             .attach_packed(&[0.0; 12], &[APPLICATION_CIRCLE, 0, 2])
             .unwrap();
-        assert!(prepare_application_geometry(&frame).is_err());
+        assert!(prepare_application_geometry(&frame, 1.0).is_err());
     }
 }
 

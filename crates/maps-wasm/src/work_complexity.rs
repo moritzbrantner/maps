@@ -784,7 +784,7 @@ fn projected_points_camera_pan_is_the_linear_comparison_path() {
                     .attach_packed(&circle_data, &[APPLICATION_CIRCLE, 0, count as u32])
                     .expect("packed circles");
                 bridge_bytes += circle_data.len() as u64 * 4;
-                let geometry = prepare_application_geometry(&application).expect("geometry");
+                let geometry = prepare_application_geometry(&application, 1.0).expect("geometry");
                 upload_bytes += geometry.circle_instances.len() as u64;
                 // Oracle: the packed centre is the maps-core projection.
                 let index = (frame as usize * 7_919) % coordinates.len();

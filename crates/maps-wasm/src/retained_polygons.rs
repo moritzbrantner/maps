@@ -238,11 +238,15 @@ impl RetainedPolygons {
 
             if polygon.shape == Shape::Circle {
                 let center = offset(polygon.rings[0][0]);
-                let outer = polygon.radius + polygon.stroke_width * 0.5;
-                // Canvas fills, then strokes over the fill: two draws, so the stencil that
+                // MapLibre circles: the stroke lies outside the radius, and no stroke is
+                // drawn below 0.01 px.
+                let stroked = polygon.stroke_width >= 0.01;
+                let outer = polygon.radius + if stroked { polygon.stroke_width } else { 0.0 };
+                let fill_ratio = if stroked { polygon.radius / outer } else { 2.0 };
+                // The stroke part blends over the fill part: two draws, so the stencil that
                 // keeps a stroke from blending twice does not block the ring over the disc.
-                let mut disc = |color: [f32; 4], radius: f32, inner: f32, kind: f32| {
-                    if radius <= 0.0 || color[3] <= 0.0 {
+                let mut disc = |color: [f32; 4], part: f32| {
+                    if outer <= 0.0 || color[3] <= 0.0 {
                         return;
                     }
                     let first = stroke_index(&geometry.stroke);
@@ -250,10 +254,10 @@ impl RetainedPolygons {
                         push_stroke_vertex(
                             &mut geometry.stroke,
                             center,
-                            [inner, 0.0],
+                            [fill_ratio, part],
                             corner,
-                            radius * 2.0,
-                            kind,
+                            outer * 2.0,
+                            RETAINED_SHAPE_CIRCLE,
                             color,
                         );
                     }
@@ -263,10 +267,11 @@ impl RetainedPolygons {
                         ..RetainedPolygonDraw::default()
                     });
                 };
-                disc(polygon.fill, polygon.radius, 0.0, 3.0);
-                if polygon.stroke_width > 0.0 {
-                    let inner = (polygon.radius - polygon.stroke_width * 0.5).max(0.0) / outer;
-                    disc(polygon.stroke, outer, inner, 3.0);
+                if polygon.radius > 0.0 {
+                    disc(polygon.fill, 0.0);
+                }
+                if stroked {
+                    disc(polygon.stroke, 1.0);
                 }
                 continue;
             }
@@ -668,10 +673,12 @@ mod tests {
             let start = vertex * 48 + index * 4;
             f32::from_le_bytes(geometry.stroke[start..start + 4].try_into().unwrap())
         };
-        // Fill: radius 5 (width 10), no hole. Ring: outer 6, inner 4 / 6.
-        assert_eq!((value(0, 6), value(0, 2)), (10.0, 0.0));
-        assert_eq!(value(6, 6), 12.0);
-        assert!((value(6, 2) - 4.0 / 6.0).abs() < 1.0e-6);
+        // MapLibre: radius 5 plus a stroke of 2 outside it, outer 7 (width 14) for both
+        // parts; `b` holds the fill ratio 5 / 7 and the part (0 fill, 1 stroke).
+        assert_eq!((value(0, 6), value(0, 3)), (14.0, 0.0));
+        assert_eq!((value(6, 6), value(6, 3)), (14.0, 1.0));
+        assert!((value(0, 2) - 5.0 / 7.0).abs() < 1.0e-6);
+        assert!((value(6, 2) - 5.0 / 7.0).abs() < 1.0e-6);
 
         let mut unstroked = CIRCLE;
         unstroked[8] = 0.0;
