@@ -37,7 +37,7 @@ use crate::wgpu_retained::{
 
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
 const CAMERA_UNIFORM_SIZE: u64 = 64;
-const VERTEX_SIZE: u64 = 16;
+const VERTEX_SIZE: u64 = 20;
 const APPLICATION_CIRCLE_VERTEX_COUNT: u32 = 6;
 const VERTICES_PER_TILE: u32 = 4;
 const MAP_BACKGROUND_RED: f64 = 249.0 / 255.0;
@@ -330,6 +330,11 @@ impl MapsWgpuBaseMapRenderer {
                 offset: 8,
                 shader_location: 1,
             },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 16,
+                shader_location: 2,
+            },
         ];
         let vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: VERTEX_SIZE,
@@ -357,7 +362,7 @@ impl MapsWgpuBaseMapRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_view_format,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
