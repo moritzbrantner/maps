@@ -166,6 +166,46 @@ export function drawCanvasMapPrimitive<TFeature = unknown>(
   drawPrimitive(context, primitive, options);
 }
 
+/**
+ * The MapLibre runtime's point and cluster label: a `.mb-maps__cluster-count` marker
+ * (bold 12px, 16px line box, grid-centered) inside `.maplibregl-map`, whose font it inherits.
+ */
+export const MARKER_LABEL_FONT = 'bold 12px "Helvetica Neue", Arial, Helvetica, sans-serif';
+const MARKER_LABEL_LINE_HEIGHT = 16;
+/** The marker's `iconSize`, centered on the point (`iconAnchor` is half of it). */
+const MARKER_LABEL_BOX = 36;
+
+/** CSS layout snaps offsets down to 1/64 px (Blink's LayoutUnit). */
+function layoutUnit(value: number) {
+  return Math.floor(value * 64) / 64;
+}
+
+/**
+ * Draws a label exactly where MapLibre lays out the HTML marker text (#310): the marker snaps
+ * to whole pixels (`Marker` without subpixel positioning), CSS centers the line box, so the
+ * baseline sits at the box top plus the half-leading plus the font ascent, and a label wider
+ * than the marker grows its grid track from the marker's left edge.
+ */
+export function drawMarkerLabel(
+  context: CanvasRenderingContext2D,
+  label: string,
+  x: number,
+  y: number,
+) {
+  context.globalAlpha = 1;
+  context.fillStyle = "#ffffff";
+  context.font = MARKER_LABEL_FONT;
+  context.textAlign = "left";
+  context.textBaseline = "alphabetic";
+  const metrics = context.measureText(label);
+  const ascent = Math.round(metrics.fontBoundingBoxAscent);
+  const descent = Math.round(metrics.fontBoundingBoxDescent);
+  const top = Math.round(y) - MARKER_LABEL_LINE_HEIGHT / 2;
+  const baseline = top + (MARKER_LABEL_LINE_HEIGHT - ascent - descent) / 2 + ascent;
+  const inset = layoutUnit(Math.max(0, (MARKER_LABEL_BOX - metrics.width) / 2));
+  context.fillText(label, Math.round(x) - MARKER_LABEL_BOX / 2 + inset, baseline);
+}
+
 export function drawCanvasMapLabels<TFeature = unknown>(
   context: CanvasRenderingContext2D,
   scene: CanvasMapScene<TFeature>,
@@ -174,13 +214,7 @@ export function drawCanvasMapLabels<TFeature = unknown>(
   for (const primitive of scene.primitives) {
     if (primitive.kind !== "circle") continue;
     const label = (primitive.renderPrimitive as MapRenderCircle<TFeature>).label;
-    if (!label) continue;
-    context.globalAlpha = 1;
-    context.fillStyle = "#ffffff";
-    context.font = "600 12px system-ui, sans-serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText(label, primitive.x, primitive.y);
+    if (label) drawMarkerLabel(context, label, primitive.x, primitive.y);
   }
 }
 
@@ -406,13 +440,7 @@ function drawCircle<TFeature>(
   }
   context.globalAlpha = 1;
 
-  if (primitive.label) {
-    context.fillStyle = "#ffffff";
-    context.font = "600 12px system-ui, sans-serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText(primitive.label, scene.x, scene.y);
-  }
+  if (primitive.label) drawMarkerLabel(context, primitive.label, scene.x, scene.y);
 }
 
 function drawLine<TFeature>(

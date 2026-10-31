@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { MARKER_LABEL_FONT } from "./canvas-map-renderer";
 import {
   createCanvasPointClusterScene,
   drawCanvasPointClusterScene,
@@ -82,6 +83,11 @@ describe("Canvas2D point/cluster renderer", () => {
       font: "",
       globalAlpha: 1,
       lineWidth: 0,
+      measureText: vi.fn(() => ({
+        fontBoundingBoxAscent: 11,
+        fontBoundingBoxDescent: 3,
+        width: 14,
+      })),
       stroke: vi.fn(),
       strokeStyle: "",
       textAlign: "start",
@@ -97,7 +103,10 @@ describe("Canvas2D point/cluster renderer", () => {
 
     expect(context.clearRect).toHaveBeenCalledWith(0, 0, 300, 200);
     expect(context.arc).toHaveBeenCalledTimes(2);
-    expect(context.fillText).toHaveBeenCalledWith("30", 10, 50);
+    // MapLibre's marker text box: 36 px wide and centered, 16 px line box, baseline at
+    // top + half-leading + ascent.
+    expect(context.fillText).toHaveBeenCalledWith("30", 3, 54);
+    expect(context.font).toBe(MARKER_LABEL_FONT);
     expect(context.stroke).toHaveBeenCalledTimes(2);
   });
 });
