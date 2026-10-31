@@ -5,6 +5,7 @@ import { decodeShortbreadTilePixels } from "./vector-tile-wasm";
 import { paintShortbreadTile } from "./shortbread-tile-paint";
 import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
+import { createMapsScrollZoom } from "./maps-scroll-zoom";
 import {
   advanceMapsKineticPan,
   createMapsKineticPanState,
@@ -286,6 +287,7 @@ export function createMapsBrowserRuntime(
   let cameraFrame: number | null = null;
   let cameraReason: MapViewStateChangeReason | null = null;
   let cameraCommands: Array<() => void> = [];
+  const scrollZoom = createMapsScrollZoom(() => scheduleCameraFrame("zoom", scrollZoomFrame));
 
   function assertActive() {
     if (cancelled) throw new Error("Maps browser runtime is disposed.");
@@ -343,6 +345,8 @@ export function createMapsBrowserRuntime(
     if (!preserveCommands) {
       cameraReason = null;
       cameraCommands = [];
+      // A dropped scroll-zoom frame would otherwise leave the gesture waiting forever.
+      scrollZoom.reset();
     }
   }
 
@@ -457,20 +461,29 @@ export function createMapsBrowserRuntime(
     event.preventDefault();
     cancelKineticPan();
     velocityTracker.clear();
-    const runtime = activeRuntime;
-    const syncFrame = synchronize;
-    if (!runtime || !syncFrame) return;
+    if (!activeRuntime || !synchronize) return;
     const position = pointerPosition(event.clientX, event.clientY);
+    scrollZoom.wheel({
+      deltaMode: event.deltaMode,
+      deltaY: event.deltaY,
+      shiftKey: event.shiftKey,
+      x: position.x,
+      y: position.y,
+    });
+  }
+  /** One scroll-zoom animation frame, run as a camera command. */
+  function scrollZoomFrame() {
+    const runtime = activeRuntime;
+    if (!runtime) return;
     const effectiveMaxZoom = normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM;
-
-    try {
-      const deltaZoom = -event.deltaY * 0.0025;
-      scheduleCameraFrame("zoom", () => {
-        runtime.zoomAbout(deltaZoom, position.x, position.y, 0, effectiveMaxZoom);
-      });
-    } catch (error) {
-      config.onError?.(error);
+    const step = scrollZoom.frame(runtime.zoom(), (zoom) =>
+      Math.min(Math.max(zoom, 0), effectiveMaxZoom),
+    );
+    if (!step) return;
+    if (step.zoomDelta !== 0) {
+      runtime.zoomAbout(step.zoomDelta, step.around.x, step.around.y, 0, effectiveMaxZoom);
     }
+    if (step.needsFrame) scheduleCameraFrame("zoom", scrollZoomFrame);
   }
 
   async function initialize() {

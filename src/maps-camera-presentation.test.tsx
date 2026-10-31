@@ -129,6 +129,7 @@ beforeEach(() => {
     rotateAbout: vi.fn((delta: number) => {
       camera.bearing = (camera.bearing ?? 0) + delta;
     }),
+    zoom: vi.fn(() => camera.zoom),
     zoomAbout: vi.fn((delta, _x, _y, min, max) => {
       camera.zoom = Math.max(min, Math.min(max, camera.zoom + delta));
     }),
@@ -446,37 +447,38 @@ describe("Maps camera presentation", () => {
       host.dispose();
     }
   });
-  it("coalesces wheel paints without dropping ordered, differently anchored Rust zoom commands", async () => {
+  it("coalesces a wheel burst into one MapLibre-rate zoom about the gesture's first pointer", async () => {
     const { canvas, changed } = await mountMap();
     for (let index = 0; index < 8; index += 1) {
-      fireEvent.wheel(canvas, { deltaY: -20, clientX: 100 + index, clientY: 80 });
+      fireEvent.wheel(canvas, { deltaY: -2, clientX: 100 + index, clientY: 80 });
     }
     expect(runtime.zoomAbout).not.toHaveBeenCalled();
     expect(paints).toHaveLength(0);
     expect(runtime.frame).not.toHaveBeenCalled();
     expect(changed).not.toHaveBeenCalled();
     act(flushAnimationFrame);
-    expect(runtime.zoomAbout).toHaveBeenCalledTimes(8);
-    expect(vi.mocked(runtime.zoomAbout).mock.calls.map((call) => call[1])).toEqual([
-      100, 101, 102, 103, 104, 105, 106, 107,
-    ]);
+    // MapLibre's ScrollZoomHandler: trackpad deltas accumulate per frame (16 px here),
+    // map through its sigmoid at the 1/100 rate, and anchor at the first event.
+    expect(runtime.zoomAbout).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runtime.zoomAbout).mock.calls[0]![1]).toBe(100);
     expect(paints).toHaveLength(1);
-    expect(paints[0]!.zoom).toBeCloseTo(4.4);
-    expect(paints[0]!.x).toBeCloseTo(344);
+    expect(paints[0]!.zoom).toBeCloseTo(4 + Math.log2(2 / (1 + Math.exp(-16 / 100))), 12);
     expect(runtime.frame).toHaveBeenCalledTimes(1);
     expect(runtime.project).not.toHaveBeenCalled();
     expect(runtime.projectPacked).toHaveBeenCalledTimes(1);
     expect(changed).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves zoom clamping when a burst reverses direction at the limit", async () => {
+  it("preserves zoom clamping when a scroll reverses direction at the limit", async () => {
     const { canvas, controller } = await mountMap();
     act(() => controller.setViewState({ center: [0, 0], zoom: 22 }));
     paints.length = 0;
-    fireEvent.wheel(canvas, { deltaY: -200, clientX: 120, clientY: 80 });
-    fireEvent.wheel(canvas, { deltaY: 200, clientX: 120, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 120, clientY: 80 });
     act(flushAnimationFrame);
-    expect(paints).toEqual([{ zoom: 21.5, x: 515 }]);
+    fireEvent.wheel(canvas, { deltaY: 2, clientX: 120, clientY: 80 });
+    act(flushAnimationFrame);
+    // The clamped target (22) is where the reverse scroll starts from.
+    expect(paints.at(-1)!.zoom).toBeCloseTo(22 - Math.log2(2 / (1 + Math.exp(-2 / 100))), 12);
   });
 
   it("drains the final drag commands and inertia into the same first paint", async () => {
@@ -636,7 +638,7 @@ describe("Maps camera presentation", () => {
     expect(frames.size).toBe(0);
 
     // Zoom is not a translation.
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 100, clientY: 80 });
     act(flushAnimationFrame);
     expect(paints).toHaveLength(3);
     // Programmatic pans within the margin translate too (mock projection scales by zoom).
@@ -654,12 +656,12 @@ describe("Maps camera presentation", () => {
     let clock = performance.now();
     const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
 
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 100, clientY: 80 });
     act(flushAnimationFrame);
     // A single discrete change keeps the margin, so a following pan can translate.
     expect(paints.at(-1)).not.toHaveProperty("clip");
     clock += 16;
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 100, clientY: 80 });
     act(flushAnimationFrame);
     // Continuous non-translating motion replaces every frame: the margin is wasted fill.
     expect(paints.at(-1)).toMatchObject({ clip: { width: 600, height: 400 } });
@@ -692,7 +694,7 @@ describe("Maps camera presentation", () => {
     const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     for (let index = 0; index < 2; index += 1) {
       clock += 16;
-      fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+      fireEvent.wheel(canvas, { deltaY: -2, clientX: 100, clientY: 80 });
       act(flushAnimationFrame);
     }
     expect(paints.at(-1)).toHaveProperty("clip");
@@ -726,7 +728,7 @@ describe("Maps camera presentation", () => {
     expect(overlay.style.transform).toBe("matrix(1, 0, 0, 1, 32, 0)");
 
     clock += 16;
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 100, clientY: 80 });
     act(flushAnimationFrame);
     expect(runtime.projectPacked).not.toHaveBeenCalled();
     expect(overlay.style.transform).toMatch(/^matrix\(1\.0\d*, 0, 0, 1\.0\d*, /);
@@ -886,7 +888,7 @@ describe("Maps camera presentation", () => {
 
   it("cancels a pending input paint when an explicit camera command supersedes it", async () => {
     const { canvas, controller, changed } = await mountMap();
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 120, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 120, clientY: 80 });
     act(() => controller.setViewState({ center: [0, 0], zoom: 8 }));
     act(flushAnimationFrame);
     expect(paints).toEqual([{ zoom: 8, x: 380 }]);
@@ -895,11 +897,13 @@ describe("Maps camera presentation", () => {
 
   it("keeps data updates coherent while an input frame is pending", async () => {
     const { canvas, replaceLayer } = await mountMap();
-    fireEvent.wheel(canvas, { deltaY: -200, clientX: 120, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 120, clientY: 80 });
     replaceLayer();
     for (const paint of paints) expect(paint.x).toBe(300 + 20 * paint.zoom);
     act(flushAnimationFrame);
-    expect(paints.at(-1)).toEqual({ zoom: 4.5, x: 390 });
+    const zoom = 4 + Math.log2(2 / (1 + Math.exp(-2 / 100)));
+    expect(paints.at(-1)!.zoom).toBeCloseTo(zoom, 12);
+    expect(paints.at(-1)!.x).toBeCloseTo(300 + 20 * zoom, 4);
   });
 
   it("moves layers to Canvas immediately if the GPU fails on a camera paint", async () => {
@@ -918,7 +922,7 @@ describe("Maps camera presentation", () => {
 
   it("does not execute a queued camera paint after the Map View is unmounted", async () => {
     const { canvas, unmount, changed } = await mountMap();
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 120, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 120, clientY: 80 });
     unmount();
     paints.length = 0;
     changed.mockClear();

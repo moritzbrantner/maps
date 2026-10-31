@@ -5,6 +5,7 @@
     "": {
       "name": "@moritzbrantner/maps",
       "dependencies": {
+        "@mapbox/unitbezier": "^1.0.0",
         "@turf/boolean-clockwise": "^7.3.5",
         "@turf/centroid": "^7.3.5",
         "@turf/helpers": "^7.3.5",

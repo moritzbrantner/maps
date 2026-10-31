@@ -117,6 +117,7 @@ beforeEach(() => {
     rotateAbout: vi.fn((delta: number) => {
       camera.bearing = (camera.bearing ?? 0) + delta;
     }),
+    zoom: vi.fn(() => camera.zoom),
     zoomAbout: vi.fn((delta, _x, _y, min, max) => {
       camera.zoom = Math.max(min, Math.min(max, camera.zoom + delta));
     }),

@@ -115,7 +115,8 @@ test("Maps runtime preserves constrained navigation and picking after resize @sm
   await page.keyboard.press("Escape");
 
   await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.75);
-  await page.mouse.wheel(0, -10_000);
+  // MapLibre's wheel handling zooms at most one level per frame: scroll until the max zoom.
+  for (let tick = 0; tick < 10; tick++) await page.mouse.wheel(0, -100_000);
   await expect.poll(async () => parseViewState(await viewState.textContent()).zoom).toBe(8);
   await expect.poll(async () => isInsideAcceptanceBounds(parseViewState(await viewState.textContent()))).toBe(true);
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
@@ -514,9 +515,9 @@ test("late raster cancellations preserve replacement request ownership @smoke", 
       deltaY,
     });
   };
-  await zoom(-400);
+  await zoom(-100_000);
   await expect(viewState).toContainText("zoom 7.0000");
-  await zoom(400);
+  await zoom(100_000);
   await expect(viewState).toContainText("zoom 6.0000");
   await expect
     .poll(() => page.evaluate(() => {
@@ -532,7 +533,7 @@ test("late raster cancellations preserve replacement request ownership @smoke", 
   await expect
     .poll(() => page.evaluate(() => window.rasterLoadProbe.settled))
     .toBe(16);
-  await zoom(-400);
+  await zoom(-100_000);
   await expect(viewState).toContainText("zoom 7.0000");
   // All requests from the previous zoom must be aborted, including replacements.
   await expect
@@ -553,7 +554,7 @@ test("wheel zoom keeps the surrounding page stationary @smoke", async ({ page })
   expect(box).toBeTruthy();
   const scrollBefore = await page.evaluate(() => window.scrollY);
   await page.mouse.move(box!.x + box!.width * 0.8, box!.y + box!.height * 0.7);
-  await page.mouse.wheel(0, 400);
+  await page.mouse.wheel(0, 100_000);
   // Let the browser apply the default wheel action before checking the page.
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));

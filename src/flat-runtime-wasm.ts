@@ -122,6 +122,8 @@ export type MapsFlatRasterRuntime = {
   rotateAbout(deltaBearing: number, x: number, y: number): void;
   setViewState(viewState: MapViewState): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
+  /** Current camera zoom, without planning a frame. */
+  zoom(): number;
   zoomAbout(deltaZoom: number, x: number, y: number, minZoom: number, maxZoom: number): void;
 };
 
@@ -156,6 +158,7 @@ type MapsFlatRasterWasmRuntime = {
     pitch: number,
   ): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
+  zoom(): number;
   zoomAbout(deltaZoom: number, x: number, y: number, minZoom: number, maxZoom: number): void;
 };
 
@@ -182,9 +185,18 @@ export async function loadMapsFlatRasterRuntime(
   let disposed = false;
 
   return {
-    activateTileset(source) { assertLive(disposed); return runtime.activateTileset(source); },
-    takeSourceEvictions() { assertLive(disposed); return runtime.takeSourceEvictions(); },
-    markSourceLoaded(source, tile) { assertLive(disposed); runtime.markSourceLoaded(source, tile.z, tile.x, tile.y); },
+    activateTileset(source) {
+      assertLive(disposed);
+      return runtime.activateTileset(source);
+    },
+    takeSourceEvictions() {
+      assertLive(disposed);
+      return runtime.takeSourceEvictions();
+    },
+    markSourceLoaded(source, tile) {
+      assertLive(disposed);
+      runtime.markSourceLoaded(source, tile.z, tile.x, tile.y);
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -243,6 +255,10 @@ export async function loadMapsFlatRasterRuntime(
     unproject(x, y) {
       assertLive(disposed);
       return runtime.unproject(x, y);
+    },
+    zoom() {
+      assertLive(disposed);
+      return runtime.zoom();
     },
     zoomAbout(deltaZoom, x, y, minZoom, maxZoom) {
       assertLive(disposed);
