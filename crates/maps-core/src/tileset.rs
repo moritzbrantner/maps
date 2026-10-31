@@ -160,6 +160,7 @@ impl MapsTileset {
             min_zoom: self.min_zoom,
             max_zoom: self.max_zoom,
             tile_size: self.tile_size,
+            vector: true,
         }
     }
 

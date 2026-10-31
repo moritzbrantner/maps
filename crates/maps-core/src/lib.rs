@@ -8,6 +8,7 @@ mod aggregation;
 mod bounded_runtime;
 mod engine;
 mod flat_runtime;
+mod line_mesh;
 mod matrix_camera;
 mod scenario;
 mod tileset;
@@ -33,6 +34,7 @@ pub use flat_runtime::{
     RasterRenderCamera, RasterSourceSpec, RasterTilePlacement,
 };
 use geo_core::{BBox, Coordinate};
+pub use line_mesh::{LineCap, LineMesh, LineMeshVertex};
 pub use matrix_camera::{MapLocalRenderFrame, MapLocalViewportBounds};
 pub use scenario::{
     CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
@@ -41,7 +43,7 @@ pub use scenario::{
 };
 pub use vector_bucket::{
     VECTOR_FILL_PAINT_ORDER, VECTOR_LINE_GROUP_COUNT, VectorBasemapStyleClass, VectorFillVertex,
-    VectorLineSegment, VectorTileBuckets, VectorTilePlacement, build_shortbread_buckets,
+    VectorLineVertex, VectorTileBuckets, VectorTilePlacement, build_shortbread_buckets,
     vector_tile_placements,
 };
 pub use vector_tile::{

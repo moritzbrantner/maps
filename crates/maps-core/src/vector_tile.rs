@@ -177,6 +177,8 @@ pub(crate) struct ShortbreadFeature {
     /// Linework of this feature (with `line_kind`): line paths as decoded, or polygon
     /// rings split where they run along the tile clip edge, which is not a real shore.
     pub line_paths: Vec<Vec<[i32; 2]>>,
+    /// Whether `line_paths` outline polygon rings (closed rings, or runs cut at tile edges).
+    pub line_from_polygon: bool,
     /// Polygon path indices grouped as one exterior followed by its interior rings.
     pub polygons: Vec<Vec<usize>>,
 }
@@ -418,6 +420,7 @@ fn decode_feature(
         source_kind,
         paths,
         line_paths,
+        line_from_polygon: geometry_type == 3,
         polygons,
     }))
 }

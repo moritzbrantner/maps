@@ -289,7 +289,7 @@ export function EngineInspector() {
             <Row label="Vector tiles" value={format(stats?.retainedVectorTiles, 0)} />
             <Row label="Features" value={formatCount(stats?.retainedVectorFeatures)} />
             <Row label="Fill triangles" value={formatCount(stats?.retainedVectorTriangles)} />
-            <Row label="Line segments" value={formatCount(stats?.retainedVectorLineSegments)} />
+            <Row label="Line triangles" value={formatCount(stats?.retainedVectorLineTriangles)} />
             <Row
               label="Buffer memory"
               value={

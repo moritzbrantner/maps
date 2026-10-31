@@ -9,7 +9,8 @@
 // circle shader). Fills stay aliased, as MapLibre's fill triangles are.
 struct RetainedFrame {
   matrix: mat4x4<f32>,
-  // Physical surface width/height (px) and the CSS-to-physical pixel ratio.
+  // Physical surface width/height (px), the CSS-to-physical pixel ratio, and CSS px per
+  // anchor-offset (world) unit.
   surface: vec4<f32>,
 };
 
@@ -30,7 +31,8 @@ struct StrokeInput {
   // Stroke width, a marker's size, or a circle's outer diameter (CSS px).
   @location(3) width: f32,
   // 0 = segment, 1 = round join, 2 = direction marker, 3 = circle part, whose `b` holds
-  // (fill radius over outer radius or 2 without a stroke, 0 = fill part / 1 = stroke part).
+  // (fill radius over outer radius or 2 without a stroke, 0 = fill part / 1 = stroke part),
+  // 4 = line strip vertex at `a` with extrusion `b` and MapLibre's `v_normal` in `corner`.
   @location(4) kind: f32,
   @location(5) color: vec4<f32>,
 };
@@ -91,6 +93,21 @@ fn vs_stroke(input: StrokeInput) -> VertexOutput {
   output.local = vec2<f32>(0.0);
   output.extent = NO_FADE;
   output.circle = vec3<f32>(0.0);
+  if input.kind > 3.5 {
+    // A line strip vertex (`maps_core::LineMesh`, #326): MapLibre's line shader extrudes
+    // `b` by the outset in CSS px on the map plane (`frame.surface.w` CSS px per offset
+    // unit) and fades over one pixel scaled by `v_gamma_scale`.
+    let css_outset = input.width * 0.5 + 0.5 / frame.surface.z;
+    let dist = input.b * css_outset;
+    let extruded = frame.matrix * vec4<f32>(input.a + dist / frame.surface.w, 0.0, 1.0);
+    let css_per_clip = pixels / frame.surface.z;
+    let screen_dist = length((extruded.xy - clip_a.xy) / extruded.w * css_per_clip);
+    let gamma_scale = select(1.0, length(dist) / screen_dist, screen_dist > 1.0e-6);
+    output.position = extruded;
+    output.local = input.corner;
+    output.extent = css_outset * frame.surface.z / gamma_scale;
+    return output;
+  }
   var position: vec2<f32>;
   if input.kind > 2.5 {
     position = a + input.corner * half_width;

@@ -19,7 +19,9 @@
 use maps_core::VectorTilePlacement;
 
 /// Per-frame uniform shared by every retained-geometry shader: the column-major frame
-/// matrix, then (surface width px, surface height px, CSS-to-physical pixel ratio, 0).
+/// matrix, then (surface width px, surface height px, CSS-to-physical pixel ratio, w), where `w`
+/// is consumer-defined: the pitched center depth for points, the frame size (CSS px) for
+/// vector tiles.
 /// WGSL: `struct RetainedFrame { matrix: mat4x4<f32>, surface: vec4<f32> }`.
 pub(crate) const FRAME_UNIFORM_SIZE: u64 = 80;
 
@@ -86,7 +88,7 @@ pub(crate) fn frame_uniform_bytes(
 pub(crate) fn pack_frame_uniforms<K>(
     frames: impl IntoIterator<Item = (K, LocalFrame)>,
     view_projection: [f32; 16],
-    surface: [f32; 4],
+    surface: impl Fn(LocalFrame) -> [f32; 4],
     stride: u64,
     bytes: &mut Vec<u8>,
 ) -> Vec<(K, u32)> {
@@ -97,7 +99,7 @@ pub(crate) fn pack_frame_uniforms<K>(
             continue;
         };
         let offset = bytes.len();
-        bytes.extend_from_slice(&frame_uniform_bytes(matrix, surface));
+        bytes.extend_from_slice(&frame_uniform_bytes(matrix, surface(frame)));
         bytes.resize(offset + stride as usize, 0);
         offsets.push((key, offset as u32));
     }
@@ -197,7 +199,7 @@ mod tests {
         let offsets = pack_frame_uniforms(
             [("a", frame), ("skipped", overflow), ("b", frame)],
             identity(),
-            [800.0, 600.0, 2.0, 0.0],
+            |_| [800.0, 600.0, 2.0, 0.0],
             256,
             &mut bytes,
         );

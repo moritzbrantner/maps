@@ -10,8 +10,10 @@
 //! Each vertex wraps to the world copy nearest the anchor, as Canvas projects each
 //! vertex to the copy nearest the camera.
 //!
-//! Lines are open stroke paths with round caps and joins, as Canvas strokes them: a segment
-//! quad per segment and a join disc at every vertex, endpoints included. A direction
+//! Lines are MapLibre round-joined, round-capped strips (`maps_core::LineMesh`, #326) drawn
+//! without the single-coverage stencil, as a MapLibre line layer is; a line that collapses
+//! to one point keeps a Canvas round-cap dot. Polygon outlines are a segment quad per
+//! segment and a join disc at every vertex under that stencil. A direction
 //! marker is one triangle placed and oriented in screen space from its anchor and previous
 //! coordinate, so it keeps its CSS-px size and the projected heading Canvas uses. A circle
 //! is a fill disc and a stroke ring around its centre, in CSS px like retained points.
@@ -24,7 +26,7 @@
     allow(dead_code)
 )]
 
-use maps_core::project_web_mercator;
+use maps_core::{LineCap, LineMesh, project_web_mercator};
 
 use crate::retained_points::wrap_world_delta;
 
@@ -40,7 +42,7 @@ pub(crate) const RETAINED_SHAPE_CIRCLE: f32 = 3.0;
 /// Fill vertex: anchor offset (2 x f32), RGBA (4 x f32).
 pub(crate) const RETAINED_POLYGON_FILL_VERTEX_SIZE: u64 = 24;
 /// Stroke vertex: endpoints `a` and `b` (2 x 2 x f32), corner (2 x f32), width, kind
-/// (0 segment, 1 round join, 2 direction marker, 3 circle ring), RGBA.
+/// (0 segment, 1 round join, 2 direction marker, 3 circle ring, 4 line strip vertex), RGBA.
 pub(crate) const RETAINED_POLYGON_STROKE_VERTEX_SIZE: u64 = 48;
 pub(crate) const RETAINED_POLYGON_COVER_VERTEX_COUNT: u32 = 6;
 /// A disc's quad around its centre, in radii.
@@ -90,6 +92,9 @@ pub(crate) struct RetainedPolygonDraw {
     pub(crate) cover_first: u32,
     pub(crate) stroke_first: u32,
     pub(crate) stroke_count: u32,
+    /// A line strip: drawn without the single-coverage stroke stencil, like a MapLibre line
+    /// layer, whose mesh only overlaps itself at sharp round joins and crossings.
+    pub(crate) line: bool,
 }
 
 /// GPU geometry of a polygon group around one anchor.
@@ -294,6 +299,38 @@ impl RetainedPolygons {
                     }
                     draw.stroke_count = stroke_index(&geometry.stroke) - draw.stroke_first;
                 }
+                geometry.draws.push(draw);
+                continue;
+            }
+
+            if polygon.shape == Shape::Line
+                && polygon.rings[0].len() >= 2
+                && polygon.stroke_width > 0.0
+                && polygon.stroke[3] > 0.0
+            {
+                // MapLibre's round-joined, round-capped line strip (#326), tessellated in
+                // anchor offsets and extruded on the map plane in the shader.
+                let path: Vec<[f64; 2]> = polygon.rings[0]
+                    .iter()
+                    .map(|&[x, y]| [wrap_world_delta(x - anchor[0]), y - anchor[1]])
+                    .collect();
+                let mut mesh = LineMesh::new();
+                mesh.add_line(&path, LineCap::Round, false);
+                draw.stroke_first = stroke_index(&geometry.stroke);
+                for &index in &mesh.indices {
+                    let vertex = mesh.vertices[index as usize];
+                    push_stroke_vertex(
+                        &mut geometry.stroke,
+                        vertex.point.map(|value| value as f32),
+                        vertex.extrude.map(|value| value as f32),
+                        vertex.normal,
+                        polygon.stroke_width,
+                        4.0,
+                        polygon.stroke,
+                    );
+                }
+                draw.stroke_count = stroke_index(&geometry.stroke) - draw.stroke_first;
+                draw.line = true;
                 geometry.draws.push(draw);
                 continue;
             }
@@ -592,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn an_open_line_has_no_closing_segment_and_a_disc_at_every_vertex() {
+    fn an_open_line_is_one_round_joined_strip_without_the_coverage_stencil() {
         let lon_lat = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0];
         let lines = RetainedPolygons::lower(&[1], &[4], &lon_lat, &LINE).unwrap();
         assert_eq!(
@@ -605,10 +642,10 @@ mod tests {
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!(draw.fan_count, 0, "lines are never filled");
+        assert!(draw.line);
         let kinds = stroke_kinds(&geometry);
-        // Two segment quads and three join/cap discs.
-        assert_eq!(kinds.iter().filter(|&&kind| kind == 0.0).count(), 2 * 6);
-        assert_eq!(kinds.iter().filter(|&&kind| kind == 1.0).count(), 3 * 6);
+        assert!(!kinds.is_empty() && kinds.iter().all(|&kind| kind == 4.0));
+        assert_eq!(kinds.len() % 3, 0);
         assert_eq!(draw.stroke_count as usize, kinds.len());
     }
 

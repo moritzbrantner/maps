@@ -345,7 +345,7 @@ impl RetainedGroup {
         let offsets = pack_frame_uniforms(
             frames,
             view_projection,
-            surface,
+            |_| surface,
             UNIFORM_STRIDE,
             &mut self.uniforms,
         );

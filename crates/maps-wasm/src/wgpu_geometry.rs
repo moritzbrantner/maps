@@ -1,16 +1,16 @@
 //! Maps-specific pixel geometry preparation, shared by the browser backend and native tests.
 
+use maps_core::{LineCap, LineMesh};
 use serde::Deserialize;
 use std::borrow::Cow;
 
-/// Homogeneous clip position `(x, y, w)` (3 x f32), RGBA (4 x f32), edge (2 x f32): see
+/// Homogeneous clip position `(x, y, w)` (3 x f32), RGBA (4 x f32), edge (3 x f32): see
 /// `shaders/application.wgsl`.
-pub(super) const APPLICATION_VERTEX_SIZE: u64 = 36;
+pub(super) const APPLICATION_VERTEX_SIZE: u64 = 40;
 /// The edge of fills and markers: never faded.
-const FILL_EDGE: [f32; 2] = [0.0, 1.0e6];
+const FILL_EDGE: [f32; 3] = [0.0, 0.0, 1.0e6];
 pub(super) const APPLICATION_CIRCLE_INSTANCE_SIZE: u64 = 56;
 const LINE_CAP_SEGMENTS: usize = 12;
-const MAX_LINE_MITER_SCALE: f64 = 4.0;
 const GEOMETRY_EPSILON: f64 = 1.0e-9;
 const GEOMETRY_EPSILON_SQUARED: f64 = GEOMETRY_EPSILON * GEOMETRY_EPSILON;
 pub(super) const APPLICATION_CIRCLE: u32 = 0;
@@ -781,10 +781,19 @@ fn append_application_direction_marker(
 struct StrokeEdges {
     /// Half width plus the antialiasing outset (CSS px).
     outset: f64,
-    /// Vertex edges at the stroke centre, its left and its right boundary.
-    centre: [f32; 2],
-    left: [f32; 2],
-    right: [f32; 2],
+    /// Outer extent in physical px.
+    extent: f32,
+    /// Vertex edges (MapLibre's `v_normal`, then the extent) at the stroke centre, its
+    /// left and its right boundary.
+    centre: [f32; 3],
+    left: [f32; 3],
+    right: [f32; 3],
+}
+
+impl StrokeEdges {
+    fn with_normal(self, normal: [f32; 2]) -> [f32; 3] {
+        [normal[0], normal[1], self.extent]
+    }
 }
 
 fn stroke_edges(half_width: f64, pixel_ratio: f64) -> StrokeEdges {
@@ -792,9 +801,10 @@ fn stroke_edges(half_width: f64, pixel_ratio: f64) -> StrokeEdges {
     let extent = (outset * pixel_ratio) as f32;
     StrokeEdges {
         outset,
-        centre: [0.0, extent],
-        left: [1.0, extent],
-        right: [-1.0, extent],
+        extent,
+        centre: [0.0, 0.0, extent],
+        left: [1.0, 0.0, extent],
+        right: [-1.0, 0.0, extent],
     }
 }
 
@@ -974,59 +984,28 @@ fn append_application_line(
         return Err("wgpu application line has no non-degenerate segment");
     }
 
+    // MapLibre's round-joined, round-capped line strip (#326): joins are filled without
+    // overlap, so a translucent line blends once per pixel (#325).
     let edges = stroke_edges(line.stroke_width / 2.0, pixel_ratio);
-    let outset = edges.outset;
-    let first_direction = unit_direction(points[0], points[1])?;
-    let mut current_direction = first_direction;
-    let mut start_offset = line_endpoint_offset(current_direction, outset);
-
-    for index in 0..points.len() - 1 {
-        let start = points[index];
-        let end = points[index + 1];
-        let next_direction = if index + 2 < points.len() {
-            Some(unit_direction(points[index + 1], points[index + 2])?)
-        } else {
-            None
-        };
-        let end_offset = next_direction.map_or_else(
-            || line_endpoint_offset(current_direction, outset),
-            |next| line_join_offset(current_direction, next, outset),
+    let mut mesh = LineMesh::new();
+    let path: Vec<[f64; 2]> = points.iter().map(|point| [point.x, point.y]).collect();
+    mesh.add_line(&path, LineCap::Round, false);
+    for &index in &mesh.indices {
+        let vertex = mesh.vertices[index as usize];
+        let centre = (vertex.point[0], vertex.point[1]);
+        let at = (
+            centre.0 + vertex.extrude[0] * edges.outset,
+            centre.1 + vertex.extrude[1] * edges.outset,
         );
-        let start_left = (start.x + start_offset.0, start.y + start_offset.1);
-        let start_right = (start.x - start_offset.0, start.y - start_offset.1);
-        let end_left = (end.x + end_offset.0, end.y + end_offset.1);
-        let end_right = (end.x - end_offset.0, end.y - end_offset.1);
-
-        let (start_centre, end_centre) = ((start.x, start.y), (end.x, end.y));
-        for (centre, point, edge) in [
-            (start_centre, start_left, edges.left),
-            (start_centre, start_right, edges.right),
-            (end_centre, end_left, edges.left),
-            (start_centre, start_right, edges.right),
-            (end_centre, end_right, edges.right),
-            (end_centre, end_left, edges.left),
-        ] {
-            append_stroke_vertex(output, space, point, (centre, point), line.color, edge)?;
-        }
-
-        start_offset = end_offset;
-        if let Some(next) = next_direction {
-            current_direction = next;
-        }
+        append_stroke_vertex(
+            output,
+            space,
+            at,
+            (centre, at),
+            line.color,
+            edges.with_normal(vertex.normal),
+        )?;
     }
-
-    let first = points[0];
-    append_round_line_cap(
-        output,
-        space,
-        first,
-        (-first_direction.0, -first_direction.1),
-        line.color,
-        edges,
-    )?;
-    let last = *points.last().expect("line has at least two points");
-    append_round_line_cap(output, space, last, current_direction, line.color, edges)?;
-
     Ok(())
 }
 
@@ -1072,60 +1051,6 @@ fn line_endpoint_offset(direction: (f64, f64), half_width: f64) -> (f64, f64) {
     (-direction.1 * half_width, direction.0 * half_width)
 }
 
-fn line_join_offset(
-    previous_direction: (f64, f64),
-    next_direction: (f64, f64),
-    half_width: f64,
-) -> (f64, f64) {
-    let previous = (-previous_direction.1, previous_direction.0);
-    let next = (-next_direction.1, next_direction.0);
-    let sum = (previous.0 + next.0, previous.1 + next.1);
-    let sum_length_squared = sum.0 * sum.0 + sum.1 * sum.1;
-    if sum_length_squared <= GEOMETRY_EPSILON_SQUARED {
-        return (next.0 * half_width, next.1 * half_width);
-    }
-
-    let inverse_sum_length = sum_length_squared.sqrt().recip();
-    let miter = (sum.0 * inverse_sum_length, sum.1 * inverse_sum_length);
-    let denominator = miter.0 * next.0 + miter.1 * next.1;
-    if denominator.abs() <= GEOMETRY_EPSILON {
-        return (next.0 * half_width, next.1 * half_width);
-    }
-
-    let scale = (half_width / denominator).clamp(
-        -half_width * MAX_LINE_MITER_SCALE,
-        half_width * MAX_LINE_MITER_SCALE,
-    );
-    (miter.0 * scale, miter.1 * scale)
-}
-
-fn append_round_line_cap(
-    output: &mut Vec<u8>,
-    space: ApplicationSpace,
-    center: WgpuApplicationPoint,
-    outward: (f64, f64),
-    color: [f32; 4],
-    edges: StrokeEdges,
-) -> Result<(), &'static str> {
-    let normal = (-outward.1, outward.0);
-    let radius = edges.outset;
-    for segment in 0..LINE_CAP_SEGMENTS {
-        let fraction_a = segment as f64 / LINE_CAP_SEGMENTS as f64;
-        let fraction_b = (segment + 1) as f64 / LINE_CAP_SEGMENTS as f64;
-        let angle_a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * fraction_a;
-        let angle_b = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * fraction_b;
-        let a = point_on_oriented_circle(center, outward, normal, radius, angle_a);
-        let b = point_on_oriented_circle(center, outward, normal, radius, angle_b);
-        let middle =
-            point_on_oriented_circle(center, outward, normal, radius, (angle_a + angle_b) / 2.0);
-        let centre = (center.x, center.y);
-        append_stroke_vertex(output, space, centre, (centre, middle), color, edges.centre)?;
-        append_stroke_vertex(output, space, a, (centre, a), color, edges.left)?;
-        append_stroke_vertex(output, space, b, (centre, b), color, edges.left)?;
-    }
-    Ok(())
-}
-
 /// A stroke vertex at `at`, whose extrusion runs from the stroke centre `extrusion.0` to
 /// `extrusion.1` (the vertex itself on the stroke boundary, a boundary point for a centre).
 ///
@@ -1139,7 +1064,7 @@ fn append_stroke_vertex(
     at: (f64, f64),
     (centre, extruded): ((f64, f64), (f64, f64)),
     color: [f32; 4],
-    edge: [f32; 2],
+    edge: [f32; 3],
 ) -> Result<(), &'static str> {
     let Some(ground) = space.ground else {
         return append_application_vertex(output, space, at.0, at.1, color, edge);
@@ -1149,8 +1074,8 @@ fn append_stroke_vertex(
     let [ex, ey, ew] = ground.clip(extruded.0, extruded.1);
     let screen_outset =
         ((ex - cx) / ew * space.width * 0.5).hypot((ey - cy) / ew * space.height * 0.5);
-    // `edge[1]` is the outset in physical px on a flat map: scale it by the projection.
-    let extent = f64::from(edge[1]) * screen_outset / ground_outset;
+    // `edge[2]` is the outset in physical px on a flat map: scale it by the projection.
+    let extent = f64::from(edge[2]) * screen_outset / ground_outset;
     if !(extent.is_finite() && extent > 0.0) {
         return Err("wgpu application stroke has no screen extent");
     }
@@ -1160,22 +1085,7 @@ fn append_stroke_vertex(
         at.0,
         at.1,
         color,
-        [edge[0], (-1.0 / extent) as f32],
-    )
-}
-
-fn point_on_oriented_circle(
-    center: WgpuApplicationPoint,
-    outward: (f64, f64),
-    normal: (f64, f64),
-    radius: f64,
-    angle: f64,
-) -> (f64, f64) {
-    let along = angle.cos() * radius;
-    let across = angle.sin() * radius;
-    (
-        center.x + outward.0 * along + normal.0 * across,
-        center.y + outward.1 * along + normal.1 * across,
+        [edge[0], edge[1], (-1.0 / extent) as f32],
     )
 }
 
@@ -1185,7 +1095,7 @@ fn append_application_vertex(
     x: f64,
     y: f64,
     color: [f32; 4],
-    edge: [f32; 2],
+    edge: [f32; 3],
 ) -> Result<(), &'static str> {
     let clip = match space.ground {
         Some(ground) => ground.clip(x, y).map(|value| value as f32),
