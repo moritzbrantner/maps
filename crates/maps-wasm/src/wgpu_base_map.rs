@@ -1,9 +1,10 @@
 use super::wgpu_geometry::{
-    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw,
+    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw, GroundPerspective,
     POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey, SurfaceClip,
     WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
     prepare_application_geometry, unpack_tile_draws,
 };
+use super::wgpu_mipmaps::{MipmapGenerator, mip_level_count};
 
 use std::collections::HashMap;
 use std::sync::{
@@ -138,6 +139,19 @@ struct TileTexture {
     bind_group: wgpu::BindGroup,
 }
 
+/// MapLibre's `anisotropicFilterPitch` default: raster tiles of a camera pitched further are
+/// sampled with the context's maximum anisotropy (`draw_raster.ts`). WebGPU allows sampler
+/// anisotropy only with linear mip filtering, so `fs_anisotropic` in `base_map.wgsl` filters
+/// over the nearest mip level itself, as `LINEAR_MIPMAP_NEAREST` with anisotropy does.
+const ANISOTROPIC_FILTER_PITCH_DEGREES: f64 = 20.0;
+
+/// Camera pitch read from a view-projection: its clip `w` row is the view direction, whose
+/// map-plane component grows with the pitch. Margin scaling leaves that row alone.
+fn view_projection_pitch_degrees(view_projection: [f32; 16]) -> f64 {
+    let [x, y, z] = [3, 7, 11].map(|index| f64::from(view_projection[index]));
+    x.hypot(y).atan2(z.abs()).to_degrees()
+}
+
 #[wasm_bindgen]
 pub struct MapsWgpuBaseMapRenderer {
     surface: wgpu::Surface<'static>,
@@ -151,7 +165,10 @@ pub struct MapsWgpuBaseMapRenderer {
     camera_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    mipmaps: MipmapGenerator,
     pipeline: wgpu::RenderPipeline,
+    /// Raster tiles under a camera pitched past [`ANISOTROPIC_FILTER_PITCH_DEGREES`].
+    anisotropic_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: u64,
     application_pipeline: wgpu::RenderPipeline,
@@ -304,6 +321,7 @@ impl MapsWgpuBaseMapRenderer {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
+            // MapLibre raster tiles: `LINEAR` / `LINEAR_MIPMAP_NEAREST` over a full mip chain.
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
@@ -344,34 +362,38 @@ impl MapsWgpuBaseMapRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &attributes,
         })];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Maps raster tile pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &vertex_buffers,
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: ignored_stencil(),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_view_format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let raster_pipeline = |fragment_entry_point: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Maps raster tile pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &vertex_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: ignored_stencil(),
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment_entry_point),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_view_format,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = raster_pipeline("fs_main");
+        let anisotropic_pipeline = raster_pipeline("fs_anisotropic");
         let vertex_buffer = create_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
         let application_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -386,18 +408,18 @@ impl MapsWgpuBaseMapRenderer {
             });
         let application_attributes = [
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Float32x3,
                 offset: 0,
                 shader_location: 0,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
-                offset: 8,
+                offset: 12,
                 shader_location: 1,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x2,
-                offset: 24,
+                offset: 28,
                 shader_location: 2,
             },
         ];
@@ -472,6 +494,7 @@ impl MapsWgpuBaseMapRenderer {
             depth_fail_op: wgpu::StencilOperation::Keep,
             pass_op,
         };
+        let mipmaps = MipmapGenerator::new(&device, wgpu::TextureFormat::Rgba8Unorm);
         let polygon_pipelines = PolygonPipelines {
             fill_stencil: polygon_pipeline(
                 "Maps polygon even-odd stencil pipeline",
@@ -931,7 +954,9 @@ impl MapsWgpuBaseMapRenderer {
             camera_bind_group,
             texture_bind_group_layout,
             sampler,
+            mipmaps,
             pipeline,
+            anisotropic_pipeline,
             vertex_buffer,
             vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             application_pipeline,
@@ -1004,13 +1029,14 @@ impl MapsWgpuBaseMapRenderer {
                 height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            // Minified tiles sample a mip chain, as MapLibre's (#314).
+            mip_level_count: mip_level_count(width, height),
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             // Sampled values stay encoded sRGB for the encoded-sRGB surface view.
             format: wgpu::TextureFormat::Rgba8Unorm,
-            // Browser external-image copies require a renderable destination, even
-            // though this renderer only samples the uploaded tile afterwards.
+            // Browser external-image copies require a renderable destination; the mip
+            // chain is rendered level by level.
             usage: wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1036,6 +1062,7 @@ impl MapsWgpuBaseMapRenderer {
                 depth_or_array_layers: 1,
             },
         );
+        self.mipmaps.generate(&self.device, &self.queue, &texture);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Maps raster tile bind group"),
@@ -1407,8 +1434,13 @@ impl MapsWgpuBaseMapRenderer {
         );
 
         let application_geometry = application_frame
-            .as_ref()
-            .map(|frame| prepare_application_geometry(frame, clip.pixel_ratio))
+            .map(|mut frame| {
+                let ground = GroundPerspective::new(view_projection, frame.width, frame.height);
+                if let Some(ground) = &ground {
+                    frame.place_on_ground(ground)?;
+                }
+                prepare_application_geometry(&frame, clip.pixel_ratio, ground)
+            })
             .transpose()
             .map_err(JsValue::from_str)?
             .unwrap_or_default();
@@ -1510,7 +1542,13 @@ impl MapsWgpuBaseMapRenderer {
                 // Continuous motion: the margin would be replaced before it is shown.
                 pass.set_scissor_rect(x, y, width, height);
             }
-            pass.set_pipeline(&self.pipeline);
+            let anisotropic =
+                view_projection_pitch_degrees(view_projection) > ANISOTROPIC_FILTER_PITCH_DEGREES;
+            pass.set_pipeline(if anisotropic {
+                &self.anisotropic_pipeline
+            } else {
+                &self.pipeline
+            });
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
@@ -1796,11 +1834,13 @@ impl MapsWgpuBaseMapRenderer {
             }
             frames.extend(group.state.frames(&view).map(|frame| (group_key, frame)));
         }
+        // A pitched camera's clip w varies over the map plane; circles scale with it (#328).
+        let pitched = view_projection[3] != 0.0 || view_projection[7] != 0.0;
         let surface = [
             self.config.width as f32,
             self.config.height as f32,
             clip.pixel_ratio as f32,
-            0.0,
+            if pitched { view_projection[15] } else { 0.0 },
         ];
         self.retained_point_uniforms.write(
             &self.device,

@@ -11,9 +11,11 @@ use three_d_camera::PerspectiveCamera;
 use three_d_core::Vec3;
 use three_d_projective::{transform_point_projective_f64, untransform_point_projective_f64};
 
-const FIELD_OF_VIEW_Y_RADIANS: f32 = core::f32::consts::FRAC_PI_4;
+/// MapLibre's default vertical field of view (`TransformHelper._fovInRadians`, about 36.87°).
+pub const FIELD_OF_VIEW_Y_RADIANS: f64 = 0.643_501_108_793_284_4;
+/// MapLibre's `maxMercatorHorizonAngle`: the steepest view angle at which ground is drawn.
+pub const MAX_MERCATOR_HORIZON_ANGLE_DEGREES: f64 = 89.25;
 const RAY_EPSILON: f64 = 1.0e-12;
-const FAR_PLANE_MULTIPLIER: f32 = 4096.0;
 
 /// Conservative local-map-plane bounds for the ground visible through a viewport.
 ///
@@ -59,14 +61,20 @@ impl MapCamera {
             return None;
         }
 
-        let focal = 1.0 / (FIELD_OF_VIEW_Y_RADIANS * 0.5).tan();
-        let distance = height * 0.5 * focal;
+        let distance = camera_to_center_distance(self.viewport.height);
         if !distance.is_finite() || distance <= 0.0 {
             return None;
         }
 
+        let pitch_radians = self.pitch.to_radians();
+        let (near, far) = near_far_z(self.viewport.height, distance, pitch_radians);
+        let (near, far, distance) = (
+            checked_f32(near)?,
+            checked_f32(far)?,
+            checked_f32(distance)?,
+        );
         let bearing = checked_f32(self.bearing.to_radians())?;
-        let pitch = checked_f32(self.pitch.to_radians())?;
+        let pitch = checked_f32(pitch_radians)?;
         let (bearing_sin, bearing_cos) = bearing.sin_cos();
         let (pitch_sin, pitch_cos) = pitch.sin_cos();
 
@@ -80,14 +88,11 @@ impl MapCamera {
         );
         let up = Vec3::new(ground_up.x * pitch_cos, ground_up.y * pitch_cos, pitch_sin);
 
-        let near = (distance * 1.0e-4).max(0.01);
-        let viewport_extent = width.max(height);
-        let far = (distance + viewport_extent) * FAR_PLANE_MULTIPLIER;
         let shared_camera = PerspectiveCamera::new(
             eye,
             Vec3::ZERO,
             up,
-            FIELD_OF_VIEW_Y_RADIANS,
+            FIELD_OF_VIEW_Y_RADIANS as f32,
             aspect,
             near,
             far,
@@ -250,6 +255,45 @@ impl MapLocalRenderFrame {
 
         Some([local_x, local_y])
     }
+}
+
+/// MapLibre's `cameraToCenterDistance`: eye-to-center distance in CSS pixels.
+#[must_use]
+pub fn camera_to_center_distance(viewport_height: f64) -> f64 {
+    0.5 / (FIELD_OF_VIEW_Y_RADIANS * 0.5).tan() * viewport_height
+}
+
+/// MapLibre's `MercatorTransform._calculateNearFarZ` for a camera on the ground plane with no
+/// roll or center offset: the far plane sits just beyond the farthest visible ground point
+/// (or the mercator horizon), the near plane at `height / 50`.
+fn near_far_z(height: f64, distance: f64, pitch: f64) -> (f64, f64) {
+    use core::f64::consts::{FRAC_PI_2, PI};
+
+    let limited_pitch = pitch.min(MAX_MERCATOR_HORIZON_ANGLE_DEGREES.to_radians());
+    let ground_angle = FRAC_PI_2 + pitch;
+    let clamp_angle = |angle: f64| angle.clamp(0.01, PI - 0.01);
+    let surface_distance =
+        |fov: f64| fov.sin() * distance / clamp_angle(PI - ground_angle - fov).sin();
+
+    let pitch_degrees = pitch.to_degrees();
+    let horizon = distance
+        * ((90.0 - pitch_degrees).to_radians().tan() * 0.85).min(
+            (MAX_MERCATOR_HORIZON_ANGLE_DEGREES - pitch_degrees)
+                .to_radians()
+                .tan(),
+        );
+    let horizon_angle = (horizon / distance).atan();
+    let min_fov_center_to_horizon = (90.0 - MAX_MERCATOR_HORIZON_ANGLE_DEGREES).to_radians();
+    let fov_center_to_horizon = if horizon_angle > min_fov_center_to_horizon {
+        horizon_angle
+    } else {
+        min_fov_center_to_horizon
+    };
+
+    let top_half_min_distance = surface_distance(FIELD_OF_VIEW_Y_RADIANS * 0.5)
+        .min(surface_distance(fov_center_to_horizon));
+    let far = ((FRAC_PI_2 - limited_pitch).cos() * top_half_min_distance + distance) * 1.01;
+    (height / 50.0, far)
 }
 
 fn checked_f32(value: f64) -> Option<f32> {

@@ -27,6 +27,13 @@
 
 ### Patch Changes
 
+- Pitched cameras on the Maps flat runtime now match MapLibre. They use
+  MapLibre's field of view (36.87° instead of 45°) and near/far planes, so
+  overlays, picks and drag pans land where MapLibre puts them. Lines and polygon
+  outlines are stroked on the map plane and thin with distance, and circles
+  scale with their depth (`circle-pitch-scale: map`). Raster tiles now carry mip
+  chains and are filtered anisotropically above 20° of pitch, so far tiles no
+  longer alias.
 - Wheel zoom on the Maps flat runtime now follows MapLibre's scroll zoom. It
   tells mouse wheels from trackpads the same way, maps the summed deltas of
   each frame through MapLibre's rate curve (at most a factor of two per frame),
