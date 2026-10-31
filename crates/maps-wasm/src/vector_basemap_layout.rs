@@ -16,13 +16,12 @@ use maps_core::{VectorBasemapStyleClass, VectorTileBuckets};
 
 /// Fill vertex: tile-normalized position (2 x f32) and style class (u32).
 pub(crate) const FILL_VERTEX_SIZE: u64 = 12;
-/// Line vertex: tile-normalized segment start/end (4 x f32) and style class (u32). Each
-/// segment is four identical vertices (quad corners come from `vertex_index & 3`) drawn
-/// with [`LINE_QUAD_INDICES`]; per-segment instancing of 6-vertex quads is ~45x slower
-/// on SwiftShader and wasteful on hardware GPUs.
+/// Line vertex of the round-joined strip (`maps_core::LineMesh`): tile-normalized position
+/// (2 x f32), unit extrusion (2 x f32), then style class with [`LINE_ROUND_FLAG`] and
+/// [`LINE_UP_FLAG`] (u32). Indexed triangle list.
 pub(crate) const LINE_VERTEX_SIZE: u64 = 20;
-pub(crate) const LINE_VERTICES_PER_SEGMENT: u32 = 4;
-pub(crate) const LINE_QUAD_INDICES: [u32; 6] = [0, 1, 2, 2, 1, 3];
+pub(crate) const LINE_ROUND_FLAG: u32 = 1 << 8;
+pub(crate) const LINE_UP_FLAG: u32 = 1 << 9;
 /// Style entry: premultiplied-at-draw RGBA color, then (width CSS px, 0, 0, 0).
 pub(crate) const STYLE_ENTRY_FLOATS: usize = 8;
 pub(crate) const STYLE_TABLE_SIZE: u64 =
@@ -47,35 +46,24 @@ pub(crate) fn fill_index_bytes(buckets: &VectorTileBuckets) -> Vec<u8> {
 }
 
 pub(crate) fn line_vertex_bytes(buckets: &VectorTileBuckets) -> Vec<u8> {
-    let mut vertex = [0_u8; LINE_VERTEX_SIZE as usize];
-    let mut bytes = Vec::with_capacity(
-        buckets.line_segments.len()
-            * (LINE_VERTEX_SIZE as usize)
-            * LINE_VERTICES_PER_SEGMENT as usize,
-    );
-    for segment in &buckets.line_segments {
-        for (index, value) in [segment.start, segment.end]
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            vertex[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    let mut bytes = Vec::with_capacity(buckets.line_vertices.len() * LINE_VERTEX_SIZE as usize);
+    for vertex in &buckets.line_vertices {
+        for value in vertex.position.into_iter().chain(vertex.extrude) {
+            bytes.extend_from_slice(&value.to_le_bytes());
         }
-        vertex[16..20].copy_from_slice(&(segment.class as u32).to_le_bytes());
-        for _ in 0..LINE_VERTICES_PER_SEGMENT {
-            bytes.extend_from_slice(&vertex);
-        }
+        let flags = vertex.class as u32
+            | if vertex.round { LINE_ROUND_FLAG } else { 0 }
+            | if vertex.up { LINE_UP_FLAG } else { 0 };
+        bytes.extend_from_slice(&flags.to_le_bytes());
     }
     bytes
 }
 
-/// Triangle-list indices of every segment quad; segment `n` uses `n * 6 .. n * 6 + 6`.
 pub(crate) fn line_index_bytes(buckets: &VectorTileBuckets) -> Vec<u8> {
-    (0..buckets.line_segments.len() as u32)
-        .flat_map(|segment| {
-            LINE_QUAD_INDICES.map(|corner| segment * LINE_VERTICES_PER_SEGMENT + corner)
-        })
-        .flat_map(u32::to_le_bytes)
+    buckets
+        .line_indices
+        .iter()
+        .flat_map(|index| index.to_le_bytes())
         .collect()
 }
 
@@ -101,7 +89,7 @@ pub(crate) fn style_table_bytes(table: &[f32]) -> Result<Vec<u8>, &'static str> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maps_core::{VectorFillVertex, VectorLineSegment};
+    use maps_core::{VectorFillVertex, VectorLineVertex};
 
     #[test]
     fn bucket_bytes_follow_the_documented_strides() {
@@ -111,11 +99,14 @@ mod tests {
                 class: VectorBasemapStyleClass::Building,
             }],
             fill_indices: vec![0, 0, 0],
-            line_segments: vec![VectorLineSegment {
-                start: [0.0, 0.0],
-                end: [1.0, 1.0],
+            line_vertices: vec![VectorLineVertex {
+                position: [0.0, 0.5],
+                extrude: [-1.0, 1.0],
+                round: true,
+                up: true,
                 class: VectorBasemapStyleClass::Street,
             }],
+            line_indices: vec![0, 0, 0],
             ..VectorTileBuckets::default()
         };
         let vertices = fill_vertex_bytes(&buckets);
@@ -123,17 +114,11 @@ mod tests {
         assert_eq!(vertices[8..12], 6_u32.to_le_bytes());
         assert_eq!(fill_index_bytes(&buckets).len(), 12);
         let lines = line_vertex_bytes(&buckets);
-        assert_eq!(lines.len() as u64, 4 * LINE_VERTEX_SIZE);
-        assert_eq!(lines[16..20], 10_u32.to_le_bytes());
-        assert_eq!(lines[..20], lines[60..80]);
-        let indices = line_index_bytes(&buckets);
-        assert_eq!(
-            indices,
-            [0_u32, 1, 2, 2, 1, 3]
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(lines.len() as u64, LINE_VERTEX_SIZE);
+        assert_eq!(lines[4..8], 0.5_f32.to_le_bytes());
+        assert_eq!(lines[8..12], (-1.0_f32).to_le_bytes());
+        assert_eq!(lines[16..20], (10_u32 | 0x300).to_le_bytes());
+        assert_eq!(line_index_bytes(&buckets).len(), 12);
     }
 
     #[test]

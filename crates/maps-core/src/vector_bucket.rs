@@ -12,6 +12,7 @@ use core::ops::Range;
 use earcut::Earcut;
 
 use crate::TileId;
+use crate::line_mesh::{LineCap, LineMesh};
 use crate::vector_tile::{
     ShortbreadFeature, VectorBasemapLineKind, VectorBasemapPolygonKind, VectorTileError,
     split_at_tile_edges, visit_shortbread_features,
@@ -114,10 +115,18 @@ pub struct VectorFillVertex {
     pub class: VectorBasemapStyleClass,
 }
 
+/// One vertex of a round-joined line strip ([`LineMesh`]): renderers place it at
+/// `position + extrude * outset`, the outset converted from CSS px to tile units, and fade
+/// it by `length(normal)` like MapLibre's line shader.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VectorLineSegment {
-    pub start: [f32; 2],
-    pub end: [f32; 2],
+pub struct VectorLineVertex {
+    pub position: [f32; 2],
+    /// Extrusion for a half width of one (unitless, so the same in tile and pixel units).
+    pub extrude: [f32; 2],
+    /// Whether this vertex lies on a round cap (MapLibre's `v_normal.x`).
+    pub round: bool,
+    /// Which side of the line this vertex is on (MapLibre's `v_normal.y`).
+    pub up: bool,
     pub class: VectorBasemapStyleClass,
 }
 
@@ -129,8 +138,10 @@ pub struct VectorTileBuckets {
     pub fill_indices: Vec<u32>,
     /// `fill_indices` range per [`VECTOR_FILL_PAINT_ORDER`] group.
     pub fill_groups: [Range<u32>; VECTOR_FILL_PAINT_ORDER.len()],
-    pub line_segments: Vec<VectorLineSegment>,
-    /// `line_segments` range per line group (building outlines, then linework).
+    pub line_vertices: Vec<VectorLineVertex>,
+    /// Triangle list into `line_vertices`.
+    pub line_indices: Vec<u32>,
+    /// `line_indices` range per line group (building outlines, then linework).
     pub line_groups: [Range<u32>; VECTOR_LINE_GROUP_COUNT],
     /// Decoded Shortbread features represented by these buckets.
     pub feature_count: u32,
@@ -148,8 +159,9 @@ struct FillGroup {
 /// keeps protobuf order within the tile. Degenerate rings produce no triangles.
 pub fn build_shortbread_buckets(bytes: &[u8]) -> Result<VectorTileBuckets, VectorTileError> {
     let mut fills: [FillGroup; VECTOR_FILL_PAINT_ORDER.len()] = Default::default();
-    let mut outlines = Vec::new();
-    let mut lines = Vec::new();
+    let mut outlines = LineGroup::default();
+    let mut lines = LineGroup::default();
+    let mut mesh = LineMesh::new();
     let mut feature_count = 0_u32;
     let mut earcut = Earcut::new();
     let mut ring_points = Vec::new();
@@ -159,13 +171,18 @@ pub fn build_shortbread_buckets(bytes: &[u8]) -> Result<VectorTileBuckets, Vecto
     visit_shortbread_features(bytes, |feature: ShortbreadFeature| {
         feature_count += 1;
         let scale = 1.0 / f64::from(feature.extent);
-        let normalize =
-            |[x, y]: [i32; 2]| [(f64::from(x) * scale) as f32, (f64::from(y) * scale) as f32];
 
         if let Some(kind) = feature.line_kind {
             let class = VectorBasemapStyleClass::line(kind);
             for path in &feature.line_paths {
-                append_segments(&mut lines, path, class, normalize);
+                append_line(
+                    &mut lines,
+                    &mut mesh,
+                    path,
+                    feature.line_from_polygon,
+                    class,
+                    scale,
+                );
             }
         }
 
@@ -187,11 +204,13 @@ pub fn build_shortbread_buckets(bytes: &[u8]) -> Result<VectorTileBuckets, Vecto
                     ring_points.extend(ring.iter().map(|[x, y]| [f64::from(*x), f64::from(*y)]));
                     if kind == VectorBasemapPolygonKind::Building {
                         for run in split_at_tile_edges(&feature.paths[path_index], feature.extent) {
-                            append_segments(
+                            append_line(
                                 &mut outlines,
+                                &mut mesh,
                                 &run,
+                                true,
                                 VectorBasemapStyleClass::BuildingOutline,
-                                normalize,
+                                scale,
                             );
                         }
                     }
@@ -232,9 +251,13 @@ pub fn build_shortbread_buckets(bytes: &[u8]) -> Result<VectorTileBuckets, Vecto
         .into_iter()
         .zip(buckets.line_groups.iter_mut())
     {
-        let start = buckets.line_segments.len() as u32;
-        buckets.line_segments.extend(group);
-        *range = start..buckets.line_segments.len() as u32;
+        let base = buckets.line_vertices.len() as u32;
+        let start = buckets.line_indices.len() as u32;
+        buckets.line_vertices.extend(group.vertices);
+        buckets
+            .line_indices
+            .extend(group.indices.into_iter().map(|index| base + index));
+        *range = start..buckets.line_indices.len() as u32;
     }
     Ok(buckets)
 }
@@ -247,21 +270,51 @@ fn open_ring(path: &[[i32; 2]]) -> &[[i32; 2]] {
     }
 }
 
-fn append_segments(
-    output: &mut Vec<VectorLineSegment>,
+#[derive(Default)]
+struct LineGroup {
+    vertices: Vec<VectorLineVertex>,
+    indices: Vec<u32>,
+}
+
+/// Tessellates one MVT path like MapLibre's `line-join: round` line bucket: a line gets
+/// round caps; a polygon outline is a closed ring, or a run cut at the tile edge with butt
+/// ends (the ring continues outside the tile).
+fn append_line(
+    group: &mut LineGroup,
+    mesh: &mut LineMesh,
     path: &[[i32; 2]],
+    from_polygon: bool,
     class: VectorBasemapStyleClass,
-    normalize: impl Fn([i32; 2]) -> [f32; 2],
+    scale: f64,
 ) {
-    for pair in path.windows(2) {
-        if pair[0] != pair[1] {
-            output.push(VectorLineSegment {
-                start: normalize(pair[0]),
-                end: normalize(pair[1]),
-                class,
-            });
-        }
-    }
+    let points: Vec<[f64; 2]> = path
+        .iter()
+        .map(|&[x, y]| [f64::from(x), f64::from(y)])
+        .collect();
+    let closed = from_polygon && path.len() > 2 && path.first() == path.last();
+    let cap = if from_polygon {
+        LineCap::Butt
+    } else {
+        LineCap::Round
+    };
+    mesh.clear();
+    mesh.add_line(&points, cap, closed);
+    let base = group.vertices.len() as u32;
+    group
+        .vertices
+        .extend(mesh.vertices.iter().map(|vertex| VectorLineVertex {
+            position: [
+                (vertex.point[0] * scale) as f32,
+                (vertex.point[1] * scale) as f32,
+            ],
+            extrude: [vertex.extrude[0] as f32, vertex.extrude[1] as f32],
+            round: vertex.normal[0] != 0.0,
+            up: vertex.normal[1] > 0.0,
+            class,
+        }));
+    group
+        .indices
+        .extend(mesh.indices.iter().map(|index| base + index));
 }
 
 /// Where one vector tile is drawn, in the same local map-plane frame as raster
@@ -446,8 +499,16 @@ mod tests {
                 .iter()
                 .all(|vertex| vertex.class == VectorBasemapStyleClass::Water)
         );
-        // The island ring is shore linework; the exterior is the tile clip edge.
-        assert_eq!(buckets.line_groups[1].len(), 4);
+        // The island ring is shore linework, one closed ring without caps; the exterior is
+        // the tile clip edge.
+        assert!(!buckets.line_groups[1].is_empty());
+        let shore = &buckets.line_vertices;
+        assert!(shore.iter().all(|vertex| !vertex.round));
+        let inside_island = |vertex: &&VectorLineVertex| {
+            (0.25..=0.75).contains(&vertex.position[0])
+                && (0.25..=0.75).contains(&vertex.position[1])
+        };
+        assert_eq!(shore.iter().filter(inside_island).count(), shore.len());
         assert_eq!(buckets.feature_count, 1);
     }
 
@@ -484,12 +545,12 @@ mod tests {
         assert!((triangle_area(&buckets, buckets.fill_groups[4].clone()) - 0.0625).abs() < 1e-6);
         // Building outlines skip the two sides on the tile edge; the full-tile ocean
         // has no shore at all.
-        assert_eq!(buckets.line_groups[0].len(), 2);
-        assert!(
-            buckets.line_segments[buckets.line_groups[1].start as usize..]
-                .iter()
-                .all(|segment| segment.class == VectorBasemapStyleClass::Coast)
-        );
+        // One open run of two sides with butt ends and a fake round corner.
+        assert!(!buckets.line_groups[0].is_empty());
+        assert!(buckets.line_vertices.iter().all(
+            |vertex| !vertex.round && vertex.class == VectorBasemapStyleClass::BuildingOutline
+        ));
+        assert!(buckets.line_groups[1].is_empty());
     }
 
     #[test]
@@ -520,7 +581,7 @@ mod tests {
         .concat();
         let buckets = build_shortbread_buckets(&bytes).unwrap();
         assert!(triangle_area(&buckets, buckets.fill_groups[2].clone()) < 1e-3);
-        assert!(buckets.line_segments.is_empty());
+        assert!(buckets.line_indices.is_empty());
         assert_eq!(buckets.feature_count, 2);
     }
 
@@ -538,22 +599,25 @@ mod tests {
         ]
         .concat();
         let buckets = build_shortbread_buckets(&bytes).unwrap();
+        // Each two-point line is a round-capped strip of 8 vertices and 6 triangles.
+        let points = |class| {
+            buckets
+                .line_vertices
+                .iter()
+                .filter(|vertex| vertex.class == class)
+                .map(|vertex| vertex.position)
+                .collect::<Vec<_>>()
+        };
+        let street = points(VectorBasemapStyleClass::Street);
+        let boundary = points(VectorBasemapStyleClass::Boundary);
+        assert_eq!((street.len(), boundary.len()), (8, 8));
+        assert_eq!((street[0], street[7]), ([0.0, 0.0], [1.0, 0.5]));
+        assert_eq!((boundary[0], boundary[7]), ([0.0, 1.0], [0.5, 1.0]));
         assert_eq!(
-            buckets.line_segments,
-            [
-                VectorLineSegment {
-                    start: [0.0, 0.0],
-                    end: [1.0, 0.5],
-                    class: VectorBasemapStyleClass::Street,
-                },
-                VectorLineSegment {
-                    start: [0.0, 1.0],
-                    end: [0.5, 1.0],
-                    class: VectorBasemapStyleClass::Boundary,
-                },
-            ]
+            buckets.line_vertices[0].class,
+            VectorBasemapStyleClass::Street
         );
-        assert_eq!(buckets.line_groups, [0..0, 0..2]);
+        assert_eq!(buckets.line_groups, [0..0, 0..36]);
     }
 
     #[test]

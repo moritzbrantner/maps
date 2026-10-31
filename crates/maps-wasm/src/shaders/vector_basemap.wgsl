@@ -1,7 +1,8 @@
 // The shared retained-geometry frame uniform (see `wgpu_retained`).
 struct RetainedFrame {
   matrix: mat4x4<f32>,
-  // Physical surface width/height (px) and the CSS-to-physical pixel ratio.
+  // Physical surface width/height (px), the CSS-to-physical pixel ratio, and the tile's
+  // size in CSS px at the camera zoom.
   surface: vec4<f32>,
 };
 
@@ -46,68 +47,63 @@ fn fs_fill(input: FillOutput) -> @location(0) vec4<f32> {
 }
 
 struct LineInput {
-  @location(0) segment: vec4<f32>,
+  @location(0) position: vec2<f32>,
+  // Style class in the low byte, then the round-cap (bit 8) and up (bit 9) flags.
   @location(1) style_class: u32,
+  // Extrusion for a half width of one.
+  @location(2) extrude: vec2<f32>,
 };
 
 struct LineOutput {
   @builtin(position) position: vec4<f32>,
-  @location(0) across: f32,
-  @location(1) @interpolate(flat) half_width: f32,
-  @location(2) @interpolate(flat) color: vec4<f32>,
+  // MapLibre's `v_normal`, `v_width2.s` (outset, CSS px) and fade width `blur2` (CSS px).
+  @location(0) normal: vec2<f32>,
+  @location(1) outset: f32,
+  @location(2) blur: f32,
+  @location(3) @interpolate(flat) color: vec4<f32>,
+  // Tile-normalized position: MapLibre clips every tile to its own square.
+  @location(4) tile_position: vec2<f32>,
 };
 
-// Screen-space quads per segment: widths stay in CSS px at every zoom, and square
-// caps extend each segment by half its width so polyline joints stay closed. Each
-// segment is four vertices; the index pattern makes `vertex_index & 3` its corner.
+// MapLibre's line shader (#325): the strip from `maps_core::LineMesh` is extruded on the
+// map plane by the line's outset in CSS px (half width plus half a physical pixel), so
+// widths stay in CSS px at every zoom and shrink with distance under pitch.
 @vertex
-fn vs_line(@builtin(vertex_index) vertex_index: u32, input: LineInput) -> LineOutput {
-  let corners = array<vec2<f32>, 4>(
-    vec2<f32>(0.0, -1.0),
-    vec2<f32>(1.0, -1.0),
-    vec2<f32>(0.0, 1.0),
-    vec2<f32>(1.0, 1.0),
-  );
-  let corner = corners[vertex_index & 3u];
-  let style = styles.entries[input.style_class];
-  let width = style.params.x * tile.surface.z;
-  let half_width = max(width, 1.0) * 0.5;
-  // One extra pixel of feather on each side for analytic antialiasing.
-  let extent = half_width + 1.0;
+fn vs_line(input: LineInput) -> LineOutput {
   var output: LineOutput;
-  let start = tile.matrix * vec4<f32>(input.segment.xy, 0.0, 1.0);
-  let end = tile.matrix * vec4<f32>(input.segment.zw, 0.0, 1.0);
-  if start.w <= 0.0 || end.w <= 0.0 {
+  let style = styles.entries[input.style_class & 0xffu];
+  let pixel_ratio = tile.surface.z;
+  let half_width = style.params.x * 0.5;
+  let outset = half_width + select(0.5 / pixel_ratio, 0.0, half_width == 0.0);
+  if style.color.a < 0.01 || outset == 0.0 || tile.surface.w <= 0.0 {
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
-    output.across = 0.0;
-    output.half_width = 0.0;
-    output.color = vec4<f32>(0.0);
     return output;
   }
-  let half_surface = tile.surface.xy * 0.5;
-  let start_px = start.xy / start.w * half_surface;
-  let end_px = end.xy / end.w * half_surface;
-  let delta = end_px - start_px;
-  let length_px = length(delta);
-  var direction = vec2<f32>(1.0, 0.0);
-  if length_px > 1.0e-6 {
-    direction = delta / length_px;
-  }
-  let normal = vec2<f32>(-direction.y, direction.x);
-  let pixel = mix(start_px, end_px, corner.x)
-    + direction * mix(-half_width, half_width, corner.x)
-    + normal * corner.y * extent;
-  output.position = vec4<f32>(pixel / half_surface, 0.0, 1.0);
-  output.across = corner.y * extent;
-  output.half_width = half_width;
-  // Sub-pixel lines keep their coverage as alpha instead of vanishing.
-  let alpha = style.color.a * min(width, 1.0);
-  output.color = vec4<f32>(style.color.rgb * alpha, alpha);
+  let dist = input.extrude * outset;
+  let tile_position = input.position + dist / tile.surface.w;
+  let base = tile.matrix * vec4<f32>(input.position, 0.0, 1.0);
+  let extruded = tile.matrix * vec4<f32>(tile_position, 0.0, 1.0);
+  output.position = extruded;
+  let css_per_clip = tile.surface.xy * 0.5 / pixel_ratio;
+  let screen_dist = length((extruded.xy - base.xy) / extruded.w * css_per_clip);
+  let gamma_scale = select(1.0, length(dist) / screen_dist, screen_dist > 1.0e-6);
+  output.blur = gamma_scale / pixel_ratio;
+  output.normal = vec2<f32>(
+    f32((input.style_class >> 8u) & 1u),
+    f32((input.style_class >> 9u) & 1u) * 2.0 - 1.0,
+  );
+  output.outset = outset;
+  output.color = vec4<f32>(style.color.rgb * style.color.a, style.color.a);
+  output.tile_position = tile_position;
   return output;
 }
 
 @fragment
 fn fs_line(input: LineOutput) -> @location(0) vec4<f32> {
-  let coverage = clamp(input.half_width + 0.5 - abs(input.across), 0.0, 1.0);
-  return input.color * coverage;
+  if any(input.tile_position < vec2<f32>(0.0)) || any(input.tile_position >= vec2<f32>(1.0)) {
+    discard;
+  }
+  let dist = length(input.normal) * input.outset;
+  let alpha = clamp(min(dist + input.blur, input.outset - dist) / input.blur, 0.0, 1.0);
+  return input.color * alpha;
 }

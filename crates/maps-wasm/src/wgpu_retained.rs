@@ -156,14 +156,14 @@ impl FrameUniforms {
     }
 
     /// Writes this frame's uniforms and returns each drawable frame's dynamic offset.
-    /// `surface` is (surface width px, surface height px, pixel ratio, 0).
+    /// `surface` gives each frame its (surface width px, surface height px, pixel ratio, w).
     pub(crate) fn write<K>(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frames: impl IntoIterator<Item = (K, LocalFrame)>,
         view_projection: [f32; 16],
-        surface: [f32; 4],
+        surface: impl Fn(LocalFrame) -> [f32; 4],
     ) -> Vec<(K, u32)> {
         let offsets = pack_frame_uniforms(
             frames,

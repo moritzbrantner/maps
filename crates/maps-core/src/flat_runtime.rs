@@ -29,6 +29,9 @@ pub struct RasterSourceSpec {
     pub min_zoom: u8,
     pub max_zoom: u8,
     pub tile_size: u16,
+    /// A vector (MVT) pyramid: MapLibre covers it at the floored zoom, never magnifying a
+    /// tile's simplified geometry from the next zoom down (#325). Raster pyramids round.
+    pub vector: bool,
 }
 
 impl RasterSourceSpec {
@@ -42,6 +45,7 @@ impl RasterSourceSpec {
             min_zoom,
             max_zoom,
             tile_size,
+            vector: false,
         })
     }
 }
@@ -1247,8 +1251,10 @@ fn source_covering_zoom(
     }
 
     // Raster sources round the covering zoom as MapLibre does (`roundZoom`, JS `Math.round`,
-    // which rounds halves up), so a tile shows at 0.71x to 1.41x of its native size.
-    let covering_zoom = (camera_zoom + source_zoom_offset + 0.5).floor();
+    // which rounds halves up), so a tile shows at 0.71x to 1.41x of its native size. Vector
+    // sources floor it like MapLibre's vector tile sources (1x to 2x).
+    let rounding = if source.vector { 0.0 } else { 0.5 };
+    let covering_zoom = (camera_zoom + source_zoom_offset + rounding).floor();
     if !covering_zoom.is_finite() {
         return Err(FlatRasterRuntimeError::InvalidCamera);
     }
@@ -1892,6 +1898,29 @@ mod tests {
         let [x, y] = alignment(721.0, 481.0);
         assert!((x - 0.132_074).abs() < 1e-5, "{x}");
         assert!((y - -0.022_585).abs() < 1e-5, "{y}");
+    }
+
+    #[test]
+    fn vector_sources_floor_the_covering_zoom_like_maplibre() {
+        let camera = MapCamera::new(
+            0.0,
+            0.0,
+            7.6,
+            0.0,
+            0.0,
+            ViewportSize::new(256.0, 256.0).unwrap(),
+        )
+        .unwrap();
+        let zoom = |vector: bool| {
+            let source = RasterSourceSpec {
+                vector,
+                ..RasterSourceSpec::new(0, 14, 512).unwrap()
+            };
+            let mut runtime =
+                FlatRasterRuntime::new(camera, source, FlatRasterRuntimeLimits::default()).unwrap();
+            runtime.frame_plan().unwrap().placements[0].tile.z
+        };
+        assert_eq!((zoom(false), zoom(true)), (8, 7));
     }
 
     #[test]

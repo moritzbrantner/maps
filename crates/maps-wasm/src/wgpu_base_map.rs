@@ -29,8 +29,8 @@ use crate::retained_polygons::{
     RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonDraw, RetainedPolygons,
 };
 use crate::vector_basemap_layout::{
-    FILL_VERTEX_SIZE, LINE_QUAD_INDICES, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes,
-    fill_vertex_bytes, line_index_bytes, line_vertex_bytes, style_table_bytes,
+    FILL_VERTEX_SIZE, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes, fill_vertex_bytes,
+    line_index_bytes, line_vertex_bytes, style_table_bytes,
 };
 use crate::wgpu_retained::{
     FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
@@ -196,6 +196,8 @@ pub struct MapsWgpuBaseMapRenderer {
     retained_point_counters: RetainedPointCounters,
     retained_polygons: RetainedSet<u32, RetainedPolygonGroup>,
     retained_polygon_pipelines: PolygonPipelines,
+    /// Retained line strips: MapLibre line layers blend without a coverage stencil.
+    retained_line_pipeline: wgpu::RenderPipeline,
     retained_polygon_uniforms: FrameUniforms,
     retained_polygon_counters: RetainedPolygonCounters,
     vector_max_zoom: u8,
@@ -418,7 +420,7 @@ impl MapsWgpuBaseMapRenderer {
                 shader_location: 1,
             },
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Float32x3,
                 offset: 28,
                 shader_location: 2,
             },
@@ -675,9 +677,14 @@ impl MapsWgpuBaseMapRenderer {
         ];
         let vector_line_attributes = [
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
+                format: wgpu::VertexFormat::Float32x2,
                 offset: 0,
                 shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 8,
+                shader_location: 2,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Uint32,
@@ -889,6 +896,12 @@ impl MapsWgpuBaseMapRenderer {
                     cache: None,
                 })
             };
+        let retained_line_pipeline = retained_polygon_pipeline(
+            "Maps retained line strip pipeline",
+            true,
+            ignored_stencil(),
+            wgpu::ColorWrites::ALL,
+        );
         // The same stencil passes as screen polygons (#161), on the retained frame layout.
         let retained_polygon_pipelines = PolygonPipelines {
             fill_stencil: retained_polygon_pipeline(
@@ -982,6 +995,7 @@ impl MapsWgpuBaseMapRenderer {
             retained_point_counters: RetainedPointCounters::default(),
             retained_polygons: RetainedSet::new(),
             retained_polygon_pipelines,
+            retained_line_pipeline,
             retained_polygon_uniforms,
             retained_polygon_counters: RetainedPolygonCounters::default(),
             vector_max_zoom: DEFAULT_VECTOR_MAX_ZOOM,
@@ -1298,14 +1312,14 @@ impl MapsWgpuBaseMapRenderer {
 
     /// Last frame and retained-resource counters: raster tiles drawn, vector tiles
     /// drawn, draw calls, then retained vector tiles, features, fill triangles, line
-    /// segments and GPU bytes, then application GPU upload bytes of the last frame, then
+    /// triangles and GPU bytes, then application GPU upload bytes of the last frame, then
     /// retained points, cumulative retained point preparations, rebases and instance
     /// upload bytes, and the retained point frames (world copies) drawn last frame, then the
     /// same five for retained polygons: polygons, preparations, rebases, geometry upload
     /// bytes and frames.
     #[wasm_bindgen(js_name = frameStats)]
     pub fn frame_stats(&self) -> Vec<f64> {
-        let (mut features, mut triangles, mut segments) = (0_u64, 0_u64, 0_u64);
+        let (mut features, mut triangles, mut line_triangles) = (0_u64, 0_u64, 0_u64);
         for tile in std::iter::once(&self.vector_tiles)
             .chain(self.inactive_vector_tiles.values())
             .flat_map(|tiles| tiles.values())
@@ -1316,10 +1330,10 @@ impl MapsWgpuBaseMapRenderer {
                 .iter()
                 .map(|range| u64::from(range.len() as u32 / 3))
                 .sum::<u64>();
-            segments += tile
+            line_triangles += tile
                 .line_groups
                 .iter()
-                .map(|range| range.len() as u64)
+                .map(|range| range.len() as u64 / 3)
                 .sum::<u64>();
         }
         vec![
@@ -1332,7 +1346,7 @@ impl MapsWgpuBaseMapRenderer {
                 .sum::<usize>() as f64,
             features as f64,
             triangles as f64,
-            segments as f64,
+            line_triangles as f64,
             std::iter::once(&self.vector_tiles)
                 .chain(self.inactive_vector_tiles.values())
                 .map(|tiles| tiles.byte_size())
@@ -1640,12 +1654,15 @@ impl MapsWgpuBaseMapRenderer {
                 placement.local_size,
             ))
         });
-        let surface = [
-            self.config.width as f32,
-            self.config.height as f32,
-            clip.pixel_ratio as f32,
-            0.0,
-        ];
+        // Lines extrude on the map plane by CSS px: each tile carries its size in CSS px.
+        let surface = |frame: LocalFrame| {
+            [
+                self.config.width as f32,
+                self.config.height as f32,
+                clip.pixel_ratio as f32,
+                frame.size as f32,
+            ]
+        };
         let frames = vector_tile_placements(raster, self.vector_max_zoom)
             .into_iter()
             .filter_map(|placement| {
@@ -1743,12 +1760,15 @@ impl MapsWgpuBaseMapRenderer {
                 frames.extend(view.anchor_frames(anchor).map(|frame| (group_key, frame)));
             }
         }
-        let surface = [
-            self.config.width as f32,
-            self.config.height as f32,
-            clip.pixel_ratio as f32,
-            0.0,
-        ];
+        // Line strips extrude on the map plane: CSS px per anchor-offset (world) unit.
+        let surface = |frame: LocalFrame| {
+            [
+                self.config.width as f32,
+                self.config.height as f32,
+                clip.pixel_ratio as f32,
+                frame.size as f32,
+            ]
+        };
         self.retained_polygon_uniforms.write(
             &self.device,
             &self.queue,
@@ -1789,6 +1809,12 @@ impl MapsWgpuBaseMapRenderer {
                 if let (true, Some(stroke)) = (draw.stroke_count > 0, &group.stroke) {
                     let range = draw.stroke_first..draw.stroke_first + draw.stroke_count;
                     pass.set_vertex_buffer(0, stroke.slice(..));
+                    if draw.line {
+                        pass.set_pipeline(&self.retained_line_pipeline);
+                        pass.draw(range, 0..1);
+                        calls += 1;
+                        continue;
+                    }
                     pass.set_stencil_reference(POLYGON_STROKE_STENCIL_BIT);
                     pass.set_pipeline(&pipelines.stroke);
                     pass.draw(range.clone(), 0..1);
@@ -1847,7 +1873,7 @@ impl MapsWgpuBaseMapRenderer {
             &self.queue,
             frames,
             view_projection,
-            surface,
+            |_| surface,
         )
     }
 
@@ -1955,11 +1981,10 @@ impl MapsWgpuBaseMapRenderer {
                 if range.is_empty() {
                     continue;
                 }
-                let per_segment = LINE_QUAD_INDICES.len() as u32;
                 pass.set_bind_group(0, self.vector_frame_uniforms.bind_group(), &[*offset]);
                 pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(range.start * per_segment..range.end * per_segment, 0, 0..1);
+                pass.draw_indexed(range, 0, 0..1);
                 calls += 1;
             }
         }

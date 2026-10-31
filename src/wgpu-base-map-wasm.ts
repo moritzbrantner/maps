@@ -42,7 +42,7 @@ export type MapsWgpuFrameStats = {
   rasterTiles: number;
   retainedVectorBytes: number;
   retainedVectorFeatures: number;
-  retainedVectorLineSegments: number;
+  retainedVectorLineTriangles: number;
   retainedVectorTiles: number;
   retainedVectorTriangles: number;
   vectorTiles: number;
@@ -214,7 +214,7 @@ export async function loadMapsWgpuBaseMapRenderer(
           retainedVectorTiles: stats[3] ?? 0,
           retainedVectorFeatures: stats[4] ?? 0,
           retainedVectorTriangles: stats[5] ?? 0,
-          retainedVectorLineSegments: stats[6] ?? 0,
+          retainedVectorLineTriangles: stats[6] ?? 0,
           retainedVectorBytes: stats[7] ?? 0,
           applicationUploadBytes: stats[8] ?? 0,
           retainedPoints: stats[9] ?? 0,

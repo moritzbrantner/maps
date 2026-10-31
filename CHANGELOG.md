@@ -27,6 +27,13 @@
 
 ### Patch Changes
 
+- Lines on the Maps flat runtime now render like MapLibre's line layers. Vector
+  tile lines and GeoJSON lines use MapLibre's round-join tessellation, so
+  sharp corners no longer crack and translucent lines no longer darken at every
+  vertex. Lines thinner than a pixel fade by their coverage. Vector tile lines
+  are clipped to their tile, and vector tilesets load the floored zoom as
+  MapLibre's vector sources do. The `frameStats()` field
+  `retainedVectorLineSegments` is now `retainedVectorLineTriangles`.
 - Pitched cameras on the Maps flat runtime now match MapLibre. They use
   MapLibre's field of view (36.87° instead of 45°) and near/far planes, so
   overlays, picks and drag pans land where MapLibre puts them. Lines and polygon

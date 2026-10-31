@@ -163,7 +163,7 @@ beforeEach(() => {
       rasterTiles: 0,
       retainedVectorBytes: 0,
       retainedVectorFeatures: 0,
-      retainedVectorLineSegments: 0,
+      retainedVectorLineTriangles: 0,
       retainedVectorTiles: 0,
       retainedVectorTriangles: 0,
       applicationUploadBytes: 0,

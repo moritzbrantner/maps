@@ -176,9 +176,7 @@ export const scenarios: Scenario[] = [
     basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "Shortbread MVT fills and lines, class palette by feature kind (lake/glacier)",
-    knownGaps: [
-      { gate: "image", issue: 325, reason: "thin lines lack coverage fade; translucent lines darken at vertices" },
-    ],
+    knownGaps: [],
     name: "vector-tiles",
     origin: "Maps Tileset (#268); osmshrink#10 OSM preview (#232)",
     size: MAP_SIZE,
@@ -191,7 +189,13 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { center: [9.0, 47.4], zoom: 8 },
     capability: "GeoJSON lines: width, colour and opacity per feature, round caps and joins",
-    knownGaps: [{ gate: "image", issue: 326, reason: "round joins crack at sharp vertices" }],
+    knownGaps: [
+      {
+        gate: "image",
+        issue: 334,
+        reason: "MapLibre's GeoJSON source simplifies lines by 0.375 px (geojson-vt); Maps draws exact coordinates",
+      },
+    ],
     name: "line-styles",
     origin: "GeoJsonLayer getFeatureStyle lines; tlm-deutschland#235 venue routes (#232)",
     size: MAP_SIZE,
