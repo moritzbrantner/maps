@@ -86,6 +86,8 @@ export function GeoJsonLayer<
   const resolvedLayerId = layerId ?? `geojson-layer-${generatedLayerId}`;
   const surfaceRef = useRef(surface);
   const flatFeatureCacheRef = useRef<Map<string, FlatGeoJsonCacheEntry>>(new Map());
+  /** The feature whose hover this layer delivered; only its own `mouseout` clears the hover. */
+  const deliveredHoverKeyRef = useRef<string | null>(null);
   const deferredFeatureCollection = useDeferredValue(featureCollection);
   const features = useMemo(
     () => createGeoJsonLayerFeatures(deferredFeatureCollection),
@@ -171,7 +173,9 @@ export function GeoJsonLayer<
                 for (const geometryLayer of layers) {
                   if (interactionMode === "none" && featureInteractive) {
                     bindFlatLayerInteraction(geometryLayer, {
+                      deliveredHover: deliveredHoverKeyRef,
                       feature,
+                      featureKey,
                       getFeatureId,
                       getPosition: (event) => getFlatFeaturePosition(map, feature.geometry, event),
                       map,
@@ -498,7 +502,9 @@ function getFlatPolygonLayerStyle(
 function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
   layer: FlatGeometryLayer,
 	options: {
+	    deliveredHover: { current: string | null };
 	    feature: GeoJsonLayerFeature<TProperties>;
+	    featureKey: string;
 	    getFeatureId?: (feature: GeoJsonLayerFeature<TProperties>) => string;
 	    getPosition: (event: FlatFeaturePointerEvent) => { x: number; y: number };
 	    map: { getContainer: () => { style: { cursor: string } } };
@@ -543,6 +549,7 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
 	    });
   });
   layer.on("mouseover", (event: FlatFeaturePointerEvent = {}) => {
+	    options.deliveredHover.current = options.featureKey;
 	    options.map.getContainer().style.cursor = "pointer";
 	    options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
 	      getFeatureId: options.getFeatureId,
@@ -552,6 +559,7 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
 	    });
 	  });
 	  layer.on("mousemove", (event: FlatFeaturePointerEvent = {}) => {
+	    options.deliveredHover.current = options.featureKey;
 	    options.surface.handleFeatureHover(options.feature, options.getPosition(event), {
 	      getFeatureId: options.getFeatureId,
 	      onHoveredFeatureIdChange: options.onHoveredFeatureIdChange,
@@ -560,6 +568,10 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
 	    });
 	  });
   layer.on("mouseout", () => {
+	    // MapLibre fires each feature layer's events in listener order, so a late `mouseleave`
+	    // from the previous feature must not clear the next one's hover (#312).
+	    if (options.deliveredHover.current !== options.featureKey) return;
+	    options.deliveredHover.current = null;
 	    options.map.getContainer().style.cursor = "";
 	    options.surface.handleFeatureHover(null, null, {
 	      getFeatureId: options.getFeatureId,

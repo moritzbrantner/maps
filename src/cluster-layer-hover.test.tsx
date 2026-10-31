@@ -94,10 +94,9 @@ describe("ClusterLayer hover cleanup", () => {
     expect(harness.hoverCalls).toEqual([]);
   });
 
-  // #221: reconciliation can replace the hovered entry under the same key when its signature
-  // changes. The dropped layer owned the delivered hover and never fires its leave, so the hover
-  // must be cleared, or re-delivered for the live replacement, instead of staying stuck.
-  test("clears or re-delivers the hover when `selectedFeatureId` replaces the hovered entry", async () => {
+  // #312: selection restyles the hovered entry in place, so its MapLibre layer keeps the hover
+  // and still fires its own leave (a replaced layer never would).
+  test("keeps the hovered entry and its hover when `selectedFeatureId` selects it", async () => {
     setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
     const harness = createSurfaceHarness();
     const view = render(
@@ -119,9 +118,29 @@ describe("ClusterLayer hover cleanup", () => {
     );
     await act(async () => {});
 
-    // Precondition: the hovered entry really was replaced (a new MapLibre layer was drawn).
-    expect([...harness.map.layers.keys()].some((id) => !layersBefore.has(id))).toBe(true);
-    expectHoverClearedOrRedelivered(harness, { callsBefore: 1, id: "a", longitude: 0 });
+    expect(new Set(harness.map.layers.keys())).toEqual(layersBefore);
+    expect(harness.hoverCalls).toEqual(["a"]);
+    act(() => harness.map.fireOnPointLayer(0, "mouseleave"));
+    expect(harness.hoverCalls).toEqual(["a", null]);
+    expect(harness.map.container.style.cursor).toBe("");
+  });
+
+  // A later marker's `mouseenter` can fire before the previous marker's `mouseleave`.
+  test("a late leave from the previous marker keeps the next marker's hover", async () => {
+    setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests());
+    const harness = createSurfaceHarness();
+    render(
+      <MapSurfaceContext.Provider value={harness.surface}>
+        <ClusterLayer points={POINTS} />
+      </MapSurfaceContext.Provider>,
+    );
+    await act(async () => {});
+
+    act(() => harness.map.fireOnPointLayer(0, "mouseenter"));
+    act(() => harness.map.fireOnPointLayer(POINTS[1]!.longitude, "mouseenter"));
+    act(() => harness.map.fireOnPointLayer(0, "mouseleave"));
+    expect(harness.hoverCalls).toEqual(["a", POINTS[1]!.id]);
+    expect(harness.map.container.style.cursor).toBe("pointer");
   });
 
   test("clears or re-delivers the hover when a cluster's count replaces the hovered entry", async () => {

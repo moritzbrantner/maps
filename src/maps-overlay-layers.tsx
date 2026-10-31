@@ -31,7 +31,7 @@ import {
   createCanvasMapSceneProjector,
   drawCanvasMapLabels,
   drawCanvasMapPrimitive,
-  hitTestCanvasMapScene,
+  hitTestCanvasMapSceneAll,
   type CanvasMapScene,
   type MapScreenPoint,
 } from "./canvas-map-renderer";
@@ -160,6 +160,8 @@ type MapsOverlayInteraction = {
   featureId: string;
   hover(position: MapScreenPoint): void;
   key: string;
+  /** The `MapView` child layer that owns the feature: picking is per layer, as in MapLibre. */
+  layer: string;
 };
 
 type MapsOverlayRenderStep =
@@ -295,8 +297,8 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const retainedLabelProjectorRef = useRef(createCanvasMapSceneProjector());
     /** Labeled circles projected by retained label passes, for transport evidence. */
     const retainedLabelProjectionsRef = useRef(0);
-    const lastHoveredInteractionRef = useRef<MapsOverlayInteraction | null>(null);
-    const lastHoveredKeyRef = useRef<string | null>(null);
+    /** The hovered feature of each layer, as MapLibre tracks `mouseenter`/`mouseleave` per layer. */
+    const hoveredByLayerRef = useRef(new Map<string, MapsOverlayInteraction>());
     const clusterRuntimesRef = useRef<Map<string, MapsClusterRuntime>>(new Map());
     const geoJsonRuntimesRef = useRef<Map<string, MapsGeoJsonRuntime>>(new Map());
     const heatDescriptorsRef = useRef<Map<string, MapsHeatLayerDescriptor>>(new Map());
@@ -508,10 +510,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
 
     const clearHover = () => {
-      const interaction = lastHoveredInteractionRef.current;
-      if (interaction) interaction.clearHover();
-      lastHoveredInteractionRef.current = null;
-      lastHoveredKeyRef.current = null;
+      const hovered = [...hoveredByLayerRef.current.values()];
+      hoveredByLayerRef.current.clear();
+      for (const interaction of hovered) interaction.clearHover();
     };
 
     /**
@@ -525,13 +526,18 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       position: { x: number; y: number },
     ) => {
       const location = unproject(position.x, position.y);
-      if (!location) return null;
+      if (!location) return [];
       const nearest = project(location);
-      if (!nearest || Math.hypot(nearest.x - position.x, nearest.y - position.y) < 0.5) return null;
-      return hitTestCanvasMapScene(scene, nearest);
+      if (!nearest || Math.hypot(nearest.x - position.x, nearest.y - position.y) < 0.5) return [];
+      return hitTestCanvasMapSceneAll(scene, nearest);
     };
 
-    const pickInternal = (clientX: number, clientY: number): InternalPick | null => {
+    /**
+     * MapLibre's layer-scoped pointer events: every layer with a feature under the pointer
+     * gets one pick (its topmost feature). Ordered bottom to top, so the topmost layer's
+     * hover, popup and tooltip land last.
+     */
+    const pickLayers = (clientX: number, clientY: number): InternalPick[] => {
       const canvas = canvasRef.current;
       const renderedSnapshot = renderedSnapshotRef.current;
       const retainedSize = retainedSizeRef.current;
@@ -550,7 +556,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         sceneRevisionRef.current = projectionRevisionRef.current;
       }
       const scene = sceneRef.current;
-      if (!canvas || !scene || !renderedSnapshot) return null;
+      if (!canvas || !scene || !renderedSnapshot) return [];
 
       const matrix = motionMatrixRef.current;
       const position = matrix
@@ -558,25 +564,24 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         : getClientCanvasPosition(canvas, clientX, clientY);
       // While a motion transform presents the retained scene, hit-test in its coordinates.
       const scenePosition = matrix ? invertOverlayMotionPoint(matrix, position) : position;
-      if (!scenePosition) return null;
-      const hit =
-        hitTestCanvasMapScene(scene, scenePosition) ??
-        (retainedModeRef.current && retainedSizeRef.current
-          ? hitTestRetainedWorldCopies(scene, scenePosition)
-          : null);
-      if (!hit) return null;
-      const primitive = hit.renderPrimitive;
-      const interaction = renderedSnapshot.interactions.get(primitive.primitiveId);
-      if (!interaction) return null;
+      if (!scenePosition) return [];
+      let hits = hitTestCanvasMapSceneAll(scene, scenePosition);
+      if (hits.length === 0 && retainedModeRef.current && retainedSizeRef.current) {
+        hits = hitTestRetainedWorldCopies(scene, scenePosition);
+      }
 
-      return {
-        interaction,
-        pick: {
-          featureId: primitive.featureId,
-          primitiveId: primitive.primitiveId,
-        },
-        position,
-      };
+      const picks = new Map<string, InternalPick>();
+      for (const hit of hits) {
+        const primitive = hit.renderPrimitive;
+        const interaction = renderedSnapshot.interactions.get(primitive.primitiveId);
+        if (!interaction || picks.has(interaction.layer)) continue;
+        picks.set(interaction.layer, {
+          interaction,
+          pick: { featureId: primitive.featureId, primitiveId: primitive.primitiveId },
+          position,
+        });
+      }
+      return [...picks.values()].reverse();
     };
 
     useImperativeHandle(
@@ -603,36 +608,33 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         },
         clearHover,
         handleClickAtClientPoint(clientX, clientY) {
-          const hit = pickInternal(clientX, clientY);
-          if (!hit) return false;
-          hit.interaction.click(hit.position);
-          return true;
+          const picks = pickLayers(clientX, clientY);
+          for (const hit of picks) hit.interaction.click(hit.position);
+          return picks.length > 0;
         },
         handleContextMenuAtClientPoint(clientX, clientY) {
-          const hit = pickInternal(clientX, clientY);
-          if (!hit) return false;
-          hit.interaction.contextMenu(hit.position);
-          return true;
+          const picks = pickLayers(clientX, clientY);
+          for (const hit of picks) hit.interaction.contextMenu(hit.position);
+          return picks.length > 0;
         },
         handleHoverAtClientPoint(clientX, clientY) {
-          const hit = pickInternal(clientX, clientY);
-          if (!hit) {
-            clearHover();
-            return null;
+          const picks = pickLayers(clientX, clientY);
+          const hovered = hoveredByLayerRef.current;
+          const next = new Map(picks.map((hit) => [hit.interaction.layer, hit.interaction]));
+          // Leaves first, then enters/moves bottom to top: the topmost hover is applied last.
+          for (const [layer, interaction] of hovered) {
+            if (next.get(layer)?.key === interaction.key) continue;
+            hovered.delete(layer);
+            interaction.clearHover();
           }
-
-          const previousKey = lastHoveredKeyRef.current;
-          if (previousKey && previousKey !== hit.interaction.key) {
-            lastHoveredInteractionRef.current?.clearHover();
+          for (const hit of picks) {
+            hovered.set(hit.interaction.layer, hit.interaction);
+            hit.interaction.hover(hit.position);
           }
-
-          lastHoveredKeyRef.current = hit.interaction.key;
-          lastHoveredInteractionRef.current = hit.interaction;
-          hit.interaction.hover(hit.position);
-          return hit.pick;
+          return picks.at(-1)?.pick ?? null;
         },
         pickAtClientPoint(clientX, clientY) {
-          return pickInternal(clientX, clientY)?.pick ?? null;
+          return pickLayers(clientX, clientY).at(-1)?.pick ?? null;
         },
       }),
       [],
@@ -858,11 +860,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     }, []);
 
     useEffect(() => {
+      const hoveredByLayer = hoveredByLayerRef.current;
       return () => {
-        const interaction = lastHoveredInteractionRef.current;
-        lastHoveredInteractionRef.current = null;
-        lastHoveredKeyRef.current = null;
-        interaction?.clearHover();
+        const hovered = [...hoveredByLayer.values()];
+        hoveredByLayer.clear();
+        for (const interaction of hovered) interaction.clearHover();
       };
     }, []);
 
@@ -1062,7 +1064,7 @@ function createOverlaySnapshot(
             resolveFeatureId,
           );
           const interaction = createFeatureInteraction(
-            `${entry.runtimeKey}|${primitive.featureId}`,
+            entry.runtimeKey,
             feature,
             primitive.featureId,
             feature.geometry.coordinates,
@@ -1107,7 +1109,7 @@ function appendPointLayer(
     const hovered = surface.isFeatureHovered(feature, props.hoveredFeatureId, resolveFeatureId);
     const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, resolveFeatureId);
     const interaction = createFeatureInteraction(
-      `${prefix}|${primitive.featureId}`,
+      prefix,
       feature,
       primitive.featureId,
       feature.coordinates,
@@ -1136,7 +1138,7 @@ function appendGeoJsonLayer(
     const selected = surface.isFeatureSelected(feature, props.selectedFeatureId, resolveFeatureId);
     const interaction = primitive.interactive
       ? createFeatureInteraction(
-          `${prefix}|${primitive.featureId}`,
+          prefix,
           feature,
           primitive.featureId,
           resolveGeoJsonLayerAnchor(runtime, feature),
@@ -1270,7 +1272,7 @@ function appendClusterLayer(
       props.getFeatureId,
     );
     const interaction = createClusterFeatureInteraction(
-      `${prefix}|${primitive.featureId}`,
+      prefix,
       feature,
       primitive.featureId,
       props,
@@ -1306,7 +1308,7 @@ function appendFlowLayer(
           ? (props.inactiveFlowOpacity ?? 0.22)
           : 0.72;
     const interaction = createFeatureInteraction(
-      `${prefix}|${featureId}`,
+      prefix,
       feature,
       featureId,
       entry.center,
@@ -1340,7 +1342,7 @@ function appendPrimitive<TFeature>(
 }
 
 function createFeatureInteraction<TFeature>(
-  key: string,
+  layer: string,
   feature: TFeature,
   featureId: string,
   coordinates: [longitude: number, latitude: number],
@@ -1386,12 +1388,13 @@ function createFeatureInteraction<TFeature>(
         renderFeatureTooltip: options.renderFeatureTooltip,
       });
     },
-    key,
+    key: `${layer}|${featureId}`,
+    layer,
   };
 }
 
 function createClusterFeatureInteraction(
-  key: string,
+  layer: string,
   feature: AggregatedMapFeature<AnyRecord>,
   rendererFeatureId: string,
   options: ClusterLayerProps<AnyRecord>,
@@ -1432,7 +1435,8 @@ function createClusterFeatureInteraction(
     hover(position) {
       surface.handleFeatureHover(feature, position, interactionOptions);
     },
-    key,
+    key: `${layer}|${rendererFeatureId}`,
+    layer,
   };
 }
 

@@ -267,27 +267,39 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
             const signature = createFlatClusterSignature({
               isMeasuring,
               renderFeature,
-              selected,
             });
-            const getClassName = (featureHovered: boolean) =>
+            const getClassName = (featureHovered: boolean, featureSelected = selected) =>
               joinClassNames(
                 renderFeature.kind === "cluster"
                   ? "mb-maps__cluster-marker"
                   : "mb-maps__point-marker",
                 featureHovered && "mb-maps__feature--hovered",
-                selected && "mb-maps__feature--selected",
+                featureSelected && "mb-maps__feature--selected",
               );
-            const createHover = (marker: FlatLayer): FlatLayerEntryHover<boolean> => ({
-              apply: (featureHovered) => {
+            // Hover and selection restyle the marker in place: a replaced MapLibre layer never
+            // fires `mouseleave`, so replacing it on selection would drop the hover (#312).
+            const createEntry = (marker: FlatLayer, layers: FlatLayer[]) => {
+              const restyle = (featureHovered: boolean, featureSelected: boolean) => {
                 marker.setStyle?.({
-                  className: getClassName(featureHovered),
+                  className: getClassName(featureHovered, featureSelected),
                   // The Maps runtime's hover delta, as real MapLibre paint.
-                  weight: selected || featureHovered ? 3 : 2,
+                  weight: featureSelected || featureHovered ? 3 : 2,
                 });
-              },
-              feature,
-              state: hovered,
-            });
+              };
+              const entry: FlatClusterCacheEntry = {
+                coordinatesKey,
+                hover: {
+                  apply: (featureHovered) => restyle(featureHovered, entry.selected),
+                  feature,
+                  state: hovered,
+                },
+                layers,
+                restyle,
+                selected,
+                signature,
+              };
+              return entry;
+            };
 
             return {
               hoverState: hovered,
@@ -363,9 +375,10 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                       },
                     );
                     marker.on("mouseout", () => {
-                      if (deliveredHoverKeyRef.current === renderFeature.id) {
-                        deliveredHoverKeyRef.current = null;
-                      }
+                      // MapLibre fires each marker layer's events in listener order, so a late
+                      // `mouseleave` from the previous marker must not clear the next one.
+                      if (deliveredHoverKeyRef.current !== renderFeature.id) return;
+                      deliveredHoverKeyRef.current = null;
                       map.getContainer().style.cursor = "";
                       currentSurface.handleFeatureHover(null, null, {
                         getFeatureId,
@@ -389,12 +402,7 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                     })
                     .addTo(layer);
 
-                  return {
-                    coordinatesKey,
-                    hover: createHover(marker),
-                    layers: [marker, countMarker],
-                    signature,
-                  };
+                  return createEntry(marker, [marker, countMarker]);
                 }
 
                 const marker = flat.circleMarker(toLatLng(renderFeature.coordinates), {
@@ -458,9 +466,9 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                     },
                   );
                   marker.on("mouseout", () => {
-                    if (deliveredHoverKeyRef.current === renderFeature.id) {
-                      deliveredHoverKeyRef.current = null;
-                    }
+                    // A late `mouseleave` from the previous marker must not clear the next one.
+                    if (deliveredHoverKeyRef.current !== renderFeature.id) return;
+                    deliveredHoverKeyRef.current = null;
                     map.getContainer().style.cursor = "";
                     currentSurface.handleFeatureHover(null, null, {
                       getFeatureId,
@@ -472,15 +480,15 @@ export function ClusterLayer<TProperties = Record<string, unknown>>({
                 }
 
                 marker.addTo(layer);
-                return {
-                  coordinatesKey,
-                  hover: createHover(marker),
-                  layers: [marker],
-                  signature,
-                };
+                return createEntry(marker, [marker]);
               },
               signature,
               update: (entry) => {
+                if (entry.selected !== selected) {
+                  entry.selected = selected;
+                  entry.restyle(entry.hover.state, selected);
+                }
+
                 if (entry.coordinatesKey === coordinatesKey) {
                   return true;
                 }
@@ -558,11 +566,9 @@ function createFlatClusterCoordinatesKey(coordinates: [longitude: number, latitu
 function createFlatClusterSignature<TProperties>({
   isMeasuring,
   renderFeature,
-  selected,
 }: {
   isMeasuring: boolean;
   renderFeature: MapPointClusterRenderFeature<TProperties>;
-  selected: boolean;
 }) {
   return JSON.stringify({
     fillColor: renderFeature.fillColor,
@@ -570,7 +576,6 @@ function createFlatClusterSignature<TProperties>({
     kind: renderFeature.kind,
     label: renderFeature.label ?? renderFeature.id,
     radius: renderFeature.radius,
-    selected,
   });
 }
 
@@ -578,6 +583,8 @@ type FlatClusterCacheEntry = {
   coordinatesKey: string;
   hover: FlatLayerEntryHover<boolean>;
   layers: FlatLayer[];
+  restyle: (hovered: boolean, selected: boolean) => void;
+  selected: boolean;
   signature: string;
 };
 

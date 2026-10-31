@@ -61,17 +61,12 @@ const MAP_SIZE = { height: 480, width: 720 };
 
 // Known gaps measured when the gate landed (2026-10-31). Each blocks its gate's removal.
 const LABELS: KnownGap = { gate: "image", issue: 310, reason: "label glyphs and placement" };
-const PICKING: KnownGap = {
-  gate: "interaction",
-  issue: 312,
-  reason: "stacked-layer hover/select, hover clear and cluster hover ids differ",
-};
 
 export const scenarios: Scenario[] = [
   {
     camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
     capability: "single source point: hover, select, clear, pan, wheel zoom",
-    knownGaps: [PICKING],
+    knownGaps: [],
     name: "source-location",
     origin: "historical-source-atlas#63 source-location map (#232)",
     size: MAP_SIZE,
@@ -87,7 +82,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.4, 51.2], zoom: 5.55 },
     capability: "territory polygons, clustered sites and seat points: select and hover",
-    knownGaps: [PICKING],
+    knownGaps: [],
     name: "church-site-discovery",
     origin: "church-atlas#8 site discovery (#232)",
     size: MAP_SIZE,
@@ -136,7 +131,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.4 },
     capability: "density clusters: placement, counts, cluster and point picking",
-    knownGaps: [PICKING],
+    knownGaps: [],
     name: "clusters",
     origin: "demo/RendererComparison cluster journey",
     size: MAP_SIZE,
