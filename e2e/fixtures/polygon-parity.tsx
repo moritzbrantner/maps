@@ -166,7 +166,9 @@ const cases = {
     { ...opaque("#0d9488", 3), polygonFillOpacity: 0.8 },
   ),
   // Opt-in line cases (#195), in the top row: sharp round joins, round caps and a
-  // translucent line that crosses itself, which must blend once where it overlaps.
+  // translucent zigzag, which must blend once at its joins. Its turns stay under 120
+  // degrees: sharper joins and self-crossings blend twice, as in MapLibre's line mesh
+  // (#325), where Canvas strokes them once.
   "line-joins": feature(
     "line-joins",
     {
@@ -186,10 +188,9 @@ const cases = {
     {
       coordinates: [
         [1, 3],
-        [9, 9],
-        [9, 3],
-        [1, 9],
-        [3, 2],
+        [4, 7],
+        [7, 3],
+        [10, 7],
       ],
       type: "LineString",
     },
