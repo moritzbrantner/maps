@@ -1,3 +1,9 @@
+import { fetchMapsTilesetTile } from "./maps-tileset-transport";
+import { type MapsTileset } from "./maps-tileset";
+import { tilesetStyleTable, type MapsVectorBasemapStyle } from "./maps-tileset-style";
+import { decodeShortbreadTilePixels } from "./vector-tile-wasm";
+import { paintShortbreadTile } from "./shortbread-tile-paint";
+import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
 import {
   advanceMapsKineticPan,
@@ -136,6 +142,18 @@ export type MapsRendererStats = Partial<MapsWgpuFrameStats> & {
   renders: number;
   /** Camera frames presented by translating the retained render instead. */
   translatedFrames: number;
+  tileset?: {
+    descriptor: MapsTileset;
+    requests: number;
+    decodes: number;
+    bucketBuilds: number;
+    cacheReuses: number;
+    retainedTiles: number;
+    retainedBytes: number;
+    switchMs: number | null;
+    state: string;
+    error: string | null;
+  };
 };
 
 export type MapsCanvasFlatRuntimeController = {
@@ -186,6 +204,9 @@ export type MapsTileImageLoader = {
 export type MapsBrowserRuntimeOptions = {
   /** Source, bounds and WASM identity are fixed for this host lifetime. */
   mapStyle: RasterMapStyle;
+  tileset?: MapsTileset;
+  tilesetStyle?: MapsVectorBasemapStyle;
+  tileLimits?: MapsFlatRasterRuntimeConfig["limits"];
   createTileImageLoader?: () => MapsTileImageLoader;
   maxBounds?: MapBounds;
   maxZoom?: number;
@@ -233,7 +254,7 @@ export function createMapsBrowserRuntime(
 ) {
   let config = { ...options, viewState: copyViewState(options.viewState) };
   const identity = runtimeIdentity(config);
-  const source = resolveTileLayerOptions(config.mapStyle);
+  let source = runtimeTileSource(config);
   const tileImageLoader = options.createTileImageLoader?.();
   const maxBounds = config.maxBounds ? ([...config.maxBounds] as MapBounds) : undefined;
   const wasmPackage = config.wasmPackage;
@@ -246,6 +267,7 @@ export function createMapsBrowserRuntime(
   let activeRenderer: MapsWgpuBaseMapRenderer | null = null;
   let activeController: MapsCanvasFlatRuntimeController | null = null;
   let synchronize: (() => MapsFlatRasterFrame) | null = null;
+  let updateTileset: (() => void) | null = null;
   let emitViewState:
     | ((frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => void)
     | null = null;
@@ -465,7 +487,7 @@ export function createMapsBrowserRuntime(
         maxBounds,
         pitch: config.viewState.pitch ?? 0,
         renderMargin,
-        limits: tileImageLoader?.limits,
+        limits: config.tileLimits ?? tileImageLoader?.limits,
         source: {
           maxZoom: Math.round(currentSource?.options.maxZoom ?? DEFAULT_SOURCE_MAX_ZOOM),
           minZoom: Math.round(currentSource?.options.minZoom ?? 0),
@@ -550,6 +572,9 @@ export function createMapsBrowserRuntime(
       runtime,
       setSurfaceTranslation,
       source: () => source,
+      tileset: () => config.tileset,
+      tilesetStyle: () => config.tilesetStyle,
+      wasmPackage,
       onError: (error) => config.onError?.(error),
       onRendererFailure: activateCanvasFallback,
       onCameraFrame: () => config.onCameraFrame?.(),
@@ -571,6 +596,7 @@ export function createMapsBrowserRuntime(
     };
 
     synchronize = syncFrame;
+    updateTileset = frameSynchronizer.updateTileset;
     emitViewState = notifyViewState;
 
     const retainedVectorBasemap: MapsRetainedVectorBasemap = {
@@ -878,7 +904,15 @@ export function createMapsBrowserRuntime(
       );
     }
     const previous = config.viewState;
+    const previousTileset = config.tileset;
+    const previousStyle = config.tilesetStyle;
     config = { ...next, viewState: copyViewState(next.viewState) };
+    source = runtimeTileSource(config);
+    if (
+      config.tileset &&
+      (previousTileset !== config.tileset || previousStyle !== config.tilesetStyle)
+    )
+      updateTileset?.();
     if (
       !activeController ||
       !activeRuntime ||
@@ -961,14 +995,30 @@ function copyViewState(state: MapViewState): MapViewState {
 export function runtimeIdentity(options: MapsBrowserRuntimeOptions) {
   const source = resolveTileLayerOptions(options.mapStyle);
   return JSON.stringify([
-    source?.url,
-    source?.options.minZoom,
-    source?.options.maxZoom,
-    source?.options.tileSize,
+    options.tileset ? "maps-tileset" : source?.url,
+    options.tileset ? null : source?.options.minZoom,
+    options.tileset ? null : source?.options.maxZoom,
+    options.tileset ? null : source?.options.tileSize,
+    options.tileLimits,
     options.maxBounds,
     options.wasmPackage,
     normalizeRenderMargin(options.renderMargin),
   ]);
+}
+
+function runtimeTileSource(options: MapsBrowserRuntimeOptions) {
+  const tileset = options.tileset;
+  return tileset
+    ? {
+        url: tileset.transport.urlTemplate,
+        options: {
+          minZoom: tileset.minZoom,
+          maxZoom: tileset.maxZoom,
+          tileSize: tileset.tileSize,
+          attribution: tileset.attribution,
+        },
+      }
+    : resolveTileLayerOptions(options.mapStyle);
 }
 
 function normalizeRenderMargin(margin: number | undefined) {
@@ -1030,6 +1080,9 @@ function createFrameSynchronizer({
   runtime,
   setSurfaceTranslation,
   source,
+  tileset,
+  tilesetStyle,
+  wasmPackage,
   onError,
   onRendererFailure,
   onCameraFrame,
@@ -1045,11 +1098,117 @@ function createFrameSynchronizer({
   renderMargin: number;
   runtime: MapsFlatRasterRuntime;
   setSurfaceTranslation: (x: number, y: number) => void;
-  source: () => ReturnType<typeof resolveTileLayerOptions>;
+  source: () => ReturnType<typeof runtimeTileSource>;
+  tileset: () => MapsTileset | undefined;
+  tilesetStyle: () => MapsVectorBasemapStyle | undefined;
+  wasmPackage?: string;
   onError: (error: unknown) => void;
   onRendererFailure: () => void;
   onCameraFrame: () => void;
 }) {
+  type VectorResource = { bytes: Uint8Array; pixels: ShortbreadTilePixels; tile: MapsRasterTileId };
+  const vectors = new Map<string, VectorResource>();
+  const sourceFailures = new Map<string, string>();
+  const inactive = new Map<string, Map<string, { vector: VectorResource; image: ImageBitmap }>>();
+  let activeDescriptor = tileset();
+  let sourceIdentity = activeDescriptor ? runtime.activateTileset(activeDescriptor) : "";
+  let styleKey = JSON.stringify(tilesetStyle());
+  let sourceSwitchStarted = performance.now();
+  let sourceSwitchMs: number | null = null;
+  let requests = 0;
+  let decodes = 0;
+  let bucketBuilds = 0;
+  let cacheReuses = 0;
+  function configureVectorRenderer() {
+    const current = renderer();
+    if (!current || !tileset()) return;
+    current.setVectorSource(sourceIdentity);
+    current.setVectorMaxZoom(tileset()!.maxZoom);
+    current.setVectorStyle(tilesetStyleTable(tilesetStyle()));
+  }
+  configureVectorRenderer();
+
+  function publishSourceStats() {
+    if (!tileset()) return;
+    canvas.dataset.mapSourceId = tileset()!.sourceId;
+    canvas.dataset.mapSourceRevision = tileset()!.dataRevision;
+    canvas.dataset.mapSourceIdentity = sourceIdentity;
+    canvas.dataset.mapSourceRequests = String(requests);
+    canvas.dataset.mapSourceDecodes = String(decodes);
+    canvas.dataset.mapSourceBucketBuilds = String(bucketBuilds);
+    canvas.dataset.mapSourceCacheReuses = String(cacheReuses);
+    canvas.dataset.mapSourceRetainedTiles = String(
+      images.size + [...inactive.values()].reduce((sum, entries) => sum + entries.size, 0),
+    );
+    canvas.dataset.mapSourceState = canvas.dataset.mapBaseTileError
+      ? "error"
+      : loads.size
+        ? "loading"
+        : "ready";
+    if (loads.size === 0 && sourceFailures.size === 0 && sourceSwitchMs === null)
+      sourceSwitchMs = performance.now() - sourceSwitchStarted;
+    if (sourceSwitchMs !== null) canvas.dataset.mapSourceSwitchMs = String(sourceSwitchMs);
+  }
+
+  function updateTileset() {
+    const descriptor = tileset();
+    if (!descriptor) return;
+    // Transport equality only controls browser I/O lifetime. Rust still supplies
+    // the resource namespace and clears its pending/failed state on a refresh.
+    const transportChanged =
+      JSON.stringify(activeDescriptor?.transport) !== JSON.stringify(descriptor.transport);
+    const nextIdentity =
+      descriptor === activeDescriptor ? sourceIdentity : runtime.activateTileset(descriptor);
+    activeDescriptor = descriptor;
+    const changed = sourceIdentity !== nextIdentity;
+    if (changed || transportChanged) {
+      // Rust validates before any in-flight browser work is cancelled.
+      for (const load of loads.values()) {
+        load.abort.abort();
+      }
+      loads.clear();
+      sourceFailures.clear();
+      delete canvas.dataset.mapBaseTileError;
+      sourceSwitchStarted = performance.now();
+      sourceSwitchMs = null;
+    }
+    if (changed) {
+      const retained = new Map<string, { vector: VectorResource; image: ImageBitmap }>();
+      for (const [key, image] of images) {
+        const vector = vectors.get(key);
+        if (vector) retained.set(key, { vector, image });
+        else image.close();
+      }
+      if (retained.size) inactive.set(sourceIdentity, retained);
+      images.clear();
+      vectors.clear();
+      sourceIdentity = nextIdentity;
+      const restored = inactive.get(sourceIdentity);
+      inactive.delete(sourceIdentity);
+      configureVectorRenderer();
+      for (const [key, resource] of restored ?? []) {
+        images.set(key, resource.image);
+        vectors.set(key, resource.vector);
+        cacheReuses++;
+      }
+    }
+    const nextStyleKey = JSON.stringify(tilesetStyle());
+    const styleChanged = styleKey !== nextStyleKey;
+    if (changed || styleChanged) {
+      styleKey = nextStyleKey;
+      configureVectorRenderer();
+      for (const [key, vector] of vectors) {
+        images.get(key)?.close();
+        images.set(key, paintShortbreadTile(vector.pixels, tilesetStyle()));
+      }
+      invalidateRendered();
+    }
+    if (changed || transportChanged || styleChanged) {
+      syncFrame();
+    }
+    publishSourceStats();
+  }
+
   let disposed = false;
   const tileLoadedAt = new Map<string, number>();
   let rendererRetryFrame: number | null = null;
@@ -1344,7 +1503,7 @@ function createFrameSynchronizer({
         const hasDecodedVisibleTile = frame.placements.some((placement) =>
           images.has(placement.tile.key),
         );
-        if (drawnTiles === 0 && hasDecodedVisibleTile) {
+        if (drawnTiles === 0 && hasDecodedVisibleTile && !tileset()) {
           retainRenderedFrame(null);
           scheduleRendererRetry();
           return;
@@ -1583,8 +1742,20 @@ function createFrameSynchronizer({
       }
       images.get(tile.key)?.close();
       images.delete(tile.key);
+      vectors.delete(tile.key);
+      renderer()?.evictVectorTile(tile);
     }
 
+    if (tileset()) {
+      for (const [identity, z, x, y] of runtime.takeSourceEvictions()) {
+        const entries = inactive.get(identity);
+        const key = `${z}/${x}/${y}`;
+        renderer()?.evictVectorSourceTile(identity, { key, z, x, y });
+        entries?.get(key)?.image.close();
+        entries?.delete(key);
+        if (entries?.size === 0) inactive.delete(identity);
+      }
+    }
     const currentSource = source();
     if (!currentSource) {
       while (frame.requests.length > 0) {
@@ -1604,7 +1775,27 @@ function createFrameSynchronizer({
       const load = { abort, tile };
       loads.set(tile.key, load);
 
-      loadTile(buildRasterTileUrl(currentSource.url, tile), tile, abort.signal)
+      const requestedIdentity = sourceIdentity;
+      const descriptor = tileset();
+      const loadImage = descriptor
+        ? (async () => {
+            requests++;
+            const bytes = await fetchMapsTilesetTile(descriptor, tile, abort.signal);
+            const pixels = await decodeShortbreadTilePixels(bytes, wasmPackage);
+            abort.signal.throwIfAborted();
+            if (disposed || loads.get(tile.key) !== load || requestedIdentity !== sourceIdentity)
+              throw new DOMException("Stale source tile", "AbortError");
+            decodes++;
+            vectors.set(tile.key, { bytes, pixels, tile });
+            if (renderer()) {
+              renderer()!.uploadVectorTile(tile, bytes);
+              bucketBuilds++;
+              decodes++;
+            }
+            return paintShortbreadTile(pixels, tilesetStyle());
+          })()
+        : loadTile(buildRasterTileUrl(currentSource.url, tile), tile, abort.signal);
+      loadImage
         .then(
           (image) => {
             // A cancelled fetch/decode may finish after this tile has been
@@ -1617,16 +1808,18 @@ function createFrameSynchronizer({
 
             images.set(tile.key, image);
             tileLoadedAt.set(tile.key, performance.now());
-            delete canvas.dataset.mapBaseTileError;
+            sourceFailures.delete(tile.key);
+            if (sourceFailures.size === 0) delete canvas.dataset.mapBaseTileError;
             const currentRenderer = renderer();
-            if (currentRenderer) {
+            if (currentRenderer && !descriptor) {
               try {
                 currentRenderer.uploadTile(tile, image);
               } catch {
                 failRenderer();
               }
             }
-            runtime.markLoaded(tile);
+            if (descriptor) runtime.markSourceLoaded(requestedIdentity, tile);
+            else runtime.markLoaded(tile);
             invalidateRendered(tile.key);
             syncFrame();
           },
@@ -1634,8 +1827,11 @@ function createFrameSynchronizer({
             if (disposed || abort.signal.aborted || loads.get(tile.key) !== load) return;
             loads.delete(tile.key);
             runtime.markFailed(tile);
+            vectors.delete(tile.key);
+            renderer()?.evictVectorTile(tile);
             canvas.dataset.mapBaseTileError =
               error instanceof Error ? error.message : String(error);
+            if (descriptor) sourceFailures.set(tile.key, canvas.dataset.mapBaseTileError);
             invalidateRendered(tile.key);
             syncFrame();
             throw error;
@@ -1647,16 +1843,22 @@ function createFrameSynchronizer({
     }
 
     publishPendingTiles();
+    publishSourceStats();
     return frame;
   }
 
   return {
+    updateTileset,
     /** The canvases lost their pixels (backing-store reset); the next frame renders. */
     invalidatePixels() {
       invalidateRendered();
     },
     dispose() {
       disposed = true;
+      for (const entries of inactive.values())
+        for (const resource of entries.values()) resource.image.close();
+      inactive.clear();
+      vectors.clear();
       fallbackCanvas.removeEventListener("contextrestored", restoreCanvasFrame);
       cancelSettle();
       cancelRendererRetry();
@@ -1667,7 +1869,36 @@ function createFrameSynchronizer({
       applicationFrame = null;
     },
     getStats() {
-      return { ...stats, ...frameStats };
+      const descriptor = tileset();
+      const resources = [
+        ...vectors.values(),
+        ...[...inactive.values()].flatMap((entries) =>
+          [...entries.values()].map((entry) => entry.vector),
+        ),
+      ];
+      return {
+        ...stats,
+        ...frameStats,
+        ...(descriptor
+          ? {
+              tileset: {
+                descriptor,
+                requests,
+                decodes,
+                bucketBuilds,
+                cacheReuses,
+                retainedTiles: resources.length,
+                retainedBytes: resources.reduce(
+                  (sum, resource) => sum + resource.bytes.byteLength + 512 * 512 * 4,
+                  0,
+                ),
+                switchMs: sourceSwitchMs,
+                state: canvas.dataset.mapSourceState ?? "loading",
+                error: canvas.dataset.mapBaseTileError ?? null,
+              },
+            }
+          : {}),
+      };
     },
     getViewState() {
       return frameViewState(lastFrame ?? syncFrame());

@@ -185,6 +185,15 @@ Globe Maps continue to use the existing MapLibre path. This removes the private
 Three.js renderer without changing the default runtime or claiming full MapLibre
 capability parity.
 
+### Versioned vector tile sources
+
+For the first-party Flat Map, pass a validated `tileset` descriptor to select an
+MVT XYZ source independently of its resolved Shortbread class palette. Switching
+sources preserves the camera and application Map Layers; source revisions share
+the Rust runtime's bounded cache budget. See the [Maps Tileset contract](docs/maps-tilesets.md)
+for a complete manifest, public API, source-switch behavior and Inspector examples.
+PMTiles transport remains a separate follow-up.
+
 ## Verification
 
 The release contract is:

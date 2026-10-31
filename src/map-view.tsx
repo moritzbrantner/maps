@@ -1,5 +1,8 @@
 "use client";
 
+import type { MapsTileset } from "./maps-tileset";
+import type { MapsVectorBasemapStyle } from "./maps-tileset-style";
+
 import { useEffect } from "react";
 
 import { ensureMapsAggregationWasm } from "./aggregation-runtime";
@@ -22,6 +25,11 @@ export type FlatMapRuntime = LegacyFlatMapRuntime | "maps";
 
 export type MapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   flatRuntime?: FlatMapRuntime;
+  /** One active versioned MVT source, supported by flatRuntime="maps" only. */
+  tileset?: MapsTileset;
+  tilesetStyle?: MapsVectorBasemapStyle;
+  /** Existing Rust request/decoded-resource budgets, shared across source revisions. */
+  tileLimits?: import("./flat-runtime-wasm").MapsFlatRasterRuntimeConfig["limits"];
 };
 
 export function MapView(props: MapViewProps) {
@@ -42,6 +50,8 @@ export function MapView(props: MapViewProps) {
   if (mapDisplay === "flat" && flatRuntime === "maps") {
     return <MapsMapView {...props} flatRuntime="maps" mapDisplay="flat" />;
   }
+
+  if (props.tileset) throw new Error('Maps Tileset requires flatRuntime="maps" on a Flat Map.');
 
   const legacyFlatRuntime: LegacyFlatMapRuntime =
     flatRuntime === "maps" ? "maplibre" : flatRuntime;

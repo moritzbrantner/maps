@@ -372,3 +372,6 @@ export {
   getTemporalHeatMapMaxWeight,
   type TemporalHeatMapProps,
 } from "./temporal-heat-map";
+
+export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "./maps-tileset";
+export { type MapsVectorBasemapStyle } from "./maps-tileset-style";

@@ -20,8 +20,10 @@ bun run analyze:bundles
 ```
 
 JS entry budgets live in `scripts/verify-entry-bundles.mjs`. Package-level
-compressed size, unpacked size, entry count, and stylesheet budgets live in
-`scripts/verify-package-size.mjs`.
+unpacked size, entry count, and stylesheet budgets live in
+`scripts/verify-package-size.mjs`. The compressed package and Maps WASM runtime
+sizes are measured and reported there but are not blocking ceilings (#268);
+reducing them belongs to the loading strategy.
 
 `scripts/analyze-bundles.mjs` stores hash-insensitive bundle baselines. Entry
 files are keyed as `entry:<fileName>`, while emitted chunks are keyed by sorted

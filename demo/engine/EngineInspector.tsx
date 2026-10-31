@@ -1,3 +1,5 @@
+import { createFixtureTileset } from "../../src/tileset-fixtures";
+import type { MapsVectorBasemapStyle } from "../../src/maps-tileset-style";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { MapsRasterTileId } from "../../src/flat-runtime-wasm";
@@ -46,6 +48,24 @@ const SWEEP_PHASE_MS = 3000;
 export function EngineInspector() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const tileUrl = params.get("tiles") ?? SHORTBREAD_TILE_URL;
+  const [sourceChoice, setSourceChoice] = useState(
+    params.get("source") === "b"
+      ? "b"
+      : params.get("source") === "a2"
+        ? "a2"
+        : params.get("source") === "a"
+          ? "a"
+          : "",
+  );
+  const activeTileset = useMemo(
+    () =>
+      sourceChoice === "a2"
+        ? createFixtureTileset("a", "2", import.meta.env.BASE_URL)
+        : sourceChoice === "a" || sourceChoice === "b"
+          ? createFixtureTileset(sourceChoice, "1", import.meta.env.BASE_URL)
+          : undefined,
+    [sourceChoice],
+  );
   const initialView = useMemo(() => readInitialView(params), [params]);
   const [controller, setController] = useState<InspectorController | null>(null);
   const controllerRef = useRef<InspectorController | null>(null);
@@ -65,12 +85,19 @@ export function EngineInspector() {
             hidden.has(styleClass) ? { ...style, opacity: 0 } : style,
     [hidden],
   );
-  const basemap = useShortbreadBasemap(tiles, {
+  const basemap = useShortbreadBasemap(activeTileset ? [] : tiles, {
     controller,
-    forceOverlay: path === "overlay",
+    forceOverlay: Boolean(activeTileset) || path === "overlay",
     styleOverride,
     tileUrl,
   });
+
+  const publicTilesetStyle = useMemo(() => {
+    const overrides: MapsVectorBasemapStyle = {};
+    for (const styleClass of hidden)
+      overrides[styleClass] = { ...getShortbreadClassStyle(styleClass), opacity: 0 };
+    return overrides;
+  }, [hidden]);
 
   const refreshTiles = useCallback(() => {
     const current = controllerRef.current;
@@ -121,7 +148,7 @@ export function EngineInspector() {
     stats?.backend === "canvas2d"
       ? "Canvas2D fallback (no WebGPU)"
       : stats?.backend === "wgpu"
-        ? basemap.renderer === "wgpu-retained"
+        ? activeTileset || basemap.renderer === "wgpu-retained"
           ? "WebGPU · retained vector buckets"
           : "WebGPU base · Canvas vector overlay"
         : "Starting…";
@@ -133,13 +160,15 @@ export function EngineInspector() {
           fitToData={false}
           flatRuntime="maps"
           initialViewState={initialView}
+          tileset={activeTileset}
+          tilesetStyle={publicTilesetStyle}
           mapLabel="Maps engine inspector map"
           mapStyle={{ attribution: "© OpenStreetMap contributors", tiles: false }}
           onMapControllerReady={handleController}
           onViewStateChange={refreshTiles}
           style={{ height: "100%", minHeight: 0 }}
         >
-          {basemap.renderer === "canvas-overlay" ? (
+          {!activeTileset && basemap.renderer === "canvas-overlay" ? (
             <GeoJsonLayer
               featureCollection={basemap.featureCollection}
               getFeatureStyle={overlayStyle}
@@ -164,6 +193,72 @@ export function EngineInspector() {
             <a href="https://github.com/moritzbrantner/maps/issues/167">#167</a>
           </nav>
         </header>
+
+        <section aria-labelledby="inspector-source">
+          <h2 id="inspector-source">Tile source</h2>
+          <select
+            aria-label="Tile source"
+            value={sourceChoice}
+            onChange={(event) => setSourceChoice(event.target.value)}
+          >
+            <option value="">Live Shortbread comparison</option>
+            <option value="a">Fixture A</option>
+            <option value="b">Fixture B</option>
+            <option value="a2">Fixture A · revision 2</option>
+          </select>
+          {activeTileset ? (
+            <dl
+              className="engine-inspector__list"
+              data-map-source-stats-id={stats?.tileset?.descriptor.sourceId}
+              data-map-source-stats-state={stats?.tileset?.state}
+              data-map-source-stats-revision={stats?.tileset?.descriptor.dataRevision}
+              data-map-source-rgba-mvt-bytes={stats?.tileset?.retainedBytes}
+              data-map-source-gpu-buffer-bytes={stats?.retainedVectorBytes}
+            >
+              <Row
+                label="Source / revision"
+                value={`${activeTileset.sourceId} / ${activeTileset.dataRevision}`}
+              />
+              <Row
+                label="Schema"
+                value={`${activeTileset.schema.id} ${activeTileset.schema.version}`}
+              />
+              <Row
+                label="Transport"
+                value={`${activeTileset.format} · ${activeTileset.transport.kind} · ${activeTileset.projection}`}
+              />
+              <Row label="Coverage" value={activeTileset.bounds.join(", ")} />
+              <Row
+                label="Zoom / tile size"
+                value={`${activeTileset.minZoom}–${activeTileset.maxZoom} / ${activeTileset.tileSize}`}
+              />
+              <Row label="License" value={activeTileset.license} />
+              <Row label="Provenance" value={activeTileset.provenance} />
+              <Row label="State" value={stats?.tileset?.state ?? "loading"} />
+              <Row
+                label="Requests / decodes / bucket builds"
+                value={`${stats?.tileset?.requests ?? 0} / ${stats?.tileset?.decodes ?? 0} / ${stats?.tileset?.bucketBuilds ?? 0}`}
+              />
+              <Row
+                label="Cache reuses / retained tiles"
+                value={`${stats?.tileset?.cacheReuses ?? 0} / ${stats?.tileset?.retainedTiles ?? 0}`}
+              />
+              <Row
+                label="Retained bytes (lower bound)"
+                value={formatCount(stats?.tileset?.retainedBytes)}
+              />
+              <Row
+                label="Switch to ready"
+                value={`${format(stats?.tileset?.switchMs ?? undefined, 2)} ms`}
+              />
+            </dl>
+          ) : null}
+          {stats?.tileset?.error ? (
+            <p role="alert" className="engine-inspector__error">
+              {stats.tileset.error}
+            </p>
+          ) : null}
+        </section>
 
         <section aria-labelledby="inspector-frames">
           <h2 id="inspector-frames">Frame cadence</h2>
@@ -250,6 +345,7 @@ export function EngineInspector() {
             {(["retained", "overlay"] as const).map((option) => (
               <label key={option}>
                 <input
+                  disabled={Boolean(activeTileset)}
                   checked={path === option}
                   name="basemap-path"
                   onChange={() => setPath(option)}

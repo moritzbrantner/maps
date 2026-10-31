@@ -1,3 +1,4 @@
+import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
 import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
 
 export type ShortbreadBasemapLineKind = "coast" | "water" | "street" | "boundary";
@@ -21,6 +22,7 @@ export type ShortbreadBasemapTile = {
 };
 
 type MapsVectorTileWasmModule = MapsWasmModuleBase & {
+  decodeShortbreadTilePixels(bytes: Uint8Array, size: number): ShortbreadTilePixels;
   decodeShortbreadBasemap?: (
     bytes: Uint8Array,
     z: number,
@@ -59,4 +61,9 @@ export async function decodeShortbreadBasemapLines(
   }
 
   return decode(new Uint8Array(bytes), tile.z, tile.x, tile.y);
+}
+
+export async function decodeShortbreadTilePixels(bytes: Uint8Array, packageName?: string) {
+  const module = await importMapsWasmModule<MapsVectorTileWasmModule>(packageName);
+  return module.decodeShortbreadTilePixels(bytes, 512);
 }

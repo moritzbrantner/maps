@@ -216,3 +216,5 @@ export {
   type PolygonLineDrawingOptions,
   type PolygonLineDrawingResult,
 } from "../polygon-line-drawing";
+
+export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "../maps-tileset";

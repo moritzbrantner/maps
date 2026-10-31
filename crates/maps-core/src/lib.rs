@@ -10,8 +10,10 @@ mod engine;
 mod flat_runtime;
 mod matrix_camera;
 mod scenario;
+mod tileset;
 mod vector_bucket;
 mod vector_tile;
+pub use tileset::{MapsTileset, TilesetObservation, TilesetSchema, TilesetTransport};
 
 use std::collections::BTreeMap;
 

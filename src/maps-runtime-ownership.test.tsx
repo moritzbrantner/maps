@@ -91,6 +91,9 @@ beforeEach(() => {
   } as unknown as CanvasRenderingContext2D;
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
   runtime = {
+    activateTileset: vi.fn(() => "fixture-source"),
+    takeSourceEvictions: vi.fn(() => []),
+    markSourceLoaded: vi.fn(),
     dispose: vi.fn(),
     fitBounds: vi.fn(),
     markFailed: vi.fn(),
@@ -178,6 +181,8 @@ beforeEach(() => {
     isDeviceLost: vi.fn(() => false),
     resize: vi.fn(),
     setVectorMaxZoom: vi.fn(),
+    setVectorSource: vi.fn(),
+    evictVectorSourceTile: vi.fn(),
     setVectorStyle: vi.fn(),
     uploadTile: vi.fn(),
     uploadVectorTile: vi.fn(() => 0),

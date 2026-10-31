@@ -1,3 +1,5 @@
+import { WEBGPU_SWIFTSHADER_ARGS } from "../e2e/helpers/webgpu-args.ts";
+import { profileTilesetSourceJourney } from "./profile-tileset-source-journey.ts";
 // Full-page descriptive frame pacing; not a GPU completion/FPS or Moonlight verdict.
 import { chromium } from "@playwright/test";
 import { preview } from "vite";
@@ -57,7 +59,7 @@ const server = await preview({
 let browser;
 let evidence;
 try {
-  const args = ["--enable-unsafe-swiftshader", "--enable-unsafe-webgpu", "--use-gl=swiftshader"];
+  const args = WEBGPU_SWIFTSHADER_ARGS;
   browser = await chromium.launch({ args });
   const page = await browser.newPage({
     viewport: { width: scenario.viewport.width, height: scenario.viewport.height },
@@ -164,6 +166,19 @@ try {
     longTaskCount: longTasks.length,
     longTaskMs: longTasks.reduce((a, b) => a + b, 0),
   };
+  const sourceLifecycle = await profileTilesetSourceJourney(
+    browser,
+    `http://127.0.0.1:${server.httpServer.address().port}`,
+    scenario.viewport,
+    fixture,
+    createShortbreadTileFixture({
+      ...scenario.fixture,
+      dense: true,
+      islandWest: 256,
+      islandEast: 1536,
+    }),
+    samples,
+  );
   evidence = {
     schemaVersion: 1,
     producer: "maps-engine-interaction",
@@ -200,6 +215,7 @@ try {
     summary,
     rendered,
     results,
+    sourceLifecycle,
     metrics: [
       {
         id: "interaction-scope",

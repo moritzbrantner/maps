@@ -192,6 +192,40 @@ impl MapsFlatRasterRuntime {
         Ok(Self { inner })
     }
 
+    #[wasm_bindgen(js_name = activateTileset)]
+    pub fn activate_tileset(&mut self, descriptor: JsValue) -> Result<String, JsValue> {
+        let source: maps_core::MapsTileset =
+            serde_wasm_bindgen::from_value(descriptor).map_err(to_js_error)?;
+        let identity = source.identity();
+        self.inner.activate_tileset(source).map_err(to_js_error)?;
+        Ok(identity)
+    }
+
+    #[wasm_bindgen(js_name = takeSourceEvictions)]
+    pub fn take_source_evictions(&mut self) -> Result<JsValue, JsValue> {
+        let evictions = self
+            .inner
+            .take_source_evictions()
+            .into_iter()
+            .map(|(source, tile)| (source, tile.z, tile.x, tile.y))
+            .collect::<Vec<_>>();
+        encode_json_compatible(&evictions)
+    }
+
+    #[wasm_bindgen(js_name = markSourceLoaded)]
+    pub fn mark_source_loaded(
+        &mut self,
+        source: &str,
+        z: u8,
+        x: u32,
+        y: u32,
+    ) -> Result<(), JsValue> {
+        if self.inner.source_identity().as_deref() == Some(source) {
+            self.mark_loaded(z, x, y)?;
+        }
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setViewState)]
     pub fn set_view_state(
         &mut self,

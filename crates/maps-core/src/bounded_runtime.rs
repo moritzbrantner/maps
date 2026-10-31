@@ -187,6 +187,19 @@ impl BoundedFlatRasterRuntime {
         self.inner.unproject_screen(screen)
     }
 
+    pub fn activate_tileset(
+        &mut self,
+        source: crate::MapsTileset,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        self.inner.activate_tileset(source)
+    }
+    pub fn source_identity(&self) -> Option<String> {
+        self.inner.source_identity()
+    }
+    pub fn take_source_evictions(&mut self) -> Vec<(String, TileId)> {
+        self.inner.take_source_evictions()
+    }
+
     pub fn mark_loaded(&mut self, tile: TileId) {
         self.inner.mark_loaded(tile);
     }
