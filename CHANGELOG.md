@@ -27,6 +27,11 @@
 
 ### Patch Changes
 
+- The Maps flat runtime now picks raster tile levels and places raster tiles
+  as MapLibre does: the covering zoom is rounded instead of floored (zoom 4.6
+  with 256 px tiles shows z6), and at rest raster tiles snap to the pixel grid.
+  The MapLibre oracle's zoom-crossfade and source-location scenarios now pass
+  their image gate (#308).
 - On WebGPU, changing some points of a GPU-retained point group, through new
   data or hover/selection, now updates only those points on the GPU. The
   renderer no longer re-uploads the whole group, and unchanged retained shape

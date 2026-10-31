@@ -10,6 +10,11 @@ export type MapsRasterTileId = {
 };
 
 export type MapsRasterRenderCamera = {
+  /**
+   * Local-plane offset (CSS px, +x east, +y north) that puts raster tiles on the pixel grid at
+   * rest, as MapLibre does. Applied to raster tile geometry only, never during motion.
+   */
+  rasterAlignment?: [x: number, y: number];
   viewProjection: [
     number,
     number,
@@ -248,7 +253,7 @@ export async function loadMapsFlatRasterRuntime(
 
 // Mirrors PACKED_FRAME_HEADER_LENGTH / PACKED_PLACEMENT_STRIDE / PACKED_TILE_STRIDE
 // in crates/maps-wasm/src/engine_scenario.rs.
-const PACKED_FRAME_HEADER_LENGTH = 35;
+const PACKED_FRAME_HEADER_LENGTH = 37;
 const PACKED_PLACEMENT_STRIDE = 12;
 const PACKED_TILE_STRIDE = 3;
 
@@ -303,6 +308,7 @@ export function decodePackedRasterFrame(packed: Float64Array): MapsFlatRasterFra
       height: packed[6]!,
     },
     renderCamera: {
+      rasterAlignment: [packed[35]!, packed[36]!],
       viewProjection: Array.from(
         packed.subarray(7, 23),
       ) as MapsRasterRenderCamera["viewProjection"],

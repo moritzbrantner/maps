@@ -95,6 +95,10 @@ impl FlatRasterRuntimeLimits {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterRenderCamera {
     pub view_projection: [f32; 16],
+    /// Local-plane offset (CSS px, +x east, +y north) that puts raster tiles on the pixel grid
+    /// at rest, as MapLibre's aligned projection does. Renderers add it to raster tile geometry
+    /// only, and skip it while the camera moves.
+    pub raster_alignment: [f64; 2],
 }
 
 /// One placement of a canonical XYZ tile.
@@ -744,7 +748,10 @@ impl FlatRasterRuntime {
                 view_projection[column * 4 + 1] *= scale_y;
             }
         }
-        let render_camera = RasterRenderCamera { view_projection };
+        let render_camera = RasterRenderCamera {
+            view_projection,
+            raster_alignment: raster_alignment(self.camera)?,
+        };
         let viewport_placements =
             visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;
         let visible_bounds = visible_bounds_for_camera(self.camera)?;
@@ -1207,6 +1214,29 @@ fn fit_zoom_for_span(available_pixels: f64, normalized_span: f64) -> f64 {
     (available_pixels / (CAMERA_TILE_SIZE * normalized_span)).log2()
 }
 
+/// MapLibre's raster pixel-grid alignment (`MercatorTransform._alignedProjMatrix`): shift the
+/// map so the camera center lands on a whole world pixel (half a pixel for an odd viewport
+/// dimension, rotated with the bearing), by at most half a pixel per axis.
+fn raster_alignment(camera: MapCamera) -> Result<[f64; 2], FlatRasterRuntimeError> {
+    let center = project_web_mercator(camera.longitude, camera.latitude)
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+    let size = camera
+        .world_size()
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+    let (x, y) = (center.x * size, center.y * size);
+    let x_shift = (camera.viewport.width % 2.0) / 2.0;
+    let y_shift = (camera.viewport.height % 2.0) / 2.0;
+    let bearing = camera.bearing.to_radians();
+    let (angle_cos, angle_sin) = (bearing.cos(), (-bearing).sin());
+    // JS `Math.round` rounds halves up.
+    let js_round = |value: f64| (value + 0.5).floor();
+    let within_half = |delta: f64| if delta > 0.5 { delta - 1.0 } else { delta };
+    let dx = within_half(x - js_round(x) + angle_cos * x_shift + angle_sin * y_shift);
+    let dy = within_half(y - js_round(y) + angle_cos * y_shift + angle_sin * x_shift);
+    // World y grows south; the local plane's +y is north.
+    Ok([dx, -dy])
+}
+
 fn source_covering_zoom(
     camera_zoom: f64,
     source: RasterSourceSpec,
@@ -1216,7 +1246,9 @@ fn source_covering_zoom(
         return Err(FlatRasterRuntimeError::InvalidSource);
     }
 
-    let covering_zoom = (camera_zoom + source_zoom_offset).floor();
+    // Raster sources round the covering zoom as MapLibre does (`roundZoom`, JS `Math.round`,
+    // which rounds halves up), so a tile shows at 0.71x to 1.41x of its native size.
+    let covering_zoom = (camera_zoom + source_zoom_offset + 0.5).floor();
     if !covering_zoom.is_finite() {
         return Err(FlatRasterRuntimeError::InvalidCamera);
     }
@@ -1831,6 +1863,35 @@ mod tests {
             );
         }
         assert_eq!(runtime.render_margin(), 64.0);
+    }
+
+    #[test]
+    fn raster_covering_zoom_rounds_like_maplibre() {
+        for (zoom, expected) in [(4.4, 4), (4.5, 5), (4.6, 5), (5.0, 5)] {
+            let mut runtime = runtime([10.3, 50.4], zoom, 720.0, 480.0);
+            let plan = runtime.frame_plan().unwrap();
+            assert!(
+                plan.placements
+                    .iter()
+                    .all(|placement| placement.tile.z == expected),
+                "zoom {zoom}"
+            );
+        }
+    }
+
+    #[test]
+    fn raster_alignment_snaps_the_center_to_the_pixel_grid_like_maplibre() {
+        // MapLibre: dx = x - round(x) (+ half a pixel for odd sizes), wrapped into (-0.5, 0.5].
+        let alignment = |width: f64, height: f64| {
+            let mut runtime = runtime([10.3, 50.4], 4.6, width, height);
+            runtime.frame_plan().unwrap().render_camera.raster_alignment
+        };
+        let [x, y] = alignment(720.0, 480.0);
+        assert!((x - -0.367_926).abs() < 1e-5, "{x}");
+        assert!((y - 0.477_415).abs() < 1e-5, "{y}");
+        let [x, y] = alignment(721.0, 481.0);
+        assert!((x - 0.132_074).abs() < 1e-5, "{x}");
+        assert!((y - -0.022_585).abs() < 1e-5, "{y}");
     }
 
     #[test]
