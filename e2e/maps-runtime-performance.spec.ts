@@ -47,12 +47,13 @@ async function wheelBurst(page: Page) {
     const p = window.mapsNativeProbe;
     p.reset();
     const r = canvas.getBoundingClientRect();
+    // Trackpad-sized deltas (|d| < 4): MapLibre's scroll zoom jumps in one frame for them.
     for (let i = 0; i < 8; i++)
       canvas.dispatchEvent(
         new WheelEvent("wheel", {
           bubbles: true,
           cancelable: true,
-          deltaY: -20,
+          deltaY: -2,
           clientX: r.left + r.width / 2 + i,
           clientY: r.top + r.height / 2,
         }),

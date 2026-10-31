@@ -37,12 +37,13 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
       const probe = window.mapsCameraProbe;
       probe.reset();
       const bounds = element.getBoundingClientRect();
+      // Trackpad-sized deltas (|d| < 4): MapLibre's scroll zoom jumps in one frame for them.
       for (let index = 0; index < 8; index++) {
         element.dispatchEvent(
           new WheelEvent("wheel", {
             bubbles: true,
             cancelable: true,
-            deltaY: -20,
+            deltaY: -2,
             clientX: bounds.left + bounds.width / 2 + index,
             clientY: bounds.top + bounds.height / 2,
           }),
