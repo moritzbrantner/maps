@@ -21,6 +21,10 @@
       "href": "/maps/benchmarks/"
     },
     {
+      "label": "MapLibre oracle",
+      "href": "/maps/oracle/"
+    },
+    {
       "label": "Source",
       "href": "https://github.com/moritzbrantner/maps"
     }

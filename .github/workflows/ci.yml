@@ -51,7 +51,7 @@ jobs:
                   "git", "diff", "--no-renames", "--name-only", "-z", *revision
               ]).decode().split("\0")
               browser_patterns = [
-                  "src/**", "crates/**", "demo/**", "e2e/**", "public/**", "scripts/**",
+                  "src/**", "crates/**", "demo/**", "e2e/**", "oracle/**", "public/**", "scripts/**",
                   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "package.json", "bun.lock",
                   "index.html", "playwright.config.*", "tsconfig*.json", "vite.config.*",
                   ".github/workflows/browser.yml", ".github/workflows/ci.yml",
@@ -67,7 +67,7 @@ jobs:
                   "browser-smoke", "runtime-evidence",
               ])
           if not browser:
-              skipped.extend(["build-package", "browser-validation"])
+              skipped.extend(["build-package", "browser-validation", "oracle"])
           if not security:
               skipped.append("dependency-audit")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
@@ -433,6 +433,75 @@ jobs:
         test-results
       upload_artifacts_on: failure
 
+  # MapLibre oracle (#306): FLIP image and picking/bounds gates block on SwiftShader;
+  # frame time is advisory here (no GPU) and enforced by `bun run oracle` on a local GPU.
+  oracle:
+    needs:
+      - changes
+      - build-package
+    if: ${{ needs.changes.outputs.browser == 'true' }}
+    name: MapLibre Oracle
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build-package.outputs.source_sha }}
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Install NVIDIA FLIP
+        run: |
+          python3 -m venv "$RUNNER_TEMP/flip"
+          "$RUNNER_TEMP/flip/bin/pip" install --quiet flip-evaluator numpy pillow
+      - name: Consume verified browser package
+        uses: moritzbrantner/reusable-workflows/.github/actions/consume-build-artifact@5e9fe1ab1fd5c8d91900a621bf8daabf879012a7
+        with:
+          producer_run_id: ${{ needs.build-package.outputs.producer_run_id }}
+          receipt_artifact_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
+          artifact_name: ${{ needs.build-package.outputs.artifact_name }}
+          artifact_digest: ${{ needs.build-package.outputs.artifact_digest }}
+          source_sha: ${{ needs.build-package.outputs.source_sha }}
+          artifact_key: ${{ needs.build-package.outputs.artifact_key }}
+          identity_digest: ${{ needs.build-package.outputs.identity_digest }}
+          destination_path: .artifacts/maps-browser-package
+          github_token: ${{ github.token }}
+      - name: Stage browser package
+        run: |
+          rm -rf public/wasm
+          mkdir -p public
+          cp -R .artifacts/maps-browser-package/public/wasm public/wasm
+          rm -rf node_modules/@moritzbrantner/ui/dist node_modules/@moritzbrantner/timeline-editor/dist node_modules/@moenarch/editor-core/dist
+          cp -R .artifacts/maps-browser-package/ci-browser-dependencies/ui node_modules/@moritzbrantner/ui/dist
+          cp -R .artifacts/maps-browser-package/ci-browser-dependencies/timeline-editor node_modules/@moritzbrantner/timeline-editor/dist
+          cp -R .artifacts/maps-browser-package/ci-browser-dependencies/editor-core node_modules/@moenarch/editor-core/dist
+      - name: MapLibre oracle gate
+        env:
+          ORACLE_PYTHON: ${{ runner.temp }}/flip/bin/python
+        run: bun run oracle -- --out oracle-report
+      - name: Upload oracle report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oracle-report
+          path: oracle-report
+          if-no-files-found: warn
+          retention-days: 7
+
   dependency-audit:
     needs: changes
     if: ${{ needs.changes.outputs.security == 'true' }}
@@ -469,11 +538,12 @@ jobs:
       - browser-smoke
       - runtime-evidence
       - browser-validation
+      - oracle
       - dependency-audit
     runs-on: ubuntu-26.04
     steps:
       - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
         with:
           needs: ${{ toJSON(needs) }}
-          required: '["changes", "fast-validation", "rust-validation", "git-install-validation", "build-package", "wasm-package-validation", "package-validation", "browser-smoke", "runtime-evidence", "browser-validation", "dependency-audit"]'
+          required: '["changes", "fast-validation", "rust-validation", "git-install-validation", "build-package", "wasm-package-validation", "package-validation", "browser-smoke", "runtime-evidence", "browser-validation", "oracle", "dependency-audit"]'
           allow-skipped: ${{ needs.changes.outputs.allow-skipped || '[]' }}

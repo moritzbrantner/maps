@@ -36,6 +36,8 @@ jobs:
         bun install --frozen-lockfile
         bunx playwright install --with-deps chromium
         bash scripts/install-wasm-bindgen-ci.sh
+        python3 -m venv "$RUNNER_TEMP/flip"
+        "$RUNNER_TEMP/flip/bin/pip" install --quiet flip-evaluator numpy pillow
         rm -rf .github-pages-template
         git init .github-pages-template
         git -C .github-pages-template remote add origin https://github.com/moritzbrantner/github-pages-template.git
@@ -60,6 +62,10 @@ jobs:
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
         mkdir -p dist/benchmarks
         cp dist/index.html dist/benchmarks/index.html
+        # MapLibre oracle report (#306). CI blocks on the gate; the report publishes either way.
+        if ! CI=1 ORACLE_PYTHON="$RUNNER_TEMP/flip/bin/python" bun run oracle -- --out dist/oracle; then
+          echo "::warning::MapLibre oracle gate failed; publishing its report anyway."
+        fi
         bun run bench:engine:interaction -- --output dist/evidence/engine-interaction.json
         # Capture exact parent/candidate kernel harnesses. The profiler owns
         # immutable bundles, strict comparison and history; these shared-runner
