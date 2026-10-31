@@ -27,3 +27,6 @@ public/benchmarks/
 
 .runtime-profiler/
 .runtime-profiler-source/
+
+# Verified CI browser dependency outputs (disposable producer artifacts).
+/ci-browser-dependencies/

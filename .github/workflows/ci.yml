@@ -11,6 +11,11 @@ permissions:
   contents: read
   packages: read
 
+# Superseded commits on the same PR must not occupy the runner queue.
+concurrency:
+  group: maps-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   changes:
     name: Validation scope
@@ -20,7 +25,7 @@ jobs:
       security: ${{ steps.scope.outputs.security }}
       allow-skipped: ${{ steps.scope.outputs.allow-skipped }}
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: scope
@@ -58,11 +63,11 @@ jobs:
           skipped = []
           if event != "workflow_dispatch":
               skipped.extend([
-                  "build-package", "wasm-package-validation", "package-validation",
+                  "wasm-package-validation", "package-validation",
                   "browser-smoke", "runtime-evidence",
               ])
           if not browser:
-              skipped.append("browser-validation")
+              skipped.extend(["build-package", "browser-validation"])
           if not security:
               skipped.append("dependency-audit")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
@@ -79,6 +84,7 @@ jobs:
     with:
       node_version: lts/*
       bun_version: latest
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
       format_command: bun run format:check
       lint_command: bun run lint
@@ -91,7 +97,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Nix
         uses: NixOS/nix-installer-action@62c1943b776c509394b550f3f983adc14e9212d6 # v1.0.0
         with:
@@ -105,15 +111,43 @@ jobs:
             wasm-bindgen --version
             wasm-opt --version
             cargo --version
-            node --test scripts/install-wasm-bindgen-ci.test.mjs
+            node --test scripts/install-wasm-bindgen-ci.test.ts
             bun run verify:rust
-            bun run build:wasm
-            bun install --frozen-lockfile
+          '
+
+  git-install-validation:
+    name: Git Install Validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Nix
+        uses: NixOS/nix-installer-action@62c1943b776c509394b550f3f983adc14e9212d6 # v1.0.0
+        with:
+          installer-version: 2.35.2
+          enable-kvm: false
+      # Cache downloaded crate inputs, never this candidate's prepared package or target.
+      - name: Cache Cargo dependency sources
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-maps-git-cargo-${{ hashFiles('flake.lock', 'rust-toolchain.toml', 'Cargo.lock') }}
+      - name: Prove clean Git source installation in Nix shell
+        run: |
+          nix develop --command bash -lc '
+            set -euo pipefail
+            # This checkout only hosts the verifier and reads the MapLibre source CSS.
+            # The separate verifier consumer still runs all real prepare scripts.
+            bun install --frozen-lockfile --ignore-scripts
             bun run verify:git-install
           '
 
   build-package:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.browser == 'true' }}
     name: Build or reuse browser package
     permissions:
       actions: read
@@ -122,29 +156,38 @@ jobs:
     uses: moritzbrantner/reusable-workflows/.github/workflows/build-artifact.yml@5e9fe1ab1fd5c8d91900a621bf8daabf879012a7
     with:
       source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      artifact_key: maps-browser-package-v1
+      artifact_key: ${{ github.event_name == 'workflow_dispatch' && 'maps-browser-package-v2' || 'maps-browser-runtime-v1' }}
       rust_toolchain: stable
       rust_targets: wasm32-unknown-unknown
       bun_version: latest
       node_version: lts/*
-      cache_bun: true
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
       use_environment_v1: false
       setup_command: |
         bun install --frozen-lockfile
         bash scripts/install-wasm-bindgen-ci.sh
       build_command: |
-        bun run build:package
-        rm -rf public/wasm
-        mkdir -p public/wasm
-        cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          bun run build:package
+        else
+          bun run build:wasm
+        fi
+        # Build the locked Git dependencies once, not in every browser consumer.
+        rm -rf ci-browser-dependencies
+        mkdir -p ci-browser-dependencies
+        cp -R node_modules/@moritzbrantner/ui/dist ci-browser-dependencies/ui
+        cp -R node_modules/@moritzbrantner/timeline-editor/dist ci-browser-dependencies/timeline-editor
+        cp -R node_modules/@moenarch/editor-core/dist ci-browser-dependencies/editor-core
       artifact_paths: |
-        dist
         public/wasm
+        ci-browser-dependencies
+        ${{ github.event_name == 'workflow_dispatch' && 'dist' || '' }}
       reuse_across_runs: true
       artifact_retention_days: 7
 
   wasm-package-validation:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: WASM Package Validation
     needs:
       - fast-validation
@@ -158,7 +201,7 @@ jobs:
       packages: read
     steps:
       - name: Check out exact source
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.build-package.outputs.source_sha }}
       - name: Set up Bun
@@ -166,7 +209,7 @@ jobs:
         with:
           bun-version: latest
       - name: Set up Node.js
-        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: lts/*
       - name: Install dependencies
@@ -195,6 +238,7 @@ jobs:
           bun run verify:engine-camera:prepared
 
   package-validation:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Package Validation
     needs:
       - fast-validation
@@ -227,6 +271,7 @@ jobs:
         bun run pack:dry
 
   browser-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Browser Smoke
     needs:
       - fast-validation
@@ -240,7 +285,9 @@ jobs:
     with:
       node_version: lts/*
       bun_version: latest
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
+      install_command: bun install --frozen-lockfile --ignore-scripts
       prebuilt_artifact_run_id: ${{ needs.build-package.outputs.producer_run_id }}
       prebuilt_artifact_receipt_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
       prebuilt_artifact_name: ${{ needs.build-package.outputs.artifact_name }}
@@ -253,15 +300,22 @@ jobs:
         rm -rf public/wasm
         mkdir -p public
         cp -R .artifacts/maps-browser-package/public/wasm public/wasm
+        rm -rf node_modules/@moritzbrantner/ui/dist node_modules/@moritzbrantner/timeline-editor/dist node_modules/@moenarch/editor-core/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/ui node_modules/@moritzbrantner/ui/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/timeline-editor node_modules/@moritzbrantner/timeline-editor/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/editor-core node_modules/@moenarch/editor-core/dist
         bun run test:browser:smoke
       install_playwright: true
       install_playwright_browsers: chromium
+      concurrency_group: maps-${{ github.ref }}-browser-smoke
+      artifact_name_suffix: -smoke
       artifact_paths: |
         playwright-report
         test-results
       upload_artifacts_on: failure
 
   runtime-evidence:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Runtime Evidence
     needs:
       - fast-validation
@@ -275,7 +329,7 @@ jobs:
       packages: read
     steps:
       - name: Check out exact source
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.build-package.outputs.source_sha }}
       - name: Set up Rust
@@ -287,7 +341,7 @@ jobs:
         with:
           bun-version: latest
       - name: Set up Node.js
-        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: lts/*
       - name: Install dependencies
@@ -326,40 +380,54 @@ jobs:
           retention-days: 7
 
   browser-validation:
-    needs: changes
+    needs:
+      - changes
+      - build-package
     if: ${{ needs.changes.outputs.browser == 'true' }}
-    name: Full Browser Validation
+    name: Full Browser Validation (${{ matrix.partition }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # These three slower files accounted for 363s; the complement for 365s.
+          # New/unrecognized files automatically run in the complement.
+          - partition: demo
+            selection: --grep=(maps-demo|maps-runtime|maps-engine-tiles)\.spec\.ts
+          - partition: engine
+            selection: --grep-invert=(maps-demo|maps-runtime|maps-engine-tiles)\.spec\.ts
     permissions:
+      actions: read
       contents: read
       packages: read
-    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@3b15546083e66aeba487a2e653e3ffaacbfe7220 # workflow-standard-v1.3
+    uses: moritzbrantner/reusable-workflows/.github/workflows/e2e-validation.yml@5e9fe1ab1fd5c8d91900a621bf8daabf879012a7
     with:
       node_version: lts/*
       bun_version: latest
+      cache_bun: false
       bun_cache_dependency_path: bun.lock
-      install_command: |
-        if [ "${{ github.event_name }}" = "pull_request" ]; then
-          expected_head="${{ github.event.pull_request.head.sha }}"
-          git fetch --no-tags --depth=1 origin "+refs/pull/${{ github.event.number }}/head:refs/remotes/origin/pr-head"
-          git checkout --detach refs/remotes/origin/pr-head
-          actual_head="$(git rev-parse HEAD)"
-          if [ "$actual_head" != "$expected_head" ]; then
-            echo "::error::Full Browser Tests checked out $actual_head instead of PR head $expected_head."
-            exit 1
-          fi
-        fi
-        bun install --frozen-lockfile
-      pre_command: |
-        bunx playwright install --with-deps chromium
-        rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
-        rustup default stable
-        source scripts/install-wasm-bindgen-ci.sh
-        bun run build:wasm
+      install_command: bun install --frozen-lockfile --ignore-scripts
+      prebuilt_artifact_run_id: ${{ needs.build-package.outputs.producer_run_id }}
+      prebuilt_artifact_receipt_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
+      prebuilt_artifact_name: ${{ needs.build-package.outputs.artifact_name }}
+      prebuilt_artifact_digest: ${{ needs.build-package.outputs.artifact_digest }}
+      prebuilt_source_sha: ${{ needs.build-package.outputs.source_sha }}
+      prebuilt_artifact_key: ${{ needs.build-package.outputs.artifact_key }}
+      prebuilt_identity_digest: ${{ needs.build-package.outputs.identity_digest }}
+      prebuilt_artifact_destination: .artifacts/maps-browser-package
+      e2e_command: |
         rm -rf public/wasm
-        mkdir -p public/wasm
-        cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
-      e2e_command: bun run test:browser -- --project=chromium
-      install_playwright: false
+        mkdir -p public
+        cp -R .artifacts/maps-browser-package/public/wasm public/wasm
+        rm -rf node_modules/@moritzbrantner/ui/dist node_modules/@moritzbrantner/timeline-editor/dist node_modules/@moenarch/editor-core/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/ui node_modules/@moritzbrantner/ui/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/timeline-editor node_modules/@moritzbrantner/timeline-editor/dist
+        cp -R .artifacts/maps-browser-package/ci-browser-dependencies/editor-core node_modules/@moenarch/editor-core/dist
+        bun run test:browser -- --project=chromium --workers=1 '${{ matrix.selection }}'
+      install_playwright: true
+      install_playwright_browsers: chromium
+      # One software GPU worker per runner; shards do not contend for the same CPU.
+      concurrency_group: maps-${{ github.ref }}-browser-full-${{ matrix.partition }}
+      artifact_name_suffix: -full-${{ matrix.partition }}
       artifact_paths: |
         playwright-report
         test-results
@@ -394,6 +462,7 @@ jobs:
       - changes
       - fast-validation
       - rust-validation
+      - git-install-validation
       - build-package
       - wasm-package-validation
       - package-validation
@@ -406,5 +475,5 @@ jobs:
       - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
         with:
           needs: ${{ toJSON(needs) }}
-          required: '["changes", "fast-validation", "rust-validation", "build-package", "wasm-package-validation", "package-validation", "browser-smoke", "runtime-evidence", "browser-validation", "dependency-audit"]'
+          required: '["changes", "fast-validation", "rust-validation", "git-install-validation", "build-package", "wasm-package-validation", "package-validation", "browser-smoke", "runtime-evidence", "browser-validation", "dependency-audit"]'
           allow-skipped: ${{ needs.changes.outputs.allow-skipped || '[]' }}
