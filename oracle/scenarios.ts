@@ -61,11 +61,6 @@ const MAP_SIZE = { height: 480, width: 720 };
 
 // Known gaps measured when the gate landed (2026-10-31). Each blocks its gate's removal.
 const LABELS: KnownGap = { gate: "image", issue: 310, reason: "label glyphs and placement" };
-const WHEEL: KnownGap = {
-  gate: "interaction",
-  issue: 311,
-  reason: "wheel zoom ends 80-100 px away from MapLibre's bounds",
-};
 const PICKING: KnownGap = {
   gate: "interaction",
   issue: 312,
@@ -76,7 +71,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
     capability: "single source point: hover, select, clear, pan, wheel zoom",
-    knownGaps: [PICKING, WHEEL],
+    knownGaps: [PICKING],
     name: "source-location",
     origin: "historical-source-atlas#63 source-location map (#232)",
     size: MAP_SIZE,
@@ -92,7 +87,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.4, 51.2], zoom: 5.55 },
     capability: "territory polygons, clustered sites and seat points: select and hover",
-    knownGaps: [PICKING, WHEEL],
+    knownGaps: [PICKING],
     name: "church-site-discovery",
     origin: "church-atlas#8 site discovery (#232)",
     size: MAP_SIZE,
@@ -109,12 +104,18 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.6 },
     capability: "raster tile zoom level and parent/child crossfade end state (#303)",
-    knownGaps: [WHEEL],
+    knownGaps: [],
     name: "zoom-crossfade",
     origin: "maps#303 zoom-gap crossfade",
     size: MAP_SIZE,
     steps: [
-      { at: [0, 0], deltaY: -120, kind: "wheel", label: "wheel zoom in across a tile level", ticks: 4 },
+      {
+        at: [0, 0],
+        deltaY: -120,
+        kind: "wheel",
+        label: "wheel zoom in across a tile level",
+        ticks: 4,
+      },
       { by: [-200, 0], kind: "pan", label: "drag pan" },
     ],
     tiles: "zoom-tinted",
@@ -135,7 +136,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.4 },
     capability: "density clusters: placement, counts, cluster and point picking",
-    knownGaps: [PICKING, WHEEL],
+    knownGaps: [PICKING],
     name: "clusters",
     origin: "demo/RendererComparison cluster journey",
     size: MAP_SIZE,

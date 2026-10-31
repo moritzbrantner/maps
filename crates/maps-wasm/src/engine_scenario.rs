@@ -275,6 +275,11 @@ impl MapsFlatRasterRuntime {
             .map_err(to_js_error)
     }
 
+    /// Current (constrained) camera zoom, without planning a frame.
+    pub fn zoom(&self) -> f64 {
+        self.inner.camera().zoom
+    }
+
     #[wasm_bindgen(js_name = zoomAbout)]
     pub fn zoom_about(
         &mut self,

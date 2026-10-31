@@ -129,6 +129,7 @@
     "fixture:2d-lab": "bun run ./scripts/export-2d-lab-render-fixture.ts"
   },
   "dependencies": {
+    "@mapbox/unitbezier": "^1.0.0",
     "@turf/boolean-clockwise": "^7.3.5",
     "@turf/centroid": "^7.3.5",
     "@turf/helpers": "^7.3.5",

@@ -27,6 +27,12 @@
 
 ### Patch Changes
 
+- Wheel zoom on the Maps flat runtime now follows MapLibre's scroll zoom. It
+  tells mouse wheels from trackpads the same way, maps the summed deltas of
+  each frame through MapLibre's rate curve (at most a factor of two per frame),
+  eases mouse-wheel zoom over 200 ms, and zooms about the pointer where the
+  gesture started. A mouse notch now zooms about 0.18 levels instead of 0.3. The
+  same wheel input now ends on MapLibre's bounds in the MapLibre oracle (#311).
 - The Maps flat runtime now draws overlay circles and strokes as MapLibre does.
   A circle's stroke lies outside its radius, and the circle edge and the
   fill-to-stroke edge fade over one device pixel. Polygon outlines and lines

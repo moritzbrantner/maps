@@ -126,6 +126,7 @@ beforeEach(() => {
     rotateAbout: vi.fn((delta: number) => {
       camera.bearing = (camera.bearing ?? 0) + delta;
     }),
+    zoom: vi.fn(() => camera.zoom),
     zoomAbout: vi.fn((delta, _x, _y, min, max) => {
       camera.zoom = Math.max(min, Math.min(max, camera.zoom + delta));
     }),
@@ -309,7 +310,7 @@ describe("Concurrent React render isolation regression", () => {
     expect(mounted.queryByText("Loading speculative UI")).toBeNull();
     expect(mounted.getByText("Committed UI")).toBeTruthy();
     const canvas = mounted.container.querySelector('[data-flat-runtime="maps"]')!;
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 100, clientY: 80 });
     act(flushAnimationFrame);
     expect(speculative).not.toHaveBeenCalled();
     expect(committed).toHaveBeenCalledOnce();
@@ -356,7 +357,7 @@ describe("Controlled composition regression", () => {
     vi.mocked(runtime.projectPacked).mockClear();
     style.mockClear();
     const canvas = mounted.container.querySelector('[data-flat-runtime="maps"]')!;
-    fireEvent.wheel(canvas, { deltaY: -20, clientX: 100, clientY: 80 });
+    fireEvent.wheel(canvas, { deltaY: -2, clientX: 100, clientY: 80 });
     act(flushAnimationFrame);
     expect(style).not.toHaveBeenCalled();
     expect(vi.mocked(runtime.project)).not.toHaveBeenCalled();
