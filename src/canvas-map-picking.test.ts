@@ -4,6 +4,7 @@ import { describe, it } from "vitest";
 import {
   createCanvasMapScene,
   hitTestCanvasMapScene,
+  hitTestCanvasMapSceneAll,
   type CanvasMapScene,
   type CanvasMapScenePrimitive,
   type MapScreenPoint,
@@ -81,14 +82,20 @@ describe("Map Feature picking work and parity", () => {
     assert.equal(hitTestCanvasMapScene(scene, { x: -4.001, y: 50 }), null);
   });
 
-  it("preserves topmost eligible identity and circle minimum hit radius", () => {
+  it("preserves topmost eligible identity and MapLibre's circle hit radius", () => {
     const passive = circle("passive", [10, 10]);
     passive.interactive = false;
     const scene = identityScene([
       circle("bottom", [10, 10]), circle("top", [10, 10]), passive,
     ]);
-    assert.equal(hitTestCanvasMapScene(scene, { x: 18, y: 10 }), scene.primitives[1]);
-    assert.equal(hitTestCanvasMapScene(scene, { x: 18.001, y: 10 }), null);
+    // Radius 5 plus stroke 2, as MapLibre's circle query extent.
+    assert.equal(hitTestCanvasMapScene(scene, { x: 17, y: 10 }), scene.primitives[1]);
+    assert.equal(hitTestCanvasMapScene(scene, { x: 17.001, y: 10 }), null);
+    assert.deepEqual(hitTestCanvasMapSceneAll(scene, { x: 17, y: 10 }), [
+      scene.primitives[1],
+      scene.primitives[0],
+    ]);
+    assert.deepEqual(hitTestCanvasMapSceneAll(scene, { x: 17.001, y: 10 }), []);
   });
 
   it("does not retain stale geometry, interaction eligibility or stroke tolerance", () => {
@@ -196,7 +203,8 @@ function referencePick(scene: CanvasMapScene, point: MapScreenPoint) {
 function referenceHit(primitive: CanvasMapScenePrimitive, point: MapScreenPoint): boolean {
   if (primitive.kind === "direction-marker") return false;
   if (primitive.kind === "circle") {
-    const radius = Math.max(8, (primitive.renderPrimitive as MapRenderCircle).radius);
+    const circle = primitive.renderPrimitive as MapRenderCircle;
+    const radius = circle.radius + circle.strokeWidth;
     return (point.x - primitive.x) ** 2 + (point.y - primitive.y) ** 2 <= radius * radius;
   }
   const width = (primitive.renderPrimitive as MapRenderLine | MapRenderPolygon).strokeWidth;

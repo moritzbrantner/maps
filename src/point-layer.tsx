@@ -196,6 +196,8 @@ function PointFeatureLayer<
   const isFlatSurface = surface?.display === "flat" || surface?.display === "globe";
   const surfaceRef = useRef(surface);
   const flatMarkerCacheRef = useRef<Map<string, FlatPointCacheEntry>>(new Map());
+  /** The point whose hover this layer delivered; only its own `mouseout` clears the hover. */
+  const deliveredHoverKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     surfaceRef.current = surface;
@@ -242,7 +244,6 @@ function PointFeatureLayer<
               isMeasuring,
               label,
               radius,
-              selected,
             });
             // Drawn above its point, as the Maps runtime's Canvas label pass does.
             const addLabel = () =>
@@ -258,12 +259,12 @@ function PointFeatureLayer<
                 })
                 .addTo(layer);
 
-            const getClassName = (featureHovered: boolean) =>
+            const getClassName = (featureHovered: boolean, featureSelected: boolean) =>
               joinClassNames(
                 "mb-maps__point-marker",
                 featureDraggable && "mb-maps__feature--draggable",
                 featureHovered && "mb-maps__feature--hovered",
-                selected && "mb-maps__feature--selected",
+                featureSelected && "mb-maps__feature--selected",
               );
 
             return {
@@ -272,7 +273,7 @@ function PointFeatureLayer<
               render: () => {
                 const marker = flat.circleMarker(toLatLng(feature.coordinates), {
                   bubblingMouseEvents: false,
-                  className: getClassName(hovered),
+                  className: getClassName(hovered, selected),
                   color: "#ffffff",
                   fillColor,
                   fillOpacity: 0.92,
@@ -282,25 +283,29 @@ function PointFeatureLayer<
                   weight: selected || hovered ? 3 : 2,
                 });
 
-                const hover: FlatLayerEntryHover<boolean> = {
-                  apply: (featureHovered) => {
-                    marker.setStyle?.({
-                      className: getClassName(featureHovered),
-                      // The Maps runtime's hover delta, as real MapLibre paint.
-                      weight: selected ? 3 : featureHovered ? 3 : 2,
-                    });
+                // Hover and selection restyle the marker in place: a replaced MapLibre layer
+                // never fires `mouseleave`, which would leave the hover stuck (#312).
+                const restyle = (featureHovered: boolean, featureSelected: boolean) => {
+                  marker.setStyle?.({
+                    className: getClassName(featureHovered, featureSelected),
+                    // The Maps runtime's hover delta, as real MapLibre paint.
+                    weight: featureSelected || featureHovered ? 3 : 2,
+                  });
+                };
+                const entry: FlatPointCacheEntry = {
+                  coordinatesKey,
+                  hover: {
+                    apply: (featureHovered) => restyle(featureHovered, entry.selected),
+                    feature,
+                    state: hovered,
                   },
-                  feature,
-                  state: hovered,
+                  layers: [marker],
+                  restyle,
+                  selected,
+                  signature,
                 };
 
                 if (!isMeasuring) {
-                  const entry: FlatPointCacheEntry = {
-                    coordinatesKey,
-                    hover,
-                    layers: [marker],
-                    signature,
-                  };
 
                   marker.on(
                     "click",
@@ -347,6 +352,7 @@ function PointFeatureLayer<
                   marker.on(
                     "mouseover",
                     (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                      deliveredHoverKeyRef.current = featureKey;
                       map.getContainer().style.cursor = featureDraggable ? "grab" : "pointer";
                       currentSurface.handleFeatureHover(
                         feature,
@@ -363,6 +369,7 @@ function PointFeatureLayer<
                   marker.on(
                     "mousemove",
                     (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                      deliveredHoverKeyRef.current = featureKey;
                       currentSurface.handleFeatureHover(
                         feature,
                         getFlatFeaturePosition(map, feature.coordinates, event),
@@ -376,6 +383,10 @@ function PointFeatureLayer<
                     },
                   );
                   marker.on("mouseout", () => {
+                    // MapLibre fires each point layer's events in listener order, so a late
+                    // `mouseleave` from the previous point must not clear the next one's hover.
+                    if (deliveredHoverKeyRef.current !== featureKey) return;
+                    deliveredHoverKeyRef.current = null;
                     map.getContainer().style.cursor = "";
                     currentSurface.handleFeatureHover(null, null, {
                       getFeatureId,
@@ -391,15 +402,16 @@ function PointFeatureLayer<
                 }
 
                 marker.addTo(layer);
-                return {
-                  coordinatesKey,
-                  hover,
-                  layers: label ? [marker, addLabel()] : [marker],
-                  signature,
-                };
+                if (label) entry.layers.push(addLabel());
+                return entry;
               },
               signature,
               update: (entry) => {
+                if (entry.selected !== selected) {
+                  entry.selected = selected;
+                  entry.restyle(entry.hover.state, selected);
+                }
+
                 if (entry.coordinatesKey === coordinatesKey) {
                   return true;
                 }
@@ -737,6 +749,8 @@ type FlatPointCacheEntry = {
   coordinatesKey: string;
   hover: FlatLayerEntryHover<boolean>;
   layers: FlatLayer[];
+  restyle: (hovered: boolean, selected: boolean) => void;
+  selected: boolean;
   signature: string;
 };
 
@@ -775,14 +789,12 @@ function createFlatPointSignature({
   isMeasuring,
   label,
   radius,
-  selected,
 }: {
   featureDraggable: boolean;
   fillColor: string;
   isMeasuring: boolean;
   label: string | null;
   radius: number;
-  selected: boolean;
 }) {
   return JSON.stringify({
     featureDraggable,
@@ -790,7 +802,6 @@ function createFlatPointSignature({
     interactive: !isMeasuring,
     label,
     radius,
-    selected,
   });
 }
 

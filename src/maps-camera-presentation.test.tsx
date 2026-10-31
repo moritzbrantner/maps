@@ -822,6 +822,9 @@ describe("Maps camera presentation", () => {
     act(flushAnimationFrame);
     pointer(canvas, "pointerup", 330, 132, 1, row);
     expect(overlay.style.transform).toBe("matrix(1, 0, 0, 1, 120, 0)");
+    // The drag's own click is past MapLibre's click tolerance: it ends the drag, picks nothing.
+    fireEvent.click(canvas, { clientX: 330, clientY: 200 });
+    expect(selected).not.toHaveBeenCalled();
 
     // x 480 is outside the polygon as rendered but inside it as presented.
     fireEvent.click(canvas, { clientX: 480, clientY: 200 });

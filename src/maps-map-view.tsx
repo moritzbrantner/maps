@@ -67,6 +67,9 @@ export type MapsMapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   createTileImageLoader?: () => MapsTileImageLoader;
 };
 
+/** MapLibre's default `clickTolerance`: pointer travel at which a press is a drag. */
+const MAP_CLICK_TOLERANCE_PX = 3;
+
 export function MapsMapView({
   children,
   className,
@@ -100,7 +103,8 @@ export function MapsMapView({
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
   const overlayControllerRef = useRef<MapsOverlayLayersController | null>(null);
-  const featurePointerDownPrimitiveRef = useRef<string | null>(null);
+  /** Where the primary pointer went down; a click that travelled farther is a drag end. */
+  const pointerDownPositionRef = useRef<{ x: number; y: number } | null>(null);
   const lastFitBoundsKeyRef = useRef<string | null>(null);
   const blockedHoverPositionRef = useRef<{ x: number; y: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -567,16 +571,21 @@ export function MapsMapView({
         data-map-runtime="maps"
         onClickCapture={(event) => {
           if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
-          const overlay = overlayControllerRef.current;
-          const hit = overlay?.pickAtClientPoint(event.clientX, event.clientY) ?? null;
-          const pointerDownPrimitive = featurePointerDownPrimitiveRef.current;
-          featurePointerDownPrimitiveRef.current = null;
+          const down = pointerDownPositionRef.current;
+          pointerDownPositionRef.current = null;
 
-          if (!hit || !pointerDownPrimitive || hit.primitiveId !== pointerDownPrimitive) {
+          // MapLibre's clickTolerance: a release this far from the press ends a drag and
+          // clicks nothing, neither a feature nor the background.
+          if (
+            down &&
+            Math.hypot(event.clientX - down.x, event.clientY - down.y) >= MAP_CLICK_TOLERANCE_PX
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
             return;
           }
 
-          if (overlay?.handleClickAtClientPoint(event.clientX, event.clientY)) {
+          if (overlayControllerRef.current?.handleClickAtClientPoint(event.clientX, event.clientY)) {
             event.preventDefault();
             event.stopPropagation();
           }
@@ -594,17 +603,14 @@ export function MapsMapView({
           }
         }}
         onPointerCancelCapture={() => {
-          featurePointerDownPrimitiveRef.current = null;
+          pointerDownPositionRef.current = null;
         }}
         onPointerDownCapture={(event) => {
           if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
-          if (event.pointerType === "mouse" && event.button !== 0) {
-            featurePointerDownPrimitiveRef.current = null;
-            return;
-          }
-
-          const hit = overlayControllerRef.current?.pickAtClientPoint(event.clientX, event.clientY);
-          featurePointerDownPrimitiveRef.current = hit?.primitiveId ?? null;
+          pointerDownPositionRef.current =
+            event.pointerType === "mouse" && event.button !== 0
+              ? null
+              : { x: event.clientX, y: event.clientY };
         }}
         onPointerLeave={(event) => {
           overlayControllerRef.current?.clearHover();
@@ -618,16 +624,18 @@ export function MapsMapView({
           }
 
           const target = event.target;
-          const gestureOwnsPointer =
+          // As in MapLibre, pointer moves owned by a camera gesture fire no hover changes:
+          // the feature under the pointer moves with it.
+          if (
             target instanceof HTMLCanvasElement &&
             typeof target.hasPointerCapture === "function" &&
-            target.hasPointerCapture(event.pointerId);
-          const hit = gestureOwnsPointer
-            ? (overlayControllerRef.current?.clearHover(), null)
-            : (overlayControllerRef.current?.handleHoverAtClientPoint(
-                event.clientX,
-                event.clientY,
-              ) ?? null);
+            target.hasPointerCapture(event.pointerId)
+          ) {
+            return;
+          }
+          const hit =
+            overlayControllerRef.current?.handleHoverAtClientPoint(event.clientX, event.clientY) ??
+            null;
           event.currentTarget.style.cursor = hit ? "pointer" : fallbackCursor;
         }}
         onClick={(event) => {

@@ -131,6 +131,21 @@ export function hitTestCanvasMapScene<TFeature = unknown>(
   return null;
 }
 
+/** Every interactive primitive under the point, topmost first (MapLibre `queryRenderedFeatures`). */
+export function hitTestCanvasMapSceneAll<TFeature = unknown>(
+  scene: CanvasMapScene<TFeature>,
+  point: MapScreenPoint,
+): CanvasMapScenePrimitive<TFeature>[] {
+  const hits: CanvasMapScenePrimitive<TFeature>[] = [];
+  for (let index = scene.primitives.length - 1; index >= 0; index -= 1) {
+    const candidate = scene.primitives[index]!;
+    if (candidate.renderPrimitive.interactive && hitPrimitive(candidate, point)) {
+      hits.push(candidate);
+    }
+  }
+  return hits;
+}
+
 export function drawCanvasMapScene<TFeature = unknown>(
   context: CanvasRenderingContext2D,
   scene: CanvasMapScene<TFeature>,
@@ -470,7 +485,9 @@ function hitPrimitive<TFeature>(
 ) {
   switch (primitive.kind) {
     case "circle": {
-      const radius = Math.max(8, (primitive.renderPrimitive as MapRenderCircle<TFeature>).radius);
+      // MapLibre's circle query extent: the radius plus the stroke drawn outside it.
+      const circle = primitive.renderPrimitive as MapRenderCircle<TFeature>;
+      const radius = circle.radius + circle.strokeWidth;
       const dx = point.x - primitive.x;
       const dy = point.y - primitive.y;
       return dx * dx + dy * dy <= radius * radius;
