@@ -206,10 +206,20 @@ churn checks remain correctness evidence, not camera-churn performance scores.
 
 ## MapLibre oracle gate
 
-`bun run oracle` ([oracle/](../oracle/run.ts), [#306](https://github.com/moritzbrantner/maps/issues/306)) renders each named scenario in `oracle/scenarios.ts` through `MapView flatRuntime="maplibre"` and `flatRuntime="maps"` with the same style, generated raster tiles, camera and data. Three gates block per scenario:
+`bun run oracle` ([oracle/](../oracle/run.ts), [#306](https://github.com/moritzbrantner/maps/issues/306)) renders each named scenario in `oracle/scenarios.ts` through `MapView flatRuntime="maplibre"` and `flatRuntime="maps"` with the same style, tiles, camera and data. Three gates block per scenario:
 
 - **image:** NVIDIA FLIP of the map pixels (controls hidden) on SwiftShader, mean ≤ 0.005 and p99 ≤ 0.05, or MapLibre's own run-to-run floor rounded up when that is higher;
 - **interaction:** scripted hovers and clicks pick the same feature ids, and drag/wheel steps end in the same bounds (≤ 1 px per edge);
 - **time:** the median rAF interval of a scripted camera loop (vsync and frame-rate cap off) is ≤ 1.10× MapLibre's. It is enforced on a local hardware GPU and advisory on CI's software adapter.
+
+Rotated and pitched cameras (`bearing`, `pitch`) click at the pixel MapLibre projects for each step. After a move they compare the camera (center, zoom, bearing, pitch, converted to corner displacement in pixels) instead of north-up bounds.
+
+All data is free and served locally through request interception ([#320](https://github.com/moritzbrantner/maps/issues/320)):
+
+- raster tiles are generated in Node (`oracle/tiles.ts`);
+- vector tiles are Shortbread-shaped MVT cut on demand with `geojson-vt` and `vt-pbf` from `oracle/data/alpine-foreland.json`, a public-domain Natural Earth 1:10m extract (`oracle/clip-natural-earth.mjs`). Maps reads them through `tileset`; MapLibre reads them through the same Shortbread class palette, written as a data-driven style;
+- SDF glyphs are Noto Sans (OFL-1.1, `oracle/glyphs/OFL.txt`), Latin-1 range only, built with `build_pbf_glyphs`. The sprite and the Terrarium DEM tiles are generated.
+
+Some scenarios cover capabilities Maps does not implement at all: SDF glyph symbol layers (#321), line dash/caps/joins (#322), fill patterns (#323), and hillshade/terrain (#324). They are marked `unsupported` and render only the MapLibre reference, so the report shows the target. They claim no gate and do not fail the run. Each becomes gated once its issue lands.
 
 A failing gate listed in the scenario's `knownGaps` points to its follow-up issue. A known gap that starts passing fails the run until its entry is removed, so the list only shrinks. CI runs the gate in the `oracle` job and uploads `oracle-report`. Pages publishes the report at `/maps/oracle/`. MapLibre stays the default until a consumer's scenarios pass and the owner approves a switch (ADR 0003).

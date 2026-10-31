@@ -9,17 +9,22 @@ import { createRoot } from "react-dom/client";
 
 import {
   ClusterLayer,
+  FlowLayer,
   GeoJsonLayer,
   MapView,
   PointLayer,
   type AggregatedMapFeature,
   type MapPoint,
+  type MapsTileset,
   type MapSurfaceController,
   type MapViewState,
   type RasterMapStyle,
 } from "../src";
 import { configureMapsWasmPackage } from "../src/aggregation-wasm";
+import { getShortbreadClassStyle } from "../src/maps-tileset-style";
+import type { MapsVectorBasemapStyleClass } from "../src/vector-basemap";
 import "../styles.css";
+import alpineForeland from "./data/alpine-foreland.json";
 import {
   DEAD_SEA_SCROLLS,
   findScenario,
@@ -27,6 +32,7 @@ import {
   type LngLat,
   type Scenario,
 } from "./scenarios.ts";
+import { LAND_BOUNDS, VECTOR_MAX_ZOOM } from "./vector-constants.ts";
 
 configureMapsWasmPackage("/wasm/maps_wasm.js");
 
@@ -36,7 +42,12 @@ type PickEvent = { kind: "hover" | "select"; layer: string; id: string | null; s
 type OracleApi = {
   controller: MapSurfaceController | null;
   events: PickEvent[];
-  maplibre: { loaded(): boolean; areTilesLoaded(): boolean; isMoving(): boolean } | null;
+  maplibre: {
+    loaded(): boolean;
+    areTilesLoaded(): boolean;
+    isMoving(): boolean;
+    project(at: LngLat): { x: number; y: number };
+  } | null;
   runtime: Runtime;
   scenario: Scenario;
   frameTimes(frames: number): Promise<number[]>;
@@ -64,19 +75,220 @@ const oracle: OracleApi = {
 };
 window.__oracle = oracle;
 
+/** Declared before `style` is built at module load, which reads it for `line-dash-caps-joins`. */
+const alpineLineCache: { collection: ReturnType<typeof buildAlpineLines> | null } = { collection: null };
+
+const rasterSource = (pattern: string) => ({
+  maxzoom: 19,
+  tileSize: 256,
+  tiles: [`${TILE_ORIGIN}/${pattern}/{z}/{x}/{y}.png`],
+  type: "raster",
+});
+
 /** Exactly one raster source/layer: the one style form both runtimes accept. */
-const style = {
+const rasterStyle = (pattern: string) => ({
   layers: [{ id: "oracle-raster", source: "oracle", type: "raster" }],
-  sources: {
-    oracle: {
-      maxzoom: 19,
-      tileSize: 256,
-      tiles: [`${TILE_ORIGIN}/${scenario.tiles}/{z}/{x}/{y}.png`],
-      type: "raster",
-    },
-  },
+  sources: { oracle: rasterSource(pattern) },
   version: 8,
-} as unknown as RasterMapStyle;
+});
+
+/** The Maps Tileset for `vector` scenarios (tiles from `oracle/vector-tiles.ts`). */
+const tileset: MapsTileset = {
+  attribution: "Natural Earth",
+  bounds: [...LAND_BOUNDS],
+  dataRevision: "natural-earth-10m-alpine-foreland-v1",
+  format: "mvt",
+  license: "Public domain (Natural Earth)",
+  maxZoom: VECTOR_MAX_ZOOM,
+  minZoom: 0,
+  projection: "web-mercator",
+  provenance: "oracle/clip-natural-earth.mjs extract, cut by geojson-vt and encoded by vt-pbf",
+  scheme: "xyz",
+  schema: {
+    id: "shortbread",
+    sourceLayers: ["land", "water_polygons", "water_lines", "streets", "boundaries"],
+    version: "1.0",
+  },
+  sourceId: "oracle-alpine-foreland",
+  tileSize: 512,
+  transport: { kind: "xyz", urlTemplate: `${TILE_ORIGIN}/vector/{z}/{x}/{y}.mvt` },
+  version: 1,
+};
+
+/**
+ * The Maps Shortbread class palette (`getShortbreadClassStyle`, the same table `tileset`
+ * renders with) as a data-driven MapLibre style: fills by `kind`, outlines and lines by
+ * source layer, in the Maps paint order.
+ */
+function vectorStyle() {
+  const fill = (styleClass: MapsVectorBasemapStyleClass) => getShortbreadClassStyle(styleClass);
+  const line = (id: string, sourceLayer: string, styleClass: MapsVectorBasemapStyleClass) => {
+    const style = getShortbreadClassStyle(styleClass) as { color: string; opacity: number; width: number };
+    return {
+      id,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": style.color, "line-opacity": style.opacity, "line-width": style.width },
+      source: "oracle-vector",
+      "source-layer": sourceLayer,
+      type: "line",
+    };
+  };
+  const byKind = (property: "color" | "opacity", kind: string, special: MapsVectorBasemapStyleClass, base: MapsVectorBasemapStyleClass) => [
+    "match",
+    ["get", "kind"],
+    kind,
+    fill(special)[property],
+    fill(base)[property],
+  ];
+  return {
+    glyphs: `${TILE_ORIGIN}/glyphs/{fontstack}/{range}.pbf`,
+    layers: [
+      { id: "background", paint: { "background-color": "#f9f4ee" }, type: "background" },
+      {
+        id: "land",
+        paint: { "fill-color": byKind("color", "forest", "land-forest", "land"), "fill-opacity": byKind("opacity", "forest", "land-forest", "land") },
+        source: "oracle-vector",
+        "source-layer": "land",
+        type: "fill",
+      },
+      {
+        id: "water",
+        paint: { "fill-color": byKind("color", "glacier", "water-glacier", "water"), "fill-opacity": byKind("opacity", "glacier", "water-glacier", "water") },
+        source: "oracle-vector",
+        "source-layer": "water_polygons",
+        type: "fill",
+      },
+      line("water-outline", "water_polygons", "water-line"),
+      line("water-lines", "water_lines", "water-line"),
+      line("streets", "streets", "street"),
+      line("boundaries", "boundaries", "boundary"),
+    ] as Array<Record<string, unknown>>,
+    sources: {
+      "oracle-vector": {
+        maxzoom: VECTOR_MAX_ZOOM,
+        minzoom: 0,
+        tileSize: 512,
+        tiles: [tileset.transport.urlTemplate],
+        type: "vector",
+      },
+    } as Record<string, unknown>,
+    version: 8,
+  };
+}
+
+/** MapLibre-only styles for the unsupported scenarios (#321-#324). */
+function referenceStyle(name: string) {
+  switch (name) {
+    case "symbols": {
+      const style = vectorStyle();
+      style.layers.push(
+        {
+          id: "place-dots",
+          paint: { "circle-color": "#1f2937", "circle-radius": ["interpolate", ["linear"], ["get", "rank"], 2, 5, 8, 3] },
+          source: "oracle-vector",
+          "source-layer": "places",
+          type: "circle",
+        },
+        {
+          id: "place-labels",
+          layout: {
+            "text-anchor": "left",
+            "text-field": ["get", "name"],
+            "text-font": ["NotoSans-Regular"],
+            "text-offset": [0.6, 0],
+            "text-size": ["interpolate", ["linear"], ["get", "rank"], 2, 20, 8, 13],
+          },
+          paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+          source: "oracle-vector",
+          "source-layer": "places",
+          type: "symbol",
+        },
+        {
+          id: "lake-labels",
+          filter: ["==", ["get", "kind"], "lake"],
+          layout: { "text-field": ["get", "name"], "text-font": ["NotoSans-Regular"], "text-size": 14 },
+          paint: { "text-color": "#1e3a8a", "text-halo-color": "#e0f2fe", "text-halo-width": 1 },
+          source: "oracle-vector",
+          "source-layer": "water_polygons",
+          type: "symbol",
+        },
+      );
+      return style;
+    }
+    case "fill-pattern": {
+      const style = { ...vectorStyle(), sprite: `${TILE_ORIGIN}/sprite/oracle` };
+      style.layers.push({
+        filter: ["==", ["get", "kind"], "glacier"],
+        id: "glacier-hatch",
+        paint: { "fill-pattern": "hatch" },
+        source: "oracle-vector",
+        "source-layer": "water_polygons",
+        type: "fill",
+      });
+      return style;
+    }
+    case "line-dash-caps-joins": {
+      const line = (id: string, filter: unknown[], layout: Record<string, unknown>, paint: Record<string, unknown>) => ({
+        filter,
+        id,
+        layout,
+        paint,
+        source: "lines",
+        type: "line",
+      });
+      return {
+        layers: [
+          { id: "oracle-raster", source: "oracle", type: "raster" },
+          line("motorways", ["==", ["get", "kind"], "motorway"], { "line-cap": "square", "line-join": "bevel" }, { "line-color": "#c2410c", "line-width": 6 }),
+          line("primary", ["==", ["get", "kind"], "primary"], { "line-cap": "butt", "line-join": "miter" }, { "line-color": "#ea580c", "line-dasharray": [3, 1.5], "line-width": 3 }),
+          line("rivers", ["==", ["get", "kind"], "river"], { "line-cap": "round", "line-join": "round" }, { "line-color": "#1d4ed8", "line-dasharray": [0.5, 2], "line-width": 4 }),
+          line("boundaries", ["==", ["get", "admin_level"], 2], { "line-cap": "butt", "line-join": "miter" }, { "line-color": "#7e22ce", "line-dasharray": [4, 2, 1, 2], "line-width": 2.5 }),
+        ],
+        sources: {
+          lines: { data: alpineLines(), type: "geojson" },
+          oracle: rasterSource("geographic"),
+        },
+        version: 8,
+      };
+    }
+    case "hillshade-terrain": {
+      const dem = {
+        encoding: "terrarium",
+        maxzoom: 12,
+        tileSize: 256,
+        tiles: [`${TILE_ORIGIN}/dem/{z}/{x}/{y}.png`],
+        type: "raster-dem",
+      };
+      return {
+        layers: [
+          { id: "oracle-raster", source: "oracle", type: "raster" },
+          {
+            id: "hillshade",
+            paint: { "hillshade-exaggeration": 0.6, "hillshade-shadow-color": "#3b3b3b" },
+            source: "dem-hillshade",
+            type: "hillshade",
+          },
+        ],
+        sources: { "dem-hillshade": dem, "dem-terrain": dem, oracle: rasterSource("geographic") },
+        terrain: { exaggeration: 1.2, source: "dem-terrain" },
+        version: 8,
+      };
+    }
+    default:
+      throw new Error(`no reference style for scenario ${name}`);
+  }
+}
+
+function styleFor(): RasterMapStyle {
+  if (scenario.basemap === "style") return referenceStyle(scenario.name) as unknown as RasterMapStyle;
+  if (scenario.basemap === "vector") {
+    // Maps draws the basemap from `tileset`; MapLibre from the equivalent style.
+    const style = scenario.unsupported ? referenceStyle(scenario.name) : vectorStyle();
+    return style as unknown as RasterMapStyle;
+  }
+  return rasterStyle(scenario.basemap) as unknown as RasterMapStyle;
+}
+const style = styleFor();
 
 function record(layer: string, kind: PickEvent["kind"]) {
   return (id: string | null, context: { source: string }) => {
@@ -110,6 +322,7 @@ function App() {
         flatRuntime={runtime}
         mapLabel={`Oracle ${scenario.name}`}
         mapStyle={style}
+        {...(runtime === "maps" && scenario.basemap === "vector" ? { tileset } : {})}
         onMapControllerReady={(controller) => {
           oracle.controller = controller;
         }}
@@ -164,6 +377,8 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
         />
       );
     case "church-site-discovery":
+    case "bearing":
+    case "pitch":
       return (context) => (
         <>
           <GeoJsonLayer
@@ -225,6 +440,59 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
           points={comparisonPoints}
         />
       );
+    case "vector-tiles":
+    case "symbols":
+    case "line-dash-caps-joins":
+    case "fill-pattern":
+    case "hillshade-terrain":
+      return () => null;
+    case "line-styles":
+      return (context) => (
+        <GeoJsonLayer
+          {...interactive("line", context)}
+          featureCollection={alpineLines()}
+          getFeatureStyle={(feature) => {
+            const style = LINE_STYLES[String(feature.properties.kind)] ?? LINE_STYLES.secondary!;
+            const rank = Number(feature.properties.rank ?? 6);
+            const selected = context.selected.line === feature.id;
+            const width = feature.properties.kind === "river" ? 1 + (10 - rank) * 0.35 : style.lineWidth!;
+            return { ...style, lineWidth: selected ? width + 2 : width };
+          }}
+          layerId="alpine-lines"
+        />
+      );
+    case "atlas-flows":
+      return (context) => (
+        <>
+          <GeoJsonLayer
+            featureCollection={romanProvinces}
+            getFeatureStyle={(feature) => ({
+              polygonFillColor: String(feature.properties.color),
+              polygonFillOpacity: 0.28,
+              polygonStrokeColor: "#5b4636",
+              polygonStrokeWidth: 1.2,
+            })}
+            layerId="country-overlay"
+          />
+          <FlowLayer
+            {...interactive("flow", context)}
+            flowColor="#0f766e"
+            flows={atlasFlows}
+            getFeatureId={(feature) => feature.flow.id}
+            maxWidth={9}
+            minWidth={2}
+            showDirection
+            showEndpoints
+          />
+          <ClusterLayer
+            {...interactive("entity", context)}
+            clusterRadius={40}
+            getFeatureId={clusterFeatureId}
+            layerId="atlas-entities"
+            points={atlasEntities}
+          />
+        </>
+      );
     default:
       throw new Error(`no layers for scenario ${name}`);
   }
@@ -247,6 +515,7 @@ async function frameTimes(frames: number): Promise<number[]> {
   for (let frame = 0; frame < frames; frame++) {
     const angle = (frame / frames) * Math.PI * 2;
     controller.setViewState({
+      ...start,
       center: [lon + Math.cos(angle) * 0.4, lat + Math.sin(angle) * 0.25],
       zoom: start.zoom + Math.sin(angle * 2) * 0.2,
     });
@@ -418,5 +687,87 @@ const comparisonPoints: MapPoint[] = (() => {
     }),
   );
 })();
+
+type AlpineFeature = {
+  geometry: { coordinates: unknown; type: string };
+  properties: Record<string, string | number | undefined>;
+  type: "Feature";
+};
+
+/** One stable collection: a new object per render would make layers rebuild their data. */
+function alpineLines() {
+  return (alpineLineCache.collection ??= buildAlpineLines());
+}
+
+/** Rivers, roads and borders of the Natural Earth extract, with stable ids for picking. */
+function buildAlpineLines() {
+  return {
+    features: (alpineForeland.features as AlpineFeature[]).flatMap((feature, index) => {
+      const { layer, ...properties } = feature.properties;
+      if (layer !== "water_lines" && layer !== "streets" && layer !== "boundaries") return [];
+      return [{ ...feature, id: `${layer}-${index}`, properties: { kind: "boundary", ...properties } }];
+    }),
+    type: "FeatureCollection" as const,
+  } as unknown as Parameters<typeof GeoJsonLayer>[0]["featureCollection"];
+}
+
+const LINE_STYLES: Record<string, { lineColor: string; lineOpacity: number; lineWidth: number }> = {
+  motorway: { lineColor: "#c2410c", lineOpacity: 0.9, lineWidth: 4 },
+  primary: { lineColor: "#ea580c", lineOpacity: 0.85, lineWidth: 2.5 },
+  river: { lineColor: "#1d4ed8", lineOpacity: 0.9, lineWidth: 2 },
+  secondary: { lineColor: "#a16207", lineOpacity: 0.75, lineWidth: 1.5 },
+  boundary: { lineColor: "#7e22ce", lineOpacity: 0.7, lineWidth: 1.2 },
+};
+
+const PLACES = {
+  alexandria: [29.92, 31.2],
+  antioch: [36.16, 36.2],
+  carthage: [10.32, 36.85],
+  constantinople: [28.97, 41.01],
+  milan: [9.19, 45.46],
+  ravenna: [12.2, 44.42],
+  rome: [12.4964, 41.9028],
+} satisfies Record<string, LngLat>;
+
+/** Source-transfer flows of a late-antique corpus (historical-source-atlas#64 shape). */
+const atlasFlows = (
+  [
+    ["alexandria-rome", "alexandria", "rome", 14],
+    ["constantinople-ravenna", "constantinople", "ravenna", 9],
+    ["antioch-constantinople", "antioch", "constantinople", 6],
+    ["carthage-rome", "carthage", "rome", 4],
+    ["rome-milan", "rome", "milan", 3],
+  ] as const
+).map(([id, from, to, weight]) => ({
+  from: PLACES[from] as LngLat,
+  id,
+  metrics: { weight },
+  to: PLACES[to] as LngLat,
+}));
+
+/** Manuscript witnesses around each place; they cluster at the Atlas zoom. */
+const atlasEntities: MapPoint[] = Object.entries(PLACES).flatMap(([place, [longitude, latitude]], hub) =>
+  Array.from({ length: 4 + hub * 2 }, (_, index) => {
+    const angle = index * 2.399963229728653;
+    const distance = 0.08 + (index % 5) * 0.06;
+    return {
+      id: `${place}-witness-${index}`,
+      label: `${place} witness ${index + 1}`,
+      latitude: latitude + Math.sin(angle) * distance,
+      longitude: longitude + Math.cos(angle) * distance * 1.3,
+    };
+  }),
+);
+
+/** Coarse late-antique dioceses as the Atlas country overlay. */
+const romanProvinces = {
+  features: [
+    province("italia", "#c2410c", [[7.6, 44.1], [9.5, 44.2], [12.3, 44.9], [13.7, 45.7], [12.4, 44.2], [14.2, 42.4], [16.0, 41.4], [18.5, 40.1], [16.6, 38.4], [15.6, 38.0], [15.7, 40.0], [12.6, 41.4], [10.5, 42.9], [8.7, 44.4]]),
+    province("macedonia", "#7c3aed", [[19.4, 41.9], [22.5, 42.3], [24.1, 41.0], [22.9, 40.4], [23.3, 39.2], [22.0, 37.0], [21.1, 37.8], [20.2, 39.6]]),
+    province("thracia", "#0369a1", [[24.1, 41.0], [26.3, 42.0], [28.0, 42.0], [29.1, 41.2], [26.2, 40.4]]),
+    province("africa", "#a16207", [[8.6, 36.9], [10.2, 37.3], [11.1, 36.9], [10.4, 35.6], [11.1, 34.2], [8.2, 34.0]]),
+  ],
+  type: "FeatureCollection" as const,
+};
 
 createRoot(document.getElementById("root")!).render(<App />);
