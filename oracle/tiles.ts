@@ -48,12 +48,58 @@ export function tilePng(pattern: string, z: number, x: number, y: number): Buffe
   return png;
 }
 
-function encodePng(width: number, height: number, filteredRows: Buffer) {
+/**
+ * Terrarium-encoded elevation (`height = R·256 + G + B/256 − 32768` m) of a smooth analytic
+ * massif, for the `hillshade-terrain` reference (#324).
+ */
+export function demPng(z: number, x: number, y: number): Buffer {
+  const key = `dem/${z}/${x}/${y}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const rows = Buffer.alloc((TILE_SIZE * 3 + 1) * TILE_SIZE);
+  const scale = 2 ** z * TILE_SIZE;
+  for (let row = 0; row < TILE_SIZE; row++) {
+    const offset = row * (TILE_SIZE * 3 + 1);
+    const v = (y * TILE_SIZE + row + 0.5) / scale;
+    for (let column = 0; column < TILE_SIZE; column++) {
+      const u = (x * TILE_SIZE + column + 0.5) / scale;
+      const ridge = Math.sin(2 * Math.PI * u * 420) * Math.cos(2 * Math.PI * v * 330);
+      const valley = Math.sin(2 * Math.PI * (u + v) * 1500);
+      const height = 1800 + 1200 * ridge + 250 * valley + 32768;
+      const pixel = offset + 1 + column * 3;
+      rows[pixel] = Math.floor(height / 256);
+      rows[pixel + 1] = Math.floor(height) % 256;
+      rows[pixel + 2] = Math.floor((height % 1) * 256);
+    }
+  }
+  const png = encodePng(TILE_SIZE, TILE_SIZE, rows);
+  cache.set(key, png);
+  return png;
+}
+
+/** A one-pattern sprite (16 px diagonal hatch) for the `fill-pattern` reference (#323). */
+export const SPRITE_JSON = { hatch: { height: 16, pixelRatio: 1, width: 16, x: 0, y: 0 } };
+
+export function spritePng(): Buffer {
+  const size = 16;
+  const rows = Buffer.alloc((size * 4 + 1) * size);
+  for (let row = 0; row < size; row++) {
+    const offset = row * (size * 4 + 1);
+    for (let column = 0; column < size; column++) {
+      const line = (row + column) % 8 < 2;
+      const pixel = offset + 1 + column * 4;
+      rows.set(line ? [37, 99, 235, 255] : [255, 255, 255, 0], pixel);
+    }
+  }
+  return encodePng(size, size, rows, 6);
+}
+
+function encodePng(width: number, height: number, filteredRows: Buffer, colorType = 2) {
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0);
   header.writeUInt32BE(height, 4);
   header[8] = 8; // bit depth
-  header[9] = 2; // RGB
+  header[9] = colorType; // 2 RGB, 6 RGBA
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", header),

@@ -20,7 +20,9 @@ export type Step =
   /** Drag the map by a screen offset, starting at the map center. */
   | { kind: "pan"; by: [dx: number, dy: number]; label: string }
   /** Wheel at a screen offset from the center; negative deltaY zooms in. */
-  | { kind: "wheel"; at: [dx: number, dy: number]; deltaY: number; ticks: number; label: string };
+  | { kind: "wheel"; at: [dx: number, dy: number]; deltaY: number; ticks: number; label: string }
+  /** Right-button drag from the center: horizontal rotates the bearing, vertical the pitch. */
+  | { kind: "rotate"; by: [dx: number, dy: number]; label: string };
 
 /**
  * A failing gate that is known and owned by a follow-up issue. The runner reports it as a
@@ -29,19 +31,46 @@ export type Step =
  */
 export type KnownGap = { gate: Gate; issue: number; reason: string };
 
+/**
+ * A capability MapLibre renders and Maps does not implement at all. The runner renders only
+ * the MapLibre reference, so the report shows the target, and reports the scenario as
+ * unsupported with its issue. It claims no Maps gate.
+ */
+export type Unsupported = { issue: number; reason: string };
+
+/**
+ * What draws under the application layers:
+ * - `geographic` / `zoom-tinted`: generated raster tiles (`oracle/tiles.ts`);
+ * - `vector`: Shortbread MVT built from `oracle/data/alpine-foreland.json`
+ *   (`oracle/vector-tiles.ts`), styled by the Maps class palette: `tileset` on Maps and the
+ *   equivalent data-driven MapLibre style on MapLibre;
+ * - `style`: a MapLibre-only style built by the fixture (unsupported scenarios).
+ */
+export type Basemap = "geographic" | "zoom-tinted" | "vector" | "style";
+
+export type Camera = { center: LngLat; zoom: number; bearing?: number; pitch?: number };
+
 export type Scenario = {
   name: string;
   /** What the scenario proves, in one line. */
   capability: string;
   /** The real consumer journey or merged change it mirrors. */
   origin: string;
-  camera: { center: LngLat; zoom: number };
+  camera: Camera;
   size: { width: number; height: number };
-  /** Raster tile pattern served for this scenario (see `oracle/tiles.ts`). */
-  tiles: "geographic" | "zoom-tinted";
+  basemap: Basemap;
   steps: Step[];
   knownGaps: KnownGap[];
+  unsupported?: Unsupported;
 };
+
+/**
+ * North-up, unpitched cameras project steps with Web Mercator math and compare bounds.
+ * Rotated or pitched ones pick at MapLibre's projected pixel and compare view states.
+ */
+export function isNorthUp(camera: Camera) {
+  return !camera.bearing && !camera.pitch;
+}
 
 /** FLIP limits, as in render-engine: mean and 99th-percentile per-pixel error. */
 export const FLIP_MEAN_MAX = 0.005;
@@ -56,6 +85,9 @@ export const TILE_ORIGIN = "https://oracle-tiles.invalid";
 
 export const DEAD_SEA_SCROLLS: LngLat = [35.458, 31.741];
 export const KEVELAER_CHAPEL: LngLat = [6.2474, 51.5823];
+/** On Natural Earth lines in `oracle/data/alpine-foreland.json`, ≥ 12 px from other lines at z8. */
+export const MOTORWAY_VERTEX: LngLat = [9.0467, 47.6013];
+export const RHINE_POINT: LngLat = [8.51405, 47.58135];
 
 const MAP_SIZE = { height: 480, width: 720 };
 
@@ -74,7 +106,7 @@ export const scenarios: Scenario[] = [
       { by: [-140, 90], kind: "pan", label: "drag pan" },
       { at: [60, -40], deltaY: -120, kind: "wheel", label: "wheel zoom in", ticks: 3 },
     ],
-    tiles: "geographic",
+    basemap: "geographic",
   },
   {
     camera: { center: [10.4, 51.2], zoom: 5.55 },
@@ -91,7 +123,7 @@ export const scenarios: Scenario[] = [
       { by: [120, -60], kind: "pan", label: "drag pan" },
       { at: [-80, 30], deltaY: 120, kind: "wheel", label: "wheel zoom out", ticks: 2 },
     ],
-    tiles: "geographic",
+    basemap: "geographic",
   },
   {
     camera: { center: [10.3, 50.4], zoom: 4.6 },
@@ -110,7 +142,7 @@ export const scenarios: Scenario[] = [
       },
       { by: [-200, 0], kind: "pan", label: "drag pan" },
     ],
-    tiles: "zoom-tinted",
+    basemap: "zoom-tinted",
   },
   {
     camera: { center: [11.2, 50.6], zoom: 5.2 },
@@ -123,7 +155,7 @@ export const scenarios: Scenario[] = [
       { at: [13.405, 52.52], kind: "hover", label: "hover Berlin" },
       { at: [11.582, 48.1351], kind: "click", label: "select Munich" },
     ],
-    tiles: "geographic",
+    basemap: "geographic",
   },
   {
     camera: { center: [10.3, 50.4], zoom: 4.4 },
@@ -137,7 +169,133 @@ export const scenarios: Scenario[] = [
       { at: [9.1829, 48.7758], kind: "click", label: "select the Stuttgart cluster" },
       { at: [-70, 20], deltaY: -120, kind: "wheel", label: "wheel zoom in", ticks: 3 },
     ],
-    tiles: "geographic",
+    basemap: "geographic",
+  },
+  // ---- #320: vector tiles, lines, rotation, Atlas flows, and what Maps lacks ----
+  {
+    basemap: "vector",
+    camera: { center: [9.0, 47.3], zoom: 7.6 },
+    capability: "Shortbread MVT fills and lines, class palette by feature kind (lake/glacier)",
+    knownGaps: [
+      { gate: "image", issue: 325, reason: "thin lines lack coverage fade; translucent lines darken at vertices" },
+    ],
+    name: "vector-tiles",
+    origin: "Maps Tileset (#268); osmshrink#10 OSM preview (#232)",
+    size: MAP_SIZE,
+    steps: [
+      { by: [160, -80], kind: "pan", label: "drag pan" },
+      { at: [-60, 40], deltaY: -120, kind: "wheel", label: "wheel zoom in", ticks: 3 },
+    ],
+  },
+  {
+    basemap: "geographic",
+    camera: { center: [9.0, 47.4], zoom: 8 },
+    capability: "GeoJSON lines: width, colour and opacity per feature, round caps and joins",
+    knownGaps: [{ gate: "image", issue: 326, reason: "round joins crack at sharp vertices" }],
+    name: "line-styles",
+    origin: "GeoJsonLayer getFeatureStyle lines; tlm-deutschland#235 venue routes (#232)",
+    size: MAP_SIZE,
+    steps: [
+      { at: MOTORWAY_VERTEX, kind: "hover", label: "hover a motorway" },
+      { at: RHINE_POINT, kind: "click", label: "select the Rhine" },
+      { by: [-120, 60], kind: "pan", label: "drag pan" },
+    ],
+  },
+  {
+    basemap: "geographic",
+    camera: { bearing: 35, center: [10.4, 51.2], zoom: 5.55 },
+    capability: "rotated camera: raster, polygons and points; pick and rotate/pan/zoom",
+    knownGaps: [
+      { gate: "interaction", issue: 327, reason: "right-drag rotate release selects the feature under the pointer" },
+    ],
+    name: "bearing",
+    origin: "church-atlas#8 site discovery with a rotated map (#232)",
+    size: MAP_SIZE,
+    steps: [
+      { at: KEVELAER_CHAPEL, kind: "hover", label: "hover the Kevelaer chapel" },
+      { at: [12.4, 49.2], kind: "click", label: "select a diocese territory" },
+      { by: [80, 0], kind: "rotate", label: "right-drag rotate" },
+      { by: [120, -60], kind: "pan", label: "drag pan" },
+      { at: [-80, 30], deltaY: 120, kind: "wheel", label: "wheel zoom out", ticks: 2 },
+    ],
+  },
+  {
+    basemap: "geographic",
+    camera: { bearing: -20, center: [10.4, 51.2], pitch: 50, zoom: 5.55 },
+    capability: "pitched camera: minified far tiles, polygons and points; pick and pan",
+    knownGaps: [
+      { gate: "image", issue: 328, reason: "pitched overlays offset a few px from MapLibre" },
+      { gate: "image", issue: 314, reason: "far raster tiles alias without mipmaps" },
+      { gate: "interaction", issue: 328, reason: "pitched drag pan lands 1.6 px off" },
+    ],
+    name: "pitch",
+    origin: "church-atlas#8 site discovery with a pitched map (#232); mipmaps #314",
+    size: MAP_SIZE,
+    steps: [
+      { at: [7.6257, 51.9626], kind: "hover", label: "hover the Münster seat" },
+      { at: [12.4, 49.2], kind: "click", label: "select a diocese territory" },
+      { by: [-100, 40], kind: "pan", label: "drag pan" },
+    ],
+  },
+  {
+    basemap: "geographic",
+    camera: { center: [19, 39.5], zoom: 3.9 },
+    capability: "weighted flows with direction and endpoints, clustered entities, country overlay",
+    knownGaps: [],
+    name: "atlas-flows",
+    origin: "historical-source-atlas#64 full Atlas map (#232)",
+    size: MAP_SIZE,
+    steps: [
+      // Points on the straight (Mercator) flow segments.
+      { at: [20.337, 37.2712], kind: "hover", label: "hover the Alexandria-Rome flow" },
+      { at: [22.262, 42.3965], kind: "click", label: "select the Constantinople-Ravenna flow" },
+      { at: [12.4964, 41.9028], kind: "hover", label: "hover the Rome cluster" },
+      { at: [-60, 30], deltaY: -120, kind: "wheel", label: "wheel zoom in", ticks: 2 },
+    ],
+  },
+  {
+    basemap: "vector",
+    camera: { center: [8.6, 47.3], zoom: 7.8 },
+    capability: "symbol layer: SDF glyph labels, data-driven size, halo, collision",
+    knownGaps: [],
+    name: "symbols",
+    origin: "Milestone E cartography (#80); place labels on any vector basemap",
+    size: MAP_SIZE,
+    steps: [],
+    unsupported: { issue: 321, reason: "no style symbol layers or SDF glyph rendering" },
+  },
+  {
+    basemap: "style",
+    camera: { center: [9.0, 47.4], zoom: 8 },
+    capability: "line-dasharray, butt/square caps, miter/bevel joins per feature",
+    knownGaps: [],
+    name: "line-dash-caps-joins",
+    origin: "Milestone D vector style (#79): boundary and track styling",
+    size: MAP_SIZE,
+    steps: [],
+    unsupported: { issue: 322, reason: "lines are always solid with round caps and joins" },
+  },
+  {
+    basemap: "vector",
+    camera: { center: [8.4, 46.75], zoom: 8.4 },
+    capability: "fill-pattern from a sprite over vector-tile polygons",
+    knownGaps: [],
+    name: "fill-pattern",
+    origin: "Milestone D vector style (#79): glacier/wetland hatching",
+    size: MAP_SIZE,
+    steps: [],
+    unsupported: { issue: 323, reason: "no sprites or pattern fills" },
+  },
+  {
+    basemap: "style",
+    camera: { bearing: 20, center: [9.0, 47.2], pitch: 55, zoom: 8 },
+    capability: "raster-dem hillshade with 3D terrain under a pitched camera",
+    knownGaps: [],
+    name: "hillshade-terrain",
+    origin: "Milestone F terrain (#81); derived hillshade tilesets (#282)",
+    size: MAP_SIZE,
+    steps: [],
+    unsupported: { issue: 324, reason: "no raster-dem source, hillshade layer or terrain" },
   },
 ];
 

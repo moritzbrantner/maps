@@ -24,7 +24,7 @@
  * passes fails the run until its entry is removed.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,13 +40,15 @@ import {
   FRAME_TIME_MARGIN,
   TILE_ORIGIN,
   boundsOf,
+  isNorthUp,
   scenarios,
   toScreen,
   type Gate,
   type Scenario,
   type Step,
 } from "./scenarios.ts";
-import { tilePng } from "./tiles.ts";
+import { demPng, SPRITE_JSON, spritePng, tilePng } from "./tiles.ts";
+import { vectorTile } from "./vector-tiles.ts";
 
 type Runtime = "maplibre" | "maps";
 
@@ -129,7 +131,7 @@ try {
     failed ||= !result.passed;
     const fmt = (value: number | null, digits = 3) => (value === null ? "-" : value.toFixed(digits));
     console.log(
-      `${scenario.name.padEnd(24)}${fmt(result.image.mean, 4).padStart(10)}${fmt(result.image.p99, 4).padStart(10)}  ${(result.interaction.ok ? "same" : "DIFFER").padEnd(8)}${fmt(result.time.mapsMs).padStart(9)}${fmt(result.time.maplibreMs).padStart(9)}${fmt(result.time.ratio, 2).padStart(7)}  ${result.verdict}`,
+      `${scenario.name.padEnd(24)}${fmt(result.image.mean, 4).padStart(10)}${fmt(result.image.p99, 4).padStart(10)}  ${(result.unsupported ? "-" : result.interaction.ok ? "same" : "DIFFER").padEnd(8)}${fmt(result.time.mapsMs).padStart(9)}${fmt(result.time.maplibreMs).padStart(9)}${fmt(result.time.ratio, 2).padStart(7)}  ${result.verdict}`,
     );
   }
 } finally {
@@ -161,14 +163,17 @@ process.exit(failed ? 1 : 0);
 // ---------------------------------------------------------------------------------------
 
 async function runScenario(scenario: Scenario) {
-  const reference = await capture(images, scenario, "maplibre", true);
-  const candidate = await capture(images, scenario, "maps", true);
-  const floorRun = await capture(images, scenario, "maplibre", false);
-
   const write = (file: string, png: Buffer) => {
     writeFileSync(path.join(outDir, file), png);
     return file;
   };
+  if (scenario.unsupported) return unsupportedResult(scenario, write);
+
+  const picks: PickPoints = new Map();
+  const reference = await capture(images, scenario, "maplibre", true, picks);
+  const candidate = await capture(images, scenario, "maps", true, picks);
+  const floorRun = await capture(images, scenario, "maplibre", false, picks);
+
   const files = {
     flip: `${scenario.name}.flip.png`,
     maplibre: write(`${scenario.name}.maplibre.png`, reference.png),
@@ -242,7 +247,31 @@ async function runScenario(scenario: Scenario) {
     origin: scenario.origin,
     passed,
     time,
+    unsupported: null,
     verdict: verdicts.length ? verdicts.join("; ") : "ok",
+  };
+}
+
+/** MapLibre reference only: Maps has no implementation to gate (see `Unsupported`). */
+async function unsupportedResult(scenario: Scenario, write: (file: string, png: Buffer) => string) {
+  const unsupported = scenario.unsupported!;
+  const reference = await capture(images, scenario, "maplibre", false, new Map());
+  if (reference.error) throw new Error(`${scenario.name}/maplibre: ${reference.error}`);
+  return {
+    capability: scenario.capability,
+    errors: { maplibre: reference.error, maps: null },
+    files: { flip: null, maplibre: write(`${scenario.name}.maplibre.png`, reference.png), maps: null },
+    gates: null,
+    image: { floor: null, mean: null, meanMax: null, p99: null, p99Max: null },
+    interaction: { ok: true, steps: [] },
+    knownGaps: scenario.knownGaps,
+    mapsBaseRenderer: null,
+    name: scenario.name,
+    origin: scenario.origin,
+    passed: true,
+    time: { maplibreMs: null, mapsMs: null, ratio: null },
+    unsupported,
+    verdict: `unsupported: #${unsupported.issue}`,
   };
 }
 
@@ -252,8 +281,16 @@ type StepResult = {
   hovered: Record<string, string | null>;
   selected: Record<string, string | null>;
   bounds: [number, number, number, number] | null;
+  /** Camera after a pan/wheel/rotate step on a rotated or pitched scenario. */
+  view: { center: [number, number]; zoom: number; bearing: number; pitch: number } | null;
   zoom: number | null;
 };
+
+/**
+ * Screen points of hover/click steps on rotated or pitched cameras, by step index. MapLibre
+ * projects them during the reference run; Maps then points at the same pixels.
+ */
+type PickPoints = Map<number, { x: number; y: number }>;
 
 async function openFixture(browser: Browser, scenario: Scenario, runtime: Runtime) {
   const page = await browser.newPage({
@@ -263,14 +300,9 @@ async function openFixture(browser: Browser, scenario: Scenario, runtime: Runtim
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route(`${TILE_ORIGIN}/**`, (route) => {
-    const match = /\/([\w-]+)\/(\d+)\/(\d+)\/(\d+)\.png$/.exec(new URL(route.request().url()).pathname);
-    if (!match) return route.fulfill({ status: 404 });
-    const [, pattern, z, x, y] = match;
-    return route.fulfill({
-      body: tilePng(pattern!, Number(z), Number(x), Number(y)),
-      contentType: "image/png",
-      headers: { "Access-Control-Allow-Origin": "*" },
-    });
+    const served = serveTile(decodeURIComponent(new URL(route.request().url()).pathname));
+    if (!served) return route.fulfill({ status: 404 });
+    return route.fulfill({ ...served, headers: { "Access-Control-Allow-Origin": "*" } });
   });
   const query = new URLSearchParams({ runtime, scenario: scenario.name });
   await page.goto(`${baseUrl}/oracle/index.html?${query}`);
@@ -278,7 +310,38 @@ async function openFixture(browser: Browser, scenario: Scenario, runtime: Runtim
   return { errors, page };
 }
 
-async function capture(browser: Browser, scenario: Scenario, runtime: Runtime, interact: boolean) {
+/** Everything under TILE_ORIGIN: raster, vector, DEM tiles, glyph ranges and the sprite. */
+function serveTile(pathname: string): { body: Buffer; contentType: string } | null {
+  const tile = /^\/([\w-]+)\/(\d+)\/(\d+)\/(\d+)\.(png|mvt)$/.exec(pathname);
+  if (tile) {
+    const [, pattern, z, x, y, extension] = tile;
+    const [tz, tx, ty] = [Number(z), Number(x), Number(y)];
+    if (extension === "mvt") {
+      return { body: vectorTile(tz, tx, ty), contentType: "application/vnd.mapbox-vector-tile" };
+    }
+    if (pattern === "dem") return { body: demPng(tz, tx, ty), contentType: "image/png" };
+    return { body: tilePng(pattern!, tz, tx, ty), contentType: "image/png" };
+  }
+  const glyphs = /^\/glyphs\/([^/]+)\/(\d+-\d+)\.pbf$/.exec(pathname);
+  if (glyphs) {
+    // Only the Latin-1 range is committed; other ranges are empty glyph sets.
+    const file = path.join(root, "oracle/glyphs", glyphs[1]!, `${glyphs[2]}.pbf`);
+    return { body: existsSync(file) ? readFileSync(file) : Buffer.alloc(0), contentType: "application/x-protobuf" };
+  }
+  if (pathname === "/sprite/oracle.json") {
+    return { body: Buffer.from(JSON.stringify(SPRITE_JSON)), contentType: "application/json" };
+  }
+  if (pathname === "/sprite/oracle.png") return { body: spritePng(), contentType: "image/png" };
+  return null;
+}
+
+async function capture(
+  browser: Browser,
+  scenario: Scenario,
+  runtime: Runtime,
+  interact: boolean,
+  picks: PickPoints,
+) {
   const { errors, page } = await openFixture(browser, scenario, runtime).catch((error: Error) => {
     throw new Error(`${scenario.name}/${runtime}: ${error.message}`);
   });
@@ -291,7 +354,9 @@ async function capture(browser: Browser, scenario: Scenario, runtime: Runtime, i
     const png = await page.locator("#map").screenshot({ animations: "disabled" });
     const steps: StepResult[] = [];
     if (interact) {
-      for (const step of scenario.steps) steps.push(await perform(page, scenario, step));
+      for (const [index, step] of scenario.steps.entries()) {
+        steps.push(await perform(page, scenario, step, index, picks));
+      }
     }
     return { baseRenderer, error: errors[0] ?? null, png, steps };
   } finally {
@@ -302,19 +367,24 @@ async function capture(browser: Browser, scenario: Scenario, runtime: Runtime, i
 async function waitReady(page: Page, runtime: Runtime) {
   if (runtime === "maps") {
     await page.waitForSelector('[data-map-ready="true"]', { timeout: 30_000 });
+    const canvasState = () =>
+      page.evaluate(() => JSON.stringify(document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]')?.dataset ?? null));
     await page.waitForFunction(
       () => {
         const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]');
         return (
           canvas !== null &&
           canvas.dataset.mapBaseRenderer !== "pending" &&
-          Number(canvas.dataset.mapBaseTiles) > 0 &&
+          (Number(canvas.dataset.mapBaseTiles) > 0 || Number(canvas.dataset.mapVectorTiles) > 0) &&
+          canvas.dataset.mapSourceState !== "loading" &&
           canvas.dataset.mapBasePendingTiles === "0"
         );
       },
       undefined,
       { timeout: 30_000 },
-    );
+    ).catch(async (error: Error) => {
+      throw new Error(`${error.message}; canvas ${await canvasState()}`);
+    });
   } else {
     await page.waitForFunction(
       () => {
@@ -340,7 +410,7 @@ async function settle(page: Page, runtime: Runtime) {
       const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]');
       const map = window.__oracle.maplibre;
       const busy = maps
-        ? canvas?.dataset.mapBasePendingTiles !== "0"
+        ? canvas?.dataset.mapBasePendingTiles !== "0" || canvas?.dataset.mapSourceState === "loading"
         : !map || !map.areTilesLoaded() || map.isMoving();
       return JSON.stringify({ busy, view });
     }, runtime === "maps");
@@ -358,23 +428,36 @@ async function settle(page: Page, runtime: Runtime) {
   );
 }
 
-async function perform(page: Page, scenario: Scenario, step: Step): Promise<StepResult> {
+async function perform(
+  page: Page,
+  scenario: Scenario,
+  step: Step,
+  index: number,
+  picks: PickPoints,
+): Promise<StepResult> {
   const box = (await page.locator("#map").boundingBox())!;
   const center = { x: box.x + scenario.size.width / 2, y: box.y + scenario.size.height / 2 };
   const runtime = new URL(page.url()).searchParams.get("runtime") as Runtime;
   const view = await page.evaluate(() => window.__oracle.viewState());
   const camera = view ? { center: view.center, zoom: view.zoom } : scenario.camera;
+  const northUp = isNorthUp(scenario.camera);
   if (step.kind === "hover" || step.kind === "click") {
-    const point = toScreen(step.at, camera, scenario.size);
+    let point = northUp ? toScreen(step.at, camera, scenario.size) : picks.get(index);
+    if (!point) {
+      if (runtime !== "maplibre") throw new Error(`${scenario.name}: no reference pixel for step ${index}`);
+      point = await page.evaluate((at) => window.__oracle.maplibre!.project(at), step.at);
+      picks.set(index, point);
+    }
     await page.mouse.move(box.x + point.x, box.y + point.y, { steps: 4 });
     if (step.kind === "click") await page.mouse.click(box.x + point.x, box.y + point.y);
-  } else if (step.kind === "pan") {
+  } else if (step.kind === "pan" || step.kind === "rotate") {
+    const button = step.kind === "rotate" ? "right" : "left";
     await page.mouse.move(center.x, center.y);
-    await page.mouse.down();
+    await page.mouse.down({ button });
     await page.mouse.move(center.x + step.by[0], center.y + step.by[1], { steps: 12 });
     // Hold still before releasing: the step checks where a drag lands, not release inertia.
     await page.waitForTimeout(300);
-    await page.mouse.up();
+    await page.mouse.up({ button });
   } else {
     await page.mouse.move(center.x + step.at[0], center.y + step.at[1]);
     for (let tick = 0; tick < step.ticks; tick++) {
@@ -391,15 +474,43 @@ async function perform(page: Page, scenario: Scenario, step: Step): Promise<Step
     }
     return { hovered, selected, view: window.__oracle.viewState() };
   });
-  const moved = step.kind === "pan" || step.kind === "wheel";
+  const moved = step.kind !== "hover" && step.kind !== "click";
   return {
-    bounds: moved && state.view ? boundsOf(state.view, scenario.size) : null,
+    bounds: moved && northUp && state.view ? boundsOf(state.view, scenario.size) : null,
     hovered: state.hovered,
     kind: step.kind,
     label: step.label,
     selected: state.selected,
+    view:
+      moved && !northUp && state.view
+        ? {
+            bearing: state.view.bearing ?? 0,
+            center: state.view.center,
+            pitch: state.view.pitch ?? 0,
+            zoom: state.view.zoom,
+          }
+        : null,
     zoom: state.view?.zoom ?? null,
   };
+}
+
+/**
+ * How far two rotated/pitched cameras put the view's corners apart, in screen pixels: the
+ * center offset plus the corner displacement of the zoom, bearing and pitch differences.
+ */
+function viewErrorPx(a: NonNullable<StepResult["view"]>, b: NonNullable<StepResult["view"]>, scenario: Scenario) {
+  const world = 512 * 2 ** a.zoom;
+  const dx = Math.abs(a.center[0] - b.center[0]) * (world / 360);
+  const dy = Math.abs(mercatorY(a.center[1]) - mercatorY(b.center[1])) * (world / (2 * Math.PI));
+  const halfDiagonal = Math.hypot(scenario.size.width, scenario.size.height) / 2;
+  const radians = (degrees: number) => (Math.abs(degrees) * Math.PI) / 180;
+  const bearing = ((a.bearing - b.bearing + 540) % 360) - 180;
+  return Math.max(
+    Math.hypot(dx, dy),
+    Math.abs(2 ** (a.zoom - b.zoom) - 1) * halfDiagonal,
+    radians(bearing) * halfDiagonal,
+    radians(a.pitch - b.pitch) * (scenario.size.height / 2),
+  );
 }
 
 function compareInteractions(scenario: Scenario, reference: StepResult[], candidate: StepResult[]) {
@@ -422,15 +533,21 @@ function compareInteractions(scenario: Scenario, reference: StepResult[], candid
         latPx(s0, s1),
         latPx(n0, n1),
       );
+    } else if (expected?.view && actual?.view) {
+      boundsPx = viewErrorPx(expected.view, actual.view, scenario);
     }
     const picksSame =
       expected !== undefined &&
       actual !== undefined &&
       same(expected.hovered, actual.hovered) &&
       same(expected.selected, actual.selected);
-    const boundsSame = boundsPx === null ? expected?.bounds === actual?.bounds : boundsPx <= BOUNDS_TOLERANCE_PX;
+    const boundsSame =
+      boundsPx === null
+        ? expected?.bounds === actual?.bounds && expected?.view === actual?.view
+        : boundsPx <= BOUNDS_TOLERANCE_PX;
     return {
       bounds: { maplibre: expected?.bounds ?? null, maps: actual?.bounds ?? null, px: boundsPx },
+      view: { maplibre: expected?.view ?? null, maps: actual?.view ?? null },
       hovered: { maplibre: expected?.hovered ?? null, maps: actual?.hovered ?? null },
       label: step.label,
       ok: picksSame && boundsSame,
