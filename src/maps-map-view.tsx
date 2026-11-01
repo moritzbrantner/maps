@@ -102,6 +102,7 @@ export function MapsMapView({
 }: MapsMapViewProps) {
   const activeTileset = useMemo(() => tileset ? validateMapsTileset(tileset) : undefined, [tileset]);
   const resolvedMapStyle = useMemo(() => activeTileset ? { tiles: false as const } : resolveMapsRuntimeStyle(mapStyle), [mapStyle, activeTileset]);
+  const sprite = useMemo(() => resolveMapsRuntimeSprite(mapStyle), [mapStyle]);
   const tileSource = useMemo(() => resolveTileLayerOptions(resolvedMapStyle), [resolvedMapStyle]);
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
@@ -709,6 +710,7 @@ export function MapsMapView({
           tileset={activeTileset}
           tilesetStyle={tilesetStyle}
           tilesetLayers={tilesetLayers}
+          sprite={sprite}
           tileLimits={tileLimits}
           createTileImageLoader={createTileImageLoader}
           mapStyle={resolvedMapStyle}
@@ -780,6 +782,17 @@ function isMapsSurfaceEventTarget(target: EventTarget | null, root: HTMLDivEleme
     target === root ||
     (target instanceof HTMLCanvasElement && target.dataset.flatRuntime === "maps")
   );
+}
+
+/**
+ * The style's `sprite` URL (#323), read from the same MapLibre style object MapLibre gets,
+ * whatever basemap Maps draws. Multi-sprite arrays are not supported yet.
+ */
+function resolveMapsRuntimeSprite(mapStyle: string | RasterMapStyle): string | undefined {
+  if (typeof mapStyle === "string") return undefined;
+  const sprite = (mapStyle as { sprite?: unknown }).sprite;
+  if (sprite === undefined || typeof sprite === "string") return sprite;
+  throw new Error('flatRuntime="maps" supports a single sprite URL, not sprite arrays.');
 }
 
 function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapStyle {

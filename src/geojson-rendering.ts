@@ -21,6 +21,7 @@ export const DEFAULT_GEOJSON_LAYER_STYLE: Required<GeoJsonLayerStyle> = {
   pointRadius: 7,
   polygonFillColor: "#14b8a6",
   polygonFillOpacity: 0.22,
+  polygonFillPattern: null,
   polygonStrokeColor: "#0f766e",
   polygonStrokeWidth: 2,
 };
@@ -175,6 +176,7 @@ function createFlatPolygonLayer(
     color: style.polygonStrokeColor,
     fillColor: style.polygonFillColor,
     fillOpacity: style.polygonFillOpacity,
+    fillPattern: style.polygonFillPattern,
     interactive,
     opacity: 0.9,
     weight: selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth,

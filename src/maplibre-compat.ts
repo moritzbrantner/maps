@@ -31,6 +31,8 @@ export type FlatLayerOptions = {
   color?: string;
   fillColor?: string;
   fillOpacity?: number;
+  /** A style image id drawn as MapLibre's `fill-pattern` (#323); polygons only. */
+  fillPattern?: string | null;
   interactive?: boolean;
   /** MapLibre line layout and dashes (#322); lines only. */
   lineCap?: "butt" | "round" | "square";
@@ -996,10 +998,22 @@ type ShapeKind = "line" | "polygon";
  * no dash array is solid under round caps, a data-driven `line-dasharray` stores its period
  * as an integer (`Uint16`), and only a constant `line-cap` gives dashes round ends.
  */
-type BatchKind = ShapeKind | `dashed-line:${string}`;
+type BatchKind = ShapeKind | `dashed-line:${string}` | `pattern-polygon:${string}`;
 
 function dashedBatchKind(cap: string, dasharray: readonly number[]): BatchKind {
   return `dashed-line:${JSON.stringify({ cap, dasharray })}`;
+}
+
+/**
+ * Patterned polygons get a batch per image (#323): `fill-pattern` takes no feature-state,
+ * and a data-driven pattern would sample nothing for the features without one.
+ */
+function patternBatchKind(pattern: string): BatchKind {
+  return `pattern-polygon:${pattern}`;
+}
+
+function parsePatternBatchKind(kind: BatchKind) {
+  return kind.startsWith("pattern-polygon:") ? kind.slice("pattern-polygon:".length) : null;
 }
 
 function parseDashedBatchKind(kind: BatchKind) {
@@ -1095,7 +1109,10 @@ class MapLibreShapeBatch {
     private readonly kind: BatchKind,
     readonly group: FlatLayerGroup,
   ) {
-    this.layerIds = kind !== "polygon" ? [`${this.id}:line`] : [`${this.id}:fill`, `${this.id}:outline`];
+    this.layerIds =
+      kind === "polygon" || parsePatternBatchKind(kind) !== null
+        ? [`${this.id}:fill`, `${this.id}:outline`]
+        : [`${this.id}:line`];
     // Created now, not at the first flush, so the batch keeps its place under layers the group
     // adds after it (editor handles above their lines, endpoints above flows).
     this.inTestGroup(() => this.addStyleLayers());
@@ -1242,7 +1259,8 @@ class MapLibreShapeBatch {
       type: "geojson",
     } as never);
 
-    const isLine = this.kind !== "polygon";
+    const pattern = parsePatternBatchKind(this.kind);
+    const isLine = this.kind !== "polygon" && pattern === null;
     const dashed = parseDashedBatchKind(this.kind);
     const outline = {
       // Layout is per feature but never feature-state: changing it re-sends the data.
@@ -1271,9 +1289,11 @@ class MapLibreShapeBatch {
 
     this.map.addLayer({
       id: this.layerIds[0]!,
-      metadata: { flatBatch: "polygon-fill" },
+      metadata: { flatBatch: pattern === null ? "polygon-fill" : "pattern-polygon-fill" },
       paint: {
-        "fill-color": shapePaintValue("fillColor", "#14b8a6"),
+        ...(pattern === null
+          ? { "fill-color": shapePaintValue("fillColor", "#14b8a6") }
+          : { "fill-pattern": pattern }),
         "fill-opacity": shapePaintValue("fillOpacity", 0.2),
       },
       source: this.sourceId,
@@ -1517,6 +1537,9 @@ class MapLibreShapeLayer implements FlatLayer {
 
   private batchKind(): BatchKind {
     const dasharray = this.options.lineDasharray ?? [];
+    if (this.kind === "polygon" && this.options.fillPattern) {
+      return patternBatchKind(this.options.fillPattern);
+    }
     return this.kind === "line" && dasharray.length > 0
       ? dashedBatchKind(this.options.lineCap ?? "round", dasharray)
       : this.kind;

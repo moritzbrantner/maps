@@ -57,6 +57,12 @@ export type GeoJsonLayerStyle = {
   pointRadius?: number;
   polygonFillColor?: string;
   polygonFillOpacity?: number;
+  /**
+   * A style image (from the map style's `sprite`) repeated over the fill, as MapLibre's
+   * `fill-pattern` (#323): it replaces `polygonFillColor`, keeps `polygonFillOpacity`, and is
+   * anchored to the tile grid of the floored zoom. Default `null` (a solid fill).
+   */
+  polygonFillPattern?: string | null;
   polygonStrokeColor?: string;
   polygonStrokeWidth?: number;
 };
@@ -102,6 +108,7 @@ export function GeoJsonLayer<
   pointRadius,
   polygonFillColor,
   polygonFillOpacity,
+  polygonFillPattern,
   polygonStrokeColor,
   polygonStrokeWidth,
 }: GeoJsonLayerProps<TProperties>) {
@@ -132,6 +139,7 @@ export function GeoJsonLayer<
         pointRadius,
         polygonFillColor,
         polygonFillOpacity,
+        polygonFillPattern,
         polygonStrokeColor,
         polygonStrokeWidth,
       }),
@@ -148,6 +156,7 @@ export function GeoJsonLayer<
       pointRadius,
       polygonFillColor,
       polygonFillOpacity,
+      polygonFillPattern,
       polygonStrokeColor,
       polygonStrokeWidth,
     ],
@@ -529,6 +538,7 @@ function getFlatPolygonLayerStyle(
     color: style.polygonStrokeColor,
     fillColor: style.polygonFillColor,
     fillOpacity: style.polygonFillOpacity,
+    fillPattern: style.polygonFillPattern,
     opacity: 0.9,
     weight: style.polygonStrokeWidth + interactionStrokeDelta(selected, hovered, 1.5),
   };

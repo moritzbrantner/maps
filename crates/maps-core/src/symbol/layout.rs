@@ -1,9 +1,11 @@
-//! Per-tile buckets for tileset `line`, `circle` and `symbol` layers: MapLibre's `LineBucket`
-//! strips (#322), `CircleBucket` points and `performSymbolLayout` point-placement symbol instances (shaped glyph quads,
+//! Per-tile buckets for tileset `fill`, `line`, `circle` and `symbol` layers: MapLibre's
+//! `FillBucket` triangles and outlines (#323), `LineBucket` strips (#322), `CircleBucket`
+//! points and `performSymbolLayout` point-placement symbol instances (shaped glyph quads,
 //! collision boxes and evaluated paint), in MapLibre's 8192-unit tile space.
 
 use std::collections::BTreeSet;
 
+use earcut::Earcut;
 use serde_json::Value;
 
 use super::color::Rgba;
@@ -83,8 +85,34 @@ pub struct TileLine {
     pub dash: Option<TileDash>,
 }
 
+/// One feature of a fill layer: earcut triangles and the `fill-antialias` outline segments
+/// (`indexArray2`, one pair per ring edge) over its vertices in tile units (8192 per tile).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TileFill {
+    pub vertices: Vec<[f64; 2]>,
+    pub triangles: Vec<u32>,
+    pub outline: Vec<[u32; 2]>,
+    /// Straight-alpha `fill-color`; `fill-opacity` stays apart, as MapLibre's shaders take it.
+    pub color: [f32; 4],
+    /// Straight-alpha `fill-outline-color`, the fill color when unset.
+    pub outline_color: [f32; 4],
+    pub opacity: f32,
+    /// The `fill-pattern` image id.
+    pub pattern: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerBucket {
+    Fills {
+        fills: Vec<TileFill>,
+        /// `fill-antialias`.
+        antialias: bool,
+        /// Whether `fill-outline-color` is set: the outline then ignores the pattern.
+        outline_color: bool,
+        /// MapLibre's opaque-pass fill (no pattern, constant opaque color and opacity 1): its
+        /// depth keeps the outline outside the fill, so renderers draw the outline first.
+        opaque: bool,
+    },
     Lines(Vec<TileLine>),
     Circles(Vec<TileCircle>),
     Symbols {
@@ -132,6 +160,16 @@ pub fn layout_tile(
             .iter()
             .find(|candidate| candidate.name == layer.source_layer);
         let bucket = match layer.kind {
+            StyleLayerKind::Fill => LayerBucket::Fills {
+                fills: match features {
+                    Some(source) => layout_fills(layer, source, z)?,
+                    None => Vec::new(),
+                },
+                antialias: layer.raw_paint("fill-antialias").and_then(Value::as_bool)
+                    != Some(false),
+                outline_color: layer.raw_paint("fill-outline-color").is_some(),
+                opaque: opaque_fill(layer),
+            },
             StyleLayerKind::Line => LayerBucket::Lines(match features {
                 Some(source) => layout_lines(layer, source, z)?,
                 None => Vec::new(),
@@ -227,6 +265,114 @@ fn layout_circles(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<Ti
         }
     }
     Ok(circles)
+}
+
+/// `drawFill`'s `fillEligibleForOpaque`: no pattern, and a constant fill color of alpha 1 with
+/// a constant opacity of 1.
+fn opaque_fill(layer: &StyleLayer) -> bool {
+    let color = match layer.raw_paint("fill-color") {
+        None => Some(1.0),
+        Some(Value::String(text)) => Rgba::parse(text).map(|color| color.a),
+        Some(_) => None,
+    };
+    let opacity = match layer.raw_paint("fill-opacity") {
+        None => Some(1.0),
+        Some(value) => value.as_f64(),
+    };
+    layer.raw_paint("fill-pattern").is_none() && color == Some(1.0) && opacity == Some(1.0)
+}
+
+/// MapLibre's `FillBucket.addFeature`: each polygon of a feature (rings classified by
+/// winding) is earcut into triangles over its ring vertices, and every ring edge, the closing
+/// one included, becomes an outline segment. `fill-pattern` is evaluated per feature at the
+/// tile zoom; zoom-dependent patterns were rejected when the layer was parsed, so MapLibre's
+/// cross-faded `from` and `to` images are the same one.
+pub fn layout_fills(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<TileFill>, String> {
+    let scale = scale(source);
+    let mut earcut = Earcut::new();
+    let mut triangles: Vec<u32> = Vec::new();
+    let mut fills = Vec::new();
+    for feature in &source.features {
+        if feature.geometry_type != MvtGeometryType::Polygon {
+            continue;
+        }
+        let context = context(feature, f64::from(z));
+        if !layer.accepts(&context)? {
+            continue;
+        }
+        let black = Rgba::parse("#000").unwrap_or(Rgba::TRANSPARENT);
+        let color = layer.color("fill-color", black, &context)?;
+        let outline_color = layer.color("fill-outline-color", color, &context)?;
+        let opacity = layer.number(true, "fill-opacity", 1.0, &context)?;
+        let pattern = match layer.raw_paint("fill-pattern") {
+            None => None,
+            Some(_) => layer
+                .paint_value("fill-pattern", &context)?
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .filter(|id| !id.is_empty()),
+        };
+        // A layer with `fill-pattern` draws only the features whose image resolves.
+        if layer.raw_paint("fill-pattern").is_some() && pattern.is_none() {
+            continue;
+        }
+        let rings: Vec<Vec<[f64; 2]>> = feature
+            .geometry
+            .iter()
+            .map(|ring| {
+                let ring = match ring.as_slice() {
+                    [first, .., last] if first == last => &ring[..ring.len() - 1],
+                    _ => ring.as_slice(),
+                };
+                ring.iter()
+                    .map(|point| {
+                        [
+                            js_round(f64::from(point[0]) * scale),
+                            js_round(f64::from(point[1]) * scale),
+                        ]
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut fill = TileFill {
+            vertices: Vec::new(),
+            triangles: Vec::new(),
+            outline: Vec::new(),
+            color: color.straight(),
+            outline_color: outline_color.straight(),
+            opacity: opacity as f32,
+            pattern,
+        };
+        for polygon in classify_rings(&rings) {
+            let base = fill.vertices.len() as u32;
+            let mut holes = Vec::new();
+            for (index, ring) in polygon.iter().enumerate() {
+                if ring.is_empty() {
+                    continue;
+                }
+                let first = fill.vertices.len() as u32;
+                if index > 0 {
+                    holes.push(first - base);
+                }
+                let count = ring.len() as u32;
+                fill.outline.push([first + count - 1, first]);
+                for offset in 1..count {
+                    fill.outline.push([first + offset - 1, first + offset]);
+                }
+                fill.vertices.extend_from_slice(ring);
+            }
+            earcut.earcut(
+                fill.vertices[base as usize..].iter().copied(),
+                &holes,
+                &mut triangles,
+            );
+            fill.triangles
+                .extend(triangles.iter().map(|index| base + index));
+        }
+        if !fill.vertices.is_empty() {
+            fills.push(fill);
+        }
+    }
+    Ok(fills)
 }
 
 /// Resolves `{token}` strings (legacy text-field) against feature properties.
@@ -586,6 +732,42 @@ mod tests {
             .map(|vertex| vertex.point[0])
             .fold(f64::MIN, f64::max);
         assert_eq!(max_x, 4096.0);
+    }
+
+    #[test]
+    fn fill_layers_triangulate_polygons_with_holes_and_outline_every_ring_edge() {
+        let layer = line_layer(
+            r##"{"id":"f","type":"fill","source-layer":"water",
+                 "paint":{"fill-pattern":["match",["get","kind"],"glacier","hatch",""],"fill-opacity":0.5}}"##,
+        );
+        let polygon = |kind: &str| MvtFeature {
+            id: None,
+            geometry_type: MvtGeometryType::Polygon,
+            geometry: vec![
+                vec![[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]],
+                vec![[25, 25], [25, 75], [75, 75], [75, 25], [25, 25]],
+            ],
+            properties: BTreeMap::from([("kind".to_owned(), Value::from(kind))]),
+        };
+        let source = MvtLayer {
+            name: "water".to_owned(),
+            extent: 4096,
+            features: vec![polygon("glacier"), polygon("lake")],
+        };
+        let fills = layout_fills(&layer, &source, 8).unwrap();
+        // The lake resolves to no image and is left out, as MapLibre leaves it undrawn.
+        let [fill] = &fills[..] else {
+            panic!("{fills:?}")
+        };
+        assert_eq!(fill.pattern.as_deref(), Some("hatch"));
+        assert_eq!(fill.opacity, 0.5);
+        assert_eq!(fill.vertices.len(), 8);
+        assert_eq!(fill.vertices[2], [200.0, 200.0]);
+        // A square with a square hole: eight triangles; eight edges, closing ones included.
+        assert_eq!(fill.triangles.len(), 8 * 3);
+        assert_eq!(fill.outline.len(), 8);
+        assert_eq!(fill.outline[0], [3, 0]);
+        assert_eq!(fill.outline[4], [7, 4]);
     }
 
     #[test]

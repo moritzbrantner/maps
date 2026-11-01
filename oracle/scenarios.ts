@@ -304,13 +304,18 @@ export const scenarios: Scenario[] = [
   {
     basemap: "vector",
     camera: { center: [8.4, 46.75], zoom: 8.4 },
-    capability: "fill-pattern from a sprite over vector-tile polygons",
-    knownGaps: [],
+    capability: "fill-pattern from a sprite: tileset fill layer and GeoJSON fills, with outlines",
+    knownGaps: [FRAME_TIME_GAP],
     name: "fill-pattern",
-    origin: "Milestone D vector style (#79): glacier/wetland hatching",
+    origin: "Milestone D vector style (#79): glacier/wetland hatching; sprites and patterns (#323)",
     size: MAP_SIZE,
-    steps: [],
-    unsupported: { issue: 323, reason: "no sprites or pattern fills" },
+    steps: [
+      { at: [8.85, 46.94], kind: "hover", label: "hover the hatched hexagon" },
+      { at: [7.87, 46.76], kind: "click", label: "select the hatched frame" },
+      { at: [8.02, 46.76], kind: "click", label: "click the frame's hole (clears selection)" },
+      { by: [-120, 60], kind: "pan", label: "drag pan" },
+      { at: [40, -30], deltaY: -120, kind: "wheel", label: "wheel zoom in across zoom 9", ticks: 3 },
+    ],
   },
   {
     basemap: "style",

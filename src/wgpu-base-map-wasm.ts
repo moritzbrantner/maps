@@ -96,8 +96,9 @@ export type MapsWgpuBaseMapRenderer = {
    * Retains an application shape group on the GPU: polygons (#196), lines and direction
    * markers (#195). Per-shape ring counts, per-ring point counts, `[longitude, latitude]`
    * pairs (lowered once by Rust) and `MAPS_RETAINED_POLYGON_PAINT_STRIDE` paint values per
-   * shape, then each shape's `line-dasharray` length and the concatenated arrays (#322).
-   * Camera frames do not re-upload it. Absent on renderers without retained shapes.
+   * shape, then each shape's `line-dasharray` length and the concatenated arrays (#322),
+   * then each shape's `fill-pattern` image (#323). Camera frames do not re-upload it.
+   * Absent on renderers without retained shapes.
    */
   setRetainedPolygons?(
     group: number,
@@ -107,15 +108,24 @@ export type MapsWgpuBaseMapRenderer = {
     paint: Float32Array,
     dashCounts: Uint32Array,
     dashes: Float32Array,
+    patterns: string[],
   ): number;
   evictRetainedPolygons?(group: number): void;
   /** Style table from `createMapsVectorBasemapStyleTable`. */
   setVectorStyle(table: Float32Array): void;
   /**
-   * Tileset style layers (#321): a JSON array of MapLibre style-spec `circle` and point
-   * `symbol` layers drawn over the vector basemap. Throws on unsupported properties.
+   * Tileset style layers (#321, #322, #323): a JSON array of MapLibre style-spec `fill`,
+   * `line`, `circle` and point `symbol` layers drawn over the vector basemap. Throws on
+   * unsupported properties.
    */
   setVectorLayers(layers: string): void;
+  /**
+   * Adds a style sprite (#323): its JSON index and its sheet's straight-alpha RGBA pixels.
+   * `fill-pattern` images resolve against every sprite added. Returns the image count.
+   */
+  addSprite?(json: string, rgba: Uint8Array, width: number, height: number): number;
+  /** Whether the last frame drew patterns mid zoom cross-fade, so the host renders again. */
+  isCrossFading?(): boolean;
   /** Adds one SDF glyph range PBF (`start` = first codepoint) for a comma-joined font stack. */
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   /** Glyph ranges retained tiles still need, as `"<start>:<font stack>"`. */
@@ -166,6 +176,7 @@ type MapsWgpuBaseMapWasmRenderer = {
     paint: Float32Array,
     dashCounts: Uint32Array,
     dashes: Float32Array,
+    patterns: string[],
   ): number;
   evictRetainedPolygons(group: number): void;
   setVectorMaxZoom(maxZoom: number): void;
@@ -173,6 +184,9 @@ type MapsWgpuBaseMapWasmRenderer = {
   evictVectorSourceTile(source: string, z: number, x: number, y: number): void;
   setVectorStyle(table: Float32Array): void;
   setVectorLayers(layers: string): void;
+  addSprite(json: string, rgba: Uint8Array, width: number, height: number): number;
+  setFrameTime(now: number): void;
+  isCrossFading(): boolean;
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   missingGlyphRanges(): string[];
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
@@ -293,6 +307,7 @@ export async function loadMapsWgpuBaseMapRenderer(
             tileDraws[length + 6] = placement.opacity ?? 1;
             length += PACKED_TILE_DRAW_STRIDE;
           }
+          renderer.setFrameTime(performance.now());
           return renderer.renderPacked(
             tileDraws.subarray(0, length),
             applicationFrame ? applicationObjectFrame(applicationFrame) : null,
@@ -319,10 +334,19 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.evictRetainedPoints(group);
         });
       },
-      setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint, dashCounts, dashes) {
+      setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint, dashCounts, dashes, patterns) {
         return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
-          return renderer.setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint, dashCounts, dashes);
+          return renderer.setRetainedPolygons(
+            group,
+            ringCounts,
+            pointCounts,
+            lonLat,
+            paint,
+            dashCounts,
+            dashes,
+            patterns,
+          );
         });
       },
       evictRetainedPolygons(group) {
@@ -350,6 +374,15 @@ export async function loadMapsWgpuBaseMapRenderer(
       setVectorLayers(layers) {
         assertLive(disposed);
         renderer.setVectorLayers(layers);
+      },
+      addSprite(json, rgba, width, height) {
+        // Data errors (a malformed sprite) are the caller's; they must not hide the canvas.
+        assertLive(disposed);
+        return renderer.addSprite(json, rgba, width, height);
+      },
+      isCrossFading() {
+        assertLive(disposed);
+        return renderer.isCrossFading();
       },
       addGlyphs(stack, start, bytes) {
         assertLive(disposed);

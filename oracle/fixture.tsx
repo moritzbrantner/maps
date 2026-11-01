@@ -256,14 +256,31 @@ const LINE_LAYERS: Array<Record<string, unknown>> = [
     type: "line",
   },
 ];
+/**
+ * The `fill-pattern` style layer (#323): the sprite's hatch over glacier polygons, the same
+ * object on both runtimes; both read the sprite from the style's `sprite`.
+ */
+const FILL_PATTERN_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "glacier"],
+    id: "glacier-hatch",
+    paint: { "fill-pattern": "hatch" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "fill",
+  },
+];
+const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
     ? { glyphs: GLYPHS_URL, layers: SYMBOL_LAYERS }
     : name === "tileset-lines"
       ? { layers: LINE_LAYERS }
-      : null;
+      : name === "fill-pattern"
+        ? { layers: FILL_PATTERN_LAYERS }
+        : null;
 
-/** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines` and the unsupported scenarios (#323, #324). */
+/** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines`, `fill-pattern` and the unsupported scenario (#324). */
 function referenceStyle(name: string) {
   switch (name) {
     case "symbols": {
@@ -277,15 +294,8 @@ function referenceStyle(name: string) {
       return style;
     }
     case "fill-pattern": {
-      const style = { ...vectorStyle(), sprite: `${TILE_ORIGIN}/sprite/oracle` };
-      style.layers.push({
-        filter: ["==", ["get", "kind"], "glacier"],
-        id: "glacier-hatch",
-        paint: { "fill-pattern": "hatch" },
-        source: "oracle-vector",
-        "source-layer": "water_polygons",
-        type: "fill",
-      });
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...FILL_PATTERN_LAYERS);
       return style;
     }
     case "hillshade-terrain": {
@@ -480,10 +490,24 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
           points={comparisonPoints}
         />
       );
+    case "fill-pattern":
+      // GeoJSON fills with the sprite's hatch over the patterned tileset glaciers (#323).
+      return (context) => (
+        <GeoJsonLayer
+          {...interactive("hatched", context)}
+          featureCollection={HATCHED_AREAS}
+          getFeatureStyle={(feature) => ({
+            polygonFillOpacity: Number(feature.properties.opacity),
+            polygonFillPattern: "hatch",
+            polygonStrokeColor: "#1e3a8a",
+            polygonStrokeWidth: context.selected.hatched === feature.id ? 3 : 1.5,
+          })}
+          layerId="hatched-areas"
+        />
+      );
     case "vector-tiles":
     case "symbols":
     case "tileset-lines":
-    case "fill-pattern":
     case "hillshade-terrain":
       return () => null;
     case "line-styles":
@@ -642,6 +666,37 @@ const province = (id: string, color: string, points: LngLat[]) => ({
   properties: { color, id },
   type: "Feature" as const,
 });
+
+/**
+ * `fill-pattern` GeoJSON fills (#323): a hatched hexagon over Central Switzerland and a
+ * half-transparent hatched frame with a hole over the Bernese Oberland.
+ */
+const HATCHED_AREAS = {
+  features: [
+    {
+      geometry: {
+        coordinates: [ring([[8.7, 46.86], [8.86, 46.82], [9.0, 46.88], [9.0, 47.0], [8.84, 47.05], [8.7, 46.99]])],
+        type: "Polygon" as const,
+      },
+      id: "central-hatch",
+      properties: { opacity: 0.9 },
+      type: "Feature" as const,
+    },
+    {
+      geometry: {
+        coordinates: [
+          ring([[7.8, 46.62], [8.25, 46.62], [8.25, 46.9], [7.8, 46.9]]),
+          ring([[7.95, 46.7], [7.95, 46.82], [8.1, 46.82], [8.1, 46.7]]),
+        ],
+        type: "Polygon" as const,
+      },
+      id: "oberland-frame",
+      properties: { opacity: 0.55 },
+      type: "Feature" as const,
+    },
+  ],
+  type: "FeatureCollection" as const,
+};
 
 /** Ecclesiastical provinces as coarse territories (church-atlas derives finer ones). */
 const provinceTerritories = {

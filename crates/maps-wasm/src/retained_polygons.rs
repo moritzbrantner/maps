@@ -28,6 +28,7 @@
     allow(dead_code)
 )]
 
+use maps_core::symbol::{ImageAtlas, PatternVertex};
 use maps_core::{
     DashEntry, GEOJSON_VT_EXTENT, GEOJSON_VT_MAX_ZOOM, LINE_ATLAS_HEIGHT, LineAtlas, LineCap,
     LineJoin, LineLayout, LineMesh, SimplifiedLine, project_web_mercator,
@@ -93,6 +94,9 @@ struct RetainedPolygon {
     layout: LineLayout,
     /// A dashed line's atlas entry.
     dash: Option<DashEntry>,
+    /// A polygon's `fill-pattern` image id (#323): the fill then samples the image atlas, with
+    /// `fill[3]` as its `fill-opacity`, and draws MapLibre's pattern outline.
+    pattern: Option<String>,
 }
 
 /// Retained shapes: `f64` world rings and their paint.
@@ -108,6 +112,9 @@ pub(crate) struct RetainedPolygonDraw {
     pub(crate) fan_first: u32,
     pub(crate) fan_count: u32,
     pub(crate) cover_first: u32,
+    /// A patterned polygon's cover replaces the color cover: its six vertices in the pattern
+    /// buffer, then its `fill-antialias` outline quads there (`FILL_OUTLINE_VERTEX_SIZE`).
+    pub(crate) pattern: Option<RetainedPatternDraw>,
     pub(crate) stroke_first: u32,
     pub(crate) stroke_count: u32,
     /// A line strip: drawn without the single-coverage stroke stencil, like a MapLibre line
@@ -115,11 +122,22 @@ pub(crate) struct RetainedPolygonDraw {
     pub(crate) line: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RetainedPatternDraw {
+    pub(crate) cover_first: u32,
+    pub(crate) outline_first: u32,
+    pub(crate) outline_count: u32,
+}
+
 /// GPU geometry of a polygon group around one anchor.
 #[derive(Debug, Default)]
 pub(crate) struct RetainedPolygonGeometry {
     pub(crate) fill: Vec<u8>,
     pub(crate) stroke: Vec<u8>,
+    /// Pattern covers (`FILL_VERTEX_SIZE` vertices).
+    pub(crate) pattern_covers: Vec<u8>,
+    /// Pattern outlines (`FILL_OUTLINE_VERTEX_SIZE` vertices).
+    pub(crate) pattern_outlines: Vec<u8>,
     pub(crate) draws: Vec<RetainedPolygonDraw>,
 }
 
@@ -220,6 +238,7 @@ impl RetainedPolygons {
                     round_limit: f64::from(paint[14]),
                 },
                 dash: None,
+                pattern: None,
             });
         }
         Ok(Self { polygons })
@@ -266,22 +285,54 @@ impl RetainedPolygons {
         self.polygons.len()
     }
 
-    /// Whether the geometry depends on the tile zoom passed to [`Self::geometry`].
+    /// Sets each shape's `fill-pattern` image id (empty for none); an empty list clears them.
+    pub(crate) fn set_patterns(&mut self, patterns: &[String]) -> Result<(), &'static str> {
+        if patterns.is_empty() {
+            return Ok(());
+        }
+        if patterns.len() != self.polygons.len() {
+            return Err("retained fill patterns do not match the shapes");
+        }
+        for (polygon, pattern) in self.polygons.iter_mut().zip(patterns) {
+            polygon.pattern =
+                (polygon.shape == Shape::Polygon && !pattern.is_empty()).then(|| pattern.clone());
+        }
+        Ok(())
+    }
+
+    /// The `fill-pattern` images the shapes draw.
+    pub(crate) fn patterns(&self) -> impl Iterator<Item = &str> {
+        self.polygons
+            .iter()
+            .filter_map(|polygon| polygon.pattern.as_deref())
+    }
+
+    /// Whether the geometry depends on the tile zoom passed to [`Self::geometry`]: lines
+    /// follow MapLibre's GeoJSON tiles, patterns repeat in pixels of the tile zoom.
     pub(crate) fn has_lines(&self) -> bool {
         self.polygons
             .iter()
-            .any(|polygon| polygon.simplified.is_some())
+            .any(|polygon| polygon.simplified.is_some() || polygon.pattern.is_some())
     }
 
     /// GPU geometry around `anchor`, with lines as MapLibre's zoom-`tile_zoom` GeoJSON tiles
-    /// hold them.
-    pub(crate) fn geometry(&self, anchor: [f64; 2], tile_zoom: u8) -> RetainedPolygonGeometry {
+    /// hold them and patterns from `images`.
+    pub(crate) fn geometry(
+        &self,
+        anchor: [f64; 2],
+        tile_zoom: u8,
+        images: &ImageAtlas,
+    ) -> RetainedPolygonGeometry {
         let offset = |[x, y]: [f64; 2]| -> [f32; 2] {
             [
                 wrap_world_delta(x - anchor[0]) as f32,
                 (y - anchor[1]) as f32,
             ]
         };
+        // Pattern pixels per world unit at the tile zoom (512 px tiles, MapLibre's GeoJSON
+        // source), and the anchor's pixel whose whole pattern periods drop out.
+        let pattern_scale = 512.0 * f64::from(tile_zoom).exp2();
+        let pattern_origin = [anchor[0] * pattern_scale, anchor[1] * pattern_scale];
         let mut geometry = RetainedPolygonGeometry::default();
         for polygon in &self.polygons {
             let fill_index =
@@ -296,8 +347,14 @@ impl RetainedPolygons {
                 .filter(|ring| ring.len() >= 3)
                 .map(|ring| ring.iter().copied().map(offset).collect())
                 .collect();
+            // A pattern whose image is not in the atlas draws no fill, as in MapLibre.
+            let pattern = match &polygon.pattern {
+                Some(id) => images.pattern(id).map(Some),
+                None => Some(None),
+            };
             if polygon.shape == Shape::Polygon
                 && polygon.fill[3] > 0.0
+                && let Some(pattern) = pattern
                 && let Some(&pivot) = fill_rings.first().and_then(|ring| ring.first())
             {
                 draw.fan_first = fill_index(&geometry.fill);
@@ -314,15 +371,72 @@ impl RetainedPolygons {
                 }
                 draw.cover_first = fill_index(&geometry.fill);
                 draw.fan_count = draw.cover_first - draw.fan_first;
-                for vertex in [
+                let cover = [
                     [min[0], min[1]],
                     [max[0], min[1]],
                     [max[0], max[1]],
                     [min[0], min[1]],
                     [max[0], max[1]],
                     [min[0], max[1]],
-                ] {
-                    push_fill_vertex(&mut geometry.fill, vertex, polygon.fill);
+                ];
+                match pattern {
+                    None => {
+                        for vertex in cover {
+                            push_fill_vertex(&mut geometry.fill, vertex, polygon.fill);
+                        }
+                    }
+                    Some(position) => {
+                        // MapLibre's `fill_pattern` and `fill_outline_pattern` programs.
+                        let attributes = |vertex: [f32; 2]| {
+                            let pixel = [
+                                pattern_origin[0] + f64::from(vertex[0]) * pattern_scale,
+                                pattern_origin[1] + f64::from(vertex[1]) * pattern_scale,
+                            ];
+                            pattern_attributes(Some(&PatternVertex::new(
+                                &position,
+                                images,
+                                pixel,
+                                pattern_origin,
+                            )))
+                        };
+                        let paint = FillPaint {
+                            color: [0.0; 4],
+                            opacity: polygon.fill[3],
+                            flags: FILL_FLAG_PATTERN | if position.sdf { FILL_FLAG_SDF } else { 0 },
+                        };
+                        let covers =
+                            |bytes: &Vec<u8>| (bytes.len() as u64 / FILL_VERTEX_SIZE) as u32;
+                        let outlines = |bytes: &Vec<u8>| {
+                            (bytes.len() as u64 / FILL_OUTLINE_VERTEX_SIZE) as u32
+                        };
+                        let cover_first = covers(&geometry.pattern_covers);
+                        for vertex in cover {
+                            push_pattern_fill_vertex(
+                                &mut geometry.pattern_covers,
+                                vertex,
+                                attributes(vertex),
+                                paint,
+                            );
+                        }
+                        let outline_first = outlines(&geometry.pattern_outlines);
+                        for ring in &fill_rings {
+                            for (index, &a) in ring.iter().enumerate() {
+                                let b = ring[(index + 1) % ring.len()];
+                                push_pattern_outline_segment(
+                                    &mut geometry.pattern_outlines,
+                                    a,
+                                    b,
+                                    [attributes(a), attributes(b)],
+                                    paint,
+                                );
+                            }
+                        }
+                        draw.pattern = Some(RetainedPatternDraw {
+                            cover_first,
+                            outline_first,
+                            outline_count: outlines(&geometry.pattern_outlines) - outline_first,
+                        });
+                    }
                 }
             }
 
@@ -549,6 +663,86 @@ fn push_fill_vertex(bytes: &mut Vec<u8>, offset: [f32; 2], color: [f32; 4]) {
     }
 }
 
+/// `fill_pattern.wgsl` fill vertex: position, pattern pixel, atlas uv corners, display size
+/// (2 x f32 each), straight RGBA, then (opacity, flags).
+pub(crate) const FILL_VERTEX_SIZE: u64 = 64;
+/// `fill_pattern.wgsl` outline vertex: endpoints `a` and `b`, (end, side), then a fill
+/// vertex's pattern, color and params at that end.
+pub(crate) const FILL_OUTLINE_VERTEX_SIZE: u64 = 80;
+pub(crate) const FILL_FLAG_PATTERN: u32 = 1;
+pub(crate) const FILL_FLAG_SDF: u32 = 2;
+pub(crate) const FILL_FLAG_CLIP_TO_TILE: u32 = 4;
+
+/// A fill's paint as its program reads it: straight color, `fill-opacity`, and the pattern
+/// (pixel at this vertex, uv corners, display size) when patterned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FillPaint {
+    pub(crate) color: [f32; 4],
+    pub(crate) opacity: f32,
+    pub(crate) flags: u32,
+}
+
+/// The pattern part of a fill vertex; zero for solid fills.
+pub(crate) fn pattern_attributes(pattern: Option<&PatternVertex>) -> [f32; 8] {
+    pattern.map_or([0.0; 8], |pattern| {
+        [
+            pattern.pixel[0] as f32,
+            pattern.pixel[1] as f32,
+            pattern.uv_tl[0] as f32,
+            pattern.uv_tl[1] as f32,
+            pattern.uv_br[0] as f32,
+            pattern.uv_br[1] as f32,
+            pattern.display_size[0] as f32,
+            pattern.display_size[1] as f32,
+        ]
+    })
+}
+
+pub(crate) fn push_pattern_fill_vertex(
+    bytes: &mut Vec<u8>,
+    position: [f32; 2],
+    pattern: [f32; 8],
+    paint: FillPaint,
+) {
+    for value in position
+        .into_iter()
+        .chain(pattern)
+        .chain(paint.color)
+        .chain([paint.opacity, paint.flags as f32])
+    {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// The six corners of one outline segment's quad, each carrying its end's pattern.
+pub(crate) fn push_pattern_outline_segment(
+    bytes: &mut Vec<u8>,
+    a: [f32; 2],
+    b: [f32; 2],
+    patterns: [[f32; 8]; 2],
+    paint: FillPaint,
+) {
+    for (end, side) in [
+        (0, -1.0_f32),
+        (0, 1.0),
+        (1, 1.0),
+        (0, -1.0),
+        (1, 1.0),
+        (1, -1.0),
+    ] {
+        for value in a
+            .into_iter()
+            .chain(b)
+            .chain([end as f32, side])
+            .chain(patterns[end])
+            .chain(paint.color)
+            .chain([paint.opacity, paint.flags as f32])
+        {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+}
+
 fn push_stroke_vertex(
     bytes: &mut Vec<u8>,
     a: [f32; 2],
@@ -747,7 +941,7 @@ mod tests {
         lon_lat.extend(square(1.0, 1.0, 2.0));
         let polygons = RetainedPolygons::lower(&[2], &[5, 5], &lon_lat, &PAINT).unwrap();
 
-        let geometry = polygons.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM);
+        let geometry = polygons.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM, &ImageAtlas::default());
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!((draw.fan_first, draw.fan_count), (0, 8 * 3));
@@ -770,9 +964,16 @@ mod tests {
             RetainedPolygons::lower(&[1], &[5], &square(10.0, 10.0, 1.0), &PAINT).unwrap();
         let world = project_web_mercator(10.0, 10.0).unwrap();
 
-        let near = fill_offsets(&polygons.geometry([world.x, world.y], GEOJSON_VT_MAX_ZOOM));
-        let moved =
-            fill_offsets(&polygons.geometry([world.x - 0.01, world.y + 0.02], GEOJSON_VT_MAX_ZOOM));
+        let near = fill_offsets(&polygons.geometry(
+            [world.x, world.y],
+            GEOJSON_VT_MAX_ZOOM,
+            &ImageAtlas::default(),
+        ));
+        let moved = fill_offsets(&polygons.geometry(
+            [world.x - 0.01, world.y + 0.02],
+            GEOJSON_VT_MAX_ZOOM,
+            &ImageAtlas::default(),
+        ));
 
         assert!(
             near[0][0].abs() < 1.0e-9 && near[0][1].abs() < 1.0e-9,
@@ -790,7 +991,11 @@ mod tests {
         let polygons = RetainedPolygons::lower(&[1], &[5], &lon_lat, &PAINT).unwrap();
         let anchor = project_web_mercator(180.0, 0.0).unwrap();
 
-        let offsets = fill_offsets(&polygons.geometry([anchor.x, anchor.y], GEOJSON_VT_MAX_ZOOM));
+        let offsets = fill_offsets(&polygons.geometry(
+            [anchor.x, anchor.y],
+            GEOJSON_VT_MAX_ZOOM,
+            &ImageAtlas::default(),
+        ));
 
         let width = 2.0 / 360.0;
         for offset in &offsets {
@@ -807,7 +1012,10 @@ mod tests {
         paint[3] = 0.0;
         let stroke_only =
             RetainedPolygons::lower(&[1], &[5], &square(0.0, 0.0, 1.0), &paint).unwrap();
-        let [draw] = stroke_only.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM).draws[..] else {
+        let [draw] = stroke_only
+            .geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM, &ImageAtlas::default())
+            .draws[..]
+        else {
             panic!()
         };
         assert_eq!(draw.fan_count, 0);
@@ -817,7 +1025,10 @@ mod tests {
         paint[8] = 0.0;
         let fill_only =
             RetainedPolygons::lower(&[1], &[5], &square(0.0, 0.0, 1.0), &paint).unwrap();
-        let [draw] = fill_only.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM).draws[..] else {
+        let [draw] = fill_only
+            .geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM, &ImageAtlas::default())
+            .draws[..]
+        else {
             panic!()
         };
         assert!(draw.fan_count > 0);
@@ -834,7 +1045,7 @@ mod tests {
             "repeated points are dropped"
         );
 
-        let geometry = lines.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM);
+        let geometry = lines.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM, &ImageAtlas::default());
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!(draw.fan_count, 0, "lines are never filled");
@@ -848,7 +1059,7 @@ mod tests {
     #[test]
     fn a_line_that_collapses_in_mercator_is_a_round_cap_dot() {
         let lines = RetainedPolygons::lower(&[1], &[2], &[0.0, 0.0, 360.0, 0.0], &LINE).unwrap();
-        let geometry = lines.geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM);
+        let geometry = lines.geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM, &ImageAtlas::default());
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!(draw.stroke_count, 6);
@@ -861,7 +1072,11 @@ mod tests {
         let markers = RetainedPolygons::lower(&[1], &[2], &lon_lat, &MARKER).unwrap();
         let anchor = project_web_mercator(11.0, 10.0).unwrap();
 
-        let geometry = markers.geometry([anchor.x, anchor.y], GEOJSON_VT_MAX_ZOOM);
+        let geometry = markers.geometry(
+            [anchor.x, anchor.y],
+            GEOJSON_VT_MAX_ZOOM,
+            &ImageAtlas::default(),
+        );
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!((draw.fan_count, draw.stroke_count), (0, 3));
@@ -894,7 +1109,7 @@ mod tests {
     #[test]
     fn a_circle_is_a_fill_disc_then_a_stroke_ring_in_separate_draws() {
         let circles = RetainedPolygons::lower(&[1], &[1], &[3.0, 4.0], &CIRCLE).unwrap();
-        let geometry = circles.geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM);
+        let geometry = circles.geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM, &ImageAtlas::default());
         let [fill, ring] = geometry.draws[..] else {
             panic!()
         };
@@ -918,7 +1133,7 @@ mod tests {
         let circles = RetainedPolygons::lower(&[1], &[1], &[3.0, 4.0], &unstroked).unwrap();
         assert_eq!(
             circles
-                .geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM)
+                .geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM, &ImageAtlas::default())
                 .draws
                 .len(),
             1
