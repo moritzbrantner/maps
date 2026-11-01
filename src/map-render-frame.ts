@@ -52,6 +52,8 @@ export type MapRenderLine<TFeature = unknown> = MapRenderPrimitiveBase<TFeature>
 export type MapRenderPolygon<TFeature = unknown> = MapRenderPrimitiveBase<TFeature> & {
   fillColor: string;
   fillOpacity: number;
+  /** MapLibre's `fill-pattern` image (#323): replaces `fillColor`, keeps `fillOpacity`. */
+  fillPattern?: string;
   kind: "polygon";
   rings: MapRenderCoordinate[][];
   strokeColor: string;
@@ -300,6 +302,7 @@ function createGeoJsonPolygon<TFeature>(
     ...base,
     fillColor: style.polygonFillColor,
     fillOpacity: style.polygonFillOpacity,
+    ...(style.polygonFillPattern ? { fillPattern: style.polygonFillPattern } : {}),
     kind: "polygon",
     primitiveId,
     rings: rings.map((ring) => ring.map(copyCoordinate)),

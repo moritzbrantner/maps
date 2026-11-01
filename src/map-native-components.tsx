@@ -369,6 +369,7 @@ export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
       pointRadius={props.pointRadius}
       polygonFillColor={props.polygonFillColor}
       polygonFillOpacity={props.polygonFillOpacity}
+      polygonFillPattern={props.polygonFillPattern}
       polygonStrokeColor={props.polygonStrokeColor}
       polygonStrokeWidth={props.polygonStrokeWidth}
       renderFeatureContextMenu={mapGeoJsonContextMenu(props.renderFeatureContextMenu)}

@@ -477,9 +477,13 @@ function drawPolygon<TFeature>(
   for (const ring of scene.rings) {
     traceLine(context, ring, true, false);
   }
-  context.fillStyle = primitive.fillColor;
-  context.globalAlpha = primitive.fillOpacity;
-  context.fill("evenodd");
+  // `fill-pattern` draws on the retained WebGPU path only (#323): Canvas has no sprite and
+  // leaves the fill out, as MapLibre does until a pattern's image loads.
+  if (!primitive.fillPattern) {
+    context.fillStyle = primitive.fillColor;
+    context.globalAlpha = primitive.fillOpacity;
+    context.fill("evenodd");
+  }
   const strokeWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
   // Canvas ignores lineWidth = 0 and would reuse the previous shape's width.
   if (strokeWidth > 0) {

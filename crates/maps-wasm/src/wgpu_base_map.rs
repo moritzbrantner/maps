@@ -34,11 +34,13 @@ use crate::vector_basemap_layout::{
     line_index_bytes, line_vertex_bytes, style_table_bytes,
 };
 use crate::wgpu_dash_atlas::DashAtlasGpu;
+use crate::wgpu_patterns::{PatternGpu, PatternPipelineTargets};
 use crate::wgpu_retained::{
     FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
 };
 use crate::wgpu_symbols::{StyleLines, SymbolGpu};
 use maps_core::LineAtlas;
+use maps_core::symbol::{FADE_DURATION_MS, ImageStore, ZoomHistory};
 
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
 const CAMERA_UNIFORM_SIZE: u64 = 64;
@@ -81,16 +83,25 @@ impl RetainedResource for RetainedPointGroup {
 struct RetainedPolygonGroup {
     polygons: RetainedPolygons,
     anchor: Option<[f64; 2]>,
-    /// The GeoJSON tile zoom the line geometry was built for.
+    /// The GeoJSON tile zoom the line and pattern geometry was built for.
     tile_zoom: Option<u8>,
+    /// The image atlas the pattern geometry was built against.
+    atlas_revision: Option<u64>,
     fill: Option<wgpu::Buffer>,
     stroke: Option<wgpu::Buffer>,
+    pattern_covers: Option<wgpu::Buffer>,
+    pattern_outlines: Option<wgpu::Buffer>,
     draws: Vec<RetainedPolygonDraw>,
 }
 
 impl RetainedResource for RetainedPolygonGroup {
     fn byte_size(&self) -> u64 {
-        retained_bytes([&self.fill, &self.stroke])
+        retained_bytes([
+            &self.fill,
+            &self.stroke,
+            &self.pattern_covers,
+            &self.pattern_outlines,
+        ])
     }
 }
 
@@ -221,8 +232,16 @@ pub struct MapsWgpuBaseMapRenderer {
     /// MapLibre's dash atlas for dashed lines (#322) and its texture.
     line_atlas: LineAtlas,
     dash_atlas: DashAtlasGpu,
-    /// Per-tile frames of tileset line layers (#322), drawn with the retained line pipeline.
+    /// Per-tile frames of tileset line (#322) and fill (#323) layers.
     style_line_uniforms: FrameUniforms,
+    /// Style images (sprites, #323), their atlas and MapLibre's pattern cross-fade.
+    images: ImageStore,
+    patterns: PatternGpu,
+    zoom_history: ZoomHistory,
+    /// The host's frame clock (ms), set before each frame.
+    frame_time: f64,
+    /// Whether the last frame was mid cross-fade, so the host keeps rendering.
+    cross_fading: bool,
 }
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
@@ -1000,6 +1019,24 @@ impl MapsWgpuBaseMapRenderer {
             premultiplied_blend_state(),
             ignored_stencil(),
         );
+        let patterns = PatternGpu::new(
+            &device,
+            &PatternPipelineTargets {
+                format: surface_view_format,
+                blend: premultiplied_blend_state(),
+                tile_frames: style_line_uniforms.layout(),
+                retained_frames: retained_polygon_uniforms.layout(),
+                ignored_stencil: ignored_stencil(),
+                cover_stencil: stencil_state(
+                    stencil_face(
+                        wgpu::CompareFunction::NotEqual,
+                        wgpu::StencilOperation::Zero,
+                    ),
+                    POLYGON_FILL_STENCIL_BIT,
+                    POLYGON_FILL_STENCIL_BIT,
+                ),
+            },
+        );
 
         Ok(Self {
             surface,
@@ -1055,7 +1092,41 @@ impl MapsWgpuBaseMapRenderer {
             line_atlas: LineAtlas::new(),
             dash_atlas,
             style_line_uniforms,
+            images: ImageStore::default(),
+            patterns,
+            zoom_history: ZoomHistory::default(),
+            frame_time: 0.0,
+            cross_fading: false,
         })
+    }
+
+    /// Adds a sprite (#323): its JSON index and its sheet as straight-alpha RGBA pixels.
+    /// Returns the number of images.
+    #[wasm_bindgen(js_name = addSprite)]
+    pub fn add_sprite(
+        &mut self,
+        json: &str,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<u32, JsValue> {
+        let count = self
+            .images
+            .add_sprite(json, rgba, width, height)
+            .map_err(|error| JsValue::from_str(&error))?;
+        Ok(count as u32)
+    }
+
+    /// The host's frame clock (ms, `performance.now()`), for MapLibre's pattern cross-fade.
+    #[wasm_bindgen(js_name = setFrameTime)]
+    pub fn set_frame_time(&mut self, now: f64) {
+        self.frame_time = now;
+    }
+
+    /// Whether the last frame drew patterns mid cross-fade: the host renders again.
+    #[wasm_bindgen(js_name = isCrossFading)]
+    pub fn is_cross_fading(&self) -> bool {
+        self.cross_fading
     }
 
     #[wasm_bindgen(js_name = isDeviceLost)]
@@ -1279,9 +1350,12 @@ impl MapsWgpuBaseMapRenderer {
     /// concatenated `[longitude, latitude]` pairs and one paint record per shape (fill
     /// RGBA, stroke RGBA, stroke width or marker size in CSS px, shape kind, circle radius,
     /// line cap, join and limits), then each shape's `line-dasharray` length and the
-    /// concatenated dash arrays (both empty when nothing is dashed). Replaces the group's
-    /// previous content. Returns the shape count.
+    /// concatenated dash arrays (both empty when nothing is dashed), then each shape's
+    /// `fill-pattern` image id (`""` for none; empty when nothing is patterned; a patterned
+    /// shape's fill alpha is its `fill-opacity`). Replaces the group's previous content.
+    /// Returns the shape count.
     #[wasm_bindgen(js_name = setRetainedPolygons)]
+    #[allow(clippy::too_many_arguments)]
     pub fn set_retained_polygons(
         &mut self,
         group: u32,
@@ -1291,12 +1365,19 @@ impl MapsWgpuBaseMapRenderer {
         paint: &[f32],
         dash_counts: &[u32],
         dashes: &[f32],
+        patterns: Vec<String>,
     ) -> Result<u32, JsValue> {
         let mut polygons = RetainedPolygons::lower(ring_counts, point_counts, lon_lat, paint)
             .map_err(JsValue::from_str)?;
         polygons
             .set_dashes(dash_counts, dashes, &mut self.line_atlas)
             .map_err(JsValue::from_str)?;
+        polygons
+            .set_patterns(&patterns)
+            .map_err(JsValue::from_str)?;
+        for id in polygons.patterns() {
+            self.images.request_pattern(id);
+        }
         self.dash_atlas.upload(&self.queue, &self.line_atlas);
         let count = u32::try_from(polygons.len())
             .map_err(|_| JsValue::from_str("too many retained polygons"))?;
@@ -1307,8 +1388,11 @@ impl MapsWgpuBaseMapRenderer {
                 polygons,
                 anchor: None,
                 tile_zoom: None,
+                atlas_revision: None,
                 fill: None,
                 stroke: None,
+                pattern_covers: None,
+                pattern_outlines: None,
                 draws: Vec::new(),
             },
         );
@@ -1602,6 +1686,7 @@ impl MapsWgpuBaseMapRenderer {
             view_projection,
             clip,
         );
+        self.prepare_patterns(placements);
 
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
@@ -1684,8 +1769,11 @@ impl MapsWgpuBaseMapRenderer {
                 &StyleLines {
                     pipeline: &self.retained_line_pipeline,
                     frames: self.style_line_uniforms.bind_group(),
-                    offsets: &style_frame.line_offsets,
+                    offsets: &style_frame.tile_offsets,
                     dash_atlas: &self.dash_atlas.bind_group,
+                    fill_pipeline: &self.patterns.style_fill,
+                    outline_pipeline: &self.patterns.style_outline,
+                    image_atlas: &self.patterns.bind_group,
                 },
             );
 
@@ -1792,6 +1880,26 @@ impl MapsWgpuBaseMapRenderer {
     }
 
     /// Places tileset style labels for this frame and uploads their circles and glyphs.
+    /// MapLibre's per-frame zoom history and pattern cross-fade, and the atlas upload.
+    fn prepare_patterns(&mut self, placements: &[WgpuRasterTilePlacement]) {
+        // The camera zoom from any placed tile: `z + log2(size / 512)`.
+        let Some(zoom) = placements.iter().find_map(|placement| {
+            let (z, _, _) = placement.key?;
+            let zoom = f64::from(z) + (placement.local_size / 512.0).log2();
+            zoom.is_finite().then_some(zoom)
+        }) else {
+            return;
+        };
+        let now = self.frame_time;
+        self.zoom_history.update(zoom, now);
+        let crossfade = self.zoom_history.crossfade(zoom, now, FADE_DURATION_MS);
+        self.cross_fading = !self.images.is_empty()
+            && self.zoom_history.crossfading_factor(now, FADE_DURATION_MS) < 1.0;
+        let atlas = self.images.atlas();
+        self.patterns
+            .prepare(&self.device, &self.queue, atlas, crossfade);
+    }
+
     fn prepare_style_layers(
         &mut self,
         placements: &[WgpuRasterTilePlacement],
@@ -1827,9 +1935,10 @@ impl MapsWgpuBaseMapRenderer {
             view_projection,
             surface,
             &mut self.line_atlas,
+            &mut self.images,
         );
         self.dash_atlas.upload(&self.queue, &self.line_atlas);
-        if !frame.line_frames.is_empty() {
+        if !frame.tile_frames.is_empty() {
             // Line strips extrude on the map plane: each tile carries its size in CSS px.
             let line_surface = |local: LocalFrame| {
                 [
@@ -1842,13 +1951,13 @@ impl MapsWgpuBaseMapRenderer {
             let written = self.style_line_uniforms.write(
                 &self.device,
                 &self.queue,
-                frame.line_frames.iter().copied().enumerate(),
+                frame.tile_frames.iter().copied().enumerate(),
                 view_projection,
                 line_surface,
             );
-            frame.line_offsets = vec![None; frame.line_frames.len()];
+            frame.tile_offsets = vec![None; frame.tile_frames.len()];
             for (index, offset) in written {
-                frame.line_offsets[index] = Some(offset);
+                frame.tile_offsets[index] = Some(offset);
             }
         }
         self.placed_labels = frame.placed_labels;
@@ -1912,19 +2021,39 @@ impl MapsWgpuBaseMapRenderer {
             return Vec::new();
         };
         let tile_zoom = view.tile_zoom();
+        let atlas = self.images.atlas();
         let mut frames = Vec::new();
         for group_key in groups {
             let Some(group) = self.retained_polygons.get_mut(&group_key) else {
                 continue;
             };
-            // Lines follow MapLibre's GeoJSON tiles of the floored zoom (#334).
-            let rezoomed = group.polygons.has_lines() && group.tile_zoom != Some(tile_zoom);
-            let rebase =
-                view.needs_rebase(group.anchor) || group.fill.is_none() && group.stroke.is_none();
+            // Lines follow MapLibre's GeoJSON tiles of the floored zoom (#334), patterns its
+            // pixels and the image atlas (#323).
+            let rezoomed = group.polygons.has_lines()
+                && (group.tile_zoom != Some(tile_zoom)
+                    || group.polygons.patterns().next().is_some()
+                        && group.atlas_revision != Some(atlas.revision));
+            let rebase = view.needs_rebase(group.anchor)
+                || group.fill.is_none() && group.stroke.is_none() && group.pattern_covers.is_none();
             if rezoomed || rebase {
                 let anchor = view.center;
-                let geometry = group.polygons.geometry(anchor, tile_zoom);
+                let geometry = group.polygons.geometry(anchor, tile_zoom, atlas);
                 group.tile_zoom = Some(tile_zoom);
+                group.atlas_revision = Some(atlas.revision);
+                group.pattern_covers = upload_retained_buffer(
+                    &self.device,
+                    &self.queue,
+                    "Maps retained polygon pattern covers",
+                    wgpu::BufferUsages::VERTEX,
+                    &geometry.pattern_covers,
+                );
+                group.pattern_outlines = upload_retained_buffer(
+                    &self.device,
+                    &self.queue,
+                    "Maps retained polygon pattern outlines",
+                    wgpu::BufferUsages::VERTEX,
+                    &geometry.pattern_outlines,
+                );
                 group.fill = upload_retained_buffer(
                     &self.device,
                     &self.queue,
@@ -1993,11 +2122,41 @@ impl MapsWgpuBaseMapRenderer {
                     pass.set_stencil_reference(0);
                     pass.set_pipeline(&pipelines.fill_stencil);
                     pass.draw(draw.fan_first..draw.fan_first + draw.fan_count, 0..1);
-                    pass.set_pipeline(&pipelines.fill_cover);
-                    pass.draw(
-                        draw.cover_first..draw.cover_first + RETAINED_POLYGON_COVER_VERTEX_COUNT,
-                        0..1,
-                    );
+                    match (draw.pattern, &group.pattern_covers) {
+                        (Some(pattern), Some(covers)) => {
+                            // MapLibre's `fill_pattern` cover, then its pattern outline (#323).
+                            pass.set_bind_group(1, &self.patterns.bind_group, &[]);
+                            pass.set_vertex_buffer(0, covers.slice(..));
+                            pass.set_pipeline(&self.patterns.retained_cover);
+                            pass.draw(
+                                pattern.cover_first
+                                    ..pattern.cover_first + RETAINED_POLYGON_COVER_VERTEX_COUNT,
+                                0..1,
+                            );
+                            calls += 1;
+                            if let (true, Some(outlines)) =
+                                (pattern.outline_count > 0, &group.pattern_outlines)
+                            {
+                                pass.set_vertex_buffer(0, outlines.slice(..));
+                                pass.set_pipeline(&self.patterns.retained_outline);
+                                pass.draw(
+                                    pattern.outline_first
+                                        ..pattern.outline_first + pattern.outline_count,
+                                    0..1,
+                                );
+                                calls += 1;
+                            }
+                            pass.set_bind_group(1, &self.dash_atlas.bind_group, &[]);
+                        }
+                        _ => {
+                            pass.set_pipeline(&pipelines.fill_cover);
+                            pass.draw(
+                                draw.cover_first
+                                    ..draw.cover_first + RETAINED_POLYGON_COVER_VERTEX_COUNT,
+                                0..1,
+                            );
+                        }
+                    }
                     calls += 2;
                 }
                 if let (true, Some(stroke)) = (draw.stroke_count > 0, &group.stroke) {

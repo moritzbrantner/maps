@@ -20,15 +20,24 @@ pub(crate) struct SymbolGpu {
     /// Line strip vertices of the visible tiles (#322), replaced when they change.
     lines: wgpu::Buffer,
     line_capacity: u64,
+    /// Fill triangle and outline vertices of the visible tiles (#323).
+    fills: wgpu::Buffer,
+    fill_capacity: u64,
+    outlines: wgpu::Buffer,
+    outline_capacity: u64,
 }
 
-/// What line draws need besides their vertices: the retained line pipeline, the tile frame
-/// uniforms with each `StyleFrame::line_frames` entry's dynamic offset, and the dash atlas.
+/// What tile-frame draws need besides their vertices: the retained line pipeline, the tile
+/// frame uniforms with each `StyleFrame::tile_frames` entry's dynamic offset, the dash atlas,
+/// and the fill pipelines with the image atlas (#323).
 pub(crate) struct StyleLines<'a> {
     pub(crate) pipeline: &'a wgpu::RenderPipeline,
     pub(crate) frames: &'a wgpu::BindGroup,
     pub(crate) offsets: &'a [Option<u32>],
     pub(crate) dash_atlas: &'a wgpu::BindGroup,
+    pub(crate) fill_pipeline: &'a wgpu::RenderPipeline,
+    pub(crate) outline_pipeline: &'a wgpu::RenderPipeline,
+    pub(crate) image_atlas: &'a wgpu::BindGroup,
 }
 
 fn vertex_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
@@ -143,6 +152,14 @@ impl SymbolGpu {
             circle_capacity: INITIAL_BUFFER_SIZE,
             lines: vertex_buffer(device, "Maps style line vertices", INITIAL_BUFFER_SIZE),
             line_capacity: INITIAL_BUFFER_SIZE,
+            fills: vertex_buffer(device, "Maps style fill vertices", INITIAL_BUFFER_SIZE),
+            fill_capacity: INITIAL_BUFFER_SIZE,
+            outlines: vertex_buffer(
+                device,
+                "Maps style fill outline vertices",
+                INITIAL_BUFFER_SIZE,
+            ),
+            outline_capacity: INITIAL_BUFFER_SIZE,
         }
     }
 
@@ -154,13 +171,38 @@ impl SymbolGpu {
         frame: &StyleFrame,
         atlas: &GlyphAtlas,
     ) {
-        if let Some(bytes) = frame.line_bytes.as_ref().filter(|bytes| !bytes.is_empty()) {
-            let required = bytes.len() as u64;
-            if required > self.line_capacity {
-                self.line_capacity = required.next_power_of_two().max(INITIAL_BUFFER_SIZE);
-                self.lines = vertex_buffer(device, "Maps style line vertices", self.line_capacity);
+        let write = |buffer: &mut wgpu::Buffer, capacity: &mut u64, bytes: &[u8], label: &str| {
+            if bytes.is_empty() {
+                return;
             }
-            queue.write_buffer(&self.lines, 0, bytes);
+            let required = bytes.len() as u64;
+            if required > *capacity {
+                *capacity = required.next_power_of_two().max(INITIAL_BUFFER_SIZE);
+                *buffer = vertex_buffer(device, label, *capacity);
+            }
+            queue.write_buffer(buffer, 0, bytes);
+        };
+        if let Some(bytes) = &frame.line_bytes {
+            write(
+                &mut self.lines,
+                &mut self.line_capacity,
+                bytes,
+                "Maps style line vertices",
+            );
+        }
+        if let Some((fills, outlines)) = &frame.fill_bytes {
+            write(
+                &mut self.fills,
+                &mut self.fill_capacity,
+                fills,
+                "Maps style fill vertices",
+            );
+            write(
+                &mut self.outlines,
+                &mut self.outline_capacity,
+                outlines,
+                "Maps style fill outline vertices",
+            );
         }
         if frame.draws.is_empty() {
             return;
@@ -268,6 +310,30 @@ impl SymbolGpu {
                     pass.set_bind_group(0, lines.frames, &[*offset]);
                     pass.set_bind_group(1, lines.dash_atlas, &[]);
                     pass.set_vertex_buffer(0, self.lines.slice(..));
+                    pass.draw(first..first + count, 0..1);
+                }
+                StyleDraw::Fills {
+                    frame,
+                    first,
+                    count,
+                }
+                | StyleDraw::FillOutlines {
+                    frame,
+                    first,
+                    count,
+                } => {
+                    let Some(Some(offset)) = lines.offsets.get(frame as usize) else {
+                        continue;
+                    };
+                    let (pipeline, buffer) = if matches!(draw, StyleDraw::Fills { .. }) {
+                        (lines.fill_pipeline, &self.fills)
+                    } else {
+                        (lines.outline_pipeline, &self.outlines)
+                    };
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, lines.frames, &[*offset]);
+                    pass.set_bind_group(1, lines.image_atlas, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..));
                     pass.draw(first..first + count, 0..1);
                 }
                 StyleDraw::Glyphs { first, count } => {

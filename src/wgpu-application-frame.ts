@@ -107,6 +107,11 @@ export type MapsRetainedApplicationPolygons = {
   /** `line-dasharray` length per shape (0 solid), then the concatenated arrays (#322). */
   dashCounts: Uint32Array;
   dashes: Float32Array;
+  /**
+   * `fill-pattern` image per shape (`""` for none), empty when nothing is patterned (#323).
+   * A patterned shape's fill paint is white at its `fill-opacity`.
+   */
+  patterns: string[];
 };
 
 /**
@@ -342,7 +347,11 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
           }
           case "polygon": {
             const primitive = scenePrimitive.renderPrimitive as MapRenderPolygon<unknown>;
-            const fillColor = paint(primitive.fillColor, primitive.fillOpacity);
+            // Patterns sample the image atlas on the retained path only (#323); a pitched
+            // camera's projected path leaves the fill out until it gains them.
+            const fillColor = primitive.fillPattern
+              ? TRANSPARENT
+              : paint(primitive.fillColor, primitive.fillOpacity);
             const strokeColor = paint(primitive.strokeColor, primitive.strokeOpacity);
             const strokeWidth = resolveStrokeWidth(
               primitive.strokeWidth,
@@ -611,7 +620,9 @@ export function sameMapsRetainedPolygons(
     same(previous.lonLat, next.lonLat) &&
     same(previous.paint, next.paint) &&
     same(previous.dashCounts, next.dashCounts) &&
-    same(previous.dashes, next.dashes)
+    same(previous.dashes, next.dashes) &&
+    previous.patterns.length === next.patterns.length &&
+    previous.patterns.every((pattern, index) => pattern === next.patterns[index])
   );
 }
 
@@ -728,6 +739,8 @@ function createRetainedShapes(
   const dashCounts = new Uint32Array(count);
   const dashes: number[] = [];
   let dashed = false;
+  const patterns: string[] = Array.from({ length: count }, () => "");
+  let patterned = false;
   // Non-finite geometry stays on the projected path, which fails closed to Canvas.
   const pushRing = (ring: readonly (readonly [number, number])[]) => {
     pointCounts.push(ring.length);
@@ -759,7 +772,16 @@ function createRetainedShapes(
         break;
       }
       case "polygon": {
-        fillColor = color(primitive.fillColor, primitive.fillOpacity);
+        if (primitive.fillPattern) {
+          // MapLibre's `fill-pattern` ignores `fill-color`.
+          const opacity = primitive.fillOpacity;
+          if (!Number.isFinite(opacity)) return null;
+          fillColor = [1, 1, 1, Math.min(Math.max(opacity, 0), 1)];
+          patterns[index] = primitive.fillPattern;
+          patterned = true;
+        } else {
+          fillColor = color(primitive.fillColor, primitive.fillOpacity);
+        }
         strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
         strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
         shape = MAPS_RETAINED_SHAPE_POLYGON;
@@ -808,6 +830,7 @@ function createRetainedShapes(
     dashes: Float32Array.from(dashes),
     lonLat: Float64Array.from(lonLat),
     paint,
+    patterns: patterned ? patterns : [],
     pointCounts: Uint32Array.from(pointCounts),
     ringCounts,
   };

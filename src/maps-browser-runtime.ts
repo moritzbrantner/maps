@@ -218,6 +218,11 @@ export type MapsBrowserRuntimeOptions = {
   tilesetStyle?: MapsVectorBasemapStyle;
   /** MapLibre `circle`/`symbol` layers drawn over the Tileset, supported by flatRuntime="maps" only. */
   tilesetLayers?: MapsTilesetLayers;
+  /**
+   * The map style's `sprite` (#323): a URL whose `[@2x].json` index and `.png` sheet hold
+   * the images `fill-pattern` names, for tileset fill layers and GeoJSON fills alike.
+   */
+  sprite?: string;
   tileLimits?: MapsFlatRasterRuntimeConfig["limits"];
   createTileImageLoader?: () => MapsTileImageLoader;
   maxBounds?: MapBounds;
@@ -616,6 +621,7 @@ export function createMapsBrowserRuntime(
       tileset: () => config.tileset,
       tilesetStyle: () => config.tilesetStyle,
       tilesetLayers: () => config.tilesetLayers,
+      sprite: () => config.sprite,
       wasmPackage,
       onError: (error) => config.onError?.(error),
       onRendererFailure: activateCanvasFallback,
@@ -958,8 +964,10 @@ export function createMapsBrowserRuntime(
     const previousTileset = config.tileset;
     const previousStyle = config.tilesetStyle;
     const previousLayers = config.tilesetLayers;
+    const previousSprite = config.sprite;
     config = { ...next, viewState: copyViewState(next.viewState) };
     source = runtimeTileSource(config);
+    if (previousSprite !== config.sprite) synchronize?.();
     if (
       config.tileset &&
       (previousTileset !== config.tileset ||
@@ -1137,6 +1145,7 @@ function createFrameSynchronizer({
   tileset,
   tilesetStyle,
   tilesetLayers,
+  sprite,
   wasmPackage,
   onError,
   onRendererFailure,
@@ -1157,6 +1166,7 @@ function createFrameSynchronizer({
   tileset: () => MapsTileset | undefined;
   tilesetStyle: () => MapsVectorBasemapStyle | undefined;
   tilesetLayers: () => MapsTilesetLayers | undefined;
+  sprite: () => string | undefined;
   wasmPackage?: string;
   onError: (error: unknown) => void;
   onRendererFailure: () => void;
@@ -1225,6 +1235,31 @@ function createFrameSynchronizer({
       return request;
     });
     return Promise.all(pending).then(() => undefined);
+  }
+
+  // The style sprite per renderer and URL (#323): a replaced renderer starts without images.
+  const spriteRequests = new WeakMap<MapsWgpuBaseMapRenderer, Map<string, Promise<void>>>();
+  /** Loads the style's sprite into the renderer's image atlas (MapLibre's `loadSprite`). */
+  function loadSprite(): Promise<void> {
+    const current = renderer();
+    const url = sprite();
+    if (!current?.addSprite || !url) return Promise.resolve();
+    let requests = spriteRequests.get(current);
+    if (!requests) spriteRequests.set(current, (requests = new Map()));
+    let request = requests.get(url);
+    if (!request) {
+      request = fetchMapsSprite(url)
+        .then(({ json, rgba, width, height }) => {
+          if (disposed || renderer() !== current) return;
+          current.addSprite!(json, rgba, width, height);
+          invalidateRendered();
+          requestRender();
+        })
+        // Like MapLibre, a failed sprite leaves the patterns out instead of failing tiles.
+        .catch((error) => onError(error));
+      requests.set(url, request);
+    }
+    return request;
   }
 
   function publishSourceStats() {
@@ -1611,7 +1646,8 @@ function createFrameSynchronizer({
         cancelRendererRetry();
         retainRenderedFrame(frame, viewportOnly);
         setDrawnTiles(drawnTiles);
-        if (fading) requestRender();
+        // Patterns cross-fade for 300 ms after an integer zoom is crossed (#323).
+        if (fading || currentRenderer.isCrossFading?.()) requestRender();
         return;
       } catch {
         failRenderer();
@@ -1755,6 +1791,7 @@ function createFrameSynchronizer({
               run.polygons.paint,
               run.polygons.dashCounts,
               run.polygons.dashes,
+              run.polygons.patterns,
             ))
         );
       });
@@ -1825,6 +1862,7 @@ function createFrameSynchronizer({
   }
 
   function syncFrame(): MapsFlatRasterFrame {
+    void loadSprite();
     let frame = runtime.frame();
 
     for (const tile of frame.cancellations) {
@@ -1900,7 +1938,12 @@ function createFrameSynchronizer({
             return paintShortbreadTile(pixels, tilesetStyle());
           })()
         : loadTile(buildRasterTileUrl(currentSource.url, tile), tile, abort.signal);
-      loadImage
+      // Tiles settle once the style's sprite arrived, as MapLibre's style waits for it.
+      const loadSettled = loadImage.then(async (image) => {
+        await loadSprite();
+        return image;
+      });
+      loadSettled
         .then(
           (image) => {
             // A cancelled fetch/decode may finish after this tile has been
@@ -2088,6 +2131,42 @@ async function loadRasterTile(url: string, signal: AbortSignal) {
   }
 
   return createImageBitmap(await response.blob());
+}
+
+/**
+ * MapLibre's `loadSprite` for one sprite URL: `<url>@2x` on high-density screens, its `.json`
+ * index and its `.png` sheet read back as straight-alpha RGBA through a 2D canvas, as
+ * MapLibre reads sprite pixels.
+ */
+async function fetchMapsSprite(url: string) {
+  const format = (globalThis.devicePixelRatio || 1) > 1 ? "@2x" : "";
+  const resource = (extension: string) => {
+    const parsed = new URL(url, globalThis.location?.href);
+    parsed.pathname += `${format}${extension}`;
+    return parsed.toString();
+  };
+  const [index, sheet] = await Promise.all([fetch(resource(".json")), fetch(resource(".png"))]);
+  if (!index.ok) throw new Error(`sprite ${resource(".json")}: HTTP ${index.status}`);
+  if (!sheet.ok) throw new Error(`sprite ${resource(".png")}: HTTP ${sheet.status}`);
+  const json = await index.text();
+  const bitmap = await createImageBitmap(await sheet.blob());
+  try {
+    const { height, width } = bitmap;
+    const context = new OffscreenCanvas(width, height).getContext("2d", {
+      willReadFrequently: true,
+    });
+    if (!context) throw new Error("sprite: no 2D canvas to read the sheet");
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, width, height).data;
+    return {
+      height,
+      json,
+      rgba: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength),
+      width,
+    };
+  } finally {
+    bitmap.close();
+  }
 }
 
 function buildRasterTileUrl(url: string, tile: MapsRasterTileId) {

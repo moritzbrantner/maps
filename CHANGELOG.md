@@ -17,6 +17,19 @@
 
 ### Minor Changes
 
+- Fills take MapLibre 6.15's `fill-pattern` from the map style's `sprite` (#323).
+  `tilesetLayers` accepts style-spec `fill` layers (`fill-color`, `fill-opacity`,
+  `fill-pattern`, `fill-antialias`, `fill-outline-color`), and `GeoJsonLayer` styles gain
+  `polygonFillPattern`. On `flatRuntime="maps"` the style's `sprite` (`[@2x].json` and
+  `.png`) loads into an image atlas ported from MapLibre's (potpack bins, one pixel of
+  wrapped padding around patterns, premultiplied), which symbol icons can share. Patterns
+  repeat on the tile pixel grid of the floored zoom, scale with the zoom fraction and
+  cross-fade between neighbouring integer zooms for 300 ms after one is crossed, as
+  MapLibre's `pattern_from`/`pattern_to`; fills draw MapLibre's `fill-antialias` outline,
+  sampling the pattern unless `fill-outline-color` is set. Patterned GeoJSON fills draw on
+  the retained WebGPU path; under a pitched camera and on the Canvas fallback their fill is
+  left out for now. The MapLibre runtime batches patterned GeoJSON polygons per image.
+  `line-pattern` is not supported yet.
 - Lines take MapLibre 6.15's `line-cap` (butt, round, square), `line-join` (bevel,
   round, miter, with `line-miter-limit` and `line-round-limit`) and `line-dasharray`
   (#322). `GeoJsonLayer` styles gain `lineCap`, `lineJoin`, `lineMiterLimit`,

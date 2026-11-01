@@ -192,7 +192,7 @@ impl GlyphAtlas {
 }
 
 /// `potpack` 2.1: packs boxes (tallest first) into a near-square; returns its size.
-fn potpack(boxes: &mut [AtlasRect]) -> (u32, u32) {
+pub(crate) fn potpack(boxes: &mut [AtlasRect]) -> (u32, u32) {
     #[derive(Clone, Copy)]
     struct Space {
         x: u32,

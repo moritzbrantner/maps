@@ -1191,6 +1191,7 @@ function resolveGeoJsonLayerFrame(
     props.pointRadius,
     props.polygonFillColor,
     props.polygonFillOpacity,
+    props.polygonFillPattern,
     props.polygonStrokeColor,
     props.polygonStrokeWidth,
   ];
@@ -1218,6 +1219,7 @@ function resolveGeoJsonLayerFrame(
       pointRadius: props.pointRadius,
       polygonFillColor: props.polygonFillColor,
       polygonFillOpacity: props.polygonFillOpacity,
+      polygonFillPattern: props.polygonFillPattern,
       polygonStrokeColor: props.polygonStrokeColor,
       polygonStrokeWidth: props.polygonStrokeWidth,
     }),

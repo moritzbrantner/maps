@@ -1,5 +1,5 @@
-//! MapLibre style-specification `line` (#322), `circle` and `symbol` layers drawn over a Maps
-//! Tileset.
+//! MapLibre style-specification `fill` (#323), `line` (#322), `circle` and `symbol` layers
+//! drawn over a Maps Tileset.
 //!
 //! Layers are parsed from style JSON and validated against the properties Maps implements;
 //! anything else is rejected with its name rather than silently drawn differently.
@@ -11,6 +11,7 @@ use super::expression::{EvaluationContext, evaluate, is_expression, uses_zoom};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StyleLayerKind {
+    Fill,
     Line,
     Circle,
     Symbol,
@@ -29,6 +30,14 @@ pub struct StyleLayer {
     paint: Map<String, Value>,
 }
 
+const FILL_LAYOUT: &[&str] = &["visibility"];
+const FILL_PAINT: &[&str] = &[
+    "fill-antialias",
+    "fill-opacity",
+    "fill-color",
+    "fill-outline-color",
+    "fill-pattern",
+];
 const LINE_LAYOUT: &[&str] = &[
     "visibility",
     "line-cap",
@@ -77,6 +86,11 @@ const SYMBOL_PAINT: &[&str] = &[
 /// Properties whose value must be the same at every zoom: Maps evaluates them per tile, and
 /// MapLibre re-evaluates these at the camera zoom (`text-size`) or each frame (paint).
 const ZOOM_CONSTANT: &[&str] = &[
+    "fill-antialias",
+    "fill-opacity",
+    "fill-color",
+    "fill-outline-color",
+    "fill-pattern",
     "line-color",
     "line-opacity",
     "line-width",
@@ -106,6 +120,7 @@ impl StyleLayer {
             .ok_or("a style layer needs an id")?
             .to_owned();
         let kind = match object.get("type").and_then(Value::as_str) {
+            Some("fill") => StyleLayerKind::Fill,
             Some("line") => StyleLayerKind::Line,
             Some("circle") => StyleLayerKind::Circle,
             Some("symbol") => StyleLayerKind::Symbol,
@@ -144,6 +159,7 @@ impl StyleLayer {
             validate_operators(filter).map_err(|error| format!("layer {id}: filter: {error}"))?;
         }
         let (layout_keys, paint_keys) = match kind {
+            StyleLayerKind::Fill => (FILL_LAYOUT, FILL_PAINT),
             StyleLayerKind::Line => (LINE_LAYOUT, LINE_PAINT),
             StyleLayerKind::Circle => (CIRCLE_LAYOUT, CIRCLE_PAINT),
             StyleLayerKind::Symbol => (SYMBOL_LAYOUT, SYMBOL_PAINT),
@@ -334,7 +350,9 @@ mod tests {
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"text-size":["interpolate",["linear"],["zoom"],5,10,10,20]}}]"#,
             r#"[{"id":"a","type":"circle","source-layer":"p","paint":{"circle-radius":["sqrt",["get","n"]]}}]"#,
-            r#"[{"id":"a","type":"fill","source-layer":"p"}]"#,
+            r#"[{"id":"a","type":"fill","source-layer":"p","paint":{"fill-translate":[1,1]}}]"#,
+            r#"[{"id":"a","type":"fill","source-layer":"p","paint":{"fill-pattern":["step",["zoom"],"a",9,"b"]}}]"#,
+            r#"[{"id":"a","type":"fill-extrusion","source-layer":"p"}]"#,
         ] {
             assert!(parse(rejected).is_err(), "{rejected}");
         }

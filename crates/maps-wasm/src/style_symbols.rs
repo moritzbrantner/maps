@@ -1,20 +1,24 @@
-//! Per-frame geometry of tileset style layers (#321, #322): `maps_core::symbol` lays out lines
-//! and places labels; this module keeps each tile's buckets, projects anchors through the
-//! frame camera and writes circle instances and SDF glyph vertices for the wgpu backend. Line
-//! strips stay in tile space, drawn per tile with the retained line shader; their bytes are
-//! rebuilt only when the tile zoom changes their dash scale.
+//! Per-frame geometry of tileset style layers (#321, #322, #323): `maps_core::symbol` lays out
+//! fills and lines and places labels; this module keeps each tile's buckets, projects anchors
+//! through the frame camera and writes circle instances and SDF glyph vertices for the wgpu
+//! backend. Fill triangles, fill outlines and line strips stay in tile space, drawn per tile
+//! in its tile frame; their bytes are rebuilt only when the tile zoom changes their pattern
+//! or dash scale, or the image atlas was repacked.
 
 use std::collections::{BTreeSet, HashMap};
 
 use maps_core::symbol::{
-    GlyphStore, LayerBucket, PlacementTile, StyleLayer, TileStyleBuckets, layout_tile,
-    parse_glyph_pbf, place_symbols, symbol_tile_order,
+    GlyphStore, ImageAtlas, ImageStore, LayerBucket, PatternVertex, PlacementTile, StyleLayer,
+    StyleLayerKind, TileStyleBuckets, layout_tile, parse_glyph_pbf, place_symbols,
+    symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
 use crate::retained_frame::LocalFrame;
 use crate::retained_polygons::{
-    NO_DASH, RETAINED_POLYGON_STROKE_VERTEX_SIZE, push_line_strip_vertex,
+    FILL_FLAG_CLIP_TO_TILE, FILL_FLAG_PATTERN, FILL_FLAG_SDF, FILL_OUTLINE_VERTEX_SIZE,
+    FILL_VERTEX_SIZE, FillPaint, NO_DASH, RETAINED_POLYGON_STROKE_VERTEX_SIZE, pattern_attributes,
+    push_line_strip_vertex, push_pattern_fill_vertex, push_pattern_outline_segment,
 };
 
 /// Glyph vertex: clip position, atlas uv, (size, opacity, halo width, halo blur),
@@ -34,6 +38,18 @@ struct StyleTile {
     buckets: TileStyleBuckets,
     /// Line strip bytes for one tile zoom, with each line layer's vertex range.
     lines: Option<StyleTileLines>,
+    /// Fill and outline bytes for one tile zoom and image atlas.
+    fills: Option<StyleTileFills>,
+}
+
+struct StyleTileFills {
+    tile_zoom: u8,
+    atlas_revision: u64,
+    generation: u64,
+    fill_bytes: Vec<u8>,
+    outline_bytes: Vec<u8>,
+    /// (layer index, first fill vertex, fill vertex count, first outline vertex, count).
+    ranges: Vec<(usize, u32, u32, u32, u32)>,
 }
 
 struct StyleTileLines {
@@ -55,8 +71,20 @@ pub(crate) enum StyleDraw {
         first: u32,
         count: u32,
     },
-    /// Line strip vertices of one tile, drawn in the frame of `line_frames[frame]`.
+    /// Line strip vertices of one tile, drawn in the frame of `tile_frames[frame]`.
     Lines {
+        frame: u32,
+        first: u32,
+        count: u32,
+    },
+    /// Fill triangle vertices of one tile, in the frame of `tile_frames[frame]`.
+    Fills {
+        frame: u32,
+        first: u32,
+        count: u32,
+    },
+    /// `fill-antialias` outline quad vertices of one tile.
+    FillOutlines {
         frame: u32,
         first: u32,
         count: u32,
@@ -76,11 +104,13 @@ pub(crate) struct StyleSurface {
 pub(crate) struct StyleFrame {
     pub(crate) circles: Vec<f32>,
     pub(crate) glyphs: Vec<f32>,
-    /// Tile frames of the line draws.
-    pub(crate) line_frames: Vec<LocalFrame>,
+    /// Tile frames of the fill, outline and line draws.
+    pub(crate) tile_frames: Vec<LocalFrame>,
     /// All line strip bytes of this frame; `None` when unchanged since the last frame.
     pub(crate) line_bytes: Option<Vec<u8>>,
-    /// Dynamic uniform offset of each line frame, written by the renderer.
+    /// All fill and outline bytes of this frame; `None` when unchanged since the last frame.
+    pub(crate) fill_bytes: Option<(Vec<u8>, Vec<u8>)>,
+    /// Dynamic uniform offset of each tile frame, written by the renderer.
     #[cfg_attr(
         not(all(
             target_arch = "wasm32",
@@ -89,7 +119,7 @@ pub(crate) struct StyleFrame {
         )),
         allow(dead_code)
     )]
-    pub(crate) line_offsets: Vec<Option<u32>>,
+    pub(crate) tile_offsets: Vec<Option<u32>>,
     pub(crate) draws: Vec<StyleDraw>,
     pub(crate) placed_labels: u32,
 }
@@ -102,6 +132,8 @@ pub(crate) struct StyleSymbols {
     /// Tiles and builds of the line bytes uploaded last.
     line_signature: Vec<(TileKey, u64)>,
     line_generation: u64,
+    /// Tiles and builds of the fill bytes uploaded last.
+    fill_signature: Vec<(TileKey, u64)>,
 }
 
 impl StyleSymbols {
@@ -165,6 +197,7 @@ impl StyleSymbols {
                 source: decoded,
                 buckets,
                 lines: None,
+                fills: None,
             },
         );
         Ok(())
@@ -178,6 +211,7 @@ impl StyleSymbols {
         for tile in self.tiles.values_mut() {
             tile.buckets = layout_tile(&self.layers, &tile.source, tile.z, &self.glyphs)?;
             tile.lines = None;
+            tile.fills = None;
         }
         Ok(())
     }
@@ -194,6 +228,7 @@ impl StyleSymbols {
         view_projection: [f32; 16],
         surface: StyleSurface,
         line_atlas: &mut LineAtlas,
+        images: &mut ImageStore,
     ) -> StyleFrame {
         let mut frame = StyleFrame::default();
         if !self.is_active() || placements.is_empty() {
@@ -234,7 +269,7 @@ impl StyleSymbols {
         if self
             .layers
             .iter()
-            .any(|layer| layer.kind == maps_core::symbol::StyleLayerKind::Line)
+            .any(|layer| layer.kind == StyleLayerKind::Line)
         {
             for (tile, _) in placements {
                 if let Some(style_tile) = self
@@ -249,6 +284,49 @@ impl StyleSymbols {
                         tile_zoom,
                         self.line_generation,
                         line_atlas,
+                    ));
+                }
+            }
+        }
+        if self
+            .layers
+            .iter()
+            .any(|layer| layer.kind == StyleLayerKind::Fill)
+        {
+            // MapLibre packs the patterns a tile's features reference; Maps packs them all.
+            for (tile, _) in placements {
+                let Some(style_tile) = self
+                    .tiles
+                    .get(&(source.to_owned(), (tile.z, tile.x, tile.y)))
+                else {
+                    continue;
+                };
+                for bucket in &style_tile.buckets.layers {
+                    if let LayerBucket::Fills { fills, .. } = bucket {
+                        for id in fills.iter().filter_map(|fill| fill.pattern.as_deref()) {
+                            images.request_pattern(id);
+                        }
+                    }
+                }
+            }
+            let atlas = images.atlas();
+            for (tile, _) in placements {
+                if let Some(style_tile) = self
+                    .tiles
+                    .get_mut(&(source.to_owned(), (tile.z, tile.x, tile.y)))
+                    && style_tile
+                        .fills
+                        .as_ref()
+                        .map(|fills| (fills.tile_zoom, fills.atlas_revision))
+                        != Some((tile_zoom, atlas.revision))
+                {
+                    self.line_generation += 1;
+                    style_tile.fills = Some(build_tile_fills(
+                        &style_tile.buckets,
+                        *tile,
+                        tile_zoom,
+                        atlas,
+                        self.line_generation,
                     ));
                 }
             }
@@ -295,27 +373,50 @@ impl StyleSymbols {
             }
             visible.push((*tile, *local, style_tile));
         }
-        // Line bytes of the visible tiles, uploaded again only when they changed.
-        let mut line_bases: Vec<Option<(u32, u32)>> = vec![None; visible.len()];
+        // Line, fill and outline bytes of the visible tiles, uploaded again only when they
+        // changed; each tile drawing any of them gets a tile frame.
+        let mut tile_bases: Vec<Option<TileBase>> = vec![None; visible.len()];
         let mut line_bytes = Vec::new();
+        let mut fill_bytes = Vec::new();
+        let mut outline_bytes = Vec::new();
         let mut signature = Vec::new();
+        let mut fill_signature = Vec::new();
         for (index, (tile, local, style_tile)) in visible.iter().enumerate() {
-            let Some(lines) = style_tile
+            let lines = style_tile
                 .lines
                 .as_ref()
-                .filter(|lines| !lines.bytes.is_empty())
-            else {
+                .filter(|lines| !lines.bytes.is_empty());
+            let fills = style_tile
+                .fills
+                .as_ref()
+                .filter(|fills| !fills.fill_bytes.is_empty() || !fills.outline_bytes.is_empty());
+            if lines.is_none() && fills.is_none() {
                 continue;
-            };
-            let base = (line_bytes.len() as u64 / RETAINED_POLYGON_STROKE_VERTEX_SIZE) as u32;
-            line_bytes.extend_from_slice(&lines.bytes);
-            signature.push(((tile.z, tile.x, tile.y), lines.generation));
-            line_bases[index] = Some((frame.line_frames.len() as u32, base));
-            frame.line_frames.push(*local);
+            }
+            tile_bases[index] = Some(TileBase {
+                frame: frame.tile_frames.len() as u32,
+                line: (line_bytes.len() as u64 / RETAINED_POLYGON_STROKE_VERTEX_SIZE) as u32,
+                fill: (fill_bytes.len() as u64 / FILL_VERTEX_SIZE) as u32,
+                outline: (outline_bytes.len() as u64 / FILL_OUTLINE_VERTEX_SIZE) as u32,
+            });
+            frame.tile_frames.push(*local);
+            if let Some(lines) = lines {
+                line_bytes.extend_from_slice(&lines.bytes);
+                signature.push(((tile.z, tile.x, tile.y), lines.generation));
+            }
+            if let Some(fills) = fills {
+                fill_bytes.extend_from_slice(&fills.fill_bytes);
+                outline_bytes.extend_from_slice(&fills.outline_bytes);
+                fill_signature.push(((tile.z, tile.x, tile.y), fills.generation));
+            }
         }
         if signature != self.line_signature {
             frame.line_bytes = Some(line_bytes);
             self.line_signature = signature;
+        }
+        if fill_signature != self.fill_signature {
+            frame.fill_bytes = Some((fill_bytes, outline_bytes));
+            self.fill_signature = fill_signature;
         }
         let tile_ids: Vec<TileId> = visible.iter().map(|(tile, _, _)| *tile).collect();
         let order = symbol_tile_order(&tile_ids, bearing);
@@ -356,25 +457,63 @@ impl StyleSymbols {
                 continue;
             }
             match layer.kind {
-                maps_core::symbol::StyleLayerKind::Line => {
+                StyleLayerKind::Fill => {
+                    let opaque = visible.iter().any(|(_, _, style_tile)| {
+                        matches!(
+                            style_tile.buckets.layers.get(layer_index),
+                            Some(LayerBucket::Fills { opaque: true, .. })
+                        )
+                    });
+                    // An opaque fill hides its outline inside it (MapLibre's depth test), so
+                    // the outline goes first; otherwise it blends over the fill.
+                    let passes: [bool; 2] = if opaque { [true, false] } else { [false, true] };
+                    for outline in passes {
+                        for (index, (_, _, style_tile)) in visible.iter().enumerate() {
+                            let (Some(base), Some(fills)) = (tile_bases[index], &style_tile.fills)
+                            else {
+                                continue;
+                            };
+                            for &(layer, fill_first, fill_count, outline_first, outline_count) in
+                                &fills.ranges
+                            {
+                                if layer != layer_index {
+                                    continue;
+                                }
+                                if outline && outline_count > 0 {
+                                    frame.draws.push(StyleDraw::FillOutlines {
+                                        frame: base.frame,
+                                        first: base.outline + outline_first,
+                                        count: outline_count,
+                                    });
+                                } else if !outline && fill_count > 0 {
+                                    frame.draws.push(StyleDraw::Fills {
+                                        frame: base.frame,
+                                        first: base.fill + fill_first,
+                                        count: fill_count,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                StyleLayerKind::Line => {
                     for (index, (_, _, style_tile)) in visible.iter().enumerate() {
-                        let (Some((line_frame, base)), Some(lines)) =
-                            (line_bases[index], &style_tile.lines)
+                        let (Some(base), Some(lines)) = (tile_bases[index], &style_tile.lines)
                         else {
                             continue;
                         };
                         for &(layer, first, count) in &lines.ranges {
                             if layer == layer_index && count > 0 {
                                 frame.draws.push(StyleDraw::Lines {
-                                    frame: line_frame,
-                                    first: base + first,
+                                    frame: base.frame,
+                                    first: base.line + first,
                                     count,
                                 });
                             }
                         }
                     }
                 }
-                maps_core::symbol::StyleLayerKind::Circle => {
+                StyleLayerKind::Circle => {
                     let first = (frame.circles.len() / CIRCLE_INSTANCE_FLOATS) as u32;
                     // MapLibre draws circle layers over tiles in descending tile order.
                     for tile in placement_tiles.iter().rev() {
@@ -418,7 +557,7 @@ impl StyleSymbols {
                         frame.draws.push(StyleDraw::Circles { first, count });
                     }
                 }
-                maps_core::symbol::StyleLayerKind::Symbol => {
+                StyleLayerKind::Symbol => {
                     let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                     let symbols = &placed[layer_index];
                     // Halo width over 1 px overlaps neighbouring glyphs: MapLibre then draws
@@ -509,6 +648,128 @@ impl StyleSymbols {
             }
         }
         frame
+    }
+}
+
+/// A visible tile's tile frame and first vertices in this frame's line, fill and outline bytes.
+#[derive(Clone, Copy)]
+struct TileBase {
+    frame: u32,
+    line: u32,
+    fill: u32,
+    outline: u32,
+}
+
+/// One tile's fill triangles and `fill-antialias` outline quads in tile-normalized coordinates,
+/// clipped to the tile. A patterned vertex carries its position in pattern pixels at the
+/// camera's tile zoom: MapLibre's `u_pixel_coord_upper/lower` (the tile's pixel origin at that
+/// zoom) plus `u_scale.x * a_pos`, with whole pattern periods of the origin removed. Features
+/// whose image is not in the atlas (missing from the sprite, or the sprite still loading) are
+/// skipped, as MapLibre skips pattern tiles until their images arrive.
+fn build_tile_fills(
+    buckets: &TileStyleBuckets,
+    tile: TileId,
+    tile_zoom: u8,
+    atlas: &ImageAtlas,
+    generation: u64,
+) -> StyleTileFills {
+    // The tile's size and origin in px at the tile zoom (512 px tiles).
+    let size = 512.0 * (f64::from(tile_zoom) - f64::from(tile.z)).exp2();
+    let origin = [f64::from(tile.x) * size, f64::from(tile.y) * size];
+    let mut fill_bytes = Vec::new();
+    let mut outline_bytes = Vec::new();
+    let mut ranges = Vec::new();
+    let fill_count = |bytes: &Vec<u8>| (bytes.len() as u64 / FILL_VERTEX_SIZE) as u32;
+    let outline_count = |bytes: &Vec<u8>| (bytes.len() as u64 / FILL_OUTLINE_VERTEX_SIZE) as u32;
+    for (layer_index, bucket) in buckets.layers.iter().enumerate() {
+        let LayerBucket::Fills {
+            fills,
+            antialias,
+            outline_color,
+            ..
+        } = bucket
+        else {
+            continue;
+        };
+        let (fill_first, outline_first) = (fill_count(&fill_bytes), outline_count(&outline_bytes));
+        for fill in fills {
+            let position = match &fill.pattern {
+                Some(id) => match atlas.pattern(id) {
+                    Some(position) => Some(position),
+                    None => continue,
+                },
+                None => None,
+            };
+            let normalized = |vertex: [f64; 2]| [vertex[0] / 8192.0, vertex[1] / 8192.0];
+            let pattern_at = |vertex: [f64; 2]| {
+                position.map(|position| {
+                    let [u, v] = normalized(vertex);
+                    PatternVertex::new(
+                        &position,
+                        atlas,
+                        [origin[0] + u * size, origin[1] + v * size],
+                        origin,
+                    )
+                })
+            };
+            let pattern_flags = position.map_or(0, |position| {
+                FILL_FLAG_PATTERN | if position.sdf { FILL_FLAG_SDF } else { 0 }
+            });
+            let paint = FillPaint {
+                color: fill.color,
+                opacity: fill.opacity,
+                flags: pattern_flags | FILL_FLAG_CLIP_TO_TILE,
+            };
+            let to_f32 = |point: [f64; 2]| point.map(|value| value as f32);
+            for &index in &fill.triangles {
+                let vertex = fill.vertices[index as usize];
+                push_pattern_fill_vertex(
+                    &mut fill_bytes,
+                    to_f32(normalized(vertex)),
+                    pattern_attributes(pattern_at(vertex).as_ref()),
+                    paint,
+                );
+            }
+            if !antialias {
+                continue;
+            }
+            // `fillOutlinePattern` without `fill-outline-color`, `fillOutline` otherwise.
+            let outline_paint = FillPaint {
+                color: fill.outline_color,
+                opacity: fill.opacity,
+                flags: if *outline_color { 0 } else { pattern_flags } | FILL_FLAG_CLIP_TO_TILE,
+            };
+            for &[a, b] in &fill.outline {
+                let (a, b) = (fill.vertices[a as usize], fill.vertices[b as usize]);
+                let patterns = if *outline_color {
+                    [pattern_attributes(None); 2]
+                } else {
+                    [a, b].map(|vertex| pattern_attributes(pattern_at(vertex).as_ref()))
+                };
+                push_pattern_outline_segment(
+                    &mut outline_bytes,
+                    to_f32(normalized(a)),
+                    to_f32(normalized(b)),
+                    patterns,
+                    outline_paint,
+                );
+            }
+        }
+        ranges.push((
+            layer_index,
+            fill_first,
+            fill_count(&fill_bytes) - fill_first,
+            outline_first,
+            outline_count(&outline_bytes) - outline_first,
+        ));
+    }
+    StyleTileFills {
+        tile_zoom,
+        atlas_revision: atlas.revision,
+        generation,
+        fill_bytes,
+        outline_bytes,
+        ranges,
     }
 }
 
@@ -682,6 +943,7 @@ mod tests {
                 pixel_ratio: 1.0,
             },
             &mut LineAtlas::new(),
+            &mut ImageStore::default(),
         );
         assert_eq!(frame.placed_labels, 1);
         assert_eq!(frame.draws.len(), 2);
