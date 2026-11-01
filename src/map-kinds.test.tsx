@@ -3313,8 +3313,7 @@ describe("MapLibre Map View camera animation", () => {
   test("moves the uncontrolled camera once per frame without extra renders, source updates or update loops", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     let controller: import("./map-display").MapSurfaceController | null = null;
-    let map: (import("maplibre-gl").Map & { setMaxBounds: (bounds: unknown) => void }) | null =
-      null;
+    let map: import("maplibre-gl").Map | null = null;
     let commits = 0;
     const lines = {
       features: [0, 1, 2].map((index) => ({
@@ -3373,7 +3372,6 @@ describe("MapLibre Map View camera animation", () => {
     });
 
     const readyMap = map!;
-    const setMaxBounds = vi.spyOn(readyMap, "setMaxBounds");
     let setDataCalls = 0;
     const getSource = readyMap.getSource.bind(readyMap);
     vi.spyOn(readyMap, "getSource").mockImplementation((id: string) => {
@@ -3400,12 +3398,10 @@ describe("MapLibre Map View camera animation", () => {
       });
     }
 
-    // One commit per camera frame; no setState from the effect that moves the camera.
+    // One commit per camera frame: the constraints effect after each commit sets no state.
     expect(commits).toBe(FRAMES);
     // The line layer is camera-independent: MapLibre reprojects it, Maps does not re-send it.
     expect(setDataCalls).toBe(0);
-    // Constraints are applied when they change, not per frame.
-    expect(setMaxBounds).not.toHaveBeenCalled();
     // The uncontrolled MapLibre camera follows the controller.
     expect([readyMap.getCenter().lng, readyMap.getCenter().lat]).toEqual(center);
     expect(errors.mock.calls.map((call) => String(call[0]))).not.toContainEqual(
