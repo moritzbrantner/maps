@@ -35,6 +35,7 @@ use crate::vector_basemap_layout::{
 };
 use crate::wgpu_dash_atlas::DashAtlasGpu;
 use crate::wgpu_patterns::{PatternGpu, PatternPipelineTargets};
+use crate::wgpu_relief::{ReliefCamera, ReliefGpu};
 use crate::wgpu_retained::{
     FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
 };
@@ -242,6 +243,8 @@ pub struct MapsWgpuBaseMapRenderer {
     frame_time: f64,
     /// Whether the last frame was mid cross-fade, so the host keeps rendering.
     cross_fading: bool,
+    /// Raster-dem hillshade and terrain (#324).
+    relief: ReliefGpu,
 }
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
@@ -1038,6 +1041,14 @@ impl MapsWgpuBaseMapRenderer {
             },
         );
 
+        let relief = ReliefGpu::new(
+            &device,
+            &queue,
+            surface_view_format,
+            premultiplied_blend_state(),
+            ignored_stencil(),
+        );
+
         Ok(Self {
             surface,
             device,
@@ -1097,6 +1108,7 @@ impl MapsWgpuBaseMapRenderer {
             zoom_history: ZoomHistory::default(),
             frame_time: 0.0,
             cross_fading: false,
+            relief,
         })
     }
 
@@ -1123,10 +1135,88 @@ impl MapsWgpuBaseMapRenderer {
         self.frame_time = now;
     }
 
-    /// Whether the last frame drew patterns mid cross-fade: the host renders again.
+    /// Whether the last frame drew patterns mid cross-fade, or left terrain tile targets stale
+    /// (#324): the host renders again.
     #[wasm_bindgen(js_name = isCrossFading)]
     pub fn is_cross_fading(&self) -> bool {
-        self.cross_fading
+        self.cross_fading || self.relief.needs_follow_up()
+    }
+
+    /// The map style's relief (#324): its `raster-dem` sources, `hillshade` layers and
+    /// `terrain`, read from the MapLibre style JSON (empty clears it).
+    #[wasm_bindgen(js_name = setReliefStyle)]
+    pub fn set_relief_style(&mut self, style: &str) -> Result<(), JsValue> {
+        self.relief
+            .set_style(style)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// The camera relief plans its tiles for (CSS pixels, degrees).
+    #[wasm_bindgen(js_name = setReliefCamera)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_relief_camera(
+        &mut self,
+        longitude: f64,
+        latitude: f64,
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+        width: f64,
+        height: f64,
+    ) {
+        self.relief.set_camera(ReliefCamera {
+            longitude,
+            latitude,
+            zoom,
+            bearing,
+            pitch,
+            width,
+            height,
+        });
+    }
+
+    /// Relief tiles the last frame needed and lacked, as `"source|z|x|y"`.
+    #[wasm_bindgen(js_name = reliefRequests)]
+    pub fn relief_requests(&self) -> Vec<String> {
+        self.relief.requests()
+    }
+
+    /// Whether the style has hillshade layers or terrain.
+    #[wasm_bindgen(js_name = reliefActive)]
+    pub fn relief_active(&self) -> bool {
+        self.relief.is_active()
+    }
+
+    /// Adds a decoded `raster-dem` tile: `size × size` straight RGBA bytes.
+    #[wasm_bindgen(js_name = uploadDemTile)]
+    pub fn upload_dem_tile(
+        &mut self,
+        source: &str,
+        z: u8,
+        x: u32,
+        y: u32,
+        size: u32,
+        rgba: &[u8],
+    ) -> Result<(), JsValue> {
+        let tile = TileId::new(z, x, y).ok_or_else(|| JsValue::from_str("invalid DEM tile"))?;
+        self.relief
+            .add_dem_tile(source, tile, size as usize, rgba)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Adds a tile of the style raster drawn into terrain tiles.
+    #[wasm_bindgen(js_name = uploadReliefRaster)]
+    pub fn upload_relief_raster(
+        &mut self,
+        z: u8,
+        x: u32,
+        y: u32,
+        image: ImageBitmap,
+    ) -> Result<(), JsValue> {
+        let tile = TileId::new(z, x, y).ok_or_else(|| JsValue::from_str("invalid raster tile"))?;
+        self.relief
+            .add_raster_tile(&self.device, &self.queue, &self.mipmaps, tile, image);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = isDeviceLost)]
@@ -1687,6 +1777,13 @@ impl MapsWgpuBaseMapRenderer {
             clip,
         );
         self.prepare_patterns(placements);
+        let relief = self.relief.prepare(
+            &self.device,
+            &self.queue,
+            &self.mipmaps,
+            (self.config.width, self.config.height),
+            clip.margin,
+        );
 
         let Some(surface_frame) = self.acquire_surface_frame()? else {
             return Ok(0);
@@ -1702,22 +1799,37 @@ impl MapsWgpuBaseMapRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let background = wgpu::Color {
+            r: MAP_BACKGROUND_RED,
+            g: MAP_BACKGROUND_GREEN,
+            b: MAP_BACKGROUND_BLUE,
+            a: self.surface_clear_alpha,
+        };
+        let scissor = clip.scissor(self.config.width, self.config.height);
+        let mut drawn_tiles = 0;
+        let mut draw_calls = 0;
+        // Terrain replaces the flat raster: its tiles carry the raster and hillshade layers.
+        let terrain = relief.has_terrain();
+        if terrain {
+            let drawn = self
+                .relief
+                .draw_terrain(&mut encoder, &view, background, &relief, scissor);
+            drawn_tiles += drawn as usize;
+            draw_calls += drawn;
+        }
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: MAP_BACKGROUND_RED,
-                    g: MAP_BACKGROUND_GREEN,
-                    b: MAP_BACKGROUND_BLUE,
-                    a: self.surface_clear_alpha,
-                }),
+                load: if terrain {
+                    wgpu::LoadOp::Load
+                } else {
+                    wgpu::LoadOp::Clear(background)
+                },
                 store: wgpu::StoreOp::Store,
             },
         })];
-        let mut drawn_tiles = 0;
-        let mut draw_calls = 0;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
@@ -1734,8 +1846,7 @@ impl MapsWgpuBaseMapRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Some((x, y, width, height)) = clip.scissor(self.config.width, self.config.height)
-            {
+            if let Some((x, y, width, height)) = scissor {
                 // Continuous motion: the margin would be replaced before it is shown.
                 pass.set_scissor_rect(x, y, width, height);
             }
@@ -1750,6 +1861,9 @@ impl MapsWgpuBaseMapRenderer {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             for (index, placement) in placements.iter().enumerate() {
+                if terrain {
+                    break;
+                }
                 let Some(tile) = placement.key.and_then(|key| self.tiles.get(&key)) else {
                     continue;
                 };
@@ -1759,6 +1873,7 @@ impl MapsWgpuBaseMapRenderer {
                 drawn_tiles += 1;
                 draw_calls += 1;
             }
+            draw_calls += self.relief.draw_hillshade(&mut pass, &relief);
 
             draw_calls += self.draw_vector_tiles(&mut pass, &vector_draws);
             draw_calls += self.symbol_gpu.draw(

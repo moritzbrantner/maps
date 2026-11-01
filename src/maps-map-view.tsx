@@ -16,7 +16,7 @@ import {
 
 import { getBoundsFromPoints, type ViewportAggregationQuery } from "./aggregation";
 import { MapsCanvasFlatRuntime, type MapsCanvasFlatRuntimeController } from "./canvas-flat-runtime";
-import type { MapsRendererStats } from "./maps-browser-runtime";
+import type { MapsRelief, MapsRendererStats } from "./maps-browser-runtime";
 import {
   FeatureOverlays,
   type ContextMenuOverlayState,
@@ -103,6 +103,7 @@ export function MapsMapView({
   const activeTileset = useMemo(() => tileset ? validateMapsTileset(tileset) : undefined, [tileset]);
   const resolvedMapStyle = useMemo(() => activeTileset ? { tiles: false as const } : resolveMapsRuntimeStyle(mapStyle), [mapStyle, activeTileset]);
   const sprite = useMemo(() => resolveMapsRuntimeSprite(mapStyle), [mapStyle]);
+  const relief = useMemo(() => resolveMapsRuntimeRelief(mapStyle), [mapStyle]);
   const tileSource = useMemo(() => resolveTileLayerOptions(resolvedMapStyle), [resolvedMapStyle]);
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
@@ -711,6 +712,7 @@ export function MapsMapView({
           tilesetStyle={tilesetStyle}
           tilesetLayers={tilesetLayers}
           sprite={sprite}
+          relief={relief}
           tileLimits={tileLimits}
           createTileImageLoader={createTileImageLoader}
           mapStyle={resolvedMapStyle}
@@ -795,6 +797,34 @@ function resolveMapsRuntimeSprite(mapStyle: string | RasterMapStyle): string | u
   throw new Error('flatRuntime="maps" supports a single sprite URL, not sprite arrays.');
 }
 
+/**
+ * The style's relief (#324): `hillshade` layers on `raster-dem` sources and `terrain`, read
+ * from the same MapLibre style object MapLibre gets. Undefined when the style has neither.
+ */
+function resolveMapsRuntimeRelief(mapStyle: string | RasterMapStyle): MapsRelief | undefined {
+  if (typeof mapStyle === "string" || !("version" in mapStyle)) return undefined;
+  const style = mapStyle as unknown as {
+    layers?: readonly { type?: unknown }[];
+    sources?: Record<string, { type?: unknown; tiles?: unknown }>;
+    terrain?: unknown;
+  };
+  const hasRelief =
+    Boolean(style.terrain) || (style.layers ?? []).some((layer) => layer.type === "hillshade");
+  if (!hasRelief) return undefined;
+  const sources: MapsRelief["sources"] = {};
+  for (const [id, source] of Object.entries(style.sources ?? {})) {
+    if (source?.type !== "raster" && source?.type !== "raster-dem") continue;
+    if (!Array.isArray(source.tiles) || typeof source.tiles[0] !== "string") {
+      throw new Error(`flatRuntime="maps" needs a tiles array on relief source "${id}".`);
+    }
+    sources[id] = { dem: source.type === "raster-dem", url: source.tiles[0] };
+  }
+  return {
+    sources,
+    style: JSON.stringify({ layers: style.layers, sources: style.sources, terrain: style.terrain }),
+  };
+}
+
 function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapStyle {
   if (typeof mapStyle === "string") {
     throw new Error(
@@ -810,8 +840,13 @@ function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapSt
     layers?: readonly { source?: unknown; type?: unknown }[];
     sources?: Record<string, unknown>;
   };
-  const layers = style.layers ?? [];
-  const sources = style.sources ?? {};
+  // Relief (#324) draws from `raster-dem` sources through `resolveMapsRuntimeRelief`.
+  const layers = (style.layers ?? []).filter((layer) => layer.type !== "hillshade");
+  const sources = Object.fromEntries(
+    Object.entries(style.sources ?? {}).filter(
+      ([, source]) => (source as { type?: unknown } | null)?.type !== "raster-dem",
+    ),
+  );
   const rasterSources = Object.entries(sources).filter(([, source]) => {
     return Boolean(
       source && typeof source === "object" && "type" in source && source.type === "raster",

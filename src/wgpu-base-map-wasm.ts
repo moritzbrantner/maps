@@ -1,5 +1,6 @@
 import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
 import type {
+  MapsFlatRasterFrame,
   MapsRasterRenderCamera,
   MapsRasterTileId,
   MapsRasterTilePlacement,
@@ -124,8 +125,24 @@ export type MapsWgpuBaseMapRenderer = {
    * `fill-pattern` images resolve against every sprite added. Returns the image count.
    */
   addSprite?(json: string, rgba: Uint8Array, width: number, height: number): number;
-  /** Whether the last frame drew patterns mid zoom cross-fade, so the host renders again. */
+  /**
+   * Whether the last frame drew patterns mid zoom cross-fade, or left terrain tile targets
+   * stale (#324), so the host renders again.
+   */
   isCrossFading?(): boolean;
+  /**
+   * Relief (#324): the MapLibre style JSON whose `raster-dem` sources, `hillshade` layers and
+   * `terrain` the renderer draws (empty clears it). Throws on unsupported paint.
+   */
+  setReliefStyle?(style: string): void;
+  /** The camera the next frame plans relief tiles for. */
+  setReliefCamera?(camera: MapsFlatRasterFrame["camera"]): void;
+  /** Relief tiles the last frame lacked, as `"source|z|x|y"`. */
+  reliefRequests?(): string[];
+  /** A decoded `raster-dem` tile: `size × size` straight RGBA. */
+  uploadDemTile?(source: string, tile: MapsRasterTileId, size: number, rgba: Uint8Array): void;
+  /** A tile of the style raster that terrain tiles draw. */
+  uploadReliefRaster?(tile: MapsRasterTileId, image: ImageBitmap): void;
   /** Adds one SDF glyph range PBF (`start` = first codepoint) for a comma-joined font stack. */
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   /** Glyph ranges retained tiles still need, as `"<start>:<font stack>"`. */
@@ -187,6 +204,19 @@ type MapsWgpuBaseMapWasmRenderer = {
   addSprite(json: string, rgba: Uint8Array, width: number, height: number): number;
   setFrameTime(now: number): void;
   isCrossFading(): boolean;
+  setReliefStyle(style: string): void;
+  setReliefCamera(
+    longitude: number,
+    latitude: number,
+    zoom: number,
+    bearing: number,
+    pitch: number,
+    width: number,
+    height: number,
+  ): void;
+  reliefRequests(): string[];
+  uploadDemTile(source: string, z: number, x: number, y: number, size: number, rgba: Uint8Array): void;
+  uploadReliefRaster(z: number, x: number, y: number, image: ImageBitmap): void;
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   missingGlyphRanges(): string[];
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
@@ -383,6 +413,37 @@ export async function loadMapsWgpuBaseMapRenderer(
       isCrossFading() {
         assertLive(disposed);
         return renderer.isCrossFading();
+      },
+      setReliefStyle(style) {
+        // Style errors are the caller's; they must not hide the canvas.
+        assertLive(disposed);
+        renderer.setReliefStyle(style);
+      },
+      setReliefCamera(camera) {
+        assertLive(disposed);
+        renderer.setReliefCamera(
+          camera.center[0],
+          camera.center[1],
+          camera.zoom,
+          camera.bearing,
+          camera.pitch,
+          camera.width,
+          camera.height,
+        );
+      },
+      reliefRequests() {
+        assertLive(disposed);
+        return renderer.reliefRequests();
+      },
+      uploadDemTile(source, tile, size, rgba) {
+        assertLive(disposed);
+        renderer.uploadDemTile(source, tile.z, tile.x, tile.y, size, rgba);
+      },
+      uploadReliefRaster(tile, image) {
+        runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          renderer.uploadReliefRaster(tile.z, tile.x, tile.y, image);
+        });
       },
       addGlyphs(stack, start, bytes) {
         assertLive(disposed);

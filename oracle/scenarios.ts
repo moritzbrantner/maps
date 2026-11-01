@@ -319,14 +319,23 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "style",
+    camera: { bearing: 20, center: [9.0, 47.2], zoom: 8 },
+    capability: "raster-dem hillshade over a raster basemap, light anchored to the rotated viewport",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "hillshade",
+    origin: "derived hillshade tilesets (#282); raster-dem and hillshade (#324)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "style",
     camera: { bearing: 20, center: [9.0, 47.2], pitch: 55, zoom: 8 },
     capability: "raster-dem hillshade with 3D terrain under a pitched camera",
     knownGaps: [],
     name: "hillshade-terrain",
-    origin: "Milestone F terrain (#81); derived hillshade tilesets (#282)",
+    origin: "Milestone F terrain (#81); derived hillshade tilesets (#282); raster-dem, hillshade and terrain (#324)",
     size: MAP_SIZE,
     steps: [],
-    unsupported: { issue: 324, reason: "no raster-dem source, hillshade layer or terrain" },
   },
 ];
 
