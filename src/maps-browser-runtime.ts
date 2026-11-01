@@ -1,6 +1,10 @@
 import { fetchMapsTilesetTile } from "./maps-tileset-transport";
 import { type MapsTileset } from "./maps-tileset";
-import { tilesetStyleTable, type MapsVectorBasemapStyle } from "./maps-tileset-style";
+import {
+  tilesetStyleTable,
+  type MapsTilesetLayers,
+  type MapsVectorBasemapStyle,
+} from "./maps-tileset-style";
 import { decodeShortbreadTilePixels } from "./vector-tile-wasm";
 import { paintShortbreadTile } from "./shortbread-tile-paint";
 import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
@@ -212,6 +216,8 @@ export type MapsBrowserRuntimeOptions = {
   mapStyle: RasterMapStyle;
   tileset?: MapsTileset;
   tilesetStyle?: MapsVectorBasemapStyle;
+  /** MapLibre `circle`/`symbol` layers drawn over the Tileset, supported by flatRuntime="maps" only. */
+  tilesetLayers?: MapsTilesetLayers;
   tileLimits?: MapsFlatRasterRuntimeConfig["limits"];
   createTileImageLoader?: () => MapsTileImageLoader;
   maxBounds?: MapBounds;
@@ -609,6 +615,7 @@ export function createMapsBrowserRuntime(
       source: () => source,
       tileset: () => config.tileset,
       tilesetStyle: () => config.tilesetStyle,
+      tilesetLayers: () => config.tilesetLayers,
       wasmPackage,
       onError: (error) => config.onError?.(error),
       onRendererFailure: activateCanvasFallback,
@@ -950,11 +957,14 @@ export function createMapsBrowserRuntime(
     const previous = config.viewState;
     const previousTileset = config.tileset;
     const previousStyle = config.tilesetStyle;
+    const previousLayers = config.tilesetLayers;
     config = { ...next, viewState: copyViewState(next.viewState) };
     source = runtimeTileSource(config);
     if (
       config.tileset &&
-      (previousTileset !== config.tileset || previousStyle !== config.tilesetStyle)
+      (previousTileset !== config.tileset ||
+        previousStyle !== config.tilesetStyle ||
+        previousLayers !== config.tilesetLayers)
     )
       updateTileset?.();
     if (
@@ -1126,6 +1136,7 @@ function createFrameSynchronizer({
   source,
   tileset,
   tilesetStyle,
+  tilesetLayers,
   wasmPackage,
   onError,
   onRendererFailure,
@@ -1145,6 +1156,7 @@ function createFrameSynchronizer({
   source: () => ReturnType<typeof runtimeTileSource>;
   tileset: () => MapsTileset | undefined;
   tilesetStyle: () => MapsVectorBasemapStyle | undefined;
+  tilesetLayers: () => MapsTilesetLayers | undefined;
   wasmPackage?: string;
   onError: (error: unknown) => void;
   onRendererFailure: () => void;
@@ -1156,7 +1168,7 @@ function createFrameSynchronizer({
   const inactive = new Map<string, Map<string, { vector: VectorResource; image: ImageBitmap }>>();
   let activeDescriptor = tileset();
   let sourceIdentity = activeDescriptor ? runtime.activateTileset(activeDescriptor) : "";
-  let styleKey = JSON.stringify(tilesetStyle());
+  let styleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
   let sourceSwitchStarted = performance.now();
   let sourceSwitchMs: number | null = null;
   let requests = 0;
@@ -1169,8 +1181,51 @@ function createFrameSynchronizer({
     current.setVectorSource(sourceIdentity);
     current.setVectorMaxZoom(tileset()!.maxZoom);
     current.setVectorStyle(tilesetStyleTable(tilesetStyle()));
+    try {
+      current.setVectorLayers(JSON.stringify(tilesetLayers()?.layers ?? []));
+    } catch (error) {
+      onError(error);
+    }
   }
   configureVectorRenderer();
+
+  // Glyph ranges per renderer: a replaced renderer starts without glyphs.
+  const glyphRequests = new WeakMap<MapsWgpuBaseMapRenderer, Map<string, Promise<void>>>();
+  /** Loads the SDF glyph ranges the renderer's tiles still need (MapLibre's GlyphManager). */
+  function loadGlyphs(): Promise<void> {
+    const current = renderer();
+    const template = tilesetLayers()?.glyphs;
+    if (!current || !template) return Promise.resolve();
+    let requests = glyphRequests.get(current);
+    if (!requests) glyphRequests.set(current, (requests = new Map()));
+    const pending = current.missingGlyphRanges().map((entry) => {
+      let request = requests.get(entry);
+      if (!request) {
+        const separator = entry.indexOf(":");
+        const start = Number(entry.slice(0, separator));
+        const stack = entry.slice(separator + 1);
+        const url = template
+          .replace("{fontstack}", encodeURIComponent(stack))
+          .replace("{range}", `${start}-${start + 255}`);
+        request = fetch(url)
+          .then((response) => {
+            if (!response.ok) throw new Error(`glyph range ${url}: HTTP ${response.status}`);
+            return response.arrayBuffer();
+          })
+          .then((buffer) => {
+            if (disposed || renderer() !== current) return;
+            current.addGlyphs(stack, start, new Uint8Array(buffer));
+            invalidateRendered();
+            requestRender();
+          })
+          // Like MapLibre, a missing range leaves its labels out instead of failing tiles.
+          .catch((error) => onError(error));
+        requests.set(entry, request);
+      }
+      return request;
+    });
+    return Promise.all(pending).then(() => undefined);
+  }
 
   function publishSourceStats() {
     if (!tileset()) return;
@@ -1236,11 +1291,12 @@ function createFrameSynchronizer({
         cacheReuses++;
       }
     }
-    const nextStyleKey = JSON.stringify(tilesetStyle());
+    const nextStyleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
     const styleChanged = styleKey !== nextStyleKey;
     if (changed || styleChanged) {
       styleKey = nextStyleKey;
       configureVectorRenderer();
+      void loadGlyphs();
       for (const [key, vector] of vectors) {
         images.get(key)?.close();
         images.set(key, paintShortbreadTile(vector.pixels, tilesetStyle()));
@@ -1835,6 +1891,9 @@ function createFrameSynchronizer({
               renderer()!.uploadVectorTile(tile, bytes);
               bucketBuilds++;
               decodes++;
+              // Labels lay out once their glyph ranges arrived, as MapLibre waits for glyphs.
+              await loadGlyphs();
+              abort.signal.throwIfAborted();
             }
             return paintShortbreadTile(pixels, tilesetStyle());
           })()

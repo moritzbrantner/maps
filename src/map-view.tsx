@@ -1,7 +1,7 @@
 "use client";
 
 import type { MapsTileset } from "./maps-tileset";
-import type { MapsVectorBasemapStyle } from "./maps-tileset-style";
+import type { MapsTilesetLayers, MapsVectorBasemapStyle } from "./maps-tileset-style";
 
 import { useEffect } from "react";
 
@@ -28,6 +28,8 @@ export type MapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   /** One active versioned MVT source, supported by flatRuntime="maps" only. */
   tileset?: MapsTileset;
   tilesetStyle?: MapsVectorBasemapStyle;
+  /** MapLibre `circle`/`symbol` layers drawn over the Tileset, supported by flatRuntime="maps" only. */
+  tilesetLayers?: MapsTilesetLayers;
   /** Existing Rust request/decoded-resource budgets, shared across source revisions. */
   tileLimits?: import("./flat-runtime-wasm").MapsFlatRasterRuntimeConfig["limits"];
 };

@@ -241,6 +241,7 @@
     "MapSizeLegendProps",
     "MapsScalarFieldWasmRuntime",
     "MapsTileset",
+    "MapsTilesetLayers",
     "MapsTilesetMetadata",
     "MapSurfaceController",
     "MapsVectorBasemapStyle",

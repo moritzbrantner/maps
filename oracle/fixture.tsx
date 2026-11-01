@@ -16,6 +16,7 @@ import {
   type AggregatedMapFeature,
   type MapPoint,
   type MapsTileset,
+  type MapsTilesetLayers,
   type MapSurfaceController,
   type MapViewState,
   type RasterMapStyle,
@@ -142,7 +143,7 @@ function vectorStyle() {
     fill(base)[property],
   ];
   return {
-    glyphs: `${TILE_ORIGIN}/glyphs/{fontstack}/{range}.pbf`,
+    glyphs: GLYPHS_URL,
     layers: [
       { id: "background", paint: { "background-color": "#f9f4ee" }, type: "background" },
       {
@@ -177,43 +178,51 @@ function vectorStyle() {
   };
 }
 
-/** MapLibre-only styles for the unsupported scenarios (#321-#324). */
+/**
+ * The `symbols` style layers (#321): MapLibre draws them in its style, Maps over its Tileset
+ * (`tilesetLayers`). The very same layer objects reach both runtimes.
+ */
+const SYMBOL_LAYERS: Array<Record<string, unknown>> = [
+  {
+    id: "place-dots",
+    paint: { "circle-color": "#1f2937", "circle-radius": ["interpolate", ["linear"], ["get", "rank"], 2, 5, 8, 3] },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "circle",
+  },
+  {
+    id: "place-labels",
+    layout: {
+      "text-anchor": "left",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0.6, 0],
+      "text-size": ["interpolate", ["linear"], ["get", "rank"], 2, 20, 8, 13],
+    },
+    paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    id: "lake-labels",
+    filter: ["==", ["get", "kind"], "lake"],
+    layout: { "text-field": ["get", "name"], "text-font": ["NotoSans-Regular"], "text-size": 14 },
+    paint: { "text-color": "#1e3a8a", "text-halo-color": "#e0f2fe", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+];
+const GLYPHS_URL = `${TILE_ORIGIN}/glyphs/{fontstack}/{range}.pbf`;
+const tilesetLayers: MapsTilesetLayers = { glyphs: GLYPHS_URL, layers: SYMBOL_LAYERS };
+
+/** MapLibre styles beyond the plain vector basemap: `symbols`, and the unsupported scenarios (#322-#324). */
 function referenceStyle(name: string) {
   switch (name) {
     case "symbols": {
       const style = vectorStyle();
-      style.layers.push(
-        {
-          id: "place-dots",
-          paint: { "circle-color": "#1f2937", "circle-radius": ["interpolate", ["linear"], ["get", "rank"], 2, 5, 8, 3] },
-          source: "oracle-vector",
-          "source-layer": "places",
-          type: "circle",
-        },
-        {
-          id: "place-labels",
-          layout: {
-            "text-anchor": "left",
-            "text-field": ["get", "name"],
-            "text-font": ["NotoSans-Regular"],
-            "text-offset": [0.6, 0],
-            "text-size": ["interpolate", ["linear"], ["get", "rank"], 2, 20, 8, 13],
-          },
-          paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
-          source: "oracle-vector",
-          "source-layer": "places",
-          type: "symbol",
-        },
-        {
-          id: "lake-labels",
-          filter: ["==", ["get", "kind"], "lake"],
-          layout: { "text-field": ["get", "name"], "text-font": ["NotoSans-Regular"], "text-size": 14 },
-          paint: { "text-color": "#1e3a8a", "text-halo-color": "#e0f2fe", "text-halo-width": 1 },
-          source: "oracle-vector",
-          "source-layer": "water_polygons",
-          type: "symbol",
-        },
-      );
+      style.layers.push(...SYMBOL_LAYERS);
       return style;
     }
     case "fill-pattern": {
@@ -284,7 +293,7 @@ function styleFor(): RasterMapStyle {
   if (scenario.basemap === "style") return referenceStyle(scenario.name) as unknown as RasterMapStyle;
   if (scenario.basemap === "vector") {
     // Maps draws the basemap from `tileset`; MapLibre from the equivalent style.
-    const style = scenario.unsupported ? referenceStyle(scenario.name) : vectorStyle();
+    const style = scenario.unsupported || scenario.name === "symbols" ? referenceStyle(scenario.name) : vectorStyle();
     return style as unknown as RasterMapStyle;
   }
   return rasterStyle(scenario.basemap) as unknown as RasterMapStyle;
@@ -324,6 +333,7 @@ function App() {
         mapLabel={`Oracle ${scenario.name}`}
         mapStyle={style}
         {...(runtime === "maps" && scenario.basemap === "vector" ? { tileset } : {})}
+        {...(runtime === "maps" && scenario.name === "symbols" ? { tilesetLayers } : {})}
         onMapControllerReady={(controller) => {
           oracle.controller = controller;
         }}
