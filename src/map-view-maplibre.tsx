@@ -307,10 +307,22 @@ export function MapView({
     [hoverStore],
   );
 
+  /**
+   * Every camera move clears hover. A click's hover block stays: the pointer has not moved, so a
+   * cluster click that zooms the camera must not re-show the tooltip it just dismissed.
+   */
+  const clearCameraHover = useEffectEvent(() => {
+    setHovered(null);
+    // An unconditional `setTooltip(null)` scheduled a render per frame from inside the effect
+    // that moves the camera, which React reported as an update loop (#329).
+    if (tooltip !== null) {
+      setTooltip(null);
+    }
+  });
+
   const clearFeatureHover = useEffectEvent(() => {
     blockedHoverPositionRef.current = null;
-    setHovered(null);
-    setTooltip(null);
+    clearCameraHover();
   });
 
   const fitFlatToBounds = useEffectEvent((
@@ -414,7 +426,7 @@ export function MapView({
     setViewState(next, "fly-to");
   });
 
-  const syncFlatControlledView = useEffectEvent(() => {
+  const syncFlatView = useEffectEvent(() => {
     const map = mapRef.current;
 
     if (!map) {
@@ -443,7 +455,7 @@ export function MapView({
       return;
     }
 
-    clearFeatureHover();
+    clearCameraHover();
 
     const next = getMapLibreViewState(map);
     const previous = lastFlatMoveStateRef.current;
@@ -510,9 +522,9 @@ export function MapView({
       lastFlatMoveStateRef.current = currentViewState;
 
       localMap.on("moveend", emitFlatMoveEnd);
-      localMap.on("movestart", clearFeatureHover);
-      localMap.on("zoomstart", clearFeatureHover);
-      localMap.on("dragstart", clearFeatureHover);
+      localMap.on("movestart", clearCameraHover);
+      localMap.on("zoomstart", clearCameraHover);
+      localMap.on("dragstart", clearCameraHover);
       localMap.on("resize", syncFlatBoundsConstraints);
       localMap.on("click", () => {
         clearFeatureHover();
@@ -570,9 +582,9 @@ export function MapView({
 
       if (localMap) {
         localMap.off("moveend", emitFlatMoveEnd);
-        localMap.off("movestart", clearFeatureHover);
-        localMap.off("zoomstart", clearFeatureHover);
-        localMap.off("dragstart", clearFeatureHover);
+        localMap.off("movestart", clearCameraHover);
+        localMap.off("zoomstart", clearCameraHover);
+        localMap.off("dragstart", clearCameraHover);
         localMap.off("resize", syncFlatBoundsConstraints);
         if (handleStyleLoad) {
           localMap.off("style.load", handleStyleLoad);
@@ -588,7 +600,7 @@ export function MapView({
     };
   }, [mapDisplay, usesMapLibreRuntime]);
 
-  useEffect(() => {
+  const syncFlatZoomConstraints = useEffectEvent(() => {
     const map = mapRef.current;
 
     if (!map || !usesMapLibreRuntime) {
@@ -602,7 +614,13 @@ export function MapView({
       lastCommittedFlatStateRef.current = currentViewState;
       map.jumpTo({ zoom: currentViewState.zoom });
     }
-  }, [currentViewState, resolvedMaxZoom, syncFlatBoundsConstraints, usesMapLibreRuntime]);
+  });
+
+  // Only a constraint change re-applies the constraints: running this per view state change set
+  // MapLibre's bounds and React state on every camera frame and looped updates (#329).
+  useEffect(() => {
+    syncFlatZoomConstraints();
+  }, [resolvedMaxBounds, resolvedMaxZoom, usesMapLibreRuntime]);
 
   useEffect(() => {
     if (!usesMapLibreRuntime) {
@@ -629,12 +647,11 @@ export function MapView({
 
     lastFlatViewportRenderKeyRef.current = flatViewportRenderKey;
 
-    if (controlled) {
-      syncFlatControlledView();
-    }
-
+    // Controlled or not, a view state the map does not show yet (a controller `setViewState`)
+    // moves the MapLibre camera; one the map reported itself is already equal and a no-op.
+    syncFlatView();
     renderFlatLayers({ viewportOnly: true });
-  }, [controlled, flatViewportRenderKey, usesMapLibreRuntime]);
+  }, [flatViewportRenderKey, usesMapLibreRuntime]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -927,8 +944,9 @@ export function MapView({
           });
         });
 
+        // A hover clear keeps a click's block: a layer dropping the clicked feature (a cluster
+        // expanded by its click) is no pointer move. Hovering anywhere else lifts the block.
         if (!feature || !position) {
-          blockedHoverPositionRef.current = null;
           setHovered(null);
           setTooltip(null);
           return;

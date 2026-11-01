@@ -3308,6 +3308,113 @@ describe("MapLibre Map View surface subscriptions", () => {
   });
 });
 
+// #329: a per-frame controller camera with a GeoJSON line layer looped React updates.
+describe("MapLibre Map View camera animation", () => {
+  test("moves the uncontrolled camera once per frame without extra renders, source updates or update loops", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let controller: import("./map-display").MapSurfaceController | null = null;
+    let map: (import("maplibre-gl").Map & { setMaxBounds: (bounds: unknown) => void }) | null =
+      null;
+    let commits = 0;
+    const lines = {
+      features: [0, 1, 2].map((index) => ({
+        geometry: {
+          coordinates: [
+            [8 + index, 47],
+            [9 + index, 48],
+          ] as Array<[number, number]>,
+          type: "LineString" as const,
+        },
+        id: `line-${index}`,
+        properties: { kind: index === 0 ? "river" : "road" },
+        type: "Feature" as const,
+      })),
+      type: "FeatureCollection" as const,
+    };
+
+    render(
+      <Profiler
+        id="map-view"
+        onRender={() => {
+          commits += 1;
+        }}
+      >
+        <MapView
+          defaultViewState={{ center: [10, 47.5], zoom: 6 }}
+          fitToData={false}
+          mapLabel="Animated line map"
+          onMapControllerReady={(next) => {
+            controller = next;
+          }}
+          onMapReady={(next) => {
+            map = next as NonNullable<typeof map>;
+          }}
+          showAttributionControl={false}
+        >
+          <GeoJsonLayer
+            featureCollection={lines}
+            // A new closure per render, as consumers write it.
+            getFeatureStyle={(feature) => ({
+              lineColor: feature.properties.kind === "river" ? "#2563eb" : "#57534e",
+              lineWidth: feature.properties.kind === "river" ? 3 : 1.5,
+            })}
+            layerId="animated-lines"
+          />
+        </MapView>
+      </Profiler>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Animated line map").getAttribute("data-map-ready")).toBe("true");
+      expect(controller && map).toBeTruthy();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const readyMap = map!;
+    const setMaxBounds = vi.spyOn(readyMap, "setMaxBounds");
+    let setDataCalls = 0;
+    const getSource = readyMap.getSource.bind(readyMap);
+    vi.spyOn(readyMap, "getSource").mockImplementation((id: string) => {
+      const source = getSource(id) as { setData?: (data: unknown) => void } | undefined;
+      if (!source?.setData) return source as never;
+      const setData = source.setData;
+      return {
+        ...source,
+        setData: (data: unknown) => {
+          setDataCalls += 1;
+          setData(data);
+        },
+      } as never;
+    });
+    commits = 0;
+
+    const FRAMES = 80;
+    let center: [number, number] = [10, 47.5];
+    for (let frame = 0; frame < FRAMES; frame++) {
+      const angle = (frame / FRAMES) * Math.PI * 2;
+      center = [10 + Math.cos(angle) * 0.4, 47.5 + Math.sin(angle) * 0.25];
+      act(() => {
+        controller!.setViewState({ center, zoom: 6 + Math.sin(angle * 2) * 0.2 });
+      });
+    }
+
+    // One commit per camera frame; no setState from the effect that moves the camera.
+    expect(commits).toBe(FRAMES);
+    // The line layer is camera-independent: MapLibre reprojects it, Maps does not re-send it.
+    expect(setDataCalls).toBe(0);
+    // Constraints are applied when they change, not per frame.
+    expect(setMaxBounds).not.toHaveBeenCalled();
+    // The uncontrolled MapLibre camera follows the controller.
+    expect([readyMap.getCenter().lng, readyMap.getCenter().lat]).toEqual(center);
+    expect(errors.mock.calls.map((call) => String(call[0]))).not.toContainEqual(
+      expect.stringContaining("Maximum update depth"),
+    );
+    errors.mockRestore();
+  });
+});
+
 // #208: uncontrolled hover restyles the existing MapLibre layers in place.
 describe("MapLibre Map View uncontrolled hover styling", () => {
   const hoveredClassName = "mb-maps__feature--hovered";
