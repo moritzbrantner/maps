@@ -1,5 +1,5 @@
 import type { GeoJsonLayerFeature, GeoJsonLayerStyle } from "./geojson-layer";
-import { resolveFeatureStyle } from "./geojson-rendering";
+import { flatLineShape, resolveFeatureStyle } from "./geojson-rendering";
 import type { MapPointClusterRenderFrame } from "./point-cluster-render-frame";
 
 export type MapRenderCoordinate = [longitude: number, latitude: number];
@@ -38,6 +38,12 @@ export type MapRenderCircle<TFeature = unknown> = MapRenderPrimitiveBase<TFeatur
 export type MapRenderLine<TFeature = unknown> = MapRenderPrimitiveBase<TFeature> & {
   coordinates: MapRenderCoordinate[];
   kind: "line";
+  /** MapLibre line layout and dashes (#322); absent means round caps and joins, solid. */
+  lineCap?: "butt" | "round" | "square";
+  lineDasharray?: readonly number[];
+  lineJoin?: "bevel" | "round" | "miter";
+  lineMiterLimit?: number;
+  lineRoundLimit?: number;
   strokeColor: string;
   strokeOpacity: number;
   strokeWidth: number;
@@ -277,6 +283,7 @@ function createGeoJsonLine<TFeature>(
     coordinates: coordinates.map(copyCoordinate),
     kind: "line",
     primitiveId,
+    ...flatLineShape(style),
     strokeColor: style.lineColor,
     strokeOpacity: style.lineOpacity,
     strokeWidth: style.lineWidth,

@@ -12,7 +12,7 @@ use core::ops::Range;
 use earcut::Earcut;
 
 use crate::TileId;
-use crate::line_mesh::{LineCap, LineMesh};
+use crate::line_mesh::{LineCap, LineLayout, LineMesh};
 use crate::vector_tile::{
     ShortbreadFeature, VectorBasemapLineKind, VectorBasemapPolygonKind, VectorTileError,
     split_at_tile_edges, visit_shortbread_features,
@@ -162,6 +162,7 @@ pub fn build_shortbread_buckets(bytes: &[u8]) -> Result<VectorTileBuckets, Vecto
     let mut outlines = LineGroup::default();
     let mut lines = LineGroup::default();
     let mut mesh = LineMesh::new();
+    let mut mesh_extent = 0_u32;
     let mut feature_count = 0_u32;
     let mut earcut = Earcut::new();
     let mut ring_points = Vec::new();
@@ -171,6 +172,11 @@ pub fn build_shortbread_buckets(bytes: &[u8]) -> Result<VectorTileBuckets, Vecto
     visit_shortbread_features(bytes, |feature: ShortbreadFeature| {
         feature_count += 1;
         let scale = 1.0 / f64::from(feature.extent);
+        if feature.extent != mesh_extent {
+            // MapLibre scales every tile to its 8192-unit extent.
+            mesh = LineMesh::with_units(8192.0 / f64::from(feature.extent), 1.0);
+            mesh_extent = feature.extent;
+        }
 
         if let Some(kind) = feature.line_kind {
             let class = VectorBasemapStyleClass::line(kind);
@@ -298,7 +304,7 @@ fn append_line(
         LineCap::Round
     };
     mesh.clear();
-    mesh.add_line(&points, cap, closed);
+    mesh.add_line(&points, &LineLayout::ROUND.with_cap(cap), closed);
     let base = group.vertices.len() as u32;
     group
         .vertices

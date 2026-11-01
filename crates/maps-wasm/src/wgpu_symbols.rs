@@ -17,6 +17,18 @@ pub(crate) struct SymbolGpu {
     glyph_capacity: u64,
     circles: wgpu::Buffer,
     circle_capacity: u64,
+    /// Line strip vertices of the visible tiles (#322), replaced when they change.
+    lines: wgpu::Buffer,
+    line_capacity: u64,
+}
+
+/// What line draws need besides their vertices: the retained line pipeline, the tile frame
+/// uniforms with each `StyleFrame::line_frames` entry's dynamic offset, and the dash atlas.
+pub(crate) struct StyleLines<'a> {
+    pub(crate) pipeline: &'a wgpu::RenderPipeline,
+    pub(crate) frames: &'a wgpu::BindGroup,
+    pub(crate) offsets: &'a [Option<u32>],
+    pub(crate) dash_atlas: &'a wgpu::BindGroup,
 }
 
 fn vertex_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
@@ -129,6 +141,8 @@ impl SymbolGpu {
             glyph_capacity: INITIAL_BUFFER_SIZE,
             circles: vertex_buffer(device, "Maps style circle instances", INITIAL_BUFFER_SIZE),
             circle_capacity: INITIAL_BUFFER_SIZE,
+            lines: vertex_buffer(device, "Maps style line vertices", INITIAL_BUFFER_SIZE),
+            line_capacity: INITIAL_BUFFER_SIZE,
         }
     }
 
@@ -140,6 +154,14 @@ impl SymbolGpu {
         frame: &StyleFrame,
         atlas: &GlyphAtlas,
     ) {
+        if let Some(bytes) = frame.line_bytes.as_ref().filter(|bytes| !bytes.is_empty()) {
+            let required = bytes.len() as u64;
+            if required > self.line_capacity {
+                self.line_capacity = required.next_power_of_two().max(INITIAL_BUFFER_SIZE);
+                self.lines = vertex_buffer(device, "Maps style line vertices", self.line_capacity);
+            }
+            queue.write_buffer(&self.lines, 0, bytes);
+        }
         if frame.draws.is_empty() {
             return;
         }
@@ -224,6 +246,7 @@ impl SymbolGpu {
         draws: &[StyleDraw],
         circle_pipeline: &wgpu::RenderPipeline,
         circle_vertex_count: u32,
+        lines: &StyleLines<'_>,
     ) -> u32 {
         let mut calls = 0;
         for draw in draws {
@@ -232,6 +255,20 @@ impl SymbolGpu {
                     pass.set_pipeline(circle_pipeline);
                     pass.set_vertex_buffer(0, self.circles.slice(..));
                     pass.draw(0..circle_vertex_count, first..first + count);
+                }
+                StyleDraw::Lines {
+                    frame,
+                    first,
+                    count,
+                } => {
+                    let Some(Some(offset)) = lines.offsets.get(frame as usize) else {
+                        continue;
+                    };
+                    pass.set_pipeline(lines.pipeline);
+                    pass.set_bind_group(0, lines.frames, &[*offset]);
+                    pass.set_bind_group(1, lines.dash_atlas, &[]);
+                    pass.set_vertex_buffer(0, self.lines.slice(..));
+                    pass.draw(first..first + count, 0..1);
                 }
                 StyleDraw::Glyphs { first, count } => {
                     let Some((_, atlas)) = &self.atlas else {

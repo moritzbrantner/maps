@@ -11,6 +11,7 @@ import {
 import { type GeoJsonLayerStyle } from "./geojson-layer";
 import {
   createFlatGeometryLayers,
+  DEFAULT_GEOJSON_LAYER_STYLE,
   type FlatGeometryLayer,
   type FlatFeaturePointerEvent,
 } from "./geojson-rendering";
@@ -254,6 +255,7 @@ type DragState<TProperties extends Record<string, unknown>> =
     };
 
 const EDITOR_STYLE: Required<GeoJsonLayerStyle> = {
+  ...DEFAULT_GEOJSON_LAYER_STYLE,
   lineColor: "#0f766e",
   lineOpacity: 0.88,
   lineWidth: 4,
@@ -1771,6 +1773,7 @@ function renderBooleanPreview<TProperties extends Record<string, unknown>>(
       interactive: false,
       selected: false,
       style: {
+        ...DEFAULT_GEOJSON_LAYER_STYLE,
         lineColor: "#7c3aed",
         lineOpacity: 0.92,
         lineWidth: 3,

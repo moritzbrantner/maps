@@ -17,6 +17,12 @@ struct RetainedFrame {
 @group(0) @binding(0)
 var<uniform> frame: RetainedFrame;
 
+// MapLibre's dash atlas (#322): signed distances to dash edges, linear and repeating.
+@group(1) @binding(0)
+var dash_atlas: texture_2d<f32>;
+@group(1) @binding(1)
+var dash_sampler: sampler;
+
 struct FillInput {
   @location(0) offset: vec2<f32>,
   @location(1) color: vec4<f32>,
@@ -35,6 +41,11 @@ struct StrokeInput {
   // 4 = line strip vertex at `a` with extrusion `b` and MapLibre's `v_normal` in `corner`.
   @location(4) kind: f32,
   @location(5) color: vec4<f32>,
+  // Line strips: (atlas u, atlas v of the centre row, half the row span over the atlas
+  // height, period in line widths); period 0 is solid.
+  @location(6) dash: vec4<f32>,
+  // Line strips: the tile square they are clipped to, in anchor offsets.
+  @location(7) clip: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -46,7 +57,22 @@ struct VertexOutput {
   @location(2) extent: f32,
   // Circle parts: (fill ratio, part, one pixel over the outer radius); zero elsewhere.
   @location(3) circle: vec3<f32>,
+  // Line strips: map-plane position (anchor offsets) and the tile square it must lie in.
+  @location(4) plane: vec2<f32>,
+  @location(5) @interpolate(flat) clip: vec4<f32>,
+  // Dashed line strips: MapLibre's `v_tex`, then (dashed?, sdf edge half-width).
+  @location(6) tex: vec2<f32>,
+  @location(7) @interpolate(flat) dash: vec2<f32>,
 };
+
+const NO_CLIP: vec4<f32> = vec4<f32>(-1.0e30, -1.0e30, 1.0e30, 1.0e30);
+
+fn unclipped(output: ptr<function, VertexOutput>) {
+  (*output).plane = vec2<f32>(0.0);
+  (*output).clip = NO_CLIP;
+  (*output).tex = vec2<f32>(0.0);
+  (*output).dash = vec2<f32>(0.0);
+}
 
 const NO_FADE: f32 = 1.0e6;
 
@@ -57,6 +83,7 @@ fn culled() -> VertexOutput {
   output.local = vec2<f32>(0.0);
   output.extent = NO_FADE;
   output.circle = vec3<f32>(0.0);
+  unclipped(&output);
   return output;
 }
 
@@ -68,6 +95,7 @@ fn vs_fill(input: FillInput) -> VertexOutput {
   output.local = vec2<f32>(0.0);
   output.extent = NO_FADE;
   output.circle = vec3<f32>(0.0);
+  unclipped(&output);
   return output;
 }
 
@@ -93,6 +121,7 @@ fn vs_stroke(input: StrokeInput) -> VertexOutput {
   output.local = vec2<f32>(0.0);
   output.extent = NO_FADE;
   output.circle = vec3<f32>(0.0);
+  unclipped(&output);
   if input.kind > 3.5 {
     // A line strip vertex (`maps_core::LineMesh`, #326): MapLibre's line shader extrudes
     // `b` by the outset in CSS px on the map plane (`frame.surface.w` CSS px per offset
@@ -106,6 +135,14 @@ fn vs_stroke(input: StrokeInput) -> VertexOutput {
     output.position = extruded;
     output.local = input.corner;
     output.extent = css_outset * frame.surface.z / gamma_scale;
+    output.plane = input.a + dist / frame.surface.w;
+    output.clip = input.clip;
+    if input.dash.w > 0.0 {
+      // `line_sdf.vertex.glsl`: u along the pattern, v across the entry rows by side; the
+      // sdf edge is `(atlas width / 256 / pixel ratio) / period / floorwidth`.
+      output.tex = vec2<f32>(input.dash.x, input.dash.y - input.corner.y * input.dash.z);
+      output.dash = vec2<f32>(1.0, 1.0 / frame.surface.z / input.dash.w / input.width);
+    }
     return output;
   }
   var position: vec2<f32>;
@@ -164,6 +201,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
       // Under an opaque stroke the fill only shows where the stroke weight is below 1.
       coverage = select(0.0, opacity, distance < input.circle.x);
     }
+  }
+  if input.dash.x > 0.5 {
+    let sdf = textureSampleLevel(dash_atlas, dash_sampler, input.tex, 0.0).r;
+    coverage *= smoothstep(0.5 - input.dash.y, 0.5 + input.dash.y, sdf);
+  }
+  // MapLibre clips every tile to its square (`stencilModeForClipping`).
+  if any(input.plane < input.clip.xy) || any(input.plane >= input.clip.zw) {
+    discard;
   }
   // Uncovered fragments must not mark the single-coverage stroke stencil.
   if coverage <= 0.0 {

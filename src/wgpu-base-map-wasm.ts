@@ -96,7 +96,8 @@ export type MapsWgpuBaseMapRenderer = {
    * Retains an application shape group on the GPU: polygons (#196), lines and direction
    * markers (#195). Per-shape ring counts, per-ring point counts, `[longitude, latitude]`
    * pairs (lowered once by Rust) and `MAPS_RETAINED_POLYGON_PAINT_STRIDE` paint values per
-   * shape. Camera frames do not re-upload it. Absent on renderers without retained shapes.
+   * shape, then each shape's `line-dasharray` length and the concatenated arrays (#322).
+   * Camera frames do not re-upload it. Absent on renderers without retained shapes.
    */
   setRetainedPolygons?(
     group: number,
@@ -104,6 +105,8 @@ export type MapsWgpuBaseMapRenderer = {
     pointCounts: Uint32Array,
     lonLat: Float64Array,
     paint: Float32Array,
+    dashCounts: Uint32Array,
+    dashes: Float32Array,
   ): number;
   evictRetainedPolygons?(group: number): void;
   /** Style table from `createMapsVectorBasemapStyleTable`. */
@@ -161,6 +164,8 @@ type MapsWgpuBaseMapWasmRenderer = {
     pointCounts: Uint32Array,
     lonLat: Float64Array,
     paint: Float32Array,
+    dashCounts: Uint32Array,
+    dashes: Float32Array,
   ): number;
   evictRetainedPolygons(group: number): void;
   setVectorMaxZoom(maxZoom: number): void;
@@ -314,10 +319,10 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.evictRetainedPoints(group);
         });
       },
-      setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint) {
+      setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint, dashCounts, dashes) {
         return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
-          return renderer.setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint);
+          return renderer.setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint, dashCounts, dashes);
         });
       },
       evictRetainedPolygons(group) {

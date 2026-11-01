@@ -1,4 +1,5 @@
-//! MapLibre style-specification `circle` and `symbol` layers drawn over a Maps Tileset.
+//! MapLibre style-specification `line` (#322), `circle` and `symbol` layers drawn over a Maps
+//! Tileset.
 //!
 //! Layers are parsed from style JSON and validated against the properties Maps implements;
 //! anything else is rejected with its name rather than silently drawn differently.
@@ -10,6 +11,7 @@ use super::expression::{EvaluationContext, evaluate, is_expression, uses_zoom};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StyleLayerKind {
+    Line,
     Circle,
     Symbol,
 }
@@ -27,6 +29,14 @@ pub struct StyleLayer {
     paint: Map<String, Value>,
 }
 
+const LINE_LAYOUT: &[&str] = &[
+    "visibility",
+    "line-cap",
+    "line-join",
+    "line-miter-limit",
+    "line-round-limit",
+];
+const LINE_PAINT: &[&str] = &["line-color", "line-opacity", "line-width", "line-dasharray"];
 const CIRCLE_LAYOUT: &[&str] = &["visibility"];
 const CIRCLE_PAINT: &[&str] = &[
     "circle-radius",
@@ -67,6 +77,10 @@ const SYMBOL_PAINT: &[&str] = &[
 /// Properties whose value must be the same at every zoom: Maps evaluates them per tile, and
 /// MapLibre re-evaluates these at the camera zoom (`text-size`) or each frame (paint).
 const ZOOM_CONSTANT: &[&str] = &[
+    "line-color",
+    "line-opacity",
+    "line-width",
+    "line-dasharray",
     "text-size",
     "circle-radius",
     "circle-color",
@@ -92,6 +106,7 @@ impl StyleLayer {
             .ok_or("a style layer needs an id")?
             .to_owned();
         let kind = match object.get("type").and_then(Value::as_str) {
+            Some("line") => StyleLayerKind::Line,
             Some("circle") => StyleLayerKind::Circle,
             Some("symbol") => StyleLayerKind::Symbol,
             other => return Err(format!("layer {id}: unsupported layer type {other:?}")),
@@ -129,6 +144,7 @@ impl StyleLayer {
             validate_operators(filter).map_err(|error| format!("layer {id}: filter: {error}"))?;
         }
         let (layout_keys, paint_keys) = match kind {
+            StyleLayerKind::Line => (LINE_LAYOUT, LINE_PAINT),
             StyleLayerKind::Circle => (CIRCLE_LAYOUT, CIRCLE_PAINT),
             StyleLayerKind::Symbol => (SYMBOL_LAYOUT, SYMBOL_PAINT),
         };
@@ -248,6 +264,21 @@ impl StyleLayer {
                 .ok_or_else(|| format!("{}: {key}: invalid color {text}", self.id)),
             Some(other) => Err(format!("{}: {key}: invalid color {other}", self.id)),
         }
+    }
+
+    /// The unevaluated paint value, e.g. to tell a data-driven `line-dasharray` from a constant.
+    #[must_use]
+    pub fn raw_paint(&self, key: &str) -> Option<&Value> {
+        self.paint.get(key)
+    }
+
+    /// An evaluated paint value; `None` falls back to the property default.
+    pub fn paint_value(
+        &self,
+        key: &str,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Option<Value>, String> {
+        self.property(true, key, context)
     }
 
     /// The unevaluated layout value, e.g. to tell `{token}` strings from expressions.

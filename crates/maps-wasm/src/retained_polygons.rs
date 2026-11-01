@@ -28,13 +28,18 @@
     allow(dead_code)
 )]
 
-use maps_core::{LineCap, LineMesh, SimplifiedLine, project_web_mercator};
+use maps_core::{
+    DashEntry, GEOJSON_VT_EXTENT, GEOJSON_VT_MAX_ZOOM, LINE_ATLAS_HEIGHT, LineAtlas, LineCap,
+    LineJoin, LineLayout, LineMesh, SimplifiedLine, project_web_mercator,
+};
 
 use crate::retained_points::wrap_world_delta;
 
 /// Per-shape paint record: fill RGBA, stroke RGBA, stroke width (CSS px; a marker's size),
-/// shape kind, circle radius (CSS px). Shared with `src/wgpu-application-frame.ts`.
-pub(crate) const RETAINED_POLYGON_PAINT_LENGTH: usize = 11;
+/// shape kind, circle radius (CSS px), then a line's `line-cap` (0 butt, 1 round, 2 square),
+/// `line-join` (0 bevel, 1 round, 2 miter), `line-miter-limit` and `line-round-limit`.
+/// Shared with `src/wgpu-application-frame.ts`.
+pub(crate) const RETAINED_POLYGON_PAINT_LENGTH: usize = 15;
 pub(crate) const RETAINED_SHAPE_POLYGON: f32 = 0.0;
 pub(crate) const RETAINED_SHAPE_LINE: f32 = 1.0;
 /// One ring of exactly two points: the previous coordinate, then the anchor.
@@ -44,8 +49,13 @@ pub(crate) const RETAINED_SHAPE_CIRCLE: f32 = 3.0;
 /// Fill vertex: anchor offset (2 x f32), RGBA (4 x f32).
 pub(crate) const RETAINED_POLYGON_FILL_VERTEX_SIZE: u64 = 24;
 /// Stroke vertex: endpoints `a` and `b` (2 x 2 x f32), corner (2 x f32), width, kind
-/// (0 segment, 1 round join, 2 direction marker, 3 circle ring, 4 line strip vertex), RGBA.
-pub(crate) const RETAINED_POLYGON_STROKE_VERTEX_SIZE: u64 = 48;
+/// (0 segment, 1 round join, 2 direction marker, 3 circle ring, 4 line strip vertex), RGBA,
+/// then a line's dash (atlas u, atlas v at its centre row, half its row span over the atlas
+/// height, period; period 0 is solid) and the tile square it is clipped to (west, north,
+/// east, south anchor offsets).
+pub(crate) const RETAINED_POLYGON_STROKE_VERTEX_SIZE: u64 = 80;
+pub(crate) const NO_DASH: [f32; 4] = [0.0; 4];
+const NO_CLIP: [f32; 4] = [-1.0e30, -1.0e30, 1.0e30, 1.0e30];
 pub(crate) const RETAINED_POLYGON_COVER_VERTEX_COUNT: u32 = 6;
 /// A disc's quad around its centre, in radii.
 const JOIN_CORNERS: [[f32; 2]; 6] = [
@@ -79,6 +89,10 @@ struct RetainedPolygon {
     stroke: [f32; 4],
     stroke_width: f32,
     radius: f32,
+    /// A line's caps, joins and limits.
+    layout: LineLayout,
+    /// A dashed line's atlas entry.
+    dash: Option<DashEntry>,
 }
 
 /// Retained shapes: `f64` world rings and their paint.
@@ -189,9 +203,63 @@ impl RetainedPolygons {
                 stroke: [paint[4], paint[5], paint[6], paint[7]],
                 stroke_width: paint[8].max(0.0),
                 radius: paint[10].max(0.0),
+                layout: LineLayout {
+                    cap: match paint[11] {
+                        0.0 => LineCap::Butt,
+                        1.0 => LineCap::Round,
+                        2.0 => LineCap::Square,
+                        _ => return Err("retained line cap is invalid"),
+                    },
+                    join: match paint[12] {
+                        0.0 => LineJoin::Bevel,
+                        1.0 => LineJoin::Round,
+                        2.0 => LineJoin::Miter,
+                        _ => return Err("retained line join is invalid"),
+                    },
+                    miter_limit: f64::from(paint[13]),
+                    round_limit: f64::from(paint[14]),
+                },
+                dash: None,
             });
         }
         Ok(Self { polygons })
+    }
+
+    /// Dashes lines: `counts` holds each shape's `line-dasharray` length (0 for solid) and
+    /// `values` the concatenated arrays, in `line-width` units. Entries come from `atlas`.
+    pub(crate) fn set_dashes(
+        &mut self,
+        counts: &[u32],
+        values: &[f32],
+        atlas: &mut LineAtlas,
+    ) -> Result<(), &'static str> {
+        if counts.is_empty() && values.is_empty() {
+            return Ok(());
+        }
+        let total: usize = counts.iter().map(|&count| count as usize).sum();
+        if counts.len() != self.polygons.len() || total != values.len() {
+            return Err("retained line dashes do not match the shapes");
+        }
+        if !values
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
+        {
+            return Err("retained line dashes must be finite and non-negative");
+        }
+        let mut values = values.iter();
+        for (polygon, &count) in self.polygons.iter_mut().zip(counts) {
+            let dasharray: Vec<f64> = values
+                .by_ref()
+                .take(count as usize)
+                .map(|&value| f64::from(value))
+                .collect();
+            polygon.dash = if dasharray.is_empty() || polygon.shape != Shape::Line {
+                None
+            } else {
+                atlas.dash(&dasharray, polygon.layout.cap == LineCap::Round)
+            };
+        }
+        Ok(())
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -325,30 +393,85 @@ impl RetainedPolygons {
                 && polygon.stroke_width > 0.0
                 && polygon.stroke[3] > 0.0
             {
-                // MapLibre's round-joined, round-capped line strip (#326), tessellated in
-                // anchor offsets and extruded on the map plane in the shader, along the
-                // path its GeoJSON tile holds (#334).
-                let tiled = polygon
-                    .simplified
-                    .as_ref()
-                    .map_or_else(|| polygon.rings[0].clone(), |line| line.at_zoom(tile_zoom));
-                let path: Vec<[f64; 2]> = tiled
-                    .iter()
-                    .map(|&[x, y]| [wrap_world_delta(x - anchor[0]), y - anchor[1]])
-                    .collect();
-                let mut mesh = LineMesh::new();
-                mesh.add_line(&path, LineCap::Round, false);
+                // MapLibre's line strip (#326, #322), tessellated in anchor offsets and
+                // extruded on the map plane in the shader, along the path its GeoJSON tile
+                // holds (#334). MapLibre's GeoJSON source keeps `maxzoom` 18 and overscales.
+                let source_zoom = tile_zoom.min(GEOJSON_VT_MAX_ZOOM);
+                let overscale = f64::from(tile_zoom - source_zoom).exp2();
+                let tiles = f64::from(source_zoom).exp2();
                 draw.stroke_first = stroke_index(&geometry.stroke);
-                for &index in &mesh.indices {
-                    let vertex = mesh.vertices[index as usize];
-                    push_stroke_vertex(
+                let line_vertex = |bytes: &mut Vec<u8>,
+                                   mesh: &LineMesh,
+                                   at: &dyn Fn([f64; 2]) -> [f32; 2],
+                                   clip: [f32; 4]| {
+                    for &index in &mesh.indices {
+                        let vertex = mesh.vertices[index as usize];
+                        // MapLibre's `v_tex.x`: tile units to px at the tile zoom, over
+                        // the pattern's period in px (`line_sdf.vertex.glsl`).
+                        let dash = polygon.dash.map_or(NO_DASH, |entry| {
+                            let atlas = LINE_ATLAS_HEIGHT as f32;
+                            [
+                                vertex.linesofar * (overscale / 16.0) as f32
+                                    / entry.width
+                                    / polygon.stroke_width,
+                                (entry.y + 0.5) / atlas,
+                                entry.height / 2.0 / atlas,
+                                entry.width,
+                            ]
+                        });
+                        push_vertex(
+                            bytes,
+                            at(vertex.point),
+                            vertex.extrude.map(|value| value as f32),
+                            vertex.normal,
+                            polygon.stroke_width,
+                            4.0,
+                            polygon.stroke,
+                            dash,
+                            clip,
+                        );
+                    }
+                };
+                if polygon.dash.is_some()
+                    && let Some(line) = &polygon.simplified
+                {
+                    // Dashes restart at every tile's edge, as MapLibre measures them along
+                    // each GeoJSON tile's piece and clips every tile to its square.
+                    let size = tiles.recip();
+                    for piece in line.tile_pieces(source_zoom) {
+                        let west = wrap_world_delta(f64::from(piece.x) * size - anchor[0]);
+                        let north = f64::from(piece.y) * size - anchor[1];
+                        let mut mesh = LineMesh::with_units(1.0, overscale);
+                        mesh.add_line(&piece.points, &polygon.layout, false);
+                        let unit = size / GEOJSON_VT_EXTENT;
+                        line_vertex(
+                            &mut geometry.stroke,
+                            &mesh,
+                            &|[x, y]| [(west + x * unit) as f32, (north + y * unit) as f32],
+                            [
+                                west as f32,
+                                north as f32,
+                                (west + size) as f32,
+                                (north + size) as f32,
+                            ],
+                        );
+                    }
+                } else {
+                    let tiled = polygon
+                        .simplified
+                        .as_ref()
+                        .map_or_else(|| polygon.rings[0].clone(), |line| line.at_zoom(tile_zoom));
+                    let path: Vec<[f64; 2]> = tiled
+                        .iter()
+                        .map(|&[x, y]| [wrap_world_delta(x - anchor[0]), y - anchor[1]])
+                        .collect();
+                    let mut mesh = LineMesh::with_units(tiles * GEOJSON_VT_EXTENT, overscale);
+                    mesh.add_line(&path, &polygon.layout, false);
+                    line_vertex(
                         &mut geometry.stroke,
-                        vertex.point.map(|value| value as f32),
-                        vertex.extrude.map(|value| value as f32),
-                        vertex.normal,
-                        polygon.stroke_width,
-                        4.0,
-                        polygon.stroke,
+                        &mesh,
+                        &|point| point.map(|value| value as f32),
+                        NO_CLIP,
                     );
                 }
                 draw.stroke_count = stroke_index(&geometry.stroke) - draw.stroke_first;
@@ -435,12 +558,44 @@ fn push_stroke_vertex(
     kind: f32,
     color: [f32; 4],
 ) {
+    push_vertex(bytes, a, b, corner, width, kind, color, NO_DASH, NO_CLIP);
+}
+
+/// A line strip vertex (kind 4) at `point` with extrusion `extrude` and MapLibre's `v_normal`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_line_strip_vertex(
+    bytes: &mut Vec<u8>,
+    point: [f32; 2],
+    extrude: [f32; 2],
+    normal: [f32; 2],
+    width: f32,
+    color: [f32; 4],
+    dash: [f32; 4],
+    clip: [f32; 4],
+) {
+    push_vertex(bytes, point, extrude, normal, width, 4.0, color, dash, clip);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_vertex(
+    bytes: &mut Vec<u8>,
+    a: [f32; 2],
+    b: [f32; 2],
+    corner: [f32; 2],
+    width: f32,
+    kind: f32,
+    color: [f32; 4],
+    dash: [f32; 4],
+    clip: [f32; 4],
+) {
     for value in a
         .into_iter()
         .chain(b)
         .chain(corner)
         .chain([width, kind])
         .chain(color)
+        .chain(dash)
+        .chain(clip)
     {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -464,6 +619,10 @@ mod tests {
         2.0,
         RETAINED_SHAPE_POLYGON,
         0.0,
+        1.0,
+        1.0,
+        2.0,
+        1.05,
     ];
     const LINE: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
         0.0,
@@ -477,6 +636,10 @@ mod tests {
         3.0,
         RETAINED_SHAPE_LINE,
         0.0,
+        1.0,
+        1.0,
+        2.0,
+        1.05,
     ];
     const MARKER: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
         0.0,
@@ -490,6 +653,10 @@ mod tests {
         9.0,
         RETAINED_SHAPE_DIRECTION_MARKER,
         0.0,
+        1.0,
+        1.0,
+        2.0,
+        1.05,
     ];
     const CIRCLE: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
         0.2,
@@ -503,12 +670,16 @@ mod tests {
         2.0,
         RETAINED_SHAPE_CIRCLE,
         5.0,
+        1.0,
+        1.0,
+        2.0,
+        1.05,
     ];
 
     fn stroke_kinds(geometry: &RetainedPolygonGeometry) -> Vec<f32> {
         geometry
             .stroke
-            .as_chunks::<48>()
+            .as_chunks::<80>()
             .0
             .iter()
             .map(|vertex| f32::from_le_bytes(vertex[28..32].try_into().unwrap()))
@@ -695,7 +866,7 @@ mod tests {
 
         assert_eq!((draw.fan_count, draw.stroke_count), (0, 3));
         assert_eq!(stroke_kinds(&geometry), [2.0; 3]);
-        let first = &geometry.stroke[..48];
+        let first = &geometry.stroke[..80];
         let value =
             |index: usize| f32::from_le_bytes(first[index * 4..index * 4 + 4].try_into().unwrap());
         assert!(
@@ -732,7 +903,7 @@ mod tests {
         assert_eq!((ring.stroke_first, ring.stroke_count), (6, 6));
         assert_eq!(stroke_kinds(&geometry), [3.0; 12]);
         let value = |vertex: usize, index: usize| {
-            let start = vertex * 48 + index * 4;
+            let start = vertex * 80 + index * 4;
             f32::from_le_bytes(geometry.stroke[start..start + 4].try_into().unwrap())
         };
         // MapLibre: radius 5 plus a stroke of 2 outside it, outer 7 (width 14) for both

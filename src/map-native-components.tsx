@@ -352,8 +352,13 @@ export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
       }
       hoveredFeatureId={props.hoveredFeatureId}
       layerId={props.layerId ?? `geojson-${props.datasetId}`}
+      lineCap={props.lineCap}
       lineColor={props.lineColor}
+      lineDasharray={props.lineDasharray}
+      lineJoin={props.lineJoin}
+      lineMiterLimit={props.lineMiterLimit}
       lineOpacity={props.lineOpacity}
+      lineRoundLimit={props.lineRoundLimit}
       lineWidth={props.lineWidth}
       onFeatureContextMenu={mapGeoJsonCallback(props.onFeatureContextMenu)}
       onFeatureHover={mapNullableGeoJsonCallback(props.onFeatureHover)}

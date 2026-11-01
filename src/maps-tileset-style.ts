@@ -62,9 +62,9 @@ export function tilesetStyleTable(overrides?: MapsVectorBasemapStyle) {
 }
 
 /**
- * MapLibre style-specification layers drawn over a Maps Tileset (#321), in order:
- * `circle` layers and point-placement `symbol` layers (SDF text) of its vector source
- * layers, with filters, data-driven properties and MapLibre's collision placement.
+ * MapLibre style-specification layers drawn over a Maps Tileset (#321, #322), in order:
+ * `line` layers (caps, joins, dashes), `circle` layers and point-placement `symbol` layers
+ * (SDF text) of its vector source layers, with filters, data-driven properties and MapLibre's collision placement.
  * Properties Maps does not implement are rejected through `onError`, never approximated.
  */
 export type MapsTilesetLayers = {

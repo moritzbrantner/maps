@@ -9,8 +9,13 @@ import type {
 import type { GeoJsonLayerFeature, GeoJsonLayerStyle } from "./geojson-layer";
 
 export const DEFAULT_GEOJSON_LAYER_STYLE: Required<GeoJsonLayerStyle> = {
+  lineCap: "round",
   lineColor: "#2563eb",
+  lineDasharray: [],
+  lineJoin: "round",
+  lineMiterLimit: 2,
   lineOpacity: 0.82,
+  lineRoundLimit: 1.05,
   lineWidth: 4,
   pointColor: "#0f766e",
   pointRadius: 7,
@@ -149,6 +154,7 @@ function createFlatLineLayer(
     className,
     color: style.lineColor,
     interactive,
+    ...flatLineShape(style),
     opacity: style.lineOpacity,
     weight: selected ? style.lineWidth + 1.5 : style.lineWidth,
   }) as FlatGeometryLayer;
@@ -173,4 +179,15 @@ function createFlatPolygonLayer(
     opacity: 0.9,
     weight: selected ? style.polygonStrokeWidth + 1.5 : style.polygonStrokeWidth,
   }) as FlatGeometryLayer;
+}
+
+/** A GeoJSON line style's caps, joins and dashes as flat layer options. */
+export function flatLineShape(style: Required<GeoJsonLayerStyle>) {
+  return {
+    lineCap: style.lineCap,
+    lineDasharray: style.lineDasharray,
+    lineJoin: style.lineJoin,
+    lineMiterLimit: style.lineMiterLimit,
+    lineRoundLimit: style.lineRoundLimit,
+  };
 }

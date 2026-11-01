@@ -1753,6 +1753,8 @@ function createFrameSynchronizer({
               run.polygons.pointCounts,
               run.polygons.lonLat,
               run.polygons.paint,
+              run.polygons.dashCounts,
+              run.polygons.dashes,
             ))
         );
       });

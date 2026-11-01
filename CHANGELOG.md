@@ -17,6 +17,18 @@
 
 ### Minor Changes
 
+- Lines take MapLibre 6.15's `line-cap` (butt, round, square), `line-join` (bevel,
+  round, miter, with `line-miter-limit` and `line-round-limit`) and `line-dasharray`
+  (#322). `GeoJsonLayer` styles gain `lineCap`, `lineJoin`, `lineMiterLimit`,
+  `lineRoundLimit` and `lineDasharray` (defaults: round caps and joins, solid), and
+  `tilesetLayers` accepts style-spec `line` layers. Maps ports MapLibre's line bucket
+  for every cap and join (flipbevel and fakeround included, sharp-corner vertices,
+  byte-quantized extrusion), its dash atlas (SDF dashes, round dash ends, dashes in line
+  widths at the tile zoom) and the dash phase of each GeoJSON tile: a dashed GeoJSON
+  line is cut into its geojson-vt tile pieces and clipped to each tile, as MapLibre
+  measures and draws it. The MapLibre runtime batches dashed GeoJSON lines per dash
+  array and cap, so their dashes keep a fractional period. Pitched cameras draw dashed
+  GeoJSON lines on the Canvas path; the Canvas fallback uses its own dashes.
 - `MapView` accepts `tilesetLayers` (`MapsTilesetLayers`) on `flatRuntime="maps"`:
   MapLibre style-spec `circle` and point-placement `symbol` layers drawn over the
   Tileset's vector source layers (#321). Maps ports MapLibre 6.15's glyph PBF
