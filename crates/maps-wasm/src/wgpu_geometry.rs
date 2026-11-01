@@ -1391,8 +1391,8 @@ fn append_application_vertex(
         edge[2],
     ];
     let mut bytes = [0_u8; 40];
-    for (chunk, value) in bytes.chunks_exact_mut(4).zip(values) {
-        chunk.copy_from_slice(&value.to_le_bytes());
+    for (index, value) in values.into_iter().enumerate() {
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
     }
     output.extend_from_slice(&bytes);
     Ok(())

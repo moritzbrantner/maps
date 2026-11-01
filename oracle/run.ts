@@ -22,7 +22,8 @@
  * ```
  *
  * A failing gate listed in a scenario's `knownGaps` is reported, not failed; a listed gap that
- * passes fails the run until its entry is removed.
+ * passes fails the run until its entry is removed. Time gaps are judged only where the time
+ * gate is enforced (a hardware GPU).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -237,7 +238,9 @@ async function runScenario(scenario: Scenario) {
   const outcomes: Record<Gate, boolean> = { image: imageOk, interaction: interactionOk, time: timeOk };
   const verdicts: string[] = [];
   let passed = true;
-  for (const gate of ["image", "interaction", "time"] as Gate[]) {
+  // An advisory time gate (software adapter, CI) judges no time known gap either way.
+  const judged: Gate[] = gateTiming ? ["image", "interaction", "time"] : ["image", "interaction"];
+  for (const gate of judged) {
     const gaps = scenario.knownGaps
       .filter((entry) => entry.gate === gate)
       .map((entry) => `#${entry.issue}`)
