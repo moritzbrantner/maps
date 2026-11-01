@@ -101,11 +101,15 @@ export const RHINE_POINT: LngLat = [8.51405, 47.58135];
 
 const MAP_SIZE = { height: 480, width: 720 };
 
-/** Maps' per-frame floor (React commit, synchronous WASM frame, canvas waits; #343). */
+/**
+ * Scenes that leave Maps at Chromium's WebGPU canvas floor (#343): a clear-only WebGPU page
+ * takes about 1.0 ms per uncapped frame where a WebGL2 one takes 0.12 ms, so these stay
+ * above MapLibre's WebGL frame time while Maps waits in `getCurrentTexture`.
+ */
 const FRAME_TIME_GAP: KnownGap = {
   gate: "time",
   issue: 343,
-  reason: "per-frame floor of the Maps runtime above MapLibre's",
+  reason: "WebGPU canvas presentation floor (about 1.0 ms per frame) above MapLibre's WebGL frame",
 };
 
 export const scenarios: Scenario[] = [
@@ -128,7 +132,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.4, 51.2], zoom: 5.55 },
     capability: "territory polygons, clustered sites and seat points: select and hover",
-    knownGaps: [FRAME_TIME_GAP],
+    knownGaps: [],
     name: "church-site-discovery",
     origin: "church-atlas#8 site discovery (#232)",
     size: MAP_SIZE,
@@ -177,7 +181,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.4 },
     capability: "density clusters: placement, counts, cluster and point picking",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "clusters",
     origin: "demo/RendererComparison cluster journey",
     size: MAP_SIZE,
@@ -220,7 +224,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { bearing: 35, center: [10.4, 51.2], zoom: 5.55 },
     capability: "rotated camera: raster, polygons and points; pick and rotate/pan/zoom",
-    knownGaps: [FRAME_TIME_GAP],
+    knownGaps: [],
     name: "bearing",
     origin: "church-atlas#8 site discovery with a rotated map (#232)",
     size: MAP_SIZE,
@@ -236,7 +240,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { bearing: -20, center: [10.4, 51.2], pitch: 50, zoom: 5.55 },
     capability: "pitched camera: minified far tiles, polygons and points; pick and pan",
-    knownGaps: [FRAME_TIME_GAP],
+    knownGaps: [],
     name: "pitch",
     origin:
       "church-atlas#8 site discovery with a pitched map (#232); camera #328; mipmaps #314; fill outlines #331",
