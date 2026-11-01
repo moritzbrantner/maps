@@ -202,10 +202,10 @@ export function createMapLibreFlatLayerFactory(
       return new MapLibreDomMarkerLayer(maplibre, map, latLngToLngLat(latLng), options);
     },
     polygon(latLngs, options = {}) {
-      return new MapLibrePolygonLayer(map, latLngs, options);
+      return new MapLibreShapeLayer(map, "polygon", latLngs, options);
     },
     polyline(latLngs, options = {}) {
-      return new MapLibreLineLayer(map, latLngs, options);
+      return new MapLibreShapeLayer(map, "line", latLngs, options);
     },
   };
 }
@@ -984,166 +984,588 @@ function getMapEventPoint(event: unknown) {
   return (event as { point?: { x: number; y: number } } | undefined)?.point ?? null;
 }
 
-class MapLibreLineLayer extends MapLibreSourceLayer {
-  private coordinates: GeoJSON.Position[][] = [];
+type ShapeKind = "line" | "polygon";
 
-  constructor(map: MapLibreMap, latLngs: unknown, private readonly options: FlatLayerOptions) {
-    super(map);
-    this.coordinates = normalizeLineCoordinates(latLngs);
+/** The resolved per-feature paint of a batched line or polygon (also its feature-state). */
+type ShapePaint = {
+  color: string;
+  fillColor?: string;
+  fillOpacity?: number;
+  opacity: number;
+  weight: number;
+};
+
+/** Pointer events MapLibre also delivers through a map-level box query, so thin lines stay clickable. */
+const SHAPE_CLICK_TOLERANCE_PX = 6;
+
+const shapeBatches = new WeakMap<FlatLayerGroup, Partial<Record<ShapeKind, MapLibreShapeBatch>>>();
+
+function resolveShapePaint(kind: ShapeKind, options: FlatLayerOptions): ShapePaint {
+  if (kind === "line") {
+    return {
+      color: options.color ?? "#2563eb",
+      opacity: options.opacity ?? 1,
+      weight: options.weight ?? 2,
+    };
   }
 
-  setLatLngs(latLngs: unknown) {
-    this.coordinates = normalizeLineCoordinates(latLngs);
-    const source = this.map.getSource(this.sourceId) as GeoJSONSource | undefined;
-    source?.setData?.(this.getData());
+  return {
+    color: options.color ?? "#0f766e",
+    fillColor: options.fillColor ?? options.color ?? "#14b8a6",
+    fillOpacity: options.fillOpacity ?? 0.2,
+    opacity: options.opacity ?? 1,
+    weight: options.weight ?? 2,
+  };
+}
 
-    return this;
-  }
+/** Feature-state (set by `setStyle`) wins over the feature's source properties. */
+function shapePaintValue(key: keyof ShapePaint, fallback: string | number) {
+  return ["coalesce", ["feature-state", key], ["get", key], fallback];
+}
 
-  setStyle(options: FlatLayerOptions) {
-    Object.assign(this.options, options);
-    const layerId = this.layerIds[0];
+function getShapeFeatureKey(feature: unknown) {
+  const record = feature as { id?: unknown; properties?: { key?: unknown } | null } | null | undefined;
+  const key = record?.properties?.key ?? record?.id;
 
-    if (layerId && this.map.getLayer(layerId)) {
-      this.map.setPaintProperty(layerId, "line-color", this.options.color ?? "#2563eb");
-      this.map.setPaintProperty(layerId, "line-opacity", this.options.opacity ?? 1);
-      this.map.setPaintProperty(layerId, "line-width", this.options.weight ?? 2);
+  return typeof key === "string" ? key : null;
+}
+
+/**
+ * All lines (or all polygons) of one layer group, drawn as one GeoJSON source with
+ * data-driven paint: MapLibre handles one layer with N features far better than N layers.
+ * Each `MapLibreShapeLayer` is one feature; `setStyle` restyles it through feature-state,
+ * and pointer events are dispatched to the topmost feature with a handler.
+ */
+class MapLibreShapeBatch {
+  readonly id = `mb-maps-flat-${nextLayerId++}`;
+  readonly sourceId = `${this.id}:source`;
+  /** Bottom to top. */
+  readonly layerIds: string[];
+  private readonly members = new globalThis.Map<string, MapLibreShapeLayer>();
+  private readonly delegatedEvents = new Set<string>();
+  private delegates: Array<{ event: string; handler: (event: unknown) => void; layerId?: string }> = [];
+  private readonly seenEvents = new globalThis.Map<string, WeakSet<object>>();
+  private readonly hoverHitsByLayer = new globalThis.Map<string, string | null>();
+  private pointerKey: string | null = null;
+  private flushQueued = false;
+  private disposed = false;
+
+  static for(map: MapLibreMap, kind: ShapeKind, group: FlatLayerGroup) {
+    let batches = shapeBatches.get(group);
+
+    if (!batches) {
+      batches = {};
+      shapeBatches.set(group, batches);
     }
 
-    return this;
+    let batch = batches[kind];
+
+    if (!batch) {
+      batch = new MapLibreShapeBatch(map, kind, group);
+      batches[kind] = batch;
+    }
+
+    return batch;
   }
 
-  protected render() {
-    upsertGeoJsonSource(this.map, this.sourceId, this.getData());
-    const layerId = `${this.id}:line`;
-    this.layerIds.push(layerId);
-    this.map.addLayer({
-      id: layerId,
+  private constructor(
+    private readonly map: MapLibreMap,
+    private readonly kind: ShapeKind,
+    readonly group: FlatLayerGroup,
+  ) {
+    this.layerIds = kind === "line" ? [`${this.id}:line`] : [`${this.id}:fill`, `${this.id}:outline`];
+    // Created now, not at the first flush, so the batch keeps its place under layers the group
+    // adds after it (editor handles above their lines, endpoints above flows).
+    this.inTestGroup(() => this.addStyleLayers());
+  }
+
+  add(member: MapLibreShapeLayer) {
+    this.members.set(member.key, member);
+    for (const event of member.events()) {
+      this.listen(event);
+    }
+    this.schedule();
+  }
+
+  delete(member: MapLibreShapeLayer) {
+    if (!this.members.delete(member.key)) {
+      return;
+    }
+
+    if (this.pointerKey === member.key) {
+      this.pointerKey = null;
+    }
+    this.schedule();
+  }
+
+  moveToFront(member: MapLibreShapeLayer) {
+    if (this.members.delete(member.key)) {
+      this.members.set(member.key, member);
+      this.schedule();
+    }
+  }
+
+  restyle(member: MapLibreShapeLayer) {
+    if (!this.map.getSource(this.sourceId)) {
+      return;
+    }
+
+    this.map.setFeatureState({ id: member.key, source: this.sourceId }, member.state());
+  }
+
+  schedule() {
+    if (this.flushQueued || this.disposed) {
+      return;
+    }
+
+    this.flushQueued = true;
+    queueMicrotask(() => this.flush());
+  }
+
+  /** Subscribes the batch layers to one public pointer event (once per event). */
+  listen(event: string) {
+    const mapEvents =
+      event === "mouseover" || event === "mouseout" ? ["mouseenter", "mousemove", "mouseleave"] : [event];
+
+    for (const mapEvent of mapEvents) {
+      if (this.delegatedEvents.has(mapEvent) || this.disposed) {
+        continue;
+      }
+
+      this.delegatedEvents.add(mapEvent);
+      for (const layerId of this.layerIds) {
+        const handler = (mapEventObject: unknown) => this.onLayerEvent(mapEvent, layerId, mapEventObject);
+
+        (this.map as unknown as EventedMap).on(mapEvent, layerId, handler);
+        this.delegates.push({ event: mapEvent, handler, layerId });
+      }
+
+      if (usesMapLevelHitTestFallback(mapEvent) && typeof this.map.queryRenderedFeatures === "function") {
+        const handler = (mapEventObject: unknown) => this.onMapEvent(mapEvent, mapEventObject);
+
+        (this.map as unknown as EventedMap).on(mapEvent, handler);
+        this.delegates.push({ event: mapEvent, handler });
+      }
+    }
+  }
+
+  private flush() {
+    this.flushQueued = false;
+
+    if (this.disposed) {
+      return;
+    }
+
+    if (this.members.size === 0) {
+      this.dispose();
+      return;
+    }
+
+    this.inTestGroup(() => {
+      if (!this.map.getSource(this.sourceId)) {
+        // The style was replaced under the batch.
+        this.addStyleLayers();
+      }
+
+      (this.map.getSource(this.sourceId) as GeoJSONSource | undefined)?.setData?.(this.getData());
+      for (const member of this.members.values()) {
+        member.afterFlush(this.layerIds);
+      }
+    });
+  }
+
+  /** Lets the MapLibre test double attribute mirrored layers to this batch's group. */
+  private inTestGroup(run: () => void) {
+    const testGroup = this.group as unknown as {
+      clearActiveTestLayerGroup?: () => void;
+      setAsActiveTestLayerGroup?: () => void;
+    };
+
+    testGroup.setAsActiveTestLayerGroup?.();
+    try {
+      run();
+    } finally {
+      testGroup.clearActiveTestLayerGroup?.();
+    }
+  }
+
+  private dispose() {
+    this.disposed = true;
+    for (const { event, handler, layerId } of this.delegates) {
+      if (layerId) {
+        (this.map as unknown as EventedMap).off(event, layerId, handler);
+      } else {
+        (this.map as unknown as EventedMap).off(event, handler);
+      }
+    }
+    this.delegates = [];
+
+    for (const layerId of [...this.layerIds].reverse()) {
+      removeMapLibreLayerIfExists(this.map, layerId);
+    }
+    removeMapLibreSourceIfExists(this.map, this.sourceId);
+
+    const batches = shapeBatches.get(this.group);
+
+    if (batches?.[this.kind] === this) {
+      delete batches[this.kind];
+    }
+  }
+
+  private addStyleLayers() {
+    this.map.addSource(this.sourceId, {
+      data: { features: [], type: "FeatureCollection" },
+      // Feature state (style) is addressed by the member key.
+      promoteId: "key",
+      type: "geojson",
+    } as never);
+
+    const outline = {
       layout: {
         "line-cap": "round",
         "line-join": "round",
       },
-      metadata: {
-        flatOptions: this.options,
-      },
       paint: {
-        "line-color": this.options.color ?? "#2563eb",
-        "line-opacity": this.options.opacity ?? 1,
-        "line-width": this.options.weight ?? 2,
+        "line-color": shapePaintValue("color", this.kind === "line" ? "#2563eb" : "#0f766e"),
+        "line-opacity": shapePaintValue("opacity", 1),
+        "line-width": shapePaintValue("weight", 2),
       },
       source: this.sourceId,
       type: "line",
-    } as never);
-  }
-
-  private getData(): GeoJSON.Feature {
-    return {
-      geometry:
-        this.coordinates.length === 1
-          ? {
-              coordinates: this.coordinates[0]!,
-              type: "LineString",
-            }
-          : {
-              coordinates: this.coordinates,
-              type: "MultiLineString",
-            },
-      properties: {},
-      type: "Feature",
     };
-  }
-}
 
-class MapLibrePolygonLayer extends MapLibreSourceLayer {
-  private coordinates: GeoJSON.Position[][][] = [];
-
-  constructor(map: MapLibreMap, latLngs: unknown, private readonly options: FlatLayerOptions) {
-    super(map);
-    this.coordinates = normalizePolygonCoordinates(latLngs);
-  }
-
-  setLatLngs(latLngs: unknown) {
-    this.coordinates = normalizePolygonCoordinates(latLngs);
-    const source = this.map.getSource(this.sourceId) as GeoJSONSource | undefined;
-    source?.setData?.(this.getData());
-
-    return this;
-  }
-
-  setStyle(options: FlatLayerOptions) {
-    Object.assign(this.options, options);
-    const fillLayerId = this.layerIds[0];
-    const lineLayerId = this.layerIds[1];
-
-    if (fillLayerId && this.map.getLayer(fillLayerId)) {
-      this.map.setPaintProperty(
-        fillLayerId,
-        "fill-color",
-        this.options.fillColor ?? this.options.color ?? "#14b8a6",
-      );
-      this.map.setPaintProperty(fillLayerId, "fill-opacity", this.options.fillOpacity ?? 0.2);
+    if (this.kind === "line") {
+      this.map.addLayer({ ...outline, id: this.layerIds[0]!, metadata: { flatBatch: "line" } } as never);
+      return;
     }
 
-    if (lineLayerId && this.map.getLayer(lineLayerId)) {
-      this.map.setPaintProperty(lineLayerId, "line-color", this.options.color ?? "#0f766e");
-      this.map.setPaintProperty(lineLayerId, "line-opacity", this.options.opacity ?? 1);
-      this.map.setPaintProperty(lineLayerId, "line-width", this.options.weight ?? 2);
-    }
-
-    return this;
-  }
-
-  protected render() {
-    upsertGeoJsonSource(this.map, this.sourceId, this.getData());
-    const fillLayerId = `${this.id}:fill`;
-    const lineLayerId = `${this.id}:line`;
-    this.layerIds.push(fillLayerId, lineLayerId);
     this.map.addLayer({
-      id: fillLayerId,
-      metadata: {
-        flatOptions: this.options,
-      },
+      id: this.layerIds[0]!,
+      metadata: { flatBatch: "polygon-fill" },
       paint: {
-        "fill-color": this.options.fillColor ?? this.options.color ?? "#14b8a6",
-        "fill-opacity": this.options.fillOpacity ?? 0.2,
+        "fill-color": shapePaintValue("fillColor", "#14b8a6"),
+        "fill-opacity": shapePaintValue("fillOpacity", 0.2),
       },
       source: this.sourceId,
       type: "fill",
     } as never);
-    this.map.addLayer({
-      id: lineLayerId,
-      layout: {
-        "line-cap": "round",
-        "line-join": "round",
-      },
-      metadata: {
-        flatOptions: this.options,
-      },
-      paint: {
-        "line-color": this.options.color ?? "#0f766e",
-        "line-opacity": this.options.opacity ?? 1,
-        "line-width": this.options.weight ?? 2,
-      },
-      source: this.sourceId,
-      type: "line",
-    } as never);
+    this.map.addLayer({ ...outline, id: this.layerIds[1]!, metadata: { flatBatch: "polygon-outline" } } as never);
   }
 
-  private getData(): GeoJSON.Feature {
+  private getData(): GeoJSON.FeatureCollection {
+    const features: GeoJSON.Feature[] = [];
+
+    for (const member of this.members.values()) {
+      const feature = member.feature();
+
+      if (feature) {
+        features.push(feature);
+      }
+    }
+
+    return { features, type: "FeatureCollection" };
+  }
+
+  private onLayerEvent(mapEvent: string, layerId: string, mapEventObject: unknown) {
+    const features = (mapEventObject as { features?: unknown[] } | undefined)?.features ?? [];
+
+    if (mapEvent === "mouseenter" || mapEvent === "mousemove" || mapEvent === "mouseleave") {
+      this.trackHover(layerId, mapEvent === "mouseleave" ? [] : features, mapEventObject);
+    }
+
+    if (mapEvent !== "mouseenter" && mapEvent !== "mouseleave") {
+      this.dispatch(mapEvent, features, mapEventObject);
+    }
+  }
+
+  private onMapEvent(mapEvent: string, mapEventObject: unknown) {
+    const point = getMapEventPoint(mapEventObject);
+    const layers = this.layerIds.filter((layerId) => this.map.getLayer(layerId));
+
+    if (!point || layers.length === 0 || this.wasSeen(mapEvent, mapEventObject)) {
+      return;
+    }
+
+    const hits = this.map.queryRenderedFeatures(
+      [
+        [point.x - SHAPE_CLICK_TOLERANCE_PX, point.y - SHAPE_CLICK_TOLERANCE_PX],
+        [point.x + SHAPE_CLICK_TOLERANCE_PX, point.y + SHAPE_CLICK_TOLERANCE_PX],
+      ],
+      { layers },
+    );
+
+    this.dispatch(mapEvent, hits, mapEventObject);
+  }
+
+  /** Delivers the event to the topmost hit feature that listens for it, once per event object. */
+  private dispatch(event: string, features: readonly unknown[], mapEventObject: unknown) {
+    if (this.wasSeen(event, mapEventObject)) {
+      return;
+    }
+
+    for (const feature of features) {
+      const key = getShapeFeatureKey(feature);
+      const member = key ? this.members.get(key) : undefined;
+
+      if (member?.hasHandler(event)) {
+        this.markSeen(event, mapEventObject);
+        member.emit(event, mapEventObject);
+        return;
+      }
+    }
+  }
+
+  private trackHover(layerId: string, features: readonly unknown[], mapEventObject: unknown) {
+    let hit: string | null = null;
+
+    for (const feature of features) {
+      const key = getShapeFeatureKey(feature);
+      const member = key ? this.members.get(key) : undefined;
+
+      if (member && (member.hasHandler("mouseover") || member.hasHandler("mouseout"))) {
+        hit = member.key;
+        break;
+      }
+    }
+
+    this.hoverHitsByLayer.set(layerId, hit);
+
+    let next: string | null = null;
+
+    for (const id of [...this.layerIds].reverse()) {
+      next = this.hoverHitsByLayer.get(id) ?? null;
+      if (next) {
+        break;
+      }
+    }
+
+    if (next === this.pointerKey) {
+      return;
+    }
+
+    const previous = this.pointerKey ? this.members.get(this.pointerKey) : undefined;
+
+    this.pointerKey = next;
+    previous?.emit("mouseout", mapEventObject);
+    if (next) {
+      this.members.get(next)?.emit("mouseover", mapEventObject);
+    }
+  }
+
+  private wasSeen(event: string, mapEventObject: unknown) {
+    return Boolean(
+      mapEventObject && typeof mapEventObject === "object" && this.seenEvents.get(event)?.has(mapEventObject),
+    );
+  }
+
+  private markSeen(event: string, mapEventObject: unknown) {
+    if (!mapEventObject || typeof mapEventObject !== "object") {
+      return;
+    }
+
+    let seen = this.seenEvents.get(event);
+
+    if (!seen) {
+      seen = new WeakSet();
+      this.seenEvents.set(event, seen);
+    }
+
+    seen.add(mapEventObject);
+  }
+}
+
+/** One line (`polyline`) or polygon: a feature of its group's `MapLibreShapeBatch`. */
+class MapLibreShapeLayer implements FlatLayer {
+  readonly key = `mb-maps-shape-${nextLayerId++}`;
+  private batch: MapLibreShapeBatch | null = null;
+  private coordinates: GeoJSON.Position[][] | GeoJSON.Position[][][];
+  private readonly handlers = new globalThis.Map<string, Set<(event?: FlatPointerEvent) => void>>();
+  private tooltip: { label: string; marker?: MapLibreMarker; options?: FlatTooltipOptions } | null = null;
+  private tooltipLatLng: [number, number] | undefined;
+
+  constructor(
+    private readonly map: MapLibreMap,
+    private readonly kind: ShapeKind,
+    latLngs: unknown,
+    private readonly options: FlatLayerOptions,
+  ) {
+    this.coordinates = this.normalize(latLngs);
+  }
+
+  addTo(group: FlatLayerGroup) {
+    if (!group.layers.includes(this)) {
+      group.layers.push(this);
+    }
+
+    const batch = MapLibreShapeBatch.for(this.map, this.kind, group);
+
+    if (this.batch !== batch) {
+      this.batch?.delete(this);
+      this.batch = batch;
+    }
+    batch.add(this);
+    return this;
+  }
+
+  remove() {
+    this.tooltip?.marker?.remove?.();
+    this.batch?.delete(this);
+    this.batch = null;
+  }
+
+  bindTooltip(label: string, options?: FlatTooltipOptions) {
+    this.tooltip = { label, marker: this.tooltip?.marker, options };
+    if (this.batch) {
+      this.applyTooltipHooks(this.batch.layerIds);
+    }
+    return this;
+  }
+
+  openTooltip(latLng?: [number, number]) {
+    this.tooltipLatLng = latLng;
+
+    if (!this.tooltip || !latLng) {
+      return this;
+    }
+
+    this.tooltip.marker?.remove?.();
+    if (this.batch) {
+      this.openTooltipHook(this.batch.layerIds);
+    }
+
+    const element = document.createElement("div");
+    element.className = this.tooltip.options?.className ?? "mb-maps__tooltip";
+    element.textContent = this.tooltip.label;
+    this.tooltip.marker = new (getMarkerConstructor(this.map))({ element, anchor: "center" })
+      .setLngLat(latLngToLngLat(latLng) as LngLatLike)
+      .addTo(this.map);
+
+    return this;
+  }
+
+  bringToFront() {
+    this.batch?.moveToFront(this);
+    return this;
+  }
+
+  on(event: string, publicHandler: (event?: FlatPointerEvent) => void) {
+    let handlers = this.handlers.get(event);
+
+    if (!handlers) {
+      handlers = new Set();
+      this.handlers.set(event, handlers);
+    }
+
+    handlers.add(publicHandler);
+    this.batch?.listen(event);
+    return this;
+  }
+
+  off(event: string, publicHandler: (event?: FlatPointerEvent) => void) {
+    this.handlers.get(event)?.delete(publicHandler);
+    return this;
+  }
+
+  setLatLngs(latLngs: unknown) {
+    this.coordinates = this.normalize(latLngs);
+    this.batch?.schedule();
+    return this;
+  }
+
+  setStyle(options: FlatLayerOptions) {
+    Object.assign(this.options, options);
+    this.batch?.restyle(this);
+    return this;
+  }
+
+  events() {
+    return this.handlers.keys();
+  }
+
+  hasHandler(event: string) {
+    return (this.handlers.get(event)?.size ?? 0) > 0;
+  }
+
+  emit(event: string, mapEvent: unknown) {
+    const flatEvent = toFlatPointerEvent(mapEvent);
+
+    for (const handler of this.handlers.get(event) ?? []) {
+      handler(flatEvent);
+    }
+  }
+
+  state(): ShapePaint & { className: string | null } {
+    return { ...resolveShapePaint(this.kind, this.options), className: this.options.className ?? null };
+  }
+
+  feature(): GeoJSON.Feature | null {
+    if (this.coordinates.length === 0) {
+      return null;
+    }
+
+    const geometry: GeoJSON.Geometry =
+      this.kind === "line"
+        ? this.coordinates.length === 1
+          ? { coordinates: this.coordinates[0] as GeoJSON.Position[], type: "LineString" }
+          : { coordinates: this.coordinates as GeoJSON.Position[][], type: "MultiLineString" }
+        : this.coordinates.length === 1
+          ? { coordinates: this.coordinates[0] as GeoJSON.Position[][], type: "Polygon" }
+          : { coordinates: this.coordinates as GeoJSON.Position[][][], type: "MultiPolygon" };
+
     return {
-      geometry:
-        this.coordinates.length === 1
-          ? {
-              coordinates: this.coordinates[0]!,
-              type: "Polygon",
-            }
-          : {
-              coordinates: this.coordinates,
-              type: "MultiPolygon",
-            },
-      properties: {},
+      geometry,
+      properties: {
+        ...resolveShapePaint(this.kind, this.options),
+        ...(this.options.className ? { className: this.options.className } : {}),
+        ...(this.options.interactive !== undefined ? { interactive: this.options.interactive } : {}),
+        ...(this.options.bubblingMouseEvents !== undefined
+          ? { bubblingMouseEvents: this.options.bubblingMouseEvents }
+          : {}),
+        key: this.key,
+      },
       type: "Feature",
     };
+  }
+
+  /** Re-binds test-double tooltips after the batch re-sent its data. */
+  afterFlush(layerIds: readonly string[]) {
+    if (!this.tooltip) {
+      return;
+    }
+
+    this.applyTooltipHooks(layerIds);
+    if (this.tooltipLatLng) {
+      this.openTooltipHook(layerIds);
+    }
+  }
+
+  private normalize(latLngs: unknown) {
+    return this.kind === "line" ? normalizeLineCoordinates(latLngs) : normalizePolygonCoordinates(latLngs);
+  }
+
+  private applyTooltipHooks(layerIds: readonly string[]) {
+    const bind = (
+      this.map as unknown as {
+        __mbBindFlatTooltip?: (layerId: string, label: string, options: FlatTooltipOptions | undefined) => void;
+      }
+    ).__mbBindFlatTooltip;
+
+    for (const layerId of layerIds) {
+      bind?.call(this.map, `${layerId}#${this.key}`, this.tooltip!.label, this.tooltip!.options);
+    }
+  }
+
+  private openTooltipHook(layerIds: readonly string[]) {
+    (
+      this.map as unknown as {
+        __mbOpenFlatTooltip?: (
+          layerId: string,
+          label: string,
+          options: FlatTooltipOptions | undefined,
+          latLng: [number, number] | undefined,
+        ) => void;
+      }
+    ).__mbOpenFlatTooltip?.(`${layerIds[0]}#${this.key}`, this.tooltip!.label, this.tooltip!.options, this.tooltipLatLng);
   }
 }
 

@@ -758,6 +758,8 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       />,
     );
 
+    // The re-rendered lines reach the map (one source per layer group) at the microtask flush.
+    await act(async () => {});
     const deleteLayer = flatMock.getLayerGroups()[0]?.layers[0];
 
     act(() => {
@@ -809,13 +811,18 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       );
     });
 
-    const [firstLayer, secondLayer] = flatMock.getLayerGroups()[0]?.layers ?? [];
-
-    act(() => {
-      firstLayer?.handlers.get("click")?.[0]?.({
-        originalEvent: { preventDefault() {}, shiftKey: true, stopPropagation() {} },
+    // The lines of one layer group are one MapLibre source whose features a re-render
+    // replaces, so read the current feature layers (after the microtask flush) before each click.
+    const clickLine = async (index: number, shiftKey?: boolean) => {
+      await act(async () => {});
+      act(() => {
+        flatMock.getLayerGroups()[0]?.layers[index]?.handlers.get("click")?.[0]?.({
+          originalEvent: { preventDefault() {}, shiftKey, stopPropagation() {} },
+        });
       });
-    });
+    };
+
+    await clickLine(0, true);
 
     await waitFor(() => {
       expect(onEditorSelectionChange).toHaveBeenLastCalledWith(
@@ -826,11 +833,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
       );
     });
 
-    act(() => {
-      secondLayer?.handlers.get("click")?.[0]?.({
-        originalEvent: { preventDefault() {}, shiftKey: true, stopPropagation() {} },
-      });
-    });
+    await clickLine(1, true);
 
     expect(onEditorSelectionChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -841,11 +844,7 @@ describe("@moritzbrantner/maps GeoJSON editor", () => {
 
     onEditorSelectionChange.mockClear();
 
-    act(() => {
-      secondLayer?.handlers.get("click")?.[0]?.({
-        originalEvent: { preventDefault() {}, stopPropagation() {} },
-      });
-    });
+    await clickLine(1);
 
     expect(onEditorSelectionChange).toHaveBeenCalledWith(
       expect.objectContaining({

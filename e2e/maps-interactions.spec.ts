@@ -516,6 +516,8 @@ async function waitForEditorFeatureAtCoordinate(
               __mbMapsDemoMap?: {
                 queryRenderedFeatures?: (point: [number, number]) => Array<{
                   layer?: { metadata?: { flatOptions?: { className?: string } } };
+                  properties?: { className?: string } | null;
+                  state?: { className?: string | null };
                 }>;
               };
             };
@@ -525,10 +527,16 @@ async function waitForEditorFeatureAtCoordinate(
               return false;
             }
 
+            // Lines and polygons share one source per layer group: their class is a feature
+            // property (restyles move it to feature-state); points keep it on their layer.
             return (
               browser.__mbMapsDemoMap?.queryRenderedFeatures?.([point.x, point.y]) ?? []
             ).some((feature) =>
-              feature.layer?.metadata?.flatOptions?.className
+              (
+                feature.state?.className ??
+                feature.properties?.className ??
+                feature.layer?.metadata?.flatOptions?.className
+              )
                 ?.split(" ")
                 .includes(expectedClassName),
             );
