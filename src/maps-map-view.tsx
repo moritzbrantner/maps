@@ -134,6 +134,55 @@ export function MapsMapView({
     currentViewStateRef.current = currentViewState;
   });
 
+  // An uncontrolled camera leads its view state, as MapLibre's: the runtime moves and renders
+  // it imperatively and `onViewStateChange` fires every camera frame, while React state (and
+  // the view-state consumers) follow once the camera settles, as on MapLibre's `moveend`
+  // (#343). A controlled view follows its prop every frame.
+  const setViewStateRef = useRef(setViewState);
+  useLayoutEffect(() => {
+    setViewStateRef.current = setViewState;
+  });
+  const cameraSettleRef = useRef<{
+    frame: number | null;
+    moved: boolean;
+    pending: { next: MapViewState; reason: MapViewStateChangeReason } | null;
+  }>({ frame: null, moved: false, pending: null });
+  useEffect(() => {
+    const settle = cameraSettleRef.current;
+    return () => {
+      if (settle.frame !== null) cancelAnimationFrame(settle.frame);
+      settle.frame = null;
+      settle.pending = null;
+    };
+  }, []);
+  const handleRuntimeViewState = useCallback(
+    (next: MapViewState, reason: MapViewStateChangeReason) => {
+      if (controlled) {
+        setViewState(next, reason);
+        return;
+      }
+      setViewState(next, reason, { commit: false });
+      const settle = cameraSettleRef.current;
+      settle.pending = { next, reason };
+      settle.moved = true;
+      if (settle.frame !== null) return;
+      const check = () => {
+        // Settled once a whole animation frame passed without a camera change.
+        if (settle.moved) {
+          settle.moved = false;
+          settle.frame = requestAnimationFrame(check);
+          return;
+        }
+        settle.frame = null;
+        const pending = settle.pending;
+        settle.pending = null;
+        if (pending) setViewStateRef.current(pending.next, pending.reason);
+      };
+      settle.frame = requestAnimationFrame(check);
+    },
+    [controlled, setViewState],
+  );
+
   const getFeatureId = useCallback((feature: unknown, getId?: (feature: never) => string) => {
     if (getId) {
       return getId(feature as never);
@@ -207,15 +256,18 @@ export function MapsMapView({
   const setSurfaceViewState = useCallback(
     (next: MapViewState, reason: MapViewStateChangeReason = "programmatic") => {
       const runtime = runtimeControllerRef.current;
-      const camera = runtime?.getViewState() ?? currentViewStateRef.current;
-      const resolvedNext =
+      // A cluster expansion keeps the presented bearing and pitch.
+      const camera =
         reason === "cluster-expand"
-          ? {
-              ...next,
-              ...(camera.bearing === undefined ? {} : { bearing: camera.bearing }),
-              ...(camera.pitch === undefined ? {} : { pitch: camera.pitch }),
-            }
-          : next;
+          ? (runtime?.getViewState() ?? currentViewStateRef.current)
+          : null;
+      const resolvedNext = camera
+        ? {
+            ...next,
+            ...(camera.bearing === undefined ? {} : { bearing: camera.bearing }),
+            ...(camera.pitch === undefined ? {} : { pitch: camera.pitch }),
+          }
+        : next;
 
       if (runtime) {
         runtime.setViewState(resolvedNext, reason);
@@ -337,7 +389,13 @@ export function MapsMapView({
         options,
       ),
     flyTo: (next, options) => controllerActions.current.flyToNow(next, options),
-    getViewState: () => runtimeControllerRef.current?.getViewState() ?? currentViewStateRef.current,
+    // A read after `setViewState` sees the new camera, as MapLibre's after `jumpTo`.
+    getViewState: () => {
+      const runtime = runtimeControllerRef.current;
+      if (!runtime) return currentViewStateRef.current;
+      runtime.flushCameraFrame();
+      return runtime.getViewState();
+    },
     getRendererStats: () => runtimeControllerRef.current?.getRendererStats() ?? null,
     getRetainedVectorBasemap: () =>
       runtimeControllerRef.current?.getRetainedVectorBasemap() ?? null,
@@ -668,7 +726,7 @@ export function MapsMapView({
           onReady={() => {
             setIsReady(true);
           }}
-          onViewStateChange={setViewState}
+          onViewStateChange={handleRuntimeViewState}
           viewState={currentViewState}
         />
         <MapsOverlayLayers

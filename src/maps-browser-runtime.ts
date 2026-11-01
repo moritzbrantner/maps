@@ -159,6 +159,11 @@ export type MapsRendererStats = Partial<MapsWgpuFrameStats> & {
 
 export type MapsCanvasFlatRuntimeController = {
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
+  /**
+   * Presents a camera change scheduled for the next animation frame now (`setViewState`,
+   * gestures), so a following read sees it. Reads report the presented frame otherwise.
+   */
+  flushCameraFrame(): void;
   getBaseRenderer(): MapsBaseRenderer;
   getRendererStats(): MapsRendererStats;
   /** The GPU-retained vector basemap, or `null` without the WebGPU backend. */
@@ -375,17 +380,29 @@ export function createMapsBrowserRuntime(
     if (cameraFrame !== null) return;
     cameraFrame = requestAnimationFrame(() => {
       cameraFrame = null;
-      const nextReason = cameraReason;
-      cameraReason = null;
-      const syncFrame = synchronize;
-      if (!syncFrame || !nextReason) return;
-      try {
-        applyCameraCommands();
-        emitViewState?.(syncFrame(), nextReason);
-      } catch (error) {
-        config.onError?.(error);
-      }
+      presentCameraFrame();
     });
+  }
+
+  function presentCameraFrame() {
+    const nextReason = cameraReason;
+    cameraReason = null;
+    const syncFrame = synchronize;
+    if (!syncFrame || !nextReason) return;
+    try {
+      applyCameraCommands();
+      emitViewState?.(syncFrame(), nextReason);
+    } catch (error) {
+      config.onError?.(error);
+    }
+  }
+
+  /** A read of the camera sees a scheduled camera change at once, as MapLibre's `jumpTo`. */
+  function flushCameraFrame() {
+    if (cameraFrame === null) return;
+    cancelAnimationFrame(cameraFrame);
+    cameraFrame = null;
+    presentCameraFrame();
   }
 
   function cancelKineticPan() {
@@ -660,6 +677,10 @@ export function createMapsBrowserRuntime(
         assertActive();
         return activeRenderer ? retainedVectorBasemap : null;
       },
+      flushCameraFrame() {
+        assertActive();
+        flushCameraFrame();
+      },
       getViewState() {
         assertActive();
         return frameSynchronizer.getViewState();
@@ -701,8 +722,11 @@ export function createMapsBrowserRuntime(
         assertActive();
         cancelKineticPan();
         cancelCameraFrame();
-        runtime.setViewState(next);
-        notifyViewState(syncFrame(), reason);
+        // As MapLibre renders a `jumpTo` on its next frame, the camera change and its frame
+        // run on the next animation frame: per-frame camera updates never render
+        // synchronously (#343). `flushCameraFrame` presents it at once.
+        const viewState = copyViewState(next);
+        scheduleCameraFrame(reason, () => runtime.setViewState(viewState));
       },
       subscribeBaseRenderer(listener) {
         baseRendererListeners.add(listener);

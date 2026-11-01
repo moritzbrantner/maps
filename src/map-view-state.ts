@@ -79,8 +79,17 @@ export function useControllableMapViewState({
     setUncontrolledViewState(latestViewState);
   }, [controlled, latestViewState, uncontrolledViewState]);
 
+  /**
+   * Emits `onViewStateChange` and, unless `commit` is false, stores an uncontrolled view
+   * state in React state. A runtime that leads its own camera emits every frame and commits
+   * once the camera settles (#343); the emission of an already emitted state is skipped.
+   */
   const setViewState = useCallback(
-    (next: MapViewState, reason: MapViewStateChangeReason = "programmatic") => {
+    (
+      next: MapViewState,
+      reason: MapViewStateChangeReason = "programmatic",
+      { commit = true }: { commit?: boolean } = {},
+    ) => {
       const canCarryRuntimeConstraint = !["cluster-expand", "fly-to", "programmatic"].includes(
         reason,
       );
@@ -112,7 +121,7 @@ export function useControllableMapViewState({
         setRuntimeMinZoom(nextRuntimeMinZoom);
       }
 
-      if (!controlled) {
+      if (!controlled && commit) {
         setUncontrolledViewState(constrainedNext);
       }
 

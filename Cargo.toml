@@ -34,6 +34,7 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["webgpu", "w
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = "z"
+# Speed over size (#343, #268): "z" left iterator adapters uninlined in per-frame geometry.
+opt-level = 3
 panic = "abort"
 strip = "symbols"

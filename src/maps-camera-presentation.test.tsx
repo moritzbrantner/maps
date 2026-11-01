@@ -360,6 +360,12 @@ function flushAnimationFrame(now = 16) {
   for (const callback of pending) callback(now);
 }
 
+/** Runs animation frames until none is pending: the Map View commits a settled camera. */
+function settleCamera() {
+  for (let frame = 0; frame < 10 && frames.size > 0; frame += 1) flushAnimationFrame();
+  expect(frames.size).toBe(0);
+}
+
 function pointer(
   canvas: HTMLCanvasElement,
   type: string,
@@ -440,6 +446,9 @@ describe("Maps camera presentation", () => {
       vi.mocked(renderer.render).mockClear();
 
       host.controller?.setViewState({ center: [1, 0], zoom: 4 });
+      // The camera change renders on the next animation frame, not synchronously (#343).
+      expect(renderer.render).not.toHaveBeenCalled();
+      flushAnimationFrame();
 
       expect(renderer.render).toHaveBeenCalledTimes(1);
       expect(vi.mocked(renderer.render).mock.calls[0]?.[2]?.polygons).toHaveLength(1);
@@ -468,6 +477,10 @@ describe("Maps camera presentation", () => {
     expect(runtime.project).not.toHaveBeenCalled();
     expect(runtime.projectPacked).toHaveBeenCalledTimes(1);
     expect(changed).toHaveBeenCalledTimes(1);
+    // Committing the settled camera to React state (#343) neither repaints nor re-emits.
+    act(settleCamera);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(paints).toHaveLength(1);
   });
 
   it("preserves zoom clamping when a scroll reverses direction at the limit", async () => {
@@ -509,7 +522,10 @@ describe("Maps camera presentation", () => {
     act(flushAnimationFrame);
     expect(runtime.panBetween).toHaveBeenCalledTimes(2);
     expect(paints).toEqual([{ zoom: 4, x: 404 }]);
-    expect(frames.size).toBe(0);
+    // No inertia frame stays queued: only the Map View's camera-settle check.
+    act(settleCamera);
+    expect(runtime.panBetween).toHaveBeenCalledTimes(2);
+    expect(paints).toEqual([{ zoom: 4, x: 404 }]);
   });
 
   it("rotates about the viewport center on right-drag in one coalesced paint", async () => {
@@ -539,7 +555,9 @@ describe("Maps camera presentation", () => {
     // Windows delivers contextmenu after release: still part of the rotation.
     fireEvent.contextMenu(canvas, { clientX: 115, clientY: 80 });
     expect(onMapContextMenu).not.toHaveBeenCalled();
-    expect(frames.size).toBe(0);
+    act(settleCamera);
+    expect(paints).toHaveLength(1);
+    expect(changed).toHaveBeenCalledTimes(1);
   });
 
   it("keeps right-click context menus when the pointer does not rotate", async () => {
@@ -644,7 +662,10 @@ describe("Maps camera presentation", () => {
     expect(paints).toHaveLength(3);
     // Programmatic pans within the margin translate too (mock projection scales by zoom).
     const { center, zoom } = camera;
-    act(() => controller.setViewState({ center: [center[0] + 1, center[1]], zoom }));
+    act(() => {
+      controller.setViewState({ center: [center[0] + 1, center[1]], zoom });
+      flushAnimationFrame();
+    });
     const [, x] = /translate\(([-\d.e]+)px, 0px\)/.exec(canvas.style.transform) ?? [];
     expect(Number(x)).toBeCloseTo(-zoom, 9);
     expect(paints).toHaveLength(3);
@@ -853,9 +874,12 @@ describe("Maps camera presentation", () => {
     const { controller } = await mountMap();
     act(() => {
       controller.setViewState({ center: [0, 0], zoom: 7 });
+      expect(paints).toEqual([]);
+      flushAnimationFrame();
       expect(paints).toEqual([{ zoom: 7, x: 370 }]);
     });
-    // Reflecting camera state into React must not clear and submit the layers again.
+    // Reflecting the settled camera into React must not clear and submit the layers again.
+    act(settleCamera);
     expect(paints).toEqual([{ zoom: 7, x: 370 }]);
     expect(runtime.project).not.toHaveBeenCalled();
     expect(runtime.projectPacked).toHaveBeenCalledTimes(1);
@@ -894,7 +918,7 @@ describe("Maps camera presentation", () => {
     const { canvas, controller, changed } = await mountMap();
     fireEvent.wheel(canvas, { deltaY: -2, clientX: 120, clientY: 80 });
     act(() => controller.setViewState({ center: [0, 0], zoom: 8 }));
-    act(flushAnimationFrame);
+    act(settleCamera);
     expect(paints).toEqual([{ zoom: 8, x: 380 }]);
     expect(changed).toHaveBeenCalledTimes(1);
   });
@@ -918,6 +942,7 @@ describe("Maps camera presentation", () => {
     vi.mocked(context.arc).mockClear();
     act(() => {
       controller.setViewState({ center: [0, 0], zoom: 7 });
+      flushAnimationFrame();
       expect(overlay.dataset.mapOverlayBackend).toBe("canvas2d");
       expect(context.arc).toHaveBeenCalledWith(370, 200, expect.any(Number), 0, Math.PI * 2);
     });

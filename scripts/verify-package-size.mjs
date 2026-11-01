@@ -22,11 +22,14 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // #268 (owner decision): the compressed package and WASM runtime sizes are measured and
 // reported only, not blocking ceilings; reducing them is a loading-strategy concern
 // ("make it work, make it right, make it fast"). Keep a small margin for the rest.
+// #343 builds the WASM for speed (opt-level 3, 705,345 -> 845,540 bytes): the unpacked budget
+// now covers everything but the report-only WASM runtime, with the allowance it had before
+// (1,752,500 - 705,345).
 const budgets = {
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSize: 1_752_500,
+  unpackedSizeWithoutWasm: 1_047_155,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
@@ -71,7 +74,14 @@ for (const filePath of requiredFiles) {
 }
 
 checkPresent("compressed package size", packageInfo?.size);
-checkBudget("unpacked package size", packageInfo?.unpackedSize, budgets.unpackedSize, "bytes");
+checkBudget(
+  "unpacked package size without the WASM runtime",
+  typeof packageInfo?.unpackedSize === "number" && typeof wasmRuntime?.size === "number"
+    ? packageInfo.unpackedSize - wasmRuntime.size
+    : undefined,
+  budgets.unpackedSizeWithoutWasm,
+  "bytes",
+);
 checkBudget("package entry count", files.length, budgets.entryCount, "entries");
 checkBudget("styles.css size", stylesheet?.size, budgets.stylesheetSize, "bytes");
 checkBudget("styles.full.css size", fullStylesheet?.size, budgets.fullStylesheetSize, "bytes");

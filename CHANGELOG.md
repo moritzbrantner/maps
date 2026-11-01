@@ -27,6 +27,13 @@
 
 ### Patch Changes
 
+- Maps runtime camera frames no longer go through React (#343). As in MapLibre,
+  `setViewState` moves the camera and renders it on the next animation frame
+  (a following `getViewState()` sees it at once), and an uncontrolled Map View
+  fires `onViewStateChange` every camera frame but commits its view state to
+  React (and `useMapSurfaceViewState` consumers) once the camera settles. The
+  WASM runtime is built for speed (`opt-level = 3`, about 140 KB larger), and
+  pitched stroke geometry no longer calls software `hypot`.
 - On the MapLibre runtime, the lines of a layer group share one GeoJSON source
   and one line layer, and its polygons one source with a fill and an outline
   layer (#337). Per-feature colour, width and opacity are data-driven paint

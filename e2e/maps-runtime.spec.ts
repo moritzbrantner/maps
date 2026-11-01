@@ -305,7 +305,10 @@ test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ 
   await page.getByRole("button", { name: "Fit acceptance bounds" }).click();
   await expect(viewState).toHaveText(/^0\.0000,45\.\d{4} \| zoom \d+\.\d{4}$/);
 
+  const fitted = await viewState.textContent();
   await page.getByRole("button", { name: "Request outside bounds" }).click();
+  // The constrained camera renders, and reports, on the next animation frame (#343).
+  await expect(viewState).not.toHaveText(fitted!);
   await expect
     .poll(async () => isInsideAcceptanceBounds(parseViewState(await viewState.textContent())))
     .toBe(true);

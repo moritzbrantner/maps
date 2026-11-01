@@ -176,6 +176,7 @@ async function mountMaps() {
     ready,
     presentCamera(state: { center: [number, number]; zoom: number; bearing?: number }) {
       host.controller!.setViewState(state);
+      host.controller!.flushCameraFrame();
     },
     camera() {
       const state = host.controller!.getViewState();
@@ -280,6 +281,8 @@ async function mountMapsVector() {
     ready,
     presentCamera(state: { center: [number, number]; zoom: number; bearing?: number }) {
       active!.setViewState(state);
+      // A camera read presents the change scheduled for the next frame at once.
+      active!.getViewState();
     },
     camera() {
       const state = active!.getViewState();
