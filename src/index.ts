@@ -374,4 +374,4 @@ export {
 } from "./temporal-heat-map";
 
 export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "./maps-tileset";
-export { type MapsVectorBasemapStyle } from "./maps-tileset-style";
+export { type MapsTilesetLayers, type MapsVectorBasemapStyle } from "./maps-tileset-style";

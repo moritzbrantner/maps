@@ -7,6 +7,15 @@ mod engine_scenario;
 mod retained_frame;
 mod retained_points;
 mod retained_polygons;
+#[cfg(any(
+    test,
+    all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "wgpu-base-map"
+    )
+))]
+mod style_symbols;
 mod vector_basemap_layout;
 #[cfg(all(
     target_arch = "wasm32",
@@ -35,6 +44,12 @@ mod wgpu_mipmaps;
     feature = "wgpu-base-map"
 ))]
 mod wgpu_retained;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "wgpu-base-map"
+))]
+mod wgpu_symbols;
 #[cfg(test)]
 mod work_complexity;
 

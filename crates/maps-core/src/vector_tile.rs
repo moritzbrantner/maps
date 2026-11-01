@@ -467,7 +467,7 @@ pub(crate) fn split_at_tile_edges(ring: &[[i32; 2]], extent: u32) -> Vec<Vec<[i3
     runs
 }
 
-fn decode_geometry_paths(
+pub(crate) fn decode_geometry_paths(
     commands: &[u32],
     close_polygons: bool,
 ) -> Result<Vec<Vec<[i32; 2]>>, VectorTileError> {
@@ -567,21 +567,21 @@ fn tile_coordinate_to_lon_lat(
     Ok([longitude, latitude])
 }
 
-struct ProtoCursor<'a> {
+pub(crate) struct ProtoCursor<'a> {
     bytes: &'a [u8],
     index: usize,
 }
 
 impl<'a> ProtoCursor<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, index: 0 }
     }
 
-    fn is_finished(&self) -> bool {
+    pub(crate) fn is_finished(&self) -> bool {
         self.index >= self.bytes.len()
     }
 
-    fn read_key(&mut self) -> Result<(u32, u8), VectorTileError> {
+    pub(crate) fn read_key(&mut self) -> Result<(u32, u8), VectorTileError> {
         let key = self.read_varint()?;
         let field = u32::try_from(key >> 3).map_err(|_| VectorTileError::InvalidProtobuf)?;
         let wire_type = (key & 0x7) as u8;
@@ -591,7 +591,7 @@ impl<'a> ProtoCursor<'a> {
         Ok((field, wire_type))
     }
 
-    fn read_varint(&mut self) -> Result<u64, VectorTileError> {
+    pub(crate) fn read_varint(&mut self) -> Result<u64, VectorTileError> {
         let mut value = 0_u64;
         for shift in (0..70).step_by(7) {
             let byte = *self
@@ -610,7 +610,7 @@ impl<'a> ProtoCursor<'a> {
         Err(VectorTileError::InvalidProtobuf)
     }
 
-    fn read_length_delimited(&mut self) -> Result<&'a [u8], VectorTileError> {
+    pub(crate) fn read_length_delimited(&mut self) -> Result<&'a [u8], VectorTileError> {
         let length =
             usize::try_from(self.read_varint()?).map_err(|_| VectorTileError::InvalidProtobuf)?;
         let end = self
@@ -625,7 +625,7 @@ impl<'a> ProtoCursor<'a> {
         Ok(value)
     }
 
-    fn skip(&mut self, wire_type: u8) -> Result<(), VectorTileError> {
+    pub(crate) fn skip(&mut self, wire_type: u8) -> Result<(), VectorTileError> {
         match wire_type {
             0 => {
                 self.read_varint()?;
@@ -640,6 +640,15 @@ impl<'a> ProtoCursor<'a> {
             _ => return Err(VectorTileError::InvalidProtobuf),
         }
         Ok(())
+    }
+
+    /// Reads `N` little-endian bytes (protobuf `fixed32`/`fixed64` payloads).
+    pub(crate) fn read_fixed<const N: usize>(&mut self) -> Result<[u8; N], VectorTileError> {
+        let start = self.index;
+        self.skip_bytes(N)?;
+        let mut bytes = [0; N];
+        bytes.copy_from_slice(&self.bytes[start..self.index]);
+        Ok(bytes)
     }
 
     fn skip_bytes(&mut self, count: usize) -> Result<(), VectorTileError> {

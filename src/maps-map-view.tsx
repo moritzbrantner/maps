@@ -1,7 +1,7 @@
 "use client";
 
 import { validateMapsTileset, type MapsTileset } from "./maps-tileset";
-import type { MapsVectorBasemapStyle } from "./maps-tileset-style";
+import type { MapsTilesetLayers, MapsVectorBasemapStyle } from "./maps-tileset-style";
 
 import {
   startTransition,
@@ -62,6 +62,8 @@ export type MapsMapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   flatRuntime?: "maps";
   tileset?: MapsTileset;
   tilesetStyle?: MapsVectorBasemapStyle;
+  /** MapLibre `circle`/`symbol` layers drawn over the Tileset, supported by flatRuntime="maps" only. */
+  tilesetLayers?: MapsTilesetLayers;
   tileLimits?: import("./flat-runtime-wasm").MapsFlatRasterRuntimeConfig["limits"];
   /** Decoder for tile pixels, scoped to this Map View runtime. */
   createTileImageLoader?: () => MapsTileImageLoader;
@@ -76,6 +78,7 @@ export function MapsMapView({
   createTileImageLoader,
   tileset,
   tilesetStyle,
+  tilesetLayers,
   tileLimits,
   dataBounds = null,
   defaultViewState,
@@ -705,6 +708,7 @@ export function MapsMapView({
         <MapsCanvasFlatRuntime
           tileset={activeTileset}
           tilesetStyle={tilesetStyle}
+          tilesetLayers={tilesetLayers}
           tileLimits={tileLimits}
           createTileImageLoader={createTileImageLoader}
           mapStyle={resolvedMapStyle}

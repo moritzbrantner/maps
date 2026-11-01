@@ -11,7 +11,9 @@ mod flat_runtime;
 mod geojson_vt;
 mod line_mesh;
 mod matrix_camera;
+mod mvt_features;
 mod scenario;
+pub mod symbol;
 mod tileset;
 mod vector_bucket;
 mod vector_tile;
@@ -40,6 +42,7 @@ pub use geojson_vt::{
 };
 pub use line_mesh::{LineCap, LineMesh, LineMeshVertex};
 pub use matrix_camera::{MapLocalRenderFrame, MapLocalViewportBounds};
+pub use mvt_features::{MvtFeature, MvtGeometryType, MvtLayer, decode_mvt_layers};
 pub use scenario::{
     CameraObservation, CameraStateObservation, EngineImplementationIdentity, EngineScenarioError,
     EngineScenarioObservation, ProjectionObservation, ViewportObservation,

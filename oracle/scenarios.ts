@@ -273,10 +273,9 @@ export const scenarios: Scenario[] = [
     capability: "symbol layer: SDF glyph labels, data-driven size, halo, collision",
     knownGaps: [],
     name: "symbols",
-    origin: "Milestone E cartography (#80); place labels on any vector basemap",
+    origin: "Milestone E cartography (#80); place labels on any vector basemap; Tileset style layers #321",
     size: MAP_SIZE,
     steps: [],
-    unsupported: { issue: 321, reason: "no style symbol layers or SDF glyph rendering" },
   },
   {
     basemap: "style",

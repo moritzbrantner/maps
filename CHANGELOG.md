@@ -17,6 +17,16 @@
 
 ### Minor Changes
 
+- `MapView` accepts `tilesetLayers` (`MapsTilesetLayers`) on `flatRuntime="maps"`:
+  MapLibre style-spec `circle` and point-placement `symbol` layers drawn over the
+  Tileset's vector source layers (#321). Maps ports MapLibre 6.15's glyph PBF
+  loading (from the `glyphs` URL template), SDF glyph atlas, text shaping (line
+  breaking, justification, `text-anchor`/`text-offset`, letter spacing), the
+  `symbol_sdf` halo/gamma shader, pole-of-inaccessibility polygon labels and the
+  collision grid, so the same labels hide. Filters and data-driven properties use
+  the expression subset Maps evaluates; anything else (icons, line placement,
+  variable anchors, zoom-dependent sizes and paint) is rejected through `onError`.
+  The WebGPU backend draws them; the Canvas fallback does not yet.
 - Exported `ensureMapsAggregationWasm()`, `getMapsAggregationRuntimeStatus()`,
   `subscribeMapsAggregationRuntime()` and the `MapsAggregationRuntimeStatus`
   type from the root and `core` entries. Consumers can await or observe the

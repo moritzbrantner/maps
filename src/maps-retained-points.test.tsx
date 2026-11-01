@@ -182,6 +182,9 @@ beforeEach(() => {
     setVectorSource: vi.fn(),
     evictVectorSourceTile: vi.fn(),
     setVectorStyle: vi.fn(),
+    setVectorLayers: vi.fn(),
+    addGlyphs: vi.fn(),
+    missingGlyphRanges: vi.fn(() => []),
     uploadTile: vi.fn(),
     uploadVectorTile: vi.fn(() => 0),
     render: vi.fn((_tiles, matrix, application) => {

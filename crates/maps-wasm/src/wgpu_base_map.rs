@@ -28,6 +28,7 @@ use crate::retained_polygons::{
     RETAINED_POLYGON_COVER_VERTEX_COUNT, RETAINED_POLYGON_FILL_VERTEX_SIZE,
     RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonDraw, RetainedPolygons,
 };
+use crate::style_symbols::{StyleFrame, StyleSurface, StyleSymbols};
 use crate::vector_basemap_layout::{
     FILL_VERTEX_SIZE, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes, fill_vertex_bytes,
     line_index_bytes, line_vertex_bytes, style_table_bytes,
@@ -35,6 +36,7 @@ use crate::vector_basemap_layout::{
 use crate::wgpu_retained::{
     FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
 };
+use crate::wgpu_symbols::SymbolGpu;
 
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
 const CAMERA_UNIFORM_SIZE: u64 = 64;
@@ -210,6 +212,10 @@ pub struct MapsWgpuBaseMapRenderer {
     /// Reused per-frame scratch space; avoids allocating on the render path.
     frame_vertices: Vec<u8>,
     frame_placements: Vec<WgpuRasterTilePlacement>,
+    /// Tileset `circle`/`symbol` style layers (#321).
+    style_symbols: StyleSymbols,
+    symbol_gpu: SymbolGpu,
+    placed_labels: u32,
 }
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
@@ -974,6 +980,13 @@ impl MapsWgpuBaseMapRenderer {
             ),
         };
 
+        let symbol_gpu = SymbolGpu::new(
+            &device,
+            surface_view_format,
+            premultiplied_blend_state(),
+            ignored_stencil(),
+        );
+
         Ok(Self {
             surface,
             device,
@@ -1022,6 +1035,9 @@ impl MapsWgpuBaseMapRenderer {
             frame_stats: FrameStats::default(),
             frame_vertices: Vec::new(),
             frame_placements: Vec::new(),
+            style_symbols: StyleSymbols::default(),
+            symbol_gpu,
+            placed_labels: 0,
         })
     }
 
@@ -1143,6 +1159,9 @@ impl MapsWgpuBaseMapRenderer {
         }
         let buckets = build_shortbread_buckets(bytes)
             .map_err(|error| js_error("could not build Shortbread buckets", error))?;
+        self.style_symbols
+            .upload(&self.vector_source, (z, x, y), bytes)
+            .map_err(|error| js_error("could not lay out tileset style layers", error))?;
         let upload = |label: &str, usage: wgpu::BufferUsages, contents: Vec<u8>| {
             upload_retained_buffer(&self.device, &self.queue, label, usage, &contents)
         };
@@ -1300,6 +1319,7 @@ impl MapsWgpuBaseMapRenderer {
 
     #[wasm_bindgen(js_name = evictVectorSourceTile)]
     pub fn evict_vector_source_tile(&mut self, source: &str, z: u8, x: u32, y: u32) {
+        self.style_symbols.evict(source, (z, x, y));
         if source == self.vector_source {
             self.vector_tiles.evict(&(z, x, y));
         } else if let Some(tiles) = self.inactive_vector_tiles.get_mut(source) {
@@ -1313,6 +1333,31 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = evictVectorTile)]
     pub fn evict_vector_tile(&mut self, z: u8, x: u32, y: u32) {
         self.vector_tiles.evict(&(z, x, y));
+        self.style_symbols.evict(&self.vector_source, (z, x, y));
+    }
+
+    /// Replaces the tileset style layers: a JSON array of MapLibre style-spec `circle` and
+    /// point-placement `symbol` layers, drawn over the vector basemap in order (#321).
+    /// Retained tiles are laid out again; unsupported properties are rejected.
+    #[wasm_bindgen(js_name = setVectorLayers)]
+    pub fn set_vector_layers(&mut self, layers: &str) -> Result<(), JsValue> {
+        self.style_symbols
+            .set_layers(layers)
+            .map_err(|error| js_error("invalid tileset style layers", error))
+    }
+
+    /// Adds one SDF glyph range PBF for a font stack (the comma-joined `text-font`).
+    #[wasm_bindgen(js_name = addGlyphs)]
+    pub fn add_glyphs(&mut self, stack: &str, start: u32, bytes: &[u8]) -> Result<(), JsValue> {
+        self.style_symbols
+            .add_glyphs(stack, start, bytes)
+            .map_err(|error| js_error("invalid glyph range", error))
+    }
+
+    /// Glyph ranges retained tiles still need, as `"<first codepoint>:<font stack>"`.
+    #[wasm_bindgen(js_name = missingGlyphRanges)]
+    pub fn missing_glyph_ranges(&self) -> Vec<String> {
+        self.style_symbols.missing_glyph_ranges()
     }
 
     /// Replaces the vector style table: one entry of 8 floats (RGBA in [0, 1], line
@@ -1519,6 +1564,7 @@ impl MapsWgpuBaseMapRenderer {
         }
 
         let vector_draws = self.prepare_vector_draws(placements, view_projection, clip);
+        let style_frame = self.prepare_style_layers(placements, view_projection, clip);
         let retained_point_draws = self.prepare_retained_point_draws(
             &application_geometry.draws,
             placements,
@@ -1605,6 +1651,12 @@ impl MapsWgpuBaseMapRenderer {
             }
 
             draw_calls += self.draw_vector_tiles(&mut pass, &vector_draws);
+            draw_calls += self.symbol_gpu.draw(
+                &mut pass,
+                &style_frame.draws,
+                &self.application_circle_pipeline,
+                APPLICATION_CIRCLE_VERTEX_COUNT,
+            );
 
             for draw in &application_geometry.draws {
                 match *draw {
@@ -1706,6 +1758,52 @@ impl MapsWgpuBaseMapRenderer {
             view_projection,
             surface,
         )
+    }
+
+    /// Places tileset style labels for this frame and uploads their circles and glyphs.
+    fn prepare_style_layers(
+        &mut self,
+        placements: &[WgpuRasterTilePlacement],
+        view_projection: [f32; 16],
+        clip: SurfaceClip,
+    ) -> StyleFrame {
+        if !self.style_symbols.is_active() {
+            return StyleFrame::default();
+        }
+        let raster = placements.iter().filter_map(|placement| {
+            let (z, x, y) = placement.key?;
+            Some((
+                TileId::new(z, x, y)?,
+                placement.local_west,
+                placement.local_north,
+                placement.local_size,
+            ))
+        });
+        let tiles: Vec<(TileId, LocalFrame)> = vector_tile_placements(raster, self.vector_max_zoom)
+            .iter()
+            .map(|placement| (placement.tile, LocalFrame::from(placement)))
+            .collect();
+        let pixel_ratio = clip.pixel_ratio.max(f64::MIN_POSITIVE);
+        let surface = StyleSurface {
+            width: f64::from(self.config.width) / pixel_ratio,
+            height: f64::from(self.config.height) / pixel_ratio,
+            margin: clip.margin,
+            pixel_ratio,
+        };
+        let frame = self
+            .style_symbols
+            .frame(&self.vector_source, &tiles, view_projection, surface);
+        self.placed_labels = frame.placed_labels;
+        let atlas = self.style_symbols.atlas();
+        self.symbol_gpu
+            .prepare(&self.device, &self.queue, &frame, atlas);
+        frame
+    }
+
+    /// Labels placed by the last frame (tileset symbol layers).
+    #[wasm_bindgen(js_name = placedLabels)]
+    pub fn placed_labels(&self) -> u32 {
+        self.placed_labels
     }
 
     /// The camera as seen through this frame's raster placements, for retained groups.
