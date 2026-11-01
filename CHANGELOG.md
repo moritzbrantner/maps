@@ -27,6 +27,12 @@
 
 ### Patch Changes
 
+- On the MapLibre runtime, `controller.setViewState()` now moves the camera of
+  an uncontrolled Map View (it only updated React state before). Camera frames
+  no longer re-apply bounds/zoom constraints or clear an already empty tooltip,
+  which logged React's "Maximum update depth exceeded" during per-frame camera
+  animation and cost a second commit per frame. A cluster click's hover block
+  survives the cluster expanding away under the pointer.
 - GeoJSON lines on the Maps flat runtime now follow MapLibre's GeoJSON source.
   As geojson-vt does, they are simplified by 0.375 px at the floored camera
   zoom and snapped to the 8192-unit tile grid. The line geometry is rebuilt when
