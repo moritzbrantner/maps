@@ -1,7 +1,8 @@
 //! wgpu resources for tileset style layers (#321): the SDF glyph pipeline, the glyph atlas
-//! texture and the per-frame circle and glyph buffers written by `style_symbols`.
+//! texture, the image atlas as symbol icons sample it (#346: `LINEAR` or `NEAREST`) and the
+//! per-frame circle and glyph buffers written by `style_symbols`.
 
-use maps_core::symbol::GlyphAtlas;
+use maps_core::symbol::{GlyphAtlas, ImageAtlas};
 
 use crate::style_symbols::{GLYPH_VERTEX_SIZE, StyleDraw, StyleFrame};
 
@@ -12,7 +13,10 @@ pub(crate) struct SymbolGpu {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    nearest_sampler: wgpu::Sampler,
     atlas: Option<(u64, wgpu::BindGroup)>,
+    /// The image atlas revision with its `LINEAR` and `NEAREST` bind groups.
+    icons: Option<(u64, wgpu::BindGroup, wgpu::BindGroup)>,
     glyphs: wgpu::Buffer,
     glyph_capacity: u64,
     circles: wgpu::Buffer,
@@ -38,6 +42,53 @@ pub(crate) struct StyleLines<'a> {
     pub(crate) fill_pipeline: &'a wgpu::RenderPipeline,
     pub(crate) outline_pipeline: &'a wgpu::RenderPipeline,
     pub(crate) image_atlas: &'a wgpu::BindGroup,
+}
+
+/// A sampled 2D texture holding `data` (one or four bytes per texel, by `format`).
+fn atlas_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    format: wgpu::TextureFormat,
+    [width, height]: [u32; 2],
+    data: &[u8],
+) -> wgpu::TextureView {
+    let size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let texel_bytes = if format == wgpu::TextureFormat::R8Unorm {
+        1
+    } else {
+        4
+    };
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * texel_bytes),
+            rows_per_image: Some(height),
+        },
+        size,
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 fn vertex_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
@@ -141,11 +192,21 @@ impl SymbolGpu {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Maps icon atlas nearest sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
         Self {
             pipeline,
             layout,
             sampler,
+            nearest_sampler,
             atlas: None,
+            icons: None,
             glyphs: vertex_buffer(device, "Maps glyph vertices", INITIAL_BUFFER_SIZE),
             glyph_capacity: INITIAL_BUFFER_SIZE,
             circles: vertex_buffer(device, "Maps style circle instances", INITIAL_BUFFER_SIZE),
@@ -170,6 +231,7 @@ impl SymbolGpu {
         queue: &wgpu::Queue,
         frame: &StyleFrame,
         atlas: &GlyphAtlas,
+        images: &ImageAtlas,
     ) {
         let write = |buffer: &mut wgpu::Buffer, capacity: &mut u64, bytes: &[u8], label: &str| {
             if bytes.is_empty() {
@@ -208,52 +270,37 @@ impl SymbolGpu {
             return;
         }
         if self.atlas.as_ref().map(|(revision, _)| *revision) != Some(atlas.revision) {
-            let size = wgpu::Extent3d {
-                width: atlas.width,
-                height: atlas.height,
-                depth_or_array_layers: 1,
-            };
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Maps glyph atlas"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
+            let view = atlas_texture(
+                device,
+                queue,
+                "Maps glyph atlas",
+                wgpu::TextureFormat::R8Unorm,
+                [atlas.width, atlas.height],
                 &atlas.image,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(atlas.width),
-                    rows_per_image: Some(atlas.height),
-                },
-                size,
             );
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Maps glyph atlas bind group"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
+            let bind_group = self.bind(device, &view, &self.sampler);
             self.atlas = Some((atlas.revision, bind_group));
+        }
+        let draws_icons = frame
+            .draws
+            .iter()
+            .any(|draw| matches!(draw, StyleDraw::Icons { .. }));
+        if draws_icons
+            && !images.image.is_empty()
+            && self.icons.as_ref().map(|(revision, _, _)| *revision) != Some(images.revision)
+        {
+            // The premultiplied image atlas, as MapLibre's `imageAtlasTexture`.
+            let view = atlas_texture(
+                device,
+                queue,
+                "Maps icon atlas",
+                wgpu::TextureFormat::Rgba8Unorm,
+                [images.width, images.height],
+                &images.image,
+            );
+            let linear = self.bind(device, &view, &self.sampler);
+            let nearest = self.bind(device, &view, &self.nearest_sampler);
+            self.icons = Some((images.revision, linear, nearest));
         }
         let upload = |buffer: &mut wgpu::Buffer, capacity: &mut u64, data: &[f32], label: &str| {
             if data.is_empty() {
@@ -279,6 +326,28 @@ impl SymbolGpu {
             &frame.circles,
             "Maps style circle instances",
         );
+    }
+
+    fn bind(
+        &self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Maps symbol atlas bind group"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
     }
 
     /// Records the frame's style draws in painter order; returns the draw calls.
@@ -342,6 +411,19 @@ impl SymbolGpu {
                     };
                     pass.set_pipeline(&self.pipeline);
                     pass.set_bind_group(0, atlas, &[]);
+                    pass.set_vertex_buffer(0, self.glyphs.slice(..));
+                    pass.draw(first..first + count, 0..1);
+                }
+                StyleDraw::Icons {
+                    first,
+                    count,
+                    linear,
+                } => {
+                    let Some((_, linear_atlas, nearest_atlas)) = &self.icons else {
+                        continue;
+                    };
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, if linear { linear_atlas } else { nearest_atlas }, &[]);
                     pass.set_vertex_buffer(0, self.glyphs.slice(..));
                     pass.draw(first..first + count, 0..1);
                 }

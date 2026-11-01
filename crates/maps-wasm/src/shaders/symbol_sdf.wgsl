@@ -1,4 +1,4 @@
-// MapLibre 6.15 `symbol_sdf` for viewport-aligned point labels. Vertices arrive in clip
+// MapLibre 6.15 `symbol_sdf` (and `symbol_icon`, #346) for viewport-aligned point labels. Vertices arrive in clip
 // space (anchor projection, perspective ratio and 1/32 glyph offsets are applied on the CPU);
 // the fragment stage is MapLibre's: an SDF edge at 192/256, the halo ring inside
 // `(6 - halo_width / fontScale) / SDF_PX`, gamma 0.105 / devicePixelRatio over the font scale.
@@ -8,7 +8,8 @@ struct GlyphInput {
   @location(1) tex: vec2<f32>,
   // size (text-size x perspective ratio), opacity, halo width, halo blur
   @location(2) params: vec4<f32>,
-  // x: 1 draws the fill, y: 1 draws the halo, z: device pixel ratio
+  // x: 1 draws the fill, y: 1 draws the halo, z: device pixel ratio,
+  // w: 0 glyph (R8 atlas), 1 SDF icon (alpha of the image atlas), 2 plain icon
   @location(3) mode: vec4<f32>,
   @location(4) fill_color: vec4<f32>,
   @location(5) halo_color: vec4<f32>,
@@ -49,12 +50,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let is_plain = input.mode.x > 0.5;
   let is_halo = input.mode.y > 0.5;
   let edge_gamma = 0.105 / input.mode.z;
+  let kind = input.mode.w;
+  let texel = textureSample(atlas, atlas_sampler, input.tex);
+  // MapLibre's `symbol_icon`: the premultiplied image times the opacity.
+  if (kind > 1.5) {
+    return texel * total_opacity;
+  }
 
-  let font_scale = size / 24.0;
+  // `fontScale = u_is_text ? size / 24.0 : size`.
+  let font_scale = select(size / 24.0, size, kind > 0.5);
   // u_gamma_scale and the vertex gamma scale are 1 for viewport-pitched labels.
   let gamma = edge_gamma / font_scale;
   let inner_edge = (256.0 - 64.0) / 256.0;
-  let dist = textureSample(atlas, atlas_sampler, input.tex).r;
+  let dist = select(texel.r, texel.a, kind > 0.5);
 
   var text = vec4<f32>(0.0);
   var halo = vec4<f32>(0.0);

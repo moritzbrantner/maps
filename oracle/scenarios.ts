@@ -279,6 +279,17 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { center: [8.6, 47.3], zoom: 7.8 },
+    capability:
+      "symbol icons from the sprite: plain (NEAREST, pixel ratio 2), SDF with color and halo, joint text/icon collision",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-icons",
+    origin: "Milestone E cartography (#80): POI and capital icons on any vector basemap; symbol icons (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],

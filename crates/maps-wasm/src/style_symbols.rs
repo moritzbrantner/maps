@@ -8,9 +8,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use maps_core::symbol::{
-    GlyphStore, ImageAtlas, ImageStore, LayerBucket, PatternVertex, PlacementTile, StyleLayer,
-    StyleLayerKind, TileStyleBuckets, layout_tile, parse_glyph_pbf, place_symbols,
-    symbol_tile_order,
+    GlyphStore, ImageAtlas, ImageStore, LayerBucket, PatternVertex, PlacedSymbol, PlacementTile,
+    StyleLayer, StyleLayerKind, SymbolBucket, SymbolPaint, TileStyleBuckets, layout_tile,
+    parse_glyph_pbf, place_symbols, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
@@ -70,6 +70,13 @@ pub(crate) enum StyleDraw {
     Glyphs {
         first: u32,
         count: u32,
+    },
+    /// Icon quads of one tile (in the glyph vertex buffer) over the image atlas, sampled
+    /// `LINEAR` or `NEAREST` as MapLibre chooses per bucket.
+    Icons {
+        first: u32,
+        count: u32,
+        linear: bool,
     },
     /// Line strip vertices of one tile, drawn in the frame of `tile_frames[frame]`.
     Lines {
@@ -143,9 +150,9 @@ impl StyleSymbols {
 
     /// Replaces the style layers (a JSON array of MapLibre circle/symbol layers) and lays
     /// every retained tile out again.
-    pub(crate) fn set_layers(&mut self, json: &str) -> Result<(), String> {
+    pub(crate) fn set_layers(&mut self, json: &str, images: &mut ImageStore) -> Result<(), String> {
         self.layers = StyleLayer::parse_all(json)?;
-        self.relayout()
+        self.relayout(images)
     }
 
     pub(crate) fn add_glyphs(
@@ -153,10 +160,18 @@ impl StyleSymbols {
         stack: &str,
         start: u32,
         bytes: &[u8],
+        images: &mut ImageStore,
     ) -> Result<(), String> {
         let glyphs = parse_glyph_pbf(bytes).map_err(|error| error.to_string())?;
         self.glyphs.add_range(stack, start, glyphs);
-        self.relayout()
+        self.relayout(images)
+    }
+
+    /// Whether any symbol layer draws icons: their tiles lay out again once a sprite arrives.
+    pub(crate) fn uses_icons(&self) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| layer.raw_layout("icon-image").is_some())
     }
 
     /// Glyph ranges retained tiles need and nobody added yet, as `"<start>:<font stack>"`.
@@ -178,6 +193,7 @@ impl StyleSymbols {
         source: &str,
         key: TileKey,
         bytes: &[u8],
+        images: &mut ImageStore,
     ) -> Result<(), String> {
         if !self.is_active() {
             return Ok(());
@@ -189,7 +205,8 @@ impl StyleSymbols {
             .collect();
         let decoded = decode_mvt_layers(bytes, |name| wanted.contains(name))
             .map_err(|error| error.to_string())?;
-        let buckets = layout_tile(&self.layers, &decoded, key.0, &self.glyphs)?;
+        let buckets = layout_tile(&self.layers, &decoded, key.0, &self.glyphs, images)?;
+        request_icons(&buckets, images);
         self.tiles.insert(
             (source.to_owned(), key),
             StyleTile {
@@ -207,9 +224,11 @@ impl StyleSymbols {
         self.tiles.remove(&(source.to_owned(), key));
     }
 
-    fn relayout(&mut self) -> Result<(), String> {
+    /// Lays every retained tile out again, e.g. after glyphs or a sprite arrived.
+    pub(crate) fn relayout(&mut self, images: &mut ImageStore) -> Result<(), String> {
         for tile in self.tiles.values_mut() {
-            tile.buckets = layout_tile(&self.layers, &tile.source, tile.z, &self.glyphs)?;
+            tile.buckets = layout_tile(&self.layers, &tile.source, tile.z, &self.glyphs, images)?;
+            request_icons(&tile.buckets, images);
             tile.lines = None;
             tile.fills = None;
         }
@@ -452,6 +471,13 @@ impl StyleSymbols {
         };
         let atlas = self.glyphs.atlas();
         let (atlas_width, atlas_height) = (f64::from(atlas.width), f64::from(atlas.height));
+        let icon_atlas = images.atlas();
+        let icon_atlas_size = (
+            f64::from(icon_atlas.width.max(1)),
+            f64::from(icon_atlas.height.max(1)),
+        );
+        // `transform.pitch !== 0`: the map plane's depth varies across the screen.
+        let pitched = vp[3].abs() + vp[7].abs() > 1.0e-9 * vp[15].abs();
         for (layer_index, layer) in self.layers.iter().enumerate() {
             if !layer.visible || zoom < layer.min_zoom || zoom >= layer.max_zoom {
                 continue;
@@ -558,96 +584,199 @@ impl StyleSymbols {
                     }
                 }
                 StyleLayerKind::Symbol => {
-                    let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                     let symbols = &placed[layer_index];
-                    // Halo width over 1 px overlaps neighbouring glyphs: MapLibre then draws
-                    // a tile's halos before its fills instead of one combined pass.
-                    // Labels draw per tile in MapLibre's descending symbol tile order.
-                    for tile_index in (0..placement_tiles.len()).rev() {
-                        let Some(LayerBucket::Symbols { instances, .. }) =
-                            placement_tiles[tile_index].buckets.layers.get(layer_index)
-                        else {
-                            continue;
-                        };
-                        let tile_symbols: Vec<_> = symbols
-                            .iter()
-                            .filter(|symbol| symbol.tile == tile_index)
-                            .collect();
-                        if tile_symbols.is_empty() {
-                            continue;
-                        }
-                        let two_pass = tile_symbols
-                            .iter()
-                            .any(|symbol| instances[symbol.instance].paint.halo_width > 1.0);
-                        let passes: &[[f32; 2]] = if two_pass {
-                            &[[0.0, 1.0], [1.0, 0.0]]
-                        } else {
-                            &[[1.0, 1.0]]
-                        };
-                        for mode in passes {
-                            for symbol in &tile_symbols {
-                                let instance = &instances[symbol.instance];
-                                let has_halo = instance.paint.halo_width != 0.0;
-                                if !has_halo && mode[0] == 0.0 {
-                                    continue;
-                                }
-                                let mode = if has_halo { *mode } else { [1.0, 0.0] };
-                                let size = f64::from(instance.size)
-                                    * symbol.perspective_ratio.clamp(0.0, 4.0);
-                                let font_scale = size / 24.0;
-                                for glyph in &instance.glyphs {
-                                    let Some(rect) = atlas.rect(&instance.stack, glyph.codepoint)
-                                    else {
+                    // Symbols draw per tile in MapLibre's descending symbol tile order.
+                    let tiles: Vec<(&SymbolBucket, Vec<&PlacedSymbol>)> = (0..placement_tiles
+                        .len())
+                        .rev()
+                        .filter_map(|tile_index| {
+                            let Some(LayerBucket::Symbols(bucket)) =
+                                placement_tiles[tile_index].buckets.layers.get(layer_index)
+                            else {
+                                return None;
+                            };
+                            let tile_symbols: Vec<_> = symbols
+                                .iter()
+                                .filter(|symbol| symbol.tile == tile_index)
+                                .collect();
+                            (!tile_symbols.is_empty()).then_some((bucket, tile_symbols))
+                        })
+                        .collect();
+                    frame.placed_labels += tiles
+                        .iter()
+                        .map(|(_, tile_symbols)| tile_symbols.len() as u32)
+                        .sum::<u32>();
+                    let skipped = |key: &str| {
+                        layer.raw_paint(key).and_then(|value| value.as_f64()) == Some(0.0)
+                    };
+                    // `drawSymbols`: a layer's icons over every tile, then its text.
+                    if !skipped("icon-opacity") {
+                        for (bucket, tile_symbols) in &tiles {
+                            let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
+                            let kind = if bucket.sdf_icons { 1.0 } else { 2.0 };
+                            let halo = bucket.sdf_icons && bucket.icon_halo;
+                            for mode in halo_passes(halo, bucket.icon_halo_pass) {
+                                for symbol in tile_symbols.iter().filter(|symbol| symbol.icon) {
+                                    let Some(icon) = &bucket.instances[symbol.instance].icon else {
                                         continue;
                                     };
+                                    let Some(position) = icon_atlas.icon(&icon.image) else {
+                                        continue;
+                                    };
+                                    let size = f64::from(icon.size)
+                                        * symbol.perspective_ratio.clamp(0.0, 4.0);
                                     let corner = |offset: [f32; 2]| {
                                         to_clip([
-                                            symbol.anchor[0] + f64::from(offset[0]) * font_scale,
-                                            symbol.anchor[1] + f64::from(offset[1]) * font_scale,
+                                            symbol.anchor[0] + f64::from(offset[0]) * size,
+                                            symbol.anchor[1] + f64::from(offset[1]) * size,
                                         ])
                                     };
-                                    let (tl, br) = (corner(glyph.tl), corner(glyph.br));
-                                    let u0 = (f64::from(rect.x) / atlas_width) as f32;
-                                    let v0 = (f64::from(rect.y) / atlas_height) as f32;
-                                    let u1 = (f64::from(rect.x + rect.w) / atlas_width) as f32;
-                                    let v1 = (f64::from(rect.y + rect.h) / atlas_height) as f32;
-                                    let paint = &instance.paint;
-                                    for (position, uv) in [
-                                        ([tl[0], tl[1]], [u0, v0]),
-                                        ([br[0], tl[1]], [u1, v0]),
-                                        ([tl[0], br[1]], [u0, v1]),
-                                        ([tl[0], br[1]], [u0, v1]),
-                                        ([br[0], tl[1]], [u1, v0]),
-                                        ([br[0], br[1]], [u1, v1]),
-                                    ] {
-                                        frame.glyphs.extend_from_slice(&position);
-                                        frame.glyphs.extend_from_slice(&uv);
-                                        frame.glyphs.extend_from_slice(&[
+                                    let rect = position.padded;
+                                    push_quad(
+                                        &mut frame.glyphs,
+                                        corner(icon.tl),
+                                        corner(icon.br),
+                                        [
+                                            (f64::from(rect.x) / icon_atlas_size.0) as f32,
+                                            (f64::from(rect.y) / icon_atlas_size.1) as f32,
+                                            (f64::from(rect.x + rect.w) / icon_atlas_size.0) as f32,
+                                            (f64::from(rect.y + rect.h) / icon_atlas_size.1) as f32,
+                                        ],
+                                        size as f32,
+                                        [mode[0], mode[1], surface.pixel_ratio as f32, kind],
+                                        &icon.paint,
+                                    );
+                                }
+                            }
+                            let count = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32 - first;
+                            if count == 0 {
+                                continue;
+                            }
+                            // MapLibre samples plain icons `NEAREST` unless they scale.
+                            let needs_linear = bucket.instances.iter().any(|instance| {
+                                instance
+                                    .icon
+                                    .as_ref()
+                                    .is_some_and(|icon| icon.pixel_ratio != surface.pixel_ratio)
+                            });
+                            let linear = bucket.sdf_icons
+                                || pitched
+                                || !bucket.icon_size_one
+                                || needs_linear;
+                            frame.draws.push(StyleDraw::Icons {
+                                first,
+                                count,
+                                linear,
+                            });
+                        }
+                    }
+                    if !skipped("text-opacity") {
+                        let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
+                        for (bucket, tile_symbols) in &tiles {
+                            for mode in halo_passes(bucket.text_halo, bucket.text_halo_pass) {
+                                for symbol in tile_symbols.iter().filter(|symbol| symbol.text) {
+                                    let Some(text) = &bucket.instances[symbol.instance].text else {
+                                        continue;
+                                    };
+                                    let size = f64::from(text.size)
+                                        * symbol.perspective_ratio.clamp(0.0, 4.0);
+                                    let font_scale = size / 24.0;
+                                    for glyph in &text.glyphs {
+                                        let Some(rect) = atlas.rect(&text.stack, glyph.codepoint)
+                                        else {
+                                            continue;
+                                        };
+                                        let corner = |offset: [f32; 2]| {
+                                            to_clip([
+                                                symbol.anchor[0]
+                                                    + f64::from(offset[0]) * font_scale,
+                                                symbol.anchor[1]
+                                                    + f64::from(offset[1]) * font_scale,
+                                            ])
+                                        };
+                                        push_quad(
+                                            &mut frame.glyphs,
+                                            corner(glyph.tl),
+                                            corner(glyph.br),
+                                            [
+                                                (f64::from(rect.x) / atlas_width) as f32,
+                                                (f64::from(rect.y) / atlas_height) as f32,
+                                                (f64::from(rect.x + rect.w) / atlas_width) as f32,
+                                                (f64::from(rect.y + rect.h) / atlas_height) as f32,
+                                            ],
                                             size as f32,
-                                            paint.opacity,
-                                            paint.halo_width,
-                                            paint.halo_blur,
-                                            mode[0],
-                                            mode[1],
-                                            surface.pixel_ratio as f32,
-                                            0.0,
-                                        ]);
-                                        frame.glyphs.extend_from_slice(&paint.color);
-                                        frame.glyphs.extend_from_slice(&paint.halo_color);
+                                            [mode[0], mode[1], surface.pixel_ratio as f32, 0.0],
+                                            &text.paint,
+                                        );
                                     }
                                 }
                             }
                         }
-                        frame.placed_labels += tile_symbols.len() as u32;
-                    }
-                    let count = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32 - first;
-                    if count > 0 {
-                        frame.draws.push(StyleDraw::Glyphs { first, count });
+                        let count = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32 - first;
+                        if count > 0 {
+                            frame.draws.push(StyleDraw::Glyphs { first, count });
+                        }
                     }
                 }
             }
         }
         frame
+    }
+}
+
+/// Asks the image atlas for every icon a tile's symbols use (MapLibre's `getImages`), before
+/// any frame packs it.
+fn request_icons(buckets: &TileStyleBuckets, images: &mut ImageStore) {
+    for bucket in &buckets.layers {
+        if let LayerBucket::Symbols(bucket) = bucket {
+            for icon in bucket
+                .instances
+                .iter()
+                .filter_map(|instance| instance.icon.as_ref())
+            {
+                images.request_icon(&icon.image);
+            }
+        }
+    }
+}
+
+/// `drawLayerSymbols`' passes as (fill, halo) flags: halos in their own pass first when they
+/// overlap neighbouring glyphs, one combined pass otherwise, fills only without a halo.
+fn halo_passes(halo: bool, separate: bool) -> &'static [[f32; 2]] {
+    match (halo, separate) {
+        (false, _) => &[[1.0, 0.0]],
+        (true, true) => &[[0.0, 1.0], [1.0, 0.0]],
+        (true, false) => &[[1.0, 1.0]],
+    }
+}
+
+/// Six vertices of one glyph or icon quad: clip corners, atlas uv rect (u0, v0, u1, v1), size
+/// (`text-size` or `icon-size` with the perspective ratio), (fill?, halo?, device pixel
+/// ratio, kind: 0 glyph, 1 SDF icon, 2 plain icon) and the paint.
+fn push_quad(
+    out: &mut Vec<f32>,
+    tl: [f32; 2],
+    br: [f32; 2],
+    uv: [f32; 4],
+    size: f32,
+    mode: [f32; 4],
+    paint: &SymbolPaint,
+) {
+    let [u0, v0, u1, v1] = uv;
+    for (position, uv) in [
+        ([tl[0], tl[1]], [u0, v0]),
+        ([br[0], tl[1]], [u1, v0]),
+        ([tl[0], br[1]], [u0, v1]),
+        ([tl[0], br[1]], [u0, v1]),
+        ([br[0], tl[1]], [u1, v0]),
+        ([br[0], br[1]], [u1, v1]),
+    ] {
+        out.extend_from_slice(&position);
+        out.extend_from_slice(&uv);
+        out.extend_from_slice(&[size, paint.opacity, paint.halo_width, paint.halo_blur]);
+        out.extend_from_slice(&mode);
+        out.extend_from_slice(&paint.color);
+        out.extend_from_slice(&paint.halo_color);
     }
 }
 
@@ -893,6 +1022,7 @@ mod tests {
 
     #[test]
     fn lays_out_places_and_places_one_label_per_point() {
+        let mut images = ImageStore::default();
         let mut symbols = StyleSymbols::default();
         symbols
             .set_layers(
@@ -904,22 +1034,46 @@ mod tests {
                            "text-offset":[0.6,0],"text-size":["interpolate",["linear"],["get","rank"],2,20,8,13]},
                  "paint":{"text-color":"#111827","text-halo-color":"#ffffff","text-halo-width":1.5}}
             ]"##,
+                &mut images,
             )
             .unwrap();
-        symbols.upload("s", (7, 66, 45), &places_tile()).unwrap();
+        symbols
+            .upload("s", (7, 66, 45), &places_tile(), &mut images)
+            .unwrap();
         assert_eq!(
             symbols.missing_glyph_ranges(),
             vec!["0:NotoSans-Regular".to_owned()]
         );
+        add_glyphs(&mut symbols, &mut images);
+        assert!(symbols.missing_glyph_ranges().is_empty());
+
+        let frame = centred_frame(&mut symbols, &mut images);
+        assert_eq!(frame.placed_labels, 1);
+        assert_eq!(frame.draws.len(), 2);
+        assert_eq!(frame.circles.len(), CIRCLE_INSTANCE_FLOATS);
+        // "Zürich": six inked glyphs, halo then fill pass, six vertices each.
+        assert_eq!(frame.glyphs.len(), 6 * 2 * 6 * GLYPH_VERTEX_FLOATS);
+        // The circle sits on the anchor: tile centre at the screen centre.
+        assert!(frame.circles[0].abs() < 1e-6 && frame.circles[1].abs() < 1e-6);
+        assert_eq!(GLYPH_VERTEX_SIZE, 80);
+        assert!(symbols.atlas().width > 0);
+        symbols.evict("s", (7, 66, 45));
+        assert!(symbols.missing_glyph_ranges().is_empty());
+    }
+
+    fn add_glyphs(symbols: &mut StyleSymbols, images: &mut ImageStore) {
         let glyphs = std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../oracle/glyphs/NotoSans-Regular/0-255.pbf"
         ))
         .unwrap();
-        symbols.add_glyphs("NotoSans-Regular", 0, &glyphs).unwrap();
-        assert!(symbols.missing_glyph_ranges().is_empty());
+        symbols
+            .add_glyphs("NotoSans-Regular", 0, &glyphs, images)
+            .unwrap();
+    }
 
-        // A 512 px tile centred in a 720 x 480 surface without margin: local = screen.
+    /// A 512 px tile centred in a 720 x 480 surface without margin: local = screen.
+    fn centred_frame(symbols: &mut StyleSymbols, images: &mut ImageStore) -> StyleFrame {
         let (width, height) = (720.0_f32, 480.0_f32);
         let mut view_projection = [0.0_f32; 16];
         view_projection[0] = 2.0 / width;
@@ -932,7 +1086,7 @@ mod tests {
             north: 256.0,
             size: 512.0,
         };
-        let frame = symbols.frame(
+        symbols.frame(
             "s",
             &[(tile, local)],
             view_projection,
@@ -943,18 +1097,71 @@ mod tests {
                 pixel_ratio: 1.0,
             },
             &mut LineAtlas::new(),
-            &mut ImageStore::default(),
-        );
-        assert_eq!(frame.placed_labels, 1);
-        assert_eq!(frame.draws.len(), 2);
-        assert_eq!(frame.circles.len(), CIRCLE_INSTANCE_FLOATS);
-        // "Zürich": six inked glyphs, halo then fill pass, six vertices each.
-        assert_eq!(frame.glyphs.len(), 6 * 2 * 6 * GLYPH_VERTEX_FLOATS);
-        // The circle sits on the anchor: tile centre at the screen centre.
-        assert!(frame.circles[0].abs() < 1e-6 && frame.circles[1].abs() < 1e-6);
-        assert_eq!(GLYPH_VERTEX_SIZE, 80);
-        assert!(symbols.atlas().width > 0);
-        symbols.evict("s", (7, 66, 45));
-        assert!(symbols.missing_glyph_ranges().is_empty());
+            images,
+        )
+    }
+
+    #[test]
+    fn icons_lay_out_once_their_sprite_arrives_and_draw_before_their_text() {
+        let mut images = ImageStore::default();
+        let mut symbols = StyleSymbols::default();
+        symbols
+            .set_layers(
+                r##"[{"id":"pois","type":"symbol","source":"v","source-layer":"places",
+                 "layout":{"icon-image":"dot","icon-anchor":"bottom","text-field":["get","name"],
+                           "text-font":["NotoSans-Regular"],"text-anchor":"top"}}]"##,
+                &mut images,
+            )
+            .unwrap();
+        assert!(symbols.uses_icons());
+        symbols
+            .upload("s", (7, 66, 45), &places_tile(), &mut images)
+            .unwrap();
+        add_glyphs(&mut symbols, &mut images);
+        // Without its image the symbol is text only.
+        let frame = centred_frame(&mut symbols, &mut images);
+        assert!(matches!(frame.draws[..], [StyleDraw::Glyphs { .. }]));
+
+        // An 8 x 6 sprite image at pixel ratio 2: 4 x 3 CSS px.
+        let sheet = vec![255_u8; 8 * 6 * 4];
+        images
+            .add_sprite(
+                r#"{"dot":{"x":0,"y":0,"width":8,"height":6,"pixelRatio":2}}"#,
+                &sheet,
+                8,
+                6,
+            )
+            .unwrap();
+        symbols.relayout(&mut images).unwrap();
+        let frame = centred_frame(&mut symbols, &mut images);
+        let [
+            StyleDraw::Icons {
+                first: 0,
+                count: 6,
+                linear,
+            },
+            StyleDraw::Glyphs { first: 6, .. },
+        ] = frame.draws[..]
+        else {
+            panic!("{:?}", frame.draws)
+        };
+        // The image's pixel ratio differs from the device's: MapLibre samples it linearly.
+        assert!(linear);
+        // `icon-anchor: bottom` over the anchor at the screen centre, one image pixel (half a
+        // CSS px) of padding around the quad: x -2.5..2.5 and y -3.5..0.5 CSS px.
+        let corner = |vertex: usize| {
+            let at = vertex * GLYPH_VERTEX_FLOATS;
+            (
+                f64::from(frame.glyphs[at]) * 360.0,
+                f64::from(frame.glyphs[at + 1]) * -240.0,
+            )
+        };
+        let (left, top) = corner(0);
+        let (right, bottom) = corner(5);
+        for (actual, expected) in [(left, -2.5), (top, -3.5), (right, 2.5), (bottom, 0.5)] {
+            assert!((actual - expected).abs() < 1e-3, "{actual} vs {expected}");
+        }
+        // Plain icon kind.
+        assert_eq!(frame.glyphs[11], 2.0);
     }
 }

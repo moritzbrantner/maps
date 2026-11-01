@@ -1126,6 +1126,12 @@ impl MapsWgpuBaseMapRenderer {
             .images
             .add_sprite(json, rgba, width, height)
             .map_err(|error| JsValue::from_str(&error))?;
+        // Symbol icons (#346) lay out once their images arrived.
+        if self.style_symbols.uses_icons() {
+            self.style_symbols
+                .relayout(&mut self.images)
+                .map_err(|error| js_error("could not lay out tileset style layers", error))?;
+        }
         Ok(count as u32)
     }
 
@@ -1338,7 +1344,7 @@ impl MapsWgpuBaseMapRenderer {
         let buckets = build_shortbread_buckets(bytes)
             .map_err(|error| js_error("could not build Shortbread buckets", error))?;
         self.style_symbols
-            .upload(&self.vector_source, (z, x, y), bytes)
+            .upload(&self.vector_source, (z, x, y), bytes, &mut self.images)
             .map_err(|error| js_error("could not lay out tileset style layers", error))?;
         let upload = |label: &str, usage: wgpu::BufferUsages, contents: Vec<u8>| {
             upload_retained_buffer(&self.device, &self.queue, label, usage, &contents)
@@ -1541,7 +1547,7 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = setVectorLayers)]
     pub fn set_vector_layers(&mut self, layers: &str) -> Result<(), JsValue> {
         self.style_symbols
-            .set_layers(layers)
+            .set_layers(layers, &mut self.images)
             .map_err(|error| js_error("invalid tileset style layers", error))
     }
 
@@ -1549,7 +1555,7 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = addGlyphs)]
     pub fn add_glyphs(&mut self, stack: &str, start: u32, bytes: &[u8]) -> Result<(), JsValue> {
         self.style_symbols
-            .add_glyphs(stack, start, bytes)
+            .add_glyphs(stack, start, bytes, &mut self.images)
             .map_err(|error| js_error("invalid glyph range", error))
     }
 
@@ -2077,8 +2083,9 @@ impl MapsWgpuBaseMapRenderer {
         }
         self.placed_labels = frame.placed_labels;
         let atlas = self.style_symbols.atlas();
+        let images = self.images.atlas();
         self.symbol_gpu
-            .prepare(&self.device, &self.queue, &frame, atlas);
+            .prepare(&self.device, &self.queue, &frame, atlas, images);
         frame
     }
 

@@ -270,15 +270,84 @@ const FILL_PATTERN_LAYERS: Array<Record<string, unknown>> = [
     type: "fill",
   },
 ];
+/**
+ * The `symbol-icons` style layers (#346): sprite icons with and without text. Towns pair a
+ * crisp `NEAREST`-sampled square with an optional label below it; capitals an SDF star
+ * (`icon-color`, halo, data-driven `icon-size`) with a label to its right; lakes a pixel
+ * ratio 2 disc above their label, with asymmetric `icon-padding`.
+ */
+const ICON_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-icons",
+    layout: {
+      "icon-anchor": "bottom",
+      "icon-image": "lake",
+      "icon-offset": [0, -1],
+      "icon-padding": [1, 4],
+      "text-anchor": "top",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": 12,
+    },
+    paint: { "text-color": "#1e3a8a", "text-halo-color": "#e0f2fe", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "city"],
+    id: "town-icons",
+    layout: {
+      "icon-image": "town",
+      "text-anchor": "top",
+      "text-field": "{name}",
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0, 0.6],
+      "text-optional": true,
+      "text-size": 14,
+    },
+    paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-icons",
+    layout: {
+      "icon-image": "capital",
+      "icon-size": ["interpolate", ["linear"], ["get", "rank"], 4, 1.25, 7, 0.9],
+      "text-anchor": "left",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0.9, 0],
+      "text-size": 16,
+    },
+    paint: {
+      "icon-color": "#b91c1c",
+      "icon-halo-color": "#fef3c7",
+      "icon-halo-width": 2,
+      "text-color": "#7f1d1d",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1,
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
     ? { glyphs: GLYPHS_URL, layers: SYMBOL_LAYERS }
-    : name === "tileset-lines"
-      ? { layers: LINE_LAYERS }
-      : name === "fill-pattern"
-        ? { layers: FILL_PATTERN_LAYERS }
-        : null;
+    : name === "symbol-icons"
+      ? { glyphs: GLYPHS_URL, layers: ICON_LAYERS }
+      : name === "tileset-lines"
+        ? { layers: LINE_LAYERS }
+        : name === "fill-pattern"
+          ? { layers: FILL_PATTERN_LAYERS }
+          : null;
 
 /**
  * The relief style (#324): the raster basemap, a hillshade layer on one Terrarium
@@ -332,6 +401,11 @@ function referenceStyle(name: string) {
     case "fill-pattern": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...FILL_PATTERN_LAYERS);
+      return style;
+    }
+    case "symbol-icons": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...ICON_LAYERS);
       return style;
     }
     default:
@@ -520,6 +594,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
       );
     case "vector-tiles":
     case "symbols":
+    case "symbol-icons":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

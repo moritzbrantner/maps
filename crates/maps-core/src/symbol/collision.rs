@@ -155,7 +155,8 @@ pub struct PlacementTile<'a> {
     pub project: &'a dyn Fn([f64; 2]) -> Option<([f64; 2], f64)>,
 }
 
-/// One label that won its place, with where its anchor projects.
+/// One symbol that shows its text, its icon or both (MapLibre's `JointPlacement`), with where
+/// its anchor projects.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlacedSymbol {
     pub tile: usize,
@@ -163,6 +164,8 @@ pub struct PlacedSymbol {
     pub instance: usize,
     pub anchor: [f64; 2],
     pub perspective_ratio: f64,
+    pub text: bool,
+    pub icon: bool,
 }
 
 /// MapLibre's symbol tile order (`getRenderableIds(true)`): zoom ascending, then bottom to
@@ -198,31 +201,54 @@ pub fn place_symbols(
     let mut placed = vec![Vec::new(); layer_count];
     for layer in (0..layer_count).rev() {
         for (tile_index, tile) in tiles.iter().enumerate() {
-            let Some(LayerBucket::Symbols {
-                instances,
-                allow_overlap,
-                ignore_placement,
-            }) = tile.buckets.layers.get(layer)
-            else {
+            let Some(LayerBucket::Symbols(bucket)) = tile.buckets.layers.get(layer) else {
                 continue;
             };
-            for (instance_index, instance) in instances.iter().enumerate() {
+            // Symbols whose overlap settings show them wherever they land.
+            let always_text = bucket.text_allow_overlap
+                && (bucket.icon_allow_overlap || !bucket.has_icons() || bucket.icon_optional);
+            let always_icon = bucket.icon_allow_overlap
+                && (bucket.text_allow_overlap || !bucket.has_text() || bucket.text_optional);
+            for (instance_index, instance) in bucket.instances.iter().enumerate() {
                 let Some((anchor, ratio)) = (tile.project)(instance.anchor) else {
                     continue;
                 };
-                let Some(b) =
-                    index.place_box(anchor, ratio, instance.collision_box, *allow_overlap)
-                else {
-                    continue;
-                };
-                index.insert(b, *ignore_placement);
-                placed[layer].push(PlacedSymbol {
-                    tile: tile_index,
-                    layer,
-                    instance: instance_index,
-                    anchor,
-                    perspective_ratio: ratio,
+                let text_box = instance.text.as_ref().and_then(|text| {
+                    index.place_box(anchor, ratio, text.collision_box, bucket.text_allow_overlap)
                 });
+                let icon_box = instance.icon.as_ref().and_then(|icon| {
+                    index.place_box(anchor, ratio, icon.collision_box, bucket.icon_allow_overlap)
+                });
+                let (mut place_text, mut place_icon) = (text_box.is_some(), icon_box.is_some());
+                let icon_without_text = bucket.text_optional || instance.text.is_none();
+                let text_without_icon = bucket.icon_optional || instance.icon.is_none();
+                if !icon_without_text && !text_without_icon {
+                    place_text = place_text && place_icon;
+                    place_icon = place_text;
+                } else if !text_without_icon {
+                    place_text = place_icon && place_text;
+                } else if !icon_without_text {
+                    place_icon = place_icon && place_text;
+                }
+                if let (true, Some(b)) = (place_text, text_box) {
+                    index.insert(b, bucket.text_ignore_placement);
+                }
+                if let (true, Some(b)) = (place_icon, icon_box) {
+                    index.insert(b, bucket.icon_ignore_placement);
+                }
+                let text = instance.text.is_some() && (place_text || always_text);
+                let icon = instance.icon.is_some() && (place_icon || always_icon);
+                if text || icon {
+                    placed[layer].push(PlacedSymbol {
+                        tile: tile_index,
+                        layer,
+                        instance: instance_index,
+                        anchor,
+                        perspective_ratio: ratio,
+                        text,
+                        icon,
+                    });
+                }
             }
         }
     }
@@ -244,5 +270,66 @@ mod tests {
         assert!(index.place_box([150.0, 50.0], 1.0, label, false).is_some());
         // Outside the padded grid.
         assert!(index.place_box([-400.0, 50.0], 1.0, label, false).is_none());
+    }
+
+    #[test]
+    fn icons_and_text_place_jointly_unless_one_is_optional() {
+        use crate::symbol::layout::{
+            SymbolBucket, SymbolIcon, SymbolInstance, SymbolPaint, SymbolText,
+        };
+        let paint = SymbolPaint {
+            color: [0.0; 4],
+            halo_color: [0.0; 4],
+            halo_width: 0.0,
+            halo_blur: 0.0,
+            opacity: 1.0,
+        };
+        // Two symbols on one anchor: the second's text hits the first's, its icon (offset
+        // far right) does not.
+        let symbol = |icon_box: [f64; 4]| SymbolInstance {
+            anchor: [0.5, 0.5],
+            text: Some(SymbolText {
+                collision_box: [-10.0, -5.0, 10.0, 5.0],
+                glyphs: Vec::new(),
+                size: 16.0,
+                stack: String::new(),
+                paint: paint.clone(),
+            }),
+            icon: Some(SymbolIcon {
+                image: "dot".to_owned(),
+                tl: [0.0; 2],
+                br: [0.0; 2],
+                collision_box: icon_box,
+                size: 1.0,
+                pixel_ratio: 1.0,
+                paint: paint.clone(),
+            }),
+            feature_index: 0,
+        };
+        let place = |text_optional: bool| {
+            let buckets = TileStyleBuckets {
+                layers: vec![LayerBucket::Symbols(SymbolBucket {
+                    instances: vec![
+                        symbol([-4.0, -4.0, 4.0, 4.0]),
+                        symbol([40.0, -4.0, 48.0, 4.0]),
+                    ],
+                    text_optional,
+                    ..SymbolBucket::default()
+                })],
+                ..TileStyleBuckets::default()
+            };
+            let project = |uv: [f64; 2]| Some(([uv[0] * 200.0, uv[1] * 100.0], 1.0));
+            let tiles = [PlacementTile {
+                tile: TileId::new(0, 0, 0).unwrap(),
+                buckets: &buckets,
+                project: &project,
+            }];
+            place_symbols(&tiles, 1, 200.0, 100.0)[0]
+                .iter()
+                .map(|symbol| (symbol.instance, symbol.text, symbol.icon))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(place(false), vec![(0, true, true)]);
+        assert_eq!(place(true), vec![(0, true, true), (1, false, true)]);
     }
 }

@@ -255,6 +255,11 @@ impl ImageStore {
     }
 
     #[must_use]
+    pub fn image(&self, id: &str) -> Option<&StyleImage> {
+        self.images.get(id)
+    }
+
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.images.is_empty()
     }
