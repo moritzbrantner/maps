@@ -28,6 +28,12 @@ export class Map {
     { group: unknown; layers: Array<{ remove?: () => void }> }
   >();
   private mockLayers = new globalThis.Map<string, unknown>();
+  // A shape batch (one MapLibre line/fill layer of many features) is mirrored as one mock
+  // polyline/polygon per feature; its layer-scoped handlers reach every feature mock.
+  private batchHandlers = new globalThis.Map<string, Array<{ event: string; handler: Handler }>>();
+  private featureStates = new globalThis.Map<string, globalThis.Map<string, Record<string, unknown>>>();
+  private batchBelow = new globalThis.Map<string, Set<unknown>>();
+  private batchEarlier = new globalThis.Map<string, string[]>();
   private pendingFlatMarker: { remove?: () => void } | null = null;
   private maxBounds: [[number, number], [number, number]] | null = null;
   private minZoom = 0;
@@ -148,6 +154,12 @@ export class Map {
       removeLayer?: (layer: unknown) => unknown;
     } | null;
 
+    for (const key of this.mockLayers.keys()) {
+      if (key.startsWith(`${layerId}#`)) {
+        this.mockLayers.delete(key);
+      }
+    }
+
     for (const layer of entry.layers) {
       if (group?.removeLayer) {
         group.removeLayer(layer);
@@ -232,12 +244,17 @@ export class Map {
 
   addLayer(layer: {
     id: string;
-    metadata?: { flatOptions?: Record<string, unknown> };
+    metadata?: { flatBatch?: string; flatOptions?: Record<string, unknown> };
     paint?: Record<string, unknown>;
     source?: string;
     type: string;
   }) {
     this.layers.set(layer.id, layer);
+
+    if (layer.metadata?.flatBatch) {
+      this.mirrorShapeBatch(layer.id);
+      return;
+    }
     const source = layer.source ? this.sources.get(layer.source) : null;
     const data = source?.data as GeoJSON.Feature | undefined;
     const geometry = data?.geometry;
@@ -457,6 +474,16 @@ export class Map {
         event,
         (payload) => handler(normalizeEventPayload(payload)),
       );
+    } else if (typeof args[0] === "string" && this.isShapeBatch(args[0])) {
+      const entries = this.batchHandlers.get(args[0]) ?? [];
+
+      entries.push({ event, handler });
+      this.batchHandlers.set(args[0], entries);
+      for (const [key, mock] of this.shapeBatchMocks(args[0])) {
+        if ((mock as { options?: { interactive?: unknown } }).options?.interactive !== false) {
+          this.addShapeMockHandler(mock, key, event, handler);
+        }
+      }
     } else if (typeof args[0] === "string") {
       this.addMockLayerHandler(args[0], event, handler);
     }
@@ -481,6 +508,9 @@ export class Map {
 
   removeLayer(id: string) {
     this.clearCollectionMocks(id);
+    this.batchHandlers.delete(id);
+    this.batchBelow.delete(id);
+    this.batchEarlier.delete(id);
     (this.mockLayers.get(id) as { remove?: () => void } | undefined)?.remove?.();
     this.layers.delete(id);
     this.mockLayers.delete(id);
@@ -488,6 +518,124 @@ export class Map {
 
   removeSource(id: string) {
     this.sources.delete(id);
+    this.featureStates.delete(id);
+  }
+
+  setFeatureState(target: { id: string; source: string }, state: Record<string, unknown>) {
+    const states = this.featureStates.get(target.source) ?? new globalThis.Map();
+
+    states.set(target.id, { ...states.get(target.id), ...state });
+    this.featureStates.set(target.source, states);
+
+    for (const [layerId, definition] of this.layers) {
+      if ((definition as { source?: string }).source !== target.source || !this.isShapeBatch(layerId)) {
+        continue;
+      }
+
+      const mock = this.mockLayers.get(`${layerId}#${target.id}`) as
+        | { options?: Record<string, unknown>; paint?: Record<string, unknown> }
+        | undefined;
+
+      if (mock) {
+        mock.options = { ...mock.options, ...withoutNulls(state) };
+        // What MapLibre actually draws: the batch paint reads these feature-state values.
+        mock.paint = { ...mock.paint, ...shapeBatchPaint(state) };
+      }
+    }
+  }
+
+  private isShapeBatch(layerId: string) {
+    return Boolean(
+      (this.layers.get(layerId) as { metadata?: { flatBatch?: string } } | undefined)?.metadata?.flatBatch,
+    );
+  }
+
+  private shapeBatchMocks(layerId: string) {
+    return [...this.mockLayers]
+      .filter(([key]) => key.startsWith(`${layerId}#`))
+      .map(([key, mock]) => [key.slice(layerId.length + 1), mock] as const);
+  }
+
+  private mirrorShapeBatch(layerId: string) {
+    const layer = this.layers.get(layerId) as { metadata?: { flatBatch?: string }; source?: string };
+    const kind = layer.metadata?.flatBatch;
+    const source = layer.source ? this.sources.get(layer.source) : undefined;
+    const features = (source?.data as GeoJSON.FeatureCollection | undefined)?.features ?? [];
+    const states = layer.source ? this.featureStates.get(layer.source) : undefined;
+    const group = (this.collectionMocks.get(layerId)?.group ?? this.getCurrentLayerGroup()) as {
+      layers?: unknown[];
+    };
+
+    this.clearCollectionMocks(layerId);
+    // Layers the group held when the batch layer was added, and the feature mocks of batches
+    // added before it, stay below its feature mocks.
+    if (!this.batchBelow.has(layerId)) {
+      const earlier = [...this.batchBelow.keys()];
+
+      this.batchBelow.set(layerId, new Set(group.layers ?? []));
+      this.batchEarlier.set(layerId, earlier);
+    }
+    const below = this.batchBelow.get(layerId)!;
+    const earlierMocks = new Set(
+      (this.batchEarlier.get(layerId) ?? []).flatMap((id) => this.collectionMocks.get(id)?.layers ?? []),
+    );
+
+    // The polygon outline layer draws the fill's features again; the fill mock stands for both.
+    if (kind === "polygon-outline") {
+      return;
+    }
+
+    const create = kind === "line" ? flatRuntime.polyline : flatRuntime.polygon;
+    const mocks = features.map((feature) => {
+      const { key, ...properties } = (feature.properties ?? {}) as Record<string, unknown> & { key: string };
+      const coordinates = "coordinates" in feature.geometry ? feature.geometry.coordinates : undefined;
+      const state = withoutNulls(states?.get(key) ?? {});
+      const mock = create(toLatLngCoordinates(coordinates) as never, {
+        ...properties,
+        ...state,
+      } as never).addTo(group as never) as {
+        options?: Record<string, unknown>;
+        paint?: Record<string, unknown>;
+        remove?: () => void;
+      };
+
+      if (Object.keys(state).length > 0) {
+        mock.paint = { ...mock.paint, ...shapeBatchPaint(state) };
+      }
+      this.mockLayers.set(`${layerId}#${key}`, mock);
+      // MapLibre only reaches a feature through the batch's dispatch; a non-interactive one has no handler.
+      if (mock.options?.interactive !== false) {
+        for (const { event, handler } of this.batchHandlers.get(layerId) ?? []) {
+          this.addShapeMockHandler(mock, key, event, handler);
+        }
+      }
+      return mock;
+    });
+
+    if (group.layers) {
+      // Keep the mocks at the batch layer's z-position: under layers the group added after it.
+      const others = group.layers.filter((layer) => !mocks.includes(layer as never));
+      const insertAt = others.findIndex((layer) => !below.has(layer) && !earlierMocks.has(layer as never));
+
+      group.layers.splice(0, group.layers.length, ...(insertAt < 0 ? [...others, ...mocks] : [
+        ...others.slice(0, insertAt),
+        ...mocks,
+        ...others.slice(insertAt),
+      ]));
+    }
+
+    this.collectionMocks.set(layerId, { group, layers: mocks });
+  }
+
+  private addShapeMockHandler(mock: unknown, key: string, event: string, handler: Handler) {
+    const layer = mock as { on?: (event: string, handler: Handler) => unknown };
+    const deliver = (payload: unknown) =>
+      handler({
+        ...(normalizeEventPayload(payload) as Record<string, unknown> | undefined),
+        features: event === "mouseleave" ? undefined : [{ id: key, properties: { key } }],
+      });
+
+    layer.on?.(event === "mouseenter" ? "mouseover" : event === "mouseleave" ? "mouseout" : event, deliver);
   }
 
   // The compatibility layers restyle in place through paint properties; mirror their
@@ -543,6 +691,12 @@ export class Map {
   }
 
   private updateMockLayersForSource(sourceId: string) {
+    for (const [layerId, definition] of this.layers) {
+      if ((definition as { source?: string }).source === sourceId && this.isShapeBatch(layerId)) {
+        this.mirrorShapeBatch(layerId);
+      }
+    }
+
     const source = this.sources.get(sourceId);
     const data = source?.data as GeoJSON.Feature | undefined;
     const coordinates = data?.geometry && "coordinates" in data.geometry ? data.geometry.coordinates : undefined;
@@ -636,6 +790,22 @@ function normalizeEventPayload(payload: unknown) {
   }
 
   return payload;
+}
+
+/** The paint a shape batch layer resolves from a feature's state (see `shapePaintValue`). */
+function shapeBatchPaint(state: Record<string, unknown>) {
+  const paint: Record<string, unknown> = {};
+
+  if (state.color !== undefined) paint["line-color"] = state.color;
+  if (state.opacity !== undefined) paint["line-opacity"] = state.opacity;
+  if (state.weight !== undefined) paint["line-width"] = state.weight;
+  if (state.fillColor !== undefined) paint["fill-color"] = state.fillColor;
+  if (state.fillOpacity !== undefined) paint["fill-opacity"] = state.fillOpacity;
+  return paint;
+}
+
+function withoutNulls(record: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== null && value !== undefined));
 }
 
 function toLatLng([longitude, latitude]: [number, number]) {

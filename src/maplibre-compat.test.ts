@@ -175,6 +175,96 @@ describe("@moritzbrantner/maps maplibre compatibility", () => {
     expect(events).toEqual(["over:p-2", "out:p-2", "over:p-1", "out:p-1"]);
   });
 
+  test("draws a group's lines and polygons as one source per kind with data-driven paint", async () => {
+    const map = createShapeTestMap();
+    const factory = createMapLibreFlatLayerFactory(
+      createTestMapLibre([]),
+      map as unknown as import("maplibre-gl").Map,
+    );
+    const group = createTestLayerGroup();
+    const lines = Array.from({ length: 300 }, (_, index) =>
+      factory
+        .polyline(
+          [
+            [0, index],
+            [1, index],
+          ],
+          { color: index % 2 ? "#ff0000" : "#0000ff", weight: index },
+        )
+        .addTo(group as never),
+    );
+    const polygon = factory
+      .polygon([
+        [0, 0],
+        [1, 0],
+        [1, 1],
+      ])
+      .addTo(group as never);
+
+    await Promise.resolve();
+
+    expect([...map.layers.values()].map((layer) => layer.type)).toEqual(["line", "fill", "line"]);
+    expect(map.sources.size).toBe(2);
+    const [lineSource, polygonSource] = map.sources.values();
+    expect(lineSource?.setDataCalls).toBe(1);
+    expect(lineSource?.data.features).toHaveLength(300);
+    expect(lineSource?.data.features[3]?.properties).toMatchObject({ color: "#ff0000", weight: 3 });
+    expect(polygonSource?.data.features[0]?.geometry.type).toBe("Polygon");
+
+    // Restyling is feature-state: no source data is re-sent.
+    const key = String(lineSource?.data.features[5]?.properties.key);
+    lines[5]?.setStyle?.({ color: "#00ff00", weight: 9 });
+    await Promise.resolve();
+    expect(lineSource?.setDataCalls).toBe(1);
+    expect(map.featureStates.at(-1)).toEqual([key, expect.objectContaining({ color: "#00ff00", weight: 9 })]);
+
+    for (const line of lines) line.remove?.();
+    polygon.remove?.();
+    await Promise.resolve();
+    expect(map.layers.size).toBe(0);
+    expect(map.sources.size).toBe(0);
+    expect(map.handlerCount()).toBe(0);
+  });
+
+  test("dispatches batched shape pointer events to the topmost feature that listens", async () => {
+    const map = createShapeTestMap();
+    const factory = createMapLibreFlatLayerFactory(
+      createTestMapLibre([]),
+      map as unknown as import("maplibre-gl").Map,
+    );
+    const group = createTestLayerGroup();
+    const events: string[] = [];
+    const record = (name: string) => () => events.push(name);
+    const latLngs: Array<[number, number]> = [
+      [0, 0],
+      [1, 1],
+    ];
+
+    factory
+      .polyline(latLngs)
+      .on("click", record("a:click"))
+      .on("mouseover", record("a:over"))
+      .on("mouseout", record("a:out"))
+      .addTo(group as never);
+    factory.polyline(latLngs, { interactive: false }).addTo(group as never);
+    factory.polyline(latLngs).on("click", record("c:click")).addTo(group as never);
+    await Promise.resolve();
+
+    const [layerId] = map.layers.keys();
+    const [a, b, c] = [...map.sources.values()][0]!.data.features.map((feature) => ({
+      properties: { key: feature.properties.key },
+    }));
+
+    // Topmost first, as `queryRenderedFeatures` reports them; `b` does not listen.
+    map.fireLayer("click", layerId!, { features: [b, a] });
+    map.fireLayer("click", layerId!, { features: [c, b, a] });
+    map.fireLayer("mouseenter", layerId!, { features: [b, a] });
+    map.fireLayer("mousemove", layerId!, { features: [a] });
+    map.fireLayer("mouseleave", layerId!, {});
+
+    expect(events).toEqual(["a:click", "c:click", "a:over", "a:out"]);
+  });
+
   test("ignores cleanup when MapLibre internals are already disposed", () => {
     const disposedMap = {
       getLayer() {
@@ -280,6 +370,71 @@ type CollectionTestSource = {
   setData: (data: CollectionTestSource["data"]) => void;
   setDataCalls: number;
 };
+
+type ShapeTestSource = {
+  data: {
+    features: Array<{ geometry: { type: string }; properties: Record<string, unknown> & { key: string } }>;
+  };
+  setData: (data: ShapeTestSource["data"]) => void;
+  setDataCalls: number;
+};
+
+/** A map double recording sources, layers, feature-state and layer-scoped handlers. */
+function createShapeTestMap() {
+  const handlers = new Map<string, Set<(event: unknown) => void>>();
+  const sources = new Map<string, ShapeTestSource>();
+  const layers = new Map<string, { source: string; type: string }>();
+  const featureStates: Array<[string, Record<string, unknown>]> = [];
+  const handlerKey = (event: string, layerId?: string) => (layerId ? `${event}@${layerId}` : event);
+  const split = (args: unknown[]) =>
+    [args.length === 2 ? (args[0] as string) : undefined, args.at(-1) as (event: unknown) => void] as const;
+
+  return {
+    featureStates,
+    layers,
+    sources,
+    addLayer(layer: { id: string; source: string; type: string }) {
+      layers.set(layer.id, layer);
+    },
+    addSource(id: string, spec: { data: ShapeTestSource["data"] }) {
+      const source: ShapeTestSource = {
+        data: spec.data,
+        setData(data) {
+          source.data = data;
+          source.setDataCalls += 1;
+        },
+        setDataCalls: 0,
+      };
+      sources.set(id, source);
+    },
+    fireLayer(event: string, layerId: string, payload: unknown) {
+      for (const handler of handlers.get(handlerKey(event, layerId)) ?? []) handler(payload);
+    },
+    getLayer: (id: string) => layers.get(id),
+    getSource: (id: string) => sources.get(id),
+    handlerCount: () => [...handlers.values()].reduce((total, set) => total + set.size, 0),
+    off(event: string, ...args: unknown[]) {
+      const [layerId, handler] = split(args);
+      handlers.get(handlerKey(event, layerId))?.delete(handler);
+    },
+    on(event: string, ...args: unknown[]) {
+      const [layerId, handler] = split(args);
+      const key = handlerKey(event, layerId);
+      if (!handlers.has(key)) handlers.set(key, new Set());
+      handlers.get(key)!.add(handler);
+    },
+    queryRenderedFeatures: () => [],
+    removeLayer(id: string) {
+      layers.delete(id);
+    },
+    removeSource(id: string) {
+      sources.delete(id);
+    },
+    setFeatureState(target: { id: string }, state: Record<string, unknown>) {
+      featureStates.push([target.id, state]);
+    },
+  };
+}
 
 /** A map double that projects longitude `n` to x = 10n and hit-tests circles of radius 6. */
 function createCollectionTestMap() {

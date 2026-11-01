@@ -27,6 +27,14 @@
 
 ### Patch Changes
 
+- On the MapLibre runtime, the lines of a layer group share one GeoJSON source
+  and one line layer, and its polygons one source with a fill and an outline
+  layer (#337). Per-feature colour, width and opacity are data-driven paint
+  (`["get", ...]`). Restyles such as hover and selection go through
+  feature-state, so they do not re-send the source data. Pointer events go to
+  the topmost feature that listens. Before, every line or polygon had its own
+  source and layers: `line-styles` had 307 of each, and MapLibre took 13.8 ms
+  per moving-camera frame there. It now takes 0.7 ms.
 - Polygons on the Maps WebGPU runtime draw MapLibre's `fill-antialias` outline: a
   one-pixel line in the fill colour over each ring edge, faded by MapLibre's
   `v_pos` distance. That interpolation is perspective-correct, so on a pitched
