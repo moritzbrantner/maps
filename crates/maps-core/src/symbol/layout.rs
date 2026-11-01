@@ -3,7 +3,7 @@
 //! points and `performSymbolLayout` point-placement symbol instances (shaped glyph quads,
 //! collision boxes and evaluated paint), in MapLibre's 8192-unit tile space.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use earcut::Earcut;
 use serde_json::Value;
@@ -12,9 +12,11 @@ use super::color::Rgba;
 use super::expression::{EvaluationContext, js_round, to_string};
 use super::glyphs::{GLYPH_PBF_BORDER, GlyphStore};
 use super::images::ImageStore;
+use super::line_anchors::{LabelExtent, center_anchor, clip_line, line_anchors, merge_lines};
 use super::polylabel::{classify_rings, pole_of_inaccessibility};
-use super::shaping::{ONE_EM, ShapeOptions, SymbolAnchor, shape_text};
+use super::shaping::{ONE_EM, ShapeOptions, Shaping, SymbolAnchor, shape_text};
 use super::style::{StyleLayer, StyleLayerKind};
+use super::zoom::{PropertyKind, SizeData, camera_context, packed_size, symbol_paint};
 use crate::line_mesh::{LineCap, LineJoin, LineLayout, LineMesh};
 use crate::mvt_features::{MvtFeature, MvtGeometryType, MvtLayer};
 
@@ -51,16 +53,38 @@ pub struct SymbolPaint {
     pub opacity: f32,
 }
 
+/// What a line label (`symbol-placement: line` or `line-center` along the line) keeps for
+/// projecting its glyphs each frame: MapLibre's `lineVertexArray`, `glyphOffsetArray` and
+/// the placed symbol's line fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineText {
+    /// The line the label follows, in 8192-unit tile space (MapLibre's `Int16` vertices).
+    pub line: Vec<[f64; 2]>,
+    /// The anchor lies between `line[segment]` and `line[segment + 1]`.
+    pub segment: usize,
+    /// Each glyph's centre along the text in glyph units, one per quad.
+    pub offsets: Vec<f32>,
+    /// `text-offset` in glyph units: along the line and away from it.
+    pub line_offset: [f64; 2],
+    /// The collision circle diameter in CSS px at the layout text size (`None`: no height).
+    pub circle_diameter: Option<f64>,
+}
+
 /// The text part of a symbol.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SymbolText {
-    /// Collision box around the anchor in CSS px at perspective ratio 1 (padding included).
+    /// Collision box around the anchor in CSS px at perspective ratio 1 (padding included);
+    /// line labels collide with circles along their line instead.
     pub collision_box: [f64; 4],
+    /// Quads relative to the anchor (point labels) or to each glyph's point on the line.
     pub glyphs: Vec<SymbolGlyph>,
-    /// `text-size` as the shader receives it (1/128 px steps).
-    pub size: f32,
+    /// `text-size` at the bucket's two size zooms (source sizes: twice the same), in the
+    /// shader's 1/128 px steps; see [`SizeData::for_feature`].
+    pub sizes: [f32; 2],
     pub stack: String,
-    pub paint: SymbolPaint,
+    /// Paint at the tile zoom and one above (they differ for composite functions).
+    pub paint: [SymbolPaint; 2],
+    pub line: Option<LineText>,
 }
 
 /// The icon part of a symbol: MapLibre's `shapeIcon` and `getIconQuads` without
@@ -74,11 +98,20 @@ pub struct SymbolIcon {
     pub br: [f32; 2],
     /// Collision box around the anchor in CSS px at perspective ratio 1 (`icon-padding`).
     pub collision_box: [f64; 4],
-    /// `icon-size` as the shader receives it (1/128 steps).
-    pub size: f32,
+    /// `icon-size` at the bucket's two size zooms, as [`SymbolText::sizes`].
+    pub sizes: [f32; 2],
     /// The image's pixel ratio: one unlike the device's makes MapLibre sample linearly.
     pub pixel_ratio: f64,
-    pub paint: SymbolPaint,
+    pub paint: [SymbolPaint; 2],
+}
+
+/// `symbol-placement`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SymbolPlacement {
+    #[default]
+    Point,
+    Line,
+    LineCenter,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,15 +136,20 @@ pub struct SymbolBucket {
     pub icon_optional: bool,
     /// `bucket.sdfIcons`: the first icon decides; MapLibre cannot mix SDF and plain icons.
     pub sdf_icons: bool,
-    /// `icon-size` is the constant 1: plain icons may then sample `NEAREST`.
-    pub icon_size_one: bool,
-    /// MapLibre's `hasHalo` (`*-halo-width` not the constant 0) for text and icons.
-    pub text_halo: bool,
-    pub icon_halo: bool,
-    /// `isGlyphOverlap`: negative letter spacing, or a halo width over 1 (any data-driven
-    /// one): halos then draw in their own pass before the fills, per tile.
-    pub text_halo_pass: bool,
-    pub icon_halo_pass: bool,
+    pub text_size: SizeData,
+    pub icon_size: SizeData,
+    pub placement: SymbolPlacement,
+    /// Text follows its line (`text-rotation-alignment: map` off point placement).
+    pub text_along_line: bool,
+    /// Line labels lie on the map plane (`text-pitch-alignment: map`).
+    pub pitch_with_map: bool,
+    /// `text-keep-upright`.
+    pub keep_upright: bool,
+    /// `text-padding` in CSS px: line labels pad their collision circles with it.
+    pub text_padding: f64,
+    /// The layer sets `icon-offset`: MapLibre's `u_is_offset` then keeps symbol sizes off
+    /// the perspective ratio.
+    pub icon_offset: bool,
 }
 
 impl SymbolBucket {
@@ -252,6 +290,30 @@ pub fn layout_tile(
                 };
                 let zoom = f64::from(z);
                 let constant = context(&probe, zoom);
+                let size_data = |key: &str, default: f64| {
+                    SizeData::new(&PropertyKind::of(layer.raw_layout(key))?, zoom, |at| {
+                        layer.number(false, key, default, &camera_context(at))
+                    })
+                };
+                let text_size = size_data("text-size", 16.0)?;
+                let icon_size = size_data("icon-size", 1.0)?;
+                let placement = match layer
+                    .string(false, "symbol-placement", "point", &constant)?
+                    .as_str()
+                {
+                    "line" => SymbolPlacement::Line,
+                    "line-center" => SymbolPlacement::LineCenter,
+                    _ => SymbolPlacement::Point,
+                };
+                let alignment = |key: &str| layer.string(false, key, "auto", &constant);
+                let text_along_line = placement != SymbolPlacement::Point
+                    && alignment("text-rotation-alignment")? != "viewport";
+                let options = SymbolOptions {
+                    placement,
+                    text_along_line,
+                    text_size: &text_size,
+                    icon_size: &icon_size,
+                };
                 let instances = match features {
                     Some(source) => layout_symbols(
                         layer,
@@ -260,6 +322,7 @@ pub fn layout_tile(
                         glyphs,
                         images,
                         &mut buckets.missing_glyph_ranges,
+                        &options,
                     )?,
                     None => Vec::new(),
                 };
@@ -268,25 +331,17 @@ pub fn layout_tile(
                     .find_map(|instance| instance.icon.as_ref())
                     .and_then(|icon| images.image(&icon.image))
                     .is_some_and(|image| image.sdf);
-                // `constantOr`: a data-driven value has no constant.
-                let constant_number = |key: &str| layer.raw_paint(key).map(Value::as_f64);
-                let has_halo = |key: &str| match constant_number(key) {
-                    None => false,
-                    Some(width) => width != Some(0.0),
-                };
-                let letter_spacing = layer
-                    .raw_layout("text-letter-spacing")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0);
-                let halo_pass = |key: &str| {
-                    letter_spacing * ONE_EM < 0.0
-                        || match constant_number(key) {
-                            None => false,
-                            Some(width) => width.unwrap_or(f64::INFINITY) > 1.0,
-                        }
-                };
                 LayerBucket::Symbols(SymbolBucket {
                     instances,
+                    text_size,
+                    icon_size,
+                    placement,
+                    text_along_line,
+                    pitch_with_map: text_along_line
+                        && alignment("text-pitch-alignment")? != "viewport",
+                    keep_upright: layer.boolean("text-keep-upright", true, &constant)?,
+                    text_padding: layer.number(false, "text-padding", 2.0, &constant)?,
+                    icon_offset: layer.raw_layout("icon-offset").is_some(),
                     text_allow_overlap: layer.boolean("text-allow-overlap", false, &constant)?,
                     text_ignore_placement: layer.boolean(
                         "text-ignore-placement",
@@ -302,14 +357,6 @@ pub fn layout_tile(
                     )?,
                     icon_optional: layer.boolean("icon-optional", false, &constant)?,
                     sdf_icons,
-                    icon_size_one: match layer.raw_layout("icon-size") {
-                        None => true,
-                        Some(value) => value.as_f64() == Some(1.0),
-                    },
-                    text_halo: has_halo("text-halo-width"),
-                    icon_halo: has_halo("icon-halo-width"),
-                    text_halo_pass: halo_pass("text-halo-width"),
-                    icon_halo_pass: halo_pass("icon-halo-width"),
                 })
             }
         };
@@ -508,6 +555,26 @@ fn resolve_tokens(text: &str, feature: &MvtFeature) -> String {
     output
 }
 
+/// What `performSymbolLayout` reads off the bucket for every feature.
+struct SymbolOptions<'a> {
+    placement: SymbolPlacement,
+    text_along_line: bool,
+    text_size: &'a SizeData,
+    icon_size: &'a SizeData,
+}
+
+/// One feature's symbol parts before anchors: its shaped text, icon and geometry.
+struct SymbolFeature {
+    index: usize,
+    text: Option<FeatureText>,
+    icon: Option<SymbolIcon>,
+    geometry: Vec<Vec<[f64; 2]>>,
+}
+
+/// `performSymbolLayout` and `addFeature`: shaped text and icons at each anchor of each
+/// accepted feature. Line placement merges same-text lines first (`mergeLines`) and drops
+/// anchors too close to one of the same text (`anchorIsTooClose`).
+#[allow(clippy::too_many_arguments)]
 fn layout_symbols(
     layer: &StyleLayer,
     source: &MvtLayer,
@@ -515,34 +582,143 @@ fn layout_symbols(
     glyphs: &GlyphStore,
     images: &ImageStore,
     missing: &mut BTreeSet<(String, u32)>,
+    options: &SymbolOptions<'_>,
 ) -> Result<Vec<SymbolInstance>, String> {
     let scale = scale(source);
-    let mut instances = Vec::new();
-    for (feature_index, feature) in source.features.iter().enumerate() {
+    let mut features = Vec::new();
+    for (index, feature) in source.features.iter().enumerate() {
         let tile_context = context(feature, f64::from(z));
         if !layer.accepts(&tile_context)? {
             continue;
         }
-        let text = symbol_text(layer, feature, &tile_context, glyphs, missing)?;
-        let icon = symbol_icon(layer, feature, &tile_context, images)?;
+        let text = feature_text(layer, feature, z, glyphs, missing, options)?;
+        let icon = symbol_icon(layer, feature, z, images, options.icon_size)?;
         if text.is_none() && icon.is_none() {
             continue;
         }
-        for anchor in anchors(feature, scale) {
+        let geometry = feature
+            .geometry
+            .iter()
+            .map(|path| {
+                path.iter()
+                    .map(|point| {
+                        [
+                            js_round(f64::from(point[0]) * scale),
+                            js_round(f64::from(point[1]) * scale),
+                        ]
+                    })
+                    .collect()
+            })
+            .collect();
+        features.push((
+            feature,
+            SymbolFeature {
+                index,
+                text,
+                icon,
+                geometry,
+            },
+        ));
+    }
+    if options.placement == SymbolPlacement::Line {
+        let keyed = features
+            .into_iter()
+            .map(|(feature, mut symbol)| {
+                let text = symbol.text.as_ref().map(|text| text.text.clone());
+                let geometry = std::mem::take(&mut symbol.geometry);
+                ((feature, symbol), text, geometry)
+            })
+            .collect();
+        features = merge_lines(keyed)
+            .into_iter()
+            .map(|((feature, mut symbol), geometry)| {
+                symbol.geometry = geometry;
+                (feature, symbol)
+            })
+            .collect();
+    }
+
+    let mut instances = Vec::new();
+    let mut compare_text: HashMap<String, Vec<[f64; 2]>> = HashMap::new();
+    for (feature, symbol) in &features {
+        let tile_context = context(feature, f64::from(z));
+        let spacing =
+            TILE_PIXEL_RATIO * layer.number(false, "symbol-spacing", 250.0, &tile_context)?;
+        let mut add = |anchor: [f64; 2], line: Option<(&[[f64; 2]], usize)>| {
             // addSymbolAtAnchor: neighbouring tiles own anchors in their buffers.
             if anchor[0] < 0.0 || anchor[0] >= EXTENT || anchor[1] < 0.0 || anchor[1] >= EXTENT {
-                continue;
+                return;
             }
-            instances.push(SymbolInstance {
-                anchor: [anchor[0].trunc() / EXTENT, anchor[1].trunc() / EXTENT],
-                text: text.clone(),
-                icon: icon.clone(),
-                feature_index,
+            // MapLibre stores anchors and line vertices as `Int16`.
+            let anchor = [anchor[0].trunc(), anchor[1].trunc()];
+            let text = symbol.text.as_ref().map(|text| {
+                let line = line
+                    .filter(|_| options.text_along_line)
+                    .map(|(line, segment)| {
+                        let line: Vec<[f64; 2]> = line
+                            .iter()
+                            .map(|point| [point[0].trunc(), point[1].trunc()])
+                            .collect();
+                        (line, segment)
+                    });
+                text.at_anchor(line)
             });
+            instances.push(SymbolInstance {
+                anchor: [anchor[0] / EXTENT, anchor[1] / EXTENT],
+                text,
+                icon: symbol.icon.clone(),
+                feature_index: symbol.index,
+            });
+        };
+        match options.placement {
+            SymbolPlacement::Point => {
+                for anchor in point_anchors(feature.geometry_type, &symbol.geometry) {
+                    add(anchor, None);
+                }
+            }
+            SymbolPlacement::Line | SymbolPlacement::LineCenter => {
+                let Some(text) = &symbol.text else {
+                    continue;
+                };
+                let max_angle = layer
+                    .number(false, "text-max-angle", 45.0, &tile_context)?
+                    .to_radians();
+                let extent = LabelExtent {
+                    length: text.shaping.right - text.shaping.left,
+                    glyph_size: ONE_EM,
+                    box_scale: TILE_PIXEL_RATIO * text.max_size / ONE_EM,
+                };
+                if options.placement == SymbolPlacement::Line {
+                    let repeat_distance = spacing / 2.0;
+                    for line in clip_line(&symbol.geometry, 0.0, 0.0, EXTENT, EXTENT) {
+                        for anchor in line_anchors(&line, spacing, max_angle, &extent, 1.0, EXTENT)
+                        {
+                            let others = compare_text.entry(text.text.clone()).or_default();
+                            if others.iter().rev().any(|other| {
+                                (other[0] - anchor.point[0]).hypot(other[1] - anchor.point[1])
+                                    < repeat_distance
+                            }) {
+                                continue;
+                            }
+                            others.push(anchor.point);
+                            add(anchor.point, Some((&line, anchor.segment)));
+                        }
+                    }
+                } else {
+                    for line in symbol.geometry.iter().filter(|line| line.len() > 1) {
+                        if let Some(anchor) = center_anchor(line, max_angle, &extent) {
+                            add(anchor.point, Some((line, anchor.segment)));
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(instances)
 }
+
+/// `EXTENT / tileSize`: tile units per CSS px of a 512 px tile.
+const TILE_PIXEL_RATIO: f64 = EXTENT / 512.0;
 
 /// A string layout property: `{token}` strings resolve against the feature (legacy), others
 /// evaluate as expressions. `None` for null or empty.
@@ -579,27 +755,37 @@ fn icon_padding(value: Option<Value>) -> [f64; 4] {
     }
 }
 
-fn symbol_paint(
+/// A feature's paint at the tile zoom and one above (composite paint blends them).
+fn feature_paint(
     layer: &StyleLayer,
     prefix: &str,
-    context: &EvaluationContext<'_>,
-) -> Result<SymbolPaint, String> {
-    let key = |name: &str| format!("{prefix}-{name}");
-    Ok(SymbolPaint {
-        color: layer
-            .color(
-                &key("color"),
-                Rgba::parse("#000").unwrap_or(Rgba::TRANSPARENT),
-                context,
-            )?
-            .premultiplied(),
-        halo_color: layer
-            .color(&key("halo-color"), Rgba::TRANSPARENT, context)?
-            .premultiplied(),
-        halo_width: layer.number(true, &key("halo-width"), 0.0, context)? as f32,
-        halo_blur: layer.number(true, &key("halo-blur"), 0.0, context)? as f32,
-        opacity: layer.number(true, &key("opacity"), 1.0, context)? as f32,
-    })
+    feature: &MvtFeature,
+    z: u8,
+) -> Result<[SymbolPaint; 2], String> {
+    let zoom = f64::from(z);
+    Ok([
+        symbol_paint(layer, prefix, &context(feature, zoom))?,
+        symbol_paint(layer, prefix, &context(feature, zoom + 1.0))?,
+    ])
+}
+
+/// A feature's `text-size` or `icon-size` at the zoom of its layout (the tile zoom plus one,
+/// which collision boxes use) and as the shader's two packed sizes.
+fn feature_sizes(
+    layer: &StyleLayer,
+    key: &str,
+    default: f64,
+    feature: &MvtFeature,
+    z: u8,
+    data: &SizeData,
+) -> Result<(f64, [f32; 2]), String> {
+    let at = |zoom: f64| layer.number(false, key, default, &context(feature, zoom));
+    let layout_size = at(f64::from(z) + 1.0)?;
+    let sizes = match data.feature_zooms() {
+        Some([lower, upper]) => [packed_size(at(lower)?), packed_size(at(upper)?)],
+        None => [packed_size(at(f64::from(z))?); 2],
+    };
+    Ok((layout_size, sizes))
 }
 
 /// `shapeIcon`, `getIconQuads` and the icon `CollisionFeature` for one feature. An image the
@@ -607,9 +793,12 @@ fn symbol_paint(
 fn symbol_icon(
     layer: &StyleLayer,
     feature: &MvtFeature,
-    context: &EvaluationContext<'_>,
+    z: u8,
     images: &ImageStore,
+    size_data: &SizeData,
 ) -> Result<Option<SymbolIcon>, String> {
+    let tile_context = context(feature, f64::from(z));
+    let context = &tile_context;
     let Some(id) = string_property(layer, "icon-image", feature, context)? else {
         return Ok(None);
     };
@@ -646,8 +835,8 @@ fn symbol_icon(
         em(f64::from(image.width) + 1.0, image.width, display[0], left),
         em(f64::from(image.height) + 1.0, image.height, display[1], top),
     ];
-    // `icon-size` at the tile zoom and zoom + 1 are equal: zoom-dependent sizes are rejected.
-    let size = layer.number(false, "icon-size", 1.0, context)?;
+    // Collision boxes take `icon-size` at the tile zoom plus one.
+    let (size, sizes) = feature_sizes(layer, "icon-size", 1.0, feature, z, size_data)?;
     let padding = icon_padding(layer.value("icon-padding", context)?);
     Ok(Some(SymbolIcon {
         image: id,
@@ -659,20 +848,110 @@ fn symbol_icon(
             right * size + padding[1],
             bottom * size + padding[2],
         ],
-        size: (js_round(size * 128.0) / 128.0) as f32,
+        sizes,
         pixel_ratio: image.pixel_ratio,
-        paint: symbol_paint(layer, "icon", context)?,
+        paint: feature_paint(layer, "icon", feature, z)?,
     }))
 }
 
-/// Shaped glyph quads, collision box and paint of one feature's `text-field`.
-fn symbol_text(
+/// One feature's shaped `text-field`, before it is placed at its anchors.
+struct FeatureText {
+    /// The transformed text (`mergeLines` and `anchorIsTooClose` compare it).
+    text: String,
+    shaping: Shaping,
+    stack: String,
+    /// `text-size` at the tile zoom plus one, which collision shapes use.
+    layout_size: f64,
+    /// `text-size` at zoom 18 (`textMaxSize`), which line anchors space by.
+    max_size: f64,
+    sizes: [f32; 2],
+    /// `text-offset` in glyph units.
+    offset: [f64; 2],
+    padding: f64,
+    paint: [SymbolPaint; 2],
+}
+
+/// Glyph quads are quantized to 1/32 units as MapLibre's vertices store them.
+fn quantize(value: f64) -> f32 {
+    (js_round(value * 32.0) / 32.0) as f32
+}
+
+impl FeatureText {
+    /// The text at one anchor: point quads (offset built in) and a collision box, or, along
+    /// its line (`getGlyphQuads` with `alongLine`), quads around each glyph's centre with
+    /// those centres and a collision circle.
+    fn at_anchor(&self, line: Option<(Vec<[f64; 2]>, usize)>) -> SymbolText {
+        let font_scale = self.layout_size / ONE_EM;
+        let along_line = line.is_some();
+        let rect_buffer = f64::from(GLYPH_PBF_BORDER + 1);
+        let mut quads = Vec::new();
+        let mut offsets = Vec::new();
+        for glyph in self.shaping.lines.iter().flatten() {
+            if !glyph.has_bitmap {
+                continue;
+            }
+            let metrics = glyph.metrics;
+            let half_advance = f64::from(metrics.advance) / 2.0;
+            let built_in = if along_line {
+                offsets.push((glyph.x + half_advance) as f32);
+                // `addSymbols` adds the glyph's line offset to its quad.
+                [0.0, glyph.y]
+            } else {
+                [
+                    glyph.x + half_advance + self.offset[0],
+                    glyph.y + self.offset[1],
+                ]
+            };
+            let x1 = (f64::from(metrics.left) - rect_buffer) - half_advance + built_in[0];
+            let y1 = (-f64::from(metrics.top) - rect_buffer) + built_in[1];
+            // Atlas bins: bitmap (with its SDF border) plus 1 px padding on each side.
+            let border = 2 * GLYPH_PBF_BORDER + 2;
+            let x2 = x1 + f64::from(metrics.width as i32 + border);
+            let y2 = y1 + f64::from(metrics.height as i32 + border);
+            quads.push(SymbolGlyph {
+                codepoint: glyph.codepoint,
+                tl: [quantize(x1), quantize(y1)],
+                br: [quantize(x2), quantize(y2)],
+            });
+        }
+        let shaping = &self.shaping;
+        SymbolText {
+            collision_box: [
+                shaping.left * font_scale - self.padding,
+                shaping.top * font_scale - self.padding,
+                shaping.right * font_scale + self.padding,
+                shaping.bottom * font_scale + self.padding,
+            ],
+            glyphs: quads,
+            sizes: self.sizes,
+            stack: self.stack.clone(),
+            paint: self.paint.clone(),
+            line: line.map(|(line, segment)| {
+                // `CollisionFeature` along a line: a circle as tall as the text, at least
+                // 10 glyph units.
+                let height = shaping.bottom - shaping.top;
+                LineText {
+                    line,
+                    segment,
+                    offsets,
+                    line_offset: self.offset,
+                    circle_diameter: (height > 0.0).then(|| height.max(10.0) * font_scale),
+                }
+            }),
+        }
+    }
+}
+
+/// Shapes one feature's `text-field` (`performSymbolLayout`).
+fn feature_text(
     layer: &StyleLayer,
     feature: &MvtFeature,
-    tile_context: &EvaluationContext<'_>,
+    z: u8,
     glyphs: &GlyphStore,
     missing: &mut BTreeSet<(String, u32)>,
-) -> Result<Option<SymbolText>, String> {
+    options: &SymbolOptions<'_>,
+) -> Result<Option<FeatureText>, String> {
+    let tile_context = &context(feature, f64::from(z));
     let Some(text) = string_property(layer, "text-field", feature, tile_context)? else {
         return Ok(None);
     };
@@ -697,17 +976,18 @@ fn symbol_text(
             missing.insert((stack.clone(), u32::from(c) / 256 * 256));
         }
     }
-    // `text-size` at the tile zoom ("this zoom") and at zoom + 1 (layout); both equal
-    // because zoom-dependent sizes are rejected.
-    let size = layer.number(false, "text-size", 16.0, tile_context)?;
-    let font_scale = size / ONE_EM;
+    let (layout_size, sizes) =
+        feature_sizes(layer, "text-size", 16.0, feature, z, options.text_size)?;
+    let max_size = layer.number(false, "text-size", 16.0, &context(feature, 18.0))?;
     let anchor =
         SymbolAnchor::parse(&layer.string(false, "text-anchor", "center", tile_context)?)
             .ok_or_else(|| format!("{}: invalid text-anchor", layer.id))?;
+    // Text along a line is centred on its anchor.
     let justify = match layer
         .string(false, "text-justify", "center", tile_context)?
         .as_str()
     {
+        _ if options.text_along_line => 0.5,
         "auto" => anchor.justification(),
         "left" => 0.0,
         "right" => 1.0,
@@ -720,77 +1000,47 @@ fn symbol_text(
         ],
         _ => [0.0, 0.0],
     };
-    let options = ShapeOptions {
+    let shape_options = ShapeOptions {
         stack: &stack,
-        max_width: layer.number(false, "text-max-width", 10.0, tile_context)? * ONE_EM,
+        // Line labels never wrap.
+        max_width: if options.placement == SymbolPlacement::Point {
+            layer.number(false, "text-max-width", 10.0, tile_context)? * ONE_EM
+        } else {
+            f64::INFINITY
+        },
         line_height: layer.number(false, "text-line-height", 1.2, tile_context)? * ONE_EM,
         anchor,
         justify,
         spacing: layer.number(false, "text-letter-spacing", 0.0, tile_context)? * ONE_EM,
         translate: offset,
     };
-    let Some(shaping) = shape_text(&text, glyphs, &options) else {
+    let Some(shaping) = shape_text(&text, glyphs, &shape_options) else {
         return Ok(None);
     };
-    let padding = layer.number(false, "text-padding", 2.0, tile_context)?;
-    let collision_box = [
-        shaping.left * font_scale - padding,
-        shaping.top * font_scale - padding,
-        shaping.right * font_scale + padding,
-        shaping.bottom * font_scale + padding,
-    ];
-    let quantize = |value: f64| (js_round(value * 32.0) / 32.0) as f32;
-    let rect_buffer = f64::from(GLYPH_PBF_BORDER + 1);
-    let mut quads = Vec::new();
-    for glyph in shaping.lines.iter().flatten() {
-        if !glyph.has_bitmap {
-            continue;
-        }
-        let metrics = glyph.metrics;
-        let half_advance = f64::from(metrics.advance) / 2.0;
-        let built_in = [glyph.x + half_advance + offset[0], glyph.y + offset[1]];
-        let x1 = (f64::from(metrics.left) - rect_buffer) - half_advance + built_in[0];
-        let y1 = (-f64::from(metrics.top) - rect_buffer) + built_in[1];
-        // Atlas bins: bitmap (with its SDF border) plus 1 px padding on each side.
-        let border = 2 * GLYPH_PBF_BORDER + 2;
-        let x2 = x1 + f64::from(metrics.width as i32 + border);
-        let y2 = y1 + f64::from(metrics.height as i32 + border);
-        quads.push(SymbolGlyph {
-            codepoint: glyph.codepoint,
-            tl: [quantize(x1), quantize(y1)],
-            br: [quantize(x2), quantize(y2)],
-        });
-    }
-    Ok(Some(SymbolText {
-        collision_box,
-        glyphs: quads,
-        size: (js_round(size * 128.0) / 128.0) as f32,
+    Ok(Some(FeatureText {
+        text,
+        shaping,
         stack,
-        paint: symbol_paint(layer, "text", tile_context)?,
+        layout_size,
+        max_size,
+        sizes,
+        offset,
+        padding: layer.number(false, "text-padding", 2.0, tile_context)?,
+        paint: feature_paint(layer, "text", feature, z)?,
     }))
 }
 
-/// Point-placement anchors of a feature in 8192-unit tile space (`addFeature`).
-fn anchors(feature: &MvtFeature, scale: f64) -> Vec<[f64; 2]> {
-    let point = |p: &[i32; 2]| {
-        [
-            js_round(f64::from(p[0]) * scale),
-            js_round(f64::from(p[1]) * scale),
-        ]
-    };
-    match feature.geometry_type {
-        MvtGeometryType::Point => feature.geometry.iter().flatten().map(point).collect(),
-        MvtGeometryType::LineString => feature
-            .geometry
+/// Point-placement anchors of a feature (`addFeature`): its points, the first vertex of each
+/// line, the pole of inaccessibility of each polygon; 8192-unit tile space.
+fn point_anchors(kind: MvtGeometryType, geometry: &[Vec<[f64; 2]>]) -> Vec<[f64; 2]> {
+    match kind {
+        MvtGeometryType::Point => geometry.iter().flatten().copied().collect(),
+        MvtGeometryType::LineString => geometry
             .iter()
-            .filter_map(|line| line.first().map(point))
+            .filter_map(|line| line.first().copied())
             .collect(),
         MvtGeometryType::Polygon => {
-            let rings: Vec<Vec<[f64; 2]>> = feature
-                .geometry
-                .iter()
-                .map(|ring| ring.iter().map(point).collect())
-                .collect();
+            let rings = geometry.to_vec();
             classify_rings(&rings)
                 .iter()
                 .filter(|polygon| !polygon.is_empty())
@@ -928,6 +1178,66 @@ mod tests {
                 feature("track", serde_json::json!([1, 1])),
             ],
         }
+    }
+
+    #[test]
+    fn line_labels_anchor_along_their_line_with_glyph_offsets_and_zoomed_sizes() {
+        let mut glyphs = GlyphStore::default();
+        let pbf = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../oracle/glyphs/NotoSans-Regular/0-255.pbf"
+        ))
+        .unwrap();
+        glyphs.add_range(
+            "NotoSans-Regular",
+            0,
+            super::super::glyphs::parse_glyph_pbf(&pbf).unwrap(),
+        );
+        let layer = line_layer(
+            r#"{"id":"r","type":"symbol","source-layer":"streets",
+                "layout":{"symbol-placement":"line","text-field":["get","kind"],"text-font":["NotoSans-Regular"],
+                          "text-size":["interpolate",["linear"],["zoom"],8,10,10,20]}}"#,
+        );
+        // One street across the whole tile, continued from its west edge.
+        let source = MvtLayer {
+            name: "streets".to_owned(),
+            extent: 4096,
+            features: vec![MvtFeature {
+                id: None,
+                geometry_type: MvtGeometryType::LineString,
+                geometry: vec![vec![[0, 2048], [4096, 2048]]],
+                properties: BTreeMap::from([("kind".to_owned(), Value::from("primary"))]),
+            }],
+        };
+        let buckets = layout_tile(&[layer], &[source], 8, &glyphs, &ImageStore::default()).unwrap();
+        let LayerBucket::Symbols(bucket) = &buckets.layers[0] else {
+            panic!("{buckets:?}")
+        };
+        assert!(bucket.text_along_line && bucket.pitch_with_map && bucket.keep_upright);
+        // The camera size at the drawn zoom, capped at the layout size of zoom 9.
+        assert_eq!(bucket.text_size.at_zoom(8.5).size, 12.5);
+        assert_eq!(bucket.text_size.at_zoom(9.5).size, 15.0);
+        // Continued lines start half a `symbol-spacing` (250 px, 16 units each) in.
+        let anchors: Vec<[f64; 2]> = bucket
+            .instances
+            .iter()
+            .map(|instance| [instance.anchor[0] * EXTENT, instance.anchor[1] * EXTENT])
+            .collect();
+        assert_eq!(anchors, vec![[2000.0, 4096.0], [6000.0, 4096.0]]);
+        let line = bucket.instances[0]
+            .text
+            .as_ref()
+            .unwrap()
+            .line
+            .as_ref()
+            .unwrap();
+        assert_eq!(line.line, vec![[0.0, 4096.0], [8192.0, 4096.0]]);
+        assert_eq!(line.segment, 0);
+        // Seven glyphs centred on the anchor, left to right.
+        assert_eq!(line.offsets.len(), 7);
+        assert!(line.offsets.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!((line.offsets[0] + line.offsets[6]).abs() < 2.0);
+        assert!(line.circle_diameter.is_some());
     }
 
     #[test]

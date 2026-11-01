@@ -433,7 +433,7 @@ fn interpolate(args: &[Value], context: &EvaluationContext<'_>) -> Result<Value,
 }
 
 /// MapLibre's `interpolationFactor` (exponential with `base`, linear for 1).
-fn interpolation_factor(input: f64, base: f64, lower: f64, upper: f64) -> f64 {
+pub fn interpolation_factor(input: f64, base: f64, lower: f64, upper: f64) -> f64 {
     let difference = upper - lower;
     let progress = input - lower;
     if difference == 0.0 {

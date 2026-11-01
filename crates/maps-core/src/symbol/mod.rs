@@ -1,7 +1,8 @@
 //! Cartography for tileset style layers (Milestone E, #321): MapLibre style-spec `fill`,
-//! `line`, `circle` and point-placement `symbol` layers (text and icons, #346) over vector tiles, with SDF glyphs,
-//! shaping, collision and style images (sprites, patterns, #323) ported from MapLibre GL JS
-//! 6.15. Renderers own the pixels; this module owns the layout.
+//! `line`, `circle` and `symbol` layers (point and line placement, text and icons,
+//! zoom-dependent sizes and paint, #346) over vector tiles, with SDF glyphs, shaping,
+//! collision and style images (sprites, patterns, #323) ported from MapLibre GL JS 6.15.
+//! Renderers own the pixels; this module owns the layout.
 
 pub mod collision;
 pub mod color;
@@ -9,9 +10,12 @@ pub mod expression;
 pub mod glyphs;
 pub mod images;
 pub mod layout;
+pub mod line_anchors;
 pub mod polylabel;
+pub mod projection;
 pub mod shaping;
 pub mod style;
+pub mod zoom;
 
 pub use collision::{PlacedSymbol, PlacementTile, place_symbols, symbol_tile_order};
 pub use glyphs::{AtlasRect, GlyphAtlas, GlyphStore, parse_glyph_pbf};
@@ -20,7 +24,9 @@ pub use images::{
     StyleImage, ZoomHistory,
 };
 pub use layout::{
-    LayerBucket, SymbolBucket, SymbolIcon, SymbolInstance, SymbolPaint, SymbolText, TileCircle,
-    TileDash, TileFill, TileLine, TileStyleBuckets, layout_tile,
+    LayerBucket, LineText, SymbolBucket, SymbolIcon, SymbolInstance, SymbolPaint, SymbolPlacement,
+    SymbolText, TileCircle, TileDash, TileFill, TileLine, TileStyleBuckets, layout_tile,
 };
+pub use projection::{LineGlyphs, LineLabelContext, TileProjection, line_label_glyphs};
 pub use style::{StyleLayer, StyleLayerKind};
+pub use zoom::{SizeData, SymbolDrawState, ZoomedPaint};

@@ -17,6 +17,18 @@
 
 ### Minor Changes
 
+- Tileset `symbol` layers follow the camera zoom and their lines, ported from MapLibre 6.15
+  (#346). `text-size` and `icon-size` take camera and composite functions (interpolated
+  at the drawn zoom between the tile's covering stops, camera sizes capped at the tile's
+  layout size), and `text-*`/`icon-*` paint takes camera functions (evaluated each frame)
+  and composite functions (blended between the tile zoom and one above). `symbol-placement:
+  line` and `line-center` lay labels along lines: `symbol-spacing`, `text-max-angle`,
+  merged same-name lines, glyphs walking the projected line each frame with
+  `text-keep-upright` flips and `text-offset` along and off the line, on the viewport or
+  the pitched map plane (`text-pitch-alignment`), colliding with circles along their path.
+  Symbol placement now visits tiles in MapLibre's placement order, and symbols draw in
+  its bearing order. Icons along lines are still rejected. The oracle `symbol-zoom`,
+  `symbol-lines` and `symbol-lines-pitch` scenarios are gated.
 - Tileset `symbol` layers draw icons from the map style's `sprite`, ported from MapLibre
   6.15 (#346): `icon-image` (expressions or `{token}` strings), `icon-size`, `icon-anchor`,
   `icon-offset`, `icon-padding`, `icon-allow-overlap`, `icon-ignore-placement`,
