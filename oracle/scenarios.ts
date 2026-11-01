@@ -101,11 +101,18 @@ export const RHINE_POINT: LngLat = [8.51405, 47.58135];
 
 const MAP_SIZE = { height: 480, width: 720 };
 
+/** Maps' per-frame floor (React commit, synchronous WASM frame, canvas waits; #343). */
+const FRAME_TIME_GAP: KnownGap = {
+  gate: "time",
+  issue: 343,
+  reason: "per-frame floor of the Maps runtime above MapLibre's",
+};
+
 export const scenarios: Scenario[] = [
   {
     camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
     capability: "single source point: hover, select, clear, pan, wheel zoom",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "source-location",
     origin: "historical-source-atlas#63 source-location map (#232)",
     size: MAP_SIZE,
@@ -121,7 +128,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.4, 51.2], zoom: 5.55 },
     capability: "territory polygons, clustered sites and seat points: select and hover",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "church-site-discovery",
     origin: "church-atlas#8 site discovery (#232)",
     size: MAP_SIZE,
@@ -138,7 +145,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.6 },
     capability: "raster tile zoom level and parent/child crossfade end state (#303)",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "zoom-crossfade",
     origin: "maps#303 zoom-gap crossfade",
     size: MAP_SIZE,
@@ -157,7 +164,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [11.2, 50.6], zoom: 5.2 },
     capability: "point labels placed on their points",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "labels",
     origin: "PointLayer getPointLabel",
     size: MAP_SIZE,
@@ -186,7 +193,7 @@ export const scenarios: Scenario[] = [
     basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "Shortbread MVT fills and lines, class palette by feature kind (lake/glacier)",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "vector-tiles",
     origin: "Maps Tileset (#268); osmshrink#10 OSM preview (#232)",
     size: MAP_SIZE,
@@ -199,7 +206,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { center: [9.0, 47.4], zoom: 8 },
     capability: "GeoJSON lines: width, colour and opacity per feature, round caps and joins",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "line-styles",
     origin: "GeoJsonLayer getFeatureStyle lines; tlm-deutschland#235 venue routes (#232)",
     size: MAP_SIZE,
@@ -213,7 +220,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { bearing: 35, center: [10.4, 51.2], zoom: 5.55 },
     capability: "rotated camera: raster, polygons and points; pick and rotate/pan/zoom",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "bearing",
     origin: "church-atlas#8 site discovery with a rotated map (#232)",
     size: MAP_SIZE,
@@ -229,7 +236,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { bearing: -20, center: [10.4, 51.2], pitch: 50, zoom: 5.55 },
     capability: "pitched camera: minified far tiles, polygons and points; pick and pan",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "pitch",
     origin:
       "church-atlas#8 site discovery with a pitched map (#232); camera #328; mipmaps #314; fill outlines #331",
