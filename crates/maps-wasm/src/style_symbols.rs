@@ -1,6 +1,8 @@
-//! Per-frame geometry of tileset style layers (#321): `maps_core::symbol` lays out and places
-//! labels; this module keeps each tile's buckets, projects anchors through the frame camera
-//! and writes circle instances and SDF glyph vertices for the wgpu backend.
+//! Per-frame geometry of tileset style layers (#321, #322): `maps_core::symbol` lays out lines
+//! and places labels; this module keeps each tile's buckets, projects anchors through the
+//! frame camera and writes circle instances and SDF glyph vertices for the wgpu backend. Line
+//! strips stay in tile space, drawn per tile with the retained line shader; their bytes are
+//! rebuilt only when the tile zoom changes their dash scale.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -8,9 +10,12 @@ use maps_core::symbol::{
     GlyphStore, LayerBucket, PlacementTile, StyleLayer, TileStyleBuckets, layout_tile,
     parse_glyph_pbf, place_symbols, symbol_tile_order,
 };
-use maps_core::{MvtLayer, TileId, decode_mvt_layers};
+use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
 use crate::retained_frame::LocalFrame;
+use crate::retained_polygons::{
+    NO_DASH, RETAINED_POLYGON_STROKE_VERTEX_SIZE, push_line_strip_vertex,
+};
 
 /// Glyph vertex: clip position, atlas uv, (size, opacity, halo width, halo blur),
 /// (fill?, halo?, device pixel ratio, 0), premultiplied fill and halo colors.
@@ -27,13 +32,35 @@ struct StyleTile {
     z: u8,
     source: Vec<MvtLayer>,
     buckets: TileStyleBuckets,
+    /// Line strip bytes for one tile zoom, with each line layer's vertex range.
+    lines: Option<StyleTileLines>,
+}
+
+struct StyleTileLines {
+    tile_zoom: u8,
+    generation: u64,
+    bytes: Vec<u8>,
+    /// (layer index, first vertex, vertex count).
+    ranges: Vec<(usize, u32, u32)>,
 }
 
 /// Draw runs in painter order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StyleDraw {
-    Circles { first: u32, count: u32 },
-    Glyphs { first: u32, count: u32 },
+    Circles {
+        first: u32,
+        count: u32,
+    },
+    Glyphs {
+        first: u32,
+        count: u32,
+    },
+    /// Line strip vertices of one tile, drawn in the frame of `line_frames[frame]`.
+    Lines {
+        frame: u32,
+        first: u32,
+        count: u32,
+    },
 }
 
 /// Where the frame draws: the render surface (viewport plus `margin` on every side).
@@ -49,6 +76,20 @@ pub(crate) struct StyleSurface {
 pub(crate) struct StyleFrame {
     pub(crate) circles: Vec<f32>,
     pub(crate) glyphs: Vec<f32>,
+    /// Tile frames of the line draws.
+    pub(crate) line_frames: Vec<LocalFrame>,
+    /// All line strip bytes of this frame; `None` when unchanged since the last frame.
+    pub(crate) line_bytes: Option<Vec<u8>>,
+    /// Dynamic uniform offset of each line frame, written by the renderer.
+    #[cfg_attr(
+        not(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "wgpu-base-map"
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) line_offsets: Vec<Option<u32>>,
     pub(crate) draws: Vec<StyleDraw>,
     pub(crate) placed_labels: u32,
 }
@@ -58,6 +99,9 @@ pub(crate) struct StyleSymbols {
     layers: Vec<StyleLayer>,
     glyphs: GlyphStore,
     tiles: HashMap<(String, TileKey), StyleTile>,
+    /// Tiles and builds of the line bytes uploaded last.
+    line_signature: Vec<(TileKey, u64)>,
+    line_generation: u64,
 }
 
 impl StyleSymbols {
@@ -120,6 +164,7 @@ impl StyleSymbols {
                 z: key.0,
                 source: decoded,
                 buckets,
+                lines: None,
             },
         );
         Ok(())
@@ -132,6 +177,7 @@ impl StyleSymbols {
     fn relayout(&mut self) -> Result<(), String> {
         for tile in self.tiles.values_mut() {
             tile.buckets = layout_tile(&self.layers, &tile.source, tile.z, &self.glyphs)?;
+            tile.lines = None;
         }
         Ok(())
     }
@@ -147,6 +193,7 @@ impl StyleSymbols {
         placements: &[(TileId, LocalFrame)],
         view_projection: [f32; 16],
         surface: StyleSurface,
+        line_atlas: &mut LineAtlas,
     ) -> StyleFrame {
         let mut frame = StyleFrame::default();
         if !self.is_active() || placements.is_empty() {
@@ -182,6 +229,30 @@ impl StyleSymbols {
         // Camera zoom and bearing, read off the frame of the first tile.
         let (first_tile, first_frame) = placements[0];
         let zoom = f64::from(first_tile.z) + (first_frame.size / 512.0).log2();
+        // MapLibre's `transform.tileZoom`: dashes keep their px length at the floored zoom.
+        let tile_zoom = (zoom + 1.0e-9).floor().clamp(0.0, f64::from(u8::MAX)) as u8;
+        if self
+            .layers
+            .iter()
+            .any(|layer| layer.kind == maps_core::symbol::StyleLayerKind::Line)
+        {
+            for (tile, _) in placements {
+                if let Some(style_tile) = self
+                    .tiles
+                    .get_mut(&(source.to_owned(), (tile.z, tile.x, tile.y)))
+                    && style_tile.lines.as_ref().map(|lines| lines.tile_zoom) != Some(tile_zoom)
+                {
+                    self.line_generation += 1;
+                    style_tile.lines = Some(build_tile_lines(
+                        &style_tile.buckets,
+                        tile.z,
+                        tile_zoom,
+                        self.line_generation,
+                        line_atlas,
+                    ));
+                }
+            }
+        }
         let bearing = match (to_viewport(0.0, 0.0), to_viewport(1.0, 0.0)) {
             (Some((a, _)), Some((b, _))) => (b[1] - a[1]).atan2(b[0] - a[0]),
             _ => 0.0,
@@ -224,6 +295,28 @@ impl StyleSymbols {
             }
             visible.push((*tile, *local, style_tile));
         }
+        // Line bytes of the visible tiles, uploaded again only when they changed.
+        let mut line_bases: Vec<Option<(u32, u32)>> = vec![None; visible.len()];
+        let mut line_bytes = Vec::new();
+        let mut signature = Vec::new();
+        for (index, (tile, local, style_tile)) in visible.iter().enumerate() {
+            let Some(lines) = style_tile
+                .lines
+                .as_ref()
+                .filter(|lines| !lines.bytes.is_empty())
+            else {
+                continue;
+            };
+            let base = (line_bytes.len() as u64 / RETAINED_POLYGON_STROKE_VERTEX_SIZE) as u32;
+            line_bytes.extend_from_slice(&lines.bytes);
+            signature.push(((tile.z, tile.x, tile.y), lines.generation));
+            line_bases[index] = Some((frame.line_frames.len() as u32, base));
+            frame.line_frames.push(*local);
+        }
+        if signature != self.line_signature {
+            frame.line_bytes = Some(line_bytes);
+            self.line_signature = signature;
+        }
         let tile_ids: Vec<TileId> = visible.iter().map(|(tile, _, _)| *tile).collect();
         let order = symbol_tile_order(&tile_ids, bearing);
         let projectors: Vec<Projector<'_>> = order
@@ -263,6 +356,24 @@ impl StyleSymbols {
                 continue;
             }
             match layer.kind {
+                maps_core::symbol::StyleLayerKind::Line => {
+                    for (index, (_, _, style_tile)) in visible.iter().enumerate() {
+                        let (Some((line_frame, base)), Some(lines)) =
+                            (line_bases[index], &style_tile.lines)
+                        else {
+                            continue;
+                        };
+                        for &(layer, first, count) in &lines.ranges {
+                            if layer == layer_index && count > 0 {
+                                frame.draws.push(StyleDraw::Lines {
+                                    frame: line_frame,
+                                    first: base + first,
+                                    count,
+                                });
+                            }
+                        }
+                    }
+                }
                 maps_core::symbol::StyleLayerKind::Circle => {
                     let first = (frame.circles.len() / CIRCLE_INSTANCE_FLOATS) as u32;
                     // MapLibre draws circle layers over tiles in descending tile order.
@@ -401,6 +512,70 @@ impl StyleSymbols {
     }
 }
 
+/// One tile's line strips in tile-normalized coordinates, clipped to the tile, with MapLibre's
+/// dash coordinates for the camera's tile zoom (`u_tileratio`).
+fn build_tile_lines(
+    buckets: &TileStyleBuckets,
+    z: u8,
+    tile_zoom: u8,
+    generation: u64,
+    atlas: &mut LineAtlas,
+) -> StyleTileLines {
+    let atlas_height = LINE_ATLAS_HEIGHT as f32;
+    let tile_ratio = (f64::from(tile_zoom) - f64::from(z)).exp2() / 16.0;
+    let mut bytes = Vec::new();
+    let mut ranges = Vec::new();
+    let vertex_count =
+        |bytes: &Vec<u8>| (bytes.len() as u64 / RETAINED_POLYGON_STROKE_VERTEX_SIZE) as u32;
+    for (layer_index, bucket) in buckets.layers.iter().enumerate() {
+        let LayerBucket::Lines(lines) = bucket else {
+            continue;
+        };
+        let first = vertex_count(&bytes);
+        for line in lines {
+            let dash = line.dash.as_ref().and_then(|dash| {
+                let entry = atlas.dash(&dash.dasharray, dash.round)?;
+                let period = if dash.integer_period {
+                    entry.width.trunc()
+                } else {
+                    entry.width
+                };
+                (period > 0.0).then_some((entry, period))
+            });
+            for &index in &line.mesh.indices {
+                let vertex = line.mesh.vertices[index as usize];
+                let dash = dash.map_or(NO_DASH, |(entry, period)| {
+                    [
+                        (f64::from(vertex.linesofar) * tile_ratio
+                            / f64::from(period)
+                            / f64::from(line.width)) as f32,
+                        (entry.y + 0.5) / atlas_height,
+                        entry.height / 2.0 / atlas_height,
+                        period,
+                    ]
+                });
+                push_line_strip_vertex(
+                    &mut bytes,
+                    vertex.point.map(|value| (value / 8192.0) as f32),
+                    vertex.extrude.map(|value| value as f32),
+                    vertex.normal,
+                    line.width,
+                    line.color,
+                    dash,
+                    [0.0, 0.0, 1.0, 1.0],
+                );
+            }
+        }
+        ranges.push((layer_index, first, vertex_count(&bytes) - first));
+    }
+    StyleTileLines {
+        tile_zoom,
+        generation,
+        bytes,
+        ranges,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,6 +681,7 @@ mod tests {
                 margin: 0.0,
                 pixel_ratio: 1.0,
             },
+            &mut LineAtlas::new(),
         );
         assert_eq!(frame.placed_labels, 1);
         assert_eq!(frame.draws.len(), 2);

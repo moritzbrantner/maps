@@ -33,10 +33,12 @@ use crate::vector_basemap_layout::{
     FILL_VERTEX_SIZE, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes, fill_vertex_bytes,
     line_index_bytes, line_vertex_bytes, style_table_bytes,
 };
+use crate::wgpu_dash_atlas::DashAtlasGpu;
 use crate::wgpu_retained::{
     FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
 };
-use crate::wgpu_symbols::SymbolGpu;
+use crate::wgpu_symbols::{StyleLines, SymbolGpu};
+use maps_core::LineAtlas;
 
 const INITIAL_VERTEX_BUFFER_SIZE: u64 = 4 * 1024;
 const CAMERA_UNIFORM_SIZE: u64 = 64;
@@ -216,6 +218,11 @@ pub struct MapsWgpuBaseMapRenderer {
     style_symbols: StyleSymbols,
     symbol_gpu: SymbolGpu,
     placed_labels: u32,
+    /// MapLibre's dash atlas for dashed lines (#322) and its texture.
+    line_atlas: LineAtlas,
+    dash_atlas: DashAtlasGpu,
+    /// Per-tile frames of tileset line layers (#322), drawn with the retained line pipeline.
+    style_line_uniforms: FrameUniforms,
 }
 
 #[wasm_bindgen(js_name = createWgpuBaseMapRenderer)]
@@ -842,6 +849,8 @@ impl MapsWgpuBaseMapRenderer {
 
         let retained_polygon_uniforms =
             FrameUniforms::new(&device, "Maps retained polygon frame layout");
+        let dash_atlas = DashAtlasGpu::new(&device);
+        let style_line_uniforms = FrameUniforms::new(&device, "Maps style line frame layout");
         let retained_polygon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Maps retained polygon shader"),
             source: wgpu::ShaderSource::Wgsl(RETAINED_POLYGONS_SHADER.into()),
@@ -849,7 +858,10 @@ impl MapsWgpuBaseMapRenderer {
         let retained_polygon_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Maps retained polygon pipeline layout"),
-                bind_group_layouts: &[Some(retained_polygon_uniforms.layout())],
+                bind_group_layouts: &[
+                    Some(retained_polygon_uniforms.layout()),
+                    Some(&dash_atlas.layout),
+                ],
                 immediate_size: 0,
             });
         let attribute = |format, offset, shader_location| wgpu::VertexAttribute {
@@ -868,6 +880,8 @@ impl MapsWgpuBaseMapRenderer {
             attribute(wgpu::VertexFormat::Float32, 24, 3),
             attribute(wgpu::VertexFormat::Float32, 28, 4),
             attribute(wgpu::VertexFormat::Float32x4, 32, 5),
+            attribute(wgpu::VertexFormat::Float32x4, 48, 6),
+            attribute(wgpu::VertexFormat::Float32x4, 64, 7),
         ];
         let retained_polygon_pipeline =
             |label: &str,
@@ -1038,6 +1052,9 @@ impl MapsWgpuBaseMapRenderer {
             style_symbols: StyleSymbols::default(),
             symbol_gpu,
             placed_labels: 0,
+            line_atlas: LineAtlas::new(),
+            dash_atlas,
+            style_line_uniforms,
         })
     }
 
@@ -1260,8 +1277,10 @@ impl MapsWgpuBaseMapRenderer {
     /// Retains an application shape group (polygons, lines and direction markers), lowered
     /// once by `maps-core`: each shape's ring count, each ring's point count, the
     /// concatenated `[longitude, latitude]` pairs and one paint record per shape (fill
-    /// RGBA, stroke RGBA, stroke width or marker size in CSS px, shape kind). Replaces the
-    /// group's previous content. Returns the shape count.
+    /// RGBA, stroke RGBA, stroke width or marker size in CSS px, shape kind, circle radius,
+    /// line cap, join and limits), then each shape's `line-dasharray` length and the
+    /// concatenated dash arrays (both empty when nothing is dashed). Replaces the group's
+    /// previous content. Returns the shape count.
     #[wasm_bindgen(js_name = setRetainedPolygons)]
     pub fn set_retained_polygons(
         &mut self,
@@ -1270,9 +1289,15 @@ impl MapsWgpuBaseMapRenderer {
         point_counts: &[u32],
         lon_lat: &[f64],
         paint: &[f32],
+        dash_counts: &[u32],
+        dashes: &[f32],
     ) -> Result<u32, JsValue> {
-        let polygons = RetainedPolygons::lower(ring_counts, point_counts, lon_lat, paint)
+        let mut polygons = RetainedPolygons::lower(ring_counts, point_counts, lon_lat, paint)
             .map_err(JsValue::from_str)?;
+        polygons
+            .set_dashes(dash_counts, dashes, &mut self.line_atlas)
+            .map_err(JsValue::from_str)?;
+        self.dash_atlas.upload(&self.queue, &self.line_atlas);
         let count = u32::try_from(polygons.len())
             .map_err(|_| JsValue::from_str("too many retained polygons"))?;
         self.retained_polygon_counters.prepared += u64::from(count);
@@ -1656,6 +1681,12 @@ impl MapsWgpuBaseMapRenderer {
                 &style_frame.draws,
                 &self.application_circle_pipeline,
                 APPLICATION_CIRCLE_VERTEX_COUNT,
+                &StyleLines {
+                    pipeline: &self.retained_line_pipeline,
+                    frames: self.style_line_uniforms.bind_group(),
+                    offsets: &style_frame.line_offsets,
+                    dash_atlas: &self.dash_atlas.bind_group,
+                },
             );
 
             for draw in &application_geometry.draws {
@@ -1790,9 +1821,36 @@ impl MapsWgpuBaseMapRenderer {
             margin: clip.margin,
             pixel_ratio,
         };
-        let frame = self
-            .style_symbols
-            .frame(&self.vector_source, &tiles, view_projection, surface);
+        let mut frame = self.style_symbols.frame(
+            &self.vector_source,
+            &tiles,
+            view_projection,
+            surface,
+            &mut self.line_atlas,
+        );
+        self.dash_atlas.upload(&self.queue, &self.line_atlas);
+        if !frame.line_frames.is_empty() {
+            // Line strips extrude on the map plane: each tile carries its size in CSS px.
+            let line_surface = |local: LocalFrame| {
+                [
+                    self.config.width as f32,
+                    self.config.height as f32,
+                    clip.pixel_ratio as f32,
+                    local.size as f32,
+                ]
+            };
+            let written = self.style_line_uniforms.write(
+                &self.device,
+                &self.queue,
+                frame.line_frames.iter().copied().enumerate(),
+                view_projection,
+                line_surface,
+            );
+            frame.line_offsets = vec![None; frame.line_frames.len()];
+            for (index, offset) in written {
+                frame.line_offsets[index] = Some(offset);
+            }
+        }
         self.placed_labels = frame.placed_labels;
         let atlas = self.style_symbols.atlas();
         self.symbol_gpu
@@ -1928,6 +1986,7 @@ impl MapsWgpuBaseMapRenderer {
         let mut calls = 0;
         for (_, offset) in draws.iter().filter(|(key, _)| *key == group_key) {
             pass.set_bind_group(0, self.retained_polygon_uniforms.bind_group(), &[*offset]);
+            pass.set_bind_group(1, &self.dash_atlas.bind_group, &[]);
             for draw in &group.draws {
                 if let (true, Some(fill)) = (draw.fan_count > 0, &group.fill) {
                     pass.set_vertex_buffer(0, fill.slice(..));

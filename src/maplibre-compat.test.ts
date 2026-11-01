@@ -226,6 +226,43 @@ describe("@moritzbrantner/maps maplibre compatibility", () => {
     expect(map.handlerCount()).toBe(0);
   });
 
+  test("draws dashed lines in a batch per dash array and cap with constant layout (#322)", async () => {
+    const map = createShapeTestMap();
+    const factory = createMapLibreFlatLayerFactory(
+      createTestMapLibre([]),
+      map as unknown as import("maplibre-gl").Map,
+    );
+    const group = createTestLayerGroup();
+    const latLngs: [number, number][] = [
+      [0, 0],
+      [1, 1],
+    ];
+    factory.polyline(latLngs, { lineCap: "square", lineJoin: "bevel" }).addTo(group as never);
+    const dashed = factory
+      .polyline(latLngs, { lineCap: "round", lineDasharray: [0.5, 2] })
+      .addTo(group as never);
+    factory.polyline(latLngs, { lineCap: "round", lineDasharray: [0.5, 2] }).addTo(group as never);
+    await Promise.resolve();
+
+    const layers = [...map.layers.values()] as Array<{
+      layout?: Record<string, unknown>;
+      paint?: Record<string, unknown>;
+    }>;
+    expect(layers).toHaveLength(2);
+    expect(layers[0]?.paint?.["line-dasharray"]).toBeUndefined();
+    expect(layers[1]?.layout?.["line-cap"]).toBe("round");
+    expect(layers[1]?.paint?.["line-dasharray"]).toEqual([0.5, 2]);
+    const [solidSource, dashedSource] = map.sources.values();
+    expect(solidSource?.data.features[0]?.properties).toMatchObject({ lineCap: "square", lineJoin: "bevel" });
+    expect(dashedSource?.data.features).toHaveLength(2);
+
+    // A line whose dashes change moves to the batch of its new dash array.
+    dashed.setStyle?.({ lineDasharray: [] });
+    await Promise.resolve();
+    expect(solidSource?.data.features).toHaveLength(2);
+    expect(dashedSource?.data.features).toHaveLength(1);
+  });
+
   test("dispatches batched shape pointer events to the topmost feature that listens", async () => {
     const map = createShapeTestMap();
     const factory = createMapLibreFlatLayerFactory(

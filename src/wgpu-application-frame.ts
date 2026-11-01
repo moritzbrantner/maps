@@ -37,6 +37,8 @@ export type MapsWgpuApplicationDirectionMarker = {
 
 export type MapsWgpuApplicationLine = {
   color: MapsWgpuColor;
+  /** `MAPS_RETAINED_POLYGON_PAINT_STRIDE` cap, join and limits; absent means round. */
+  lineLayout?: readonly [cap: number, join: number, miterLimit: number, roundLimit: number];
   points: readonly MapsWgpuApplicationPoint[];
   strokeWidth: number;
 };
@@ -79,9 +81,10 @@ export type MapsRetainedApplicationPoints = {
 /**
  * Retained shape paint record shared with `maps-wasm` (`RETAINED_POLYGON_PAINT_LENGTH`):
  * fill RGBA, stroke RGBA (encoded sRGB), stroke width or marker size (CSS px), shape kind,
- * circle radius (CSS px).
+ * circle radius (CSS px), then a line's cap (0 butt, 1 round, 2 square), join (0 bevel,
+ * 1 round, 2 miter), miter limit and round limit.
  */
-export const MAPS_RETAINED_POLYGON_PAINT_STRIDE = 11;
+export const MAPS_RETAINED_POLYGON_PAINT_STRIDE = 15;
 /** Shape kinds of a retained shape group, shared with `maps-wasm` (`RETAINED_SHAPE_*`). */
 export const MAPS_RETAINED_SHAPE_POLYGON = 0;
 export const MAPS_RETAINED_SHAPE_LINE = 1;
@@ -101,6 +104,9 @@ export type MapsRetainedApplicationPolygons = {
   lonLat: Float64Array;
   /** `MAPS_RETAINED_POLYGON_PAINT_STRIDE` values per shape, interaction deltas applied. */
   paint: Float32Array;
+  /** `line-dasharray` length per shape (0 solid), then the concatenated arrays (#322). */
+  dashCounts: Uint32Array;
+  dashes: Float32Array;
 };
 
 /**
@@ -326,8 +332,12 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
               return null;
             }
 
+            const lineLayout = encodeLineLayout(primitive);
+            // Dashes need the retained path's GeoJSON tiles; Canvas draws them otherwise.
+            if (!lineLayout || (primitive.lineDasharray?.length ?? 0) > 0) return null;
+
             pushOrder(MAPS_WGPU_APPLICATION_LINE, lines.length);
-            lines.push({ color, points, strokeWidth });
+            lines.push({ color, lineLayout, points, strokeWidth });
             break;
           }
           case "polygon": {
@@ -599,7 +609,9 @@ export function sameMapsRetainedPolygons(
     same(previous.ringCounts, next.ringCounts) &&
     same(previous.pointCounts, next.pointCounts) &&
     same(previous.lonLat, next.lonLat) &&
-    same(previous.paint, next.paint)
+    same(previous.paint, next.paint) &&
+    same(previous.dashCounts, next.dashCounts) &&
+    same(previous.dashes, next.dashes)
   );
 }
 
@@ -713,6 +725,9 @@ function createRetainedShapes(
   const pointCounts: number[] = [];
   const lonLat: number[] = [];
   const paint = new Float32Array(count * MAPS_RETAINED_POLYGON_PAINT_STRIDE);
+  const dashCounts = new Uint32Array(count);
+  const dashes: number[] = [];
+  let dashed = false;
   // Non-finite geometry stays on the projected path, which fails closed to Canvas.
   const pushRing = (ring: readonly (readonly [number, number])[]) => {
     pointCounts.push(ring.length);
@@ -760,6 +775,14 @@ function createRetainedShapes(
         if (!hasDistinctCoordinates(primitive.coordinates)) return null;
         ringCounts[index] = 1;
         if (!pushRing(primitive.coordinates)) return null;
+        const layout = encodeLineLayout(primitive);
+        if (!layout) return null;
+        paint.set(layout, offset + 11);
+        const dasharray = primitive.lineDasharray ?? [];
+        if (!dasharray.every((value) => Number.isFinite(value) && value >= 0)) return null;
+        dashCounts[index] = dasharray.length;
+        dashes.push(...dasharray);
+        dashed ||= dasharray.length > 0;
         break;
       }
       case "direction-marker": {
@@ -781,6 +804,8 @@ function createRetainedShapes(
   }
   return {
     count,
+    dashCounts: dashed ? dashCounts : new Uint32Array(0),
+    dashes: Float32Array.from(dashes),
     lonLat: Float64Array.from(lonLat),
     paint,
     pointCounts: Uint32Array.from(pointCounts),
@@ -825,4 +850,21 @@ export function createMapsWgpuRetainedFrame(
     polygons: [],
     width,
   };
+}
+
+const LINE_CAPS = { butt: 0, round: 1, square: 2 } as const;
+const LINE_JOINS = { bevel: 0, round: 1, miter: 2 } as const;
+
+/** A line's cap, join and limits as the retained paint record holds them; null if invalid. */
+function encodeLineLayout(
+  line: MapRenderLine<unknown>,
+): [cap: number, join: number, miterLimit: number, roundLimit: number] | null {
+  const cap = LINE_CAPS[line.lineCap ?? "round"];
+  const join = LINE_JOINS[line.lineJoin ?? "round"];
+  const miterLimit = line.lineMiterLimit ?? 2;
+  const roundLimit = line.lineRoundLimit ?? 1.05;
+  if (cap === undefined || join === undefined || !Number.isFinite(miterLimit) || !Number.isFinite(roundLimit)) {
+    return null;
+  }
+  return [cap, join, miterLimit, roundLimit];
 }

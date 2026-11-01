@@ -181,6 +181,7 @@ describe("wgpu application frame", () => {
       lines: [
         {
           color: [0, 0, 0, 0.5],
+          lineLayout: [1, 1, 2, 1.05],
           points: [
             { x: 10, y: 10 },
             { x: 20, y: 20 },
@@ -628,6 +629,33 @@ describe("retained application runs (#195)", () => {
     const [shapes] = result!;
     if (shapes?.kind !== "polygons") throw new Error("expected shapes");
     expect(shapes.polygons.paint[8]).toBe(4.5);
+  });
+
+  test("encodes line caps, joins and dashes (#322)", () => {
+    const dashed: MapRenderLine = {
+      ...line("d"),
+      lineCap: "square",
+      lineDasharray: [3, 1.5],
+      lineJoin: "miter",
+      lineMiterLimit: 4,
+    };
+    const result = runs([line("l"), dashed]);
+    const [shapes] = result!;
+    if (shapes?.kind !== "polygons") throw new Error("expected shapes");
+    const stride = MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+    expect(Array.from(shapes.polygons.paint.subarray(11, 15))).toEqual([1, 1, 2, Math.fround(1.05)]);
+    expect(Array.from(shapes.polygons.paint.subarray(stride + 11, stride + 15))).toEqual([
+      2,
+      2,
+      4,
+      Math.fround(1.05),
+    ]);
+    expect(Array.from(shapes.polygons.dashCounts)).toEqual([0, 2]);
+    expect(Array.from(shapes.polygons.dashes)).toEqual([3, 1.5]);
+    // Without dashes the group sends no dash counts.
+    const solid = runs([line("l")])![0]!;
+    if (solid.kind !== "polygons") throw new Error("expected shapes");
+    expect(solid.polygons.dashCounts.length).toBe(0);
   });
 
   test("retains labeled circles with their unlabeled neighbours (#204)", () => {

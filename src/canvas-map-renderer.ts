@@ -451,12 +451,18 @@ function drawLine<TFeature>(
   hovered: boolean,
 ) {
   traceLine(context, scene.points, false);
+  const width = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
   context.globalAlpha = primitive.strokeOpacity;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-  context.lineWidth = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
+  context.lineCap = primitive.lineCap ?? "round";
+  context.lineJoin = primitive.lineJoin ?? "round";
+  context.miterLimit = primitive.lineMiterLimit ?? 2;
+  context.lineWidth = width;
   context.strokeStyle = primitive.strokeColor;
+  // MapLibre dash lengths are in line widths.
+  const dashes = primitive.lineDasharray ?? [];
+  if (dashes.length > 0) context.setLineDash(dashes.map((dash) => dash * width));
   context.stroke();
+  if (dashes.length > 0) context.setLineDash([]);
   context.globalAlpha = 1;
 }
 

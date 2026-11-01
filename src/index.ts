@@ -157,6 +157,8 @@ export {
   type GeoJsonLayerFeature,
   type GeoJsonLayerProps,
   type GeoJsonLayerStyle,
+  type GeoJsonLineCap,
+  type GeoJsonLineJoin,
 } from "./geojson-layer";
 export {
   createGeoJsonOverlayFeatureCollection,

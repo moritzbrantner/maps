@@ -1,6 +1,6 @@
 //! Maps-specific pixel geometry preparation, shared by the browser backend and native tests.
 
-use maps_core::{LineCap, LineMesh};
+use maps_core::{LineCap, LineJoin, LineLayout, LineMesh};
 use serde::Deserialize;
 use std::borrow::Cow;
 
@@ -326,6 +326,35 @@ pub(super) struct WgpuApplicationLine {
     pub(super) color: [f32; 4],
     pub(super) points: Vec<WgpuApplicationPoint>,
     pub(super) stroke_width: f64,
+    /// `line-cap` (0 butt, 1 round, 2 square), `line-join` (0 bevel, 1 round, 2 miter),
+    /// `line-miter-limit`, `line-round-limit`, as the retained paint record holds them.
+    #[serde(default = "round_line_layout")]
+    pub(super) line_layout: [f64; 4],
+}
+
+fn round_line_layout() -> [f64; 4] {
+    [1.0, 1.0, 2.0, 1.05]
+}
+
+fn decode_line_layout(
+    [cap, join, miter_limit, round_limit]: [f64; 4],
+) -> Result<LineLayout, &'static str> {
+    Ok(LineLayout {
+        cap: match cap {
+            0.0 => LineCap::Butt,
+            1.0 => LineCap::Round,
+            2.0 => LineCap::Square,
+            _ => return Err("invalid wgpu application line cap"),
+        },
+        join: match join {
+            0.0 => LineJoin::Bevel,
+            1.0 => LineJoin::Round,
+            2.0 => LineJoin::Miter,
+            _ => return Err("invalid wgpu application line join"),
+        },
+        miter_limit,
+        round_limit,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1150,12 +1179,13 @@ fn append_application_line(
         return Err("wgpu application line has no non-degenerate segment");
     }
 
-    // MapLibre's round-joined, round-capped line strip (#326): joins are filled without
+    // MapLibre's line strip (#326, #322) with the line's caps and joins: joins are filled without
     // overlap, so a translucent line blends once per pixel (#325).
     let edges = stroke_edges(line.stroke_width / 2.0, pixel_ratio);
-    let mut mesh = LineMesh::new();
+    // Screen px at about the tile zoom: 16 MapLibre tile units each.
+    let mut mesh = LineMesh::with_units(16.0, 1.0);
     let path: Vec<[f64; 2]> = points.iter().map(|point| [point.x, point.y]).collect();
-    mesh.add_line(&path, LineCap::Round, false);
+    mesh.add_line(&path, &decode_line_layout(line.line_layout)?, false);
     for &index in &mesh.indices {
         let vertex = mesh.vertices[index as usize];
         let centre = (vertex.point[0], vertex.point[1]);
@@ -1539,6 +1569,7 @@ mod application_geometry_tests {
                 WgpuApplicationPoint { x: 20.0, y: 20.0 },
             ],
             stroke_width: 2.0,
+            line_layout: round_line_layout(),
         }
     }
 

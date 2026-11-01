@@ -23,6 +23,12 @@ mod vector_basemap_layout;
     feature = "wgpu-base-map"
 ))]
 mod wgpu_base_map;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "wgpu-base-map"
+))]
+mod wgpu_dash_atlas;
 #[cfg(any(
     test,
     all(

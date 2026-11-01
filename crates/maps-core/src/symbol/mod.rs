@@ -13,5 +13,7 @@ pub mod style;
 
 pub use collision::{PlacedSymbol, PlacementTile, place_symbols, symbol_tile_order};
 pub use glyphs::{AtlasRect, GlyphAtlas, GlyphStore, parse_glyph_pbf};
-pub use layout::{LayerBucket, SymbolInstance, TileCircle, TileStyleBuckets, layout_tile};
+pub use layout::{
+    LayerBucket, SymbolInstance, TileCircle, TileDash, TileLine, TileStyleBuckets, layout_tile,
+};
 pub use style::{StyleLayer, StyleLayerKind};

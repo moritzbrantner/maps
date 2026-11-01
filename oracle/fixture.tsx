@@ -11,6 +11,7 @@ import {
   ClusterLayer,
   FlowLayer,
   GeoJsonLayer,
+  type GeoJsonLayerStyle,
   MapView,
   PointLayer,
   type AggregatedMapFeature,
@@ -77,7 +78,7 @@ const oracle: OracleApi = {
 };
 window.__oracle = oracle;
 
-/** Declared before `style` is built at module load, which reads it for `line-dash-caps-joins`. */
+/** The alpine line collection, built once on first use. */
 const alpineLineCache: { collection: ReturnType<typeof buildAlpineLines> | null } = { collection: null };
 
 const rasterSource = (pattern: string) => ({
@@ -215,14 +216,64 @@ const SYMBOL_LAYERS: Array<Record<string, unknown>> = [
   },
 ];
 const GLYPHS_URL = `${TILE_ORIGIN}/glyphs/{fontstack}/{range}.pbf`;
-const tilesetLayers: MapsTilesetLayers = { glyphs: GLYPHS_URL, layers: SYMBOL_LAYERS };
+/**
+ * The `tileset-lines` style layers (#322): MapLibre `line` layers with caps, joins and dashes
+ * over the Tileset's Shortbread source layers, the same objects on both runtimes.
+ */
+const LINE_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "motorway"],
+    id: "motorway-casing",
+    layout: { "line-cap": "square", "line-join": "bevel" },
+    paint: { "line-color": "#c2410c", "line-width": 5 },
+    source: "oracle-vector",
+    "source-layer": "streets",
+    type: "line",
+  },
+  {
+    filter: ["==", ["get", "kind"], "primary"],
+    id: "primary-dashes",
+    layout: { "line-cap": "butt", "line-join": "miter" },
+    paint: { "line-color": "#ea580c", "line-dasharray": [3, 1.5], "line-width": 3 },
+    source: "oracle-vector",
+    "source-layer": "streets",
+    type: "line",
+  },
+  {
+    id: "river-dots",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": "#1d4ed8", "line-dasharray": [0.5, 2], "line-opacity": 0.9, "line-width": 4 },
+    source: "oracle-vector",
+    "source-layer": "water_lines",
+    type: "line",
+  },
+  {
+    filter: ["==", ["get", "admin_level"], 2],
+    id: "border-dash-dot",
+    paint: { "line-color": "#7e22ce", "line-dasharray": [4, 2, 1, 2], "line-width": 2.5 },
+    source: "oracle-vector",
+    "source-layer": "boundaries",
+    type: "line",
+  },
+];
+const tilesetLayers = (name: string): MapsTilesetLayers | null =>
+  name === "symbols"
+    ? { glyphs: GLYPHS_URL, layers: SYMBOL_LAYERS }
+    : name === "tileset-lines"
+      ? { layers: LINE_LAYERS }
+      : null;
 
-/** MapLibre styles beyond the plain vector basemap: `symbols`, and the unsupported scenarios (#322-#324). */
+/** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines` and the unsupported scenarios (#323, #324). */
 function referenceStyle(name: string) {
   switch (name) {
     case "symbols": {
       const style = vectorStyle();
       style.layers.push(...SYMBOL_LAYERS);
+      return style;
+    }
+    case "tileset-lines": {
+      const style = vectorStyle();
+      style.layers.push(...LINE_LAYERS);
       return style;
     }
     case "fill-pattern": {
@@ -236,30 +287,6 @@ function referenceStyle(name: string) {
         type: "fill",
       });
       return style;
-    }
-    case "line-dash-caps-joins": {
-      const line = (id: string, filter: unknown[], layout: Record<string, unknown>, paint: Record<string, unknown>) => ({
-        filter,
-        id,
-        layout,
-        paint,
-        source: "lines",
-        type: "line",
-      });
-      return {
-        layers: [
-          { id: "oracle-raster", source: "oracle", type: "raster" },
-          line("motorways", ["==", ["get", "kind"], "motorway"], { "line-cap": "square", "line-join": "bevel" }, { "line-color": "#c2410c", "line-width": 6 }),
-          line("primary", ["==", ["get", "kind"], "primary"], { "line-cap": "butt", "line-join": "miter" }, { "line-color": "#ea580c", "line-dasharray": [3, 1.5], "line-width": 3 }),
-          line("rivers", ["==", ["get", "kind"], "river"], { "line-cap": "round", "line-join": "round" }, { "line-color": "#1d4ed8", "line-dasharray": [0.5, 2], "line-width": 4 }),
-          line("boundaries", ["==", ["get", "admin_level"], 2], { "line-cap": "butt", "line-join": "miter" }, { "line-color": "#7e22ce", "line-dasharray": [4, 2, 1, 2], "line-width": 2.5 }),
-        ],
-        sources: {
-          lines: { data: alpineLines(), type: "geojson" },
-          oracle: rasterSource("geographic"),
-        },
-        version: 8,
-      };
     }
     case "hillshade-terrain": {
       const dem = {
@@ -293,12 +320,14 @@ function styleFor(): RasterMapStyle {
   if (scenario.basemap === "style") return referenceStyle(scenario.name) as unknown as RasterMapStyle;
   if (scenario.basemap === "vector") {
     // Maps draws the basemap from `tileset`; MapLibre from the equivalent style.
-    const style = scenario.unsupported || scenario.name === "symbols" ? referenceStyle(scenario.name) : vectorStyle();
+    const style =
+      scenario.unsupported || tilesetLayers(scenario.name) ? referenceStyle(scenario.name) : vectorStyle();
     return style as unknown as RasterMapStyle;
   }
   return rasterStyle(scenario.basemap) as unknown as RasterMapStyle;
 }
 const style = styleFor();
+const styleLayers = tilesetLayers(scenario.name);
 
 function record(layer: string, kind: PickEvent["kind"]) {
   return (id: string | null, context: { source: string }) => {
@@ -333,7 +362,7 @@ function App() {
         mapLabel={`Oracle ${scenario.name}`}
         mapStyle={style}
         {...(runtime === "maps" && scenario.basemap === "vector" ? { tileset } : {})}
-        {...(runtime === "maps" && scenario.name === "symbols" ? { tilesetLayers } : {})}
+        {...(runtime === "maps" && styleLayers ? { tilesetLayers: styleLayers } : {})}
         onMapControllerReady={(controller) => {
           oracle.controller = controller;
         }}
@@ -453,7 +482,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
       );
     case "vector-tiles":
     case "symbols":
-    case "line-dash-caps-joins":
+    case "tileset-lines":
     case "fill-pattern":
     case "hillshade-terrain":
       return () => null;
@@ -471,6 +500,22 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
           }}
           layerId="alpine-lines"
         />
+      );
+    case "line-dash-caps-joins":
+      // One layer per class, in MapLibre paint order: square-capped bevelled motorways, then
+      // dashed primary roads (butt, miter), rivers (round dashes) and borders (dash-dot).
+      return (context) => (
+        <>
+          {DASHED_LINE_CLASSES.map(({ filter, layer, style }) => (
+            <GeoJsonLayer
+              {...interactive(layer, context)}
+              featureCollection={dashedLines(layer, filter)}
+              key={layer}
+              layerId={`dashed-${layer}`}
+              {...style}
+            />
+          ))}
+        </>
       );
     case "atlas-flows":
       return (context) => (
@@ -801,3 +846,49 @@ const romanProvinces = {
 };
 
 createRoot(document.getElementById("root")!).render(<App />);
+
+type AlpineLineProperties = Record<string, string | number | undefined>;
+
+/** `line-dash-caps-joins` (#322): MapLibre `line-cap`, `line-join` and `line-dasharray`. */
+const DASHED_LINE_CLASSES: Array<{
+  filter: (properties: AlpineLineProperties) => boolean;
+  layer: string;
+  style: GeoJsonLayerStyle;
+}> = [
+  {
+    filter: (properties) => properties.kind === "motorway",
+    layer: "motorway",
+    style: { lineCap: "square", lineColor: "#c2410c", lineJoin: "bevel", lineOpacity: 1, lineWidth: 6 },
+  },
+  {
+    filter: (properties) => properties.kind === "primary",
+    layer: "primary",
+    style: { lineCap: "butt", lineColor: "#ea580c", lineDasharray: [3, 1.5], lineJoin: "miter", lineOpacity: 1, lineWidth: 3 },
+  },
+  {
+    filter: (properties) => properties.kind === "river",
+    layer: "river",
+    style: { lineCap: "round", lineColor: "#1d4ed8", lineDasharray: [0.5, 2], lineJoin: "round", lineOpacity: 1, lineWidth: 4 },
+  },
+  {
+    filter: (properties) => properties.admin_level === 2,
+    layer: "boundary",
+    style: { lineCap: "butt", lineColor: "#7e22ce", lineDasharray: [4, 2, 1, 2], lineJoin: "miter", lineOpacity: 1, lineWidth: 2.5 },
+  },
+];
+
+const dashedLineCache = new Map<string, ReturnType<typeof buildAlpineLines>>();
+
+/** One stable collection per class, so layers do not rebuild their data per render. */
+function dashedLines(layer: string, filter: (properties: AlpineLineProperties) => boolean) {
+  let collection = dashedLineCache.get(layer);
+  if (!collection) {
+    const all = alpineLines() as unknown as { features: Array<{ properties: AlpineLineProperties }> };
+    collection = {
+      features: all.features.filter((feature) => filter(feature.properties)),
+      type: "FeatureCollection",
+    } as unknown as ReturnType<typeof buildAlpineLines>;
+    dashedLineCache.set(layer, collection);
+  }
+  return collection;
+}

@@ -1,5 +1,5 @@
-//! Per-tile buckets for tileset `circle` and `symbol` layers: MapLibre's `CircleBucket`
-//! points and `performSymbolLayout` point-placement symbol instances (shaped glyph quads,
+//! Per-tile buckets for tileset `line`, `circle` and `symbol` layers: MapLibre's `LineBucket`
+//! strips (#322), `CircleBucket` points and `performSymbolLayout` point-placement symbol instances (shaped glyph quads,
 //! collision boxes and evaluated paint), in MapLibre's 8192-unit tile space.
 
 use std::collections::BTreeSet;
@@ -12,6 +12,7 @@ use super::glyphs::{GLYPH_PBF_BORDER, GlyphStore};
 use super::polylabel::{classify_rings, pole_of_inaccessibility};
 use super::shaping::{ONE_EM, ShapeOptions, SymbolAnchor, shape_text};
 use super::style::{StyleLayer, StyleLayerKind};
+use crate::line_mesh::{LineCap, LineJoin, LineLayout, LineMesh};
 use crate::mvt_features::{MvtFeature, MvtGeometryType, MvtLayer};
 
 /// MapLibre's tile extent for buckets.
@@ -60,8 +61,31 @@ pub struct SymbolInstance {
     pub feature_index: usize,
 }
 
+/// A `line-dasharray` as one feature needs it from the dash atlas.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TileDash {
+    /// Dash and gap lengths in line widths.
+    pub dasharray: Vec<f64>,
+    /// Round dash ends: a round `line-cap` that the dash atlas sees (see [`layout_lines`]).
+    pub round: bool,
+    /// A data-driven dash array: MapLibre stores its period as an integer (`Uint16`).
+    pub integer_period: bool,
+}
+
+/// One feature of a line layer: its strip in tile units (8192 per tile) and evaluated paint.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TileLine {
+    pub mesh: LineMesh,
+    /// Straight-alpha color, `line-opacity` applied.
+    pub color: [f32; 4],
+    /// `line-width` in CSS px.
+    pub width: f32,
+    pub dash: Option<TileDash>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerBucket {
+    Lines(Vec<TileLine>),
     Circles(Vec<TileCircle>),
     Symbols {
         instances: Vec<SymbolInstance>,
@@ -108,6 +132,10 @@ pub fn layout_tile(
             .iter()
             .find(|candidate| candidate.name == layer.source_layer);
         let bucket = match layer.kind {
+            StyleLayerKind::Line => LayerBucket::Lines(match features {
+                Some(source) => layout_lines(layer, source, z)?,
+                None => Vec::new(),
+            }),
             StyleLayerKind::Circle => LayerBucket::Circles(match features {
                 Some(source) => layout_circles(layer, source, z)?,
                 None => Vec::new(),
@@ -396,5 +424,196 @@ fn anchors(feature: &MvtFeature, scale: f64) -> Vec<[f64; 2]> {
                 .map(|polygon| pole_of_inaccessibility(polygon, 16.0))
                 .collect()
         }
+    }
+}
+
+/// MapLibre's `LineBucket.addFeature` for one tile: each accepted line or polygon ring is a
+/// strip with the feature's `line-cap`, `line-join` and limits, carrying its `line-color`,
+/// `line-opacity`, `line-width` and `line-dasharray`. As in MapLibre, a constant dash array
+/// takes round dash ends only from a constant `line-cap: round`, and a data-driven one from
+/// each feature's cap.
+pub fn layout_lines(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<TileLine>, String> {
+    let scale = scale(source);
+    let dash_data_driven = layer.raw_paint("line-dasharray").is_some_and(|value| {
+        value
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(Value::as_str)
+            .is_some_and(|op| op != "literal")
+    });
+    let constant_round_cap = layer.raw_layout("line-cap").and_then(Value::as_str) == Some("round");
+    let mut lines = Vec::new();
+    for feature in &source.features {
+        if feature.geometry_type == MvtGeometryType::Point {
+            continue;
+        }
+        let context = context(feature, f64::from(z));
+        if !layer.accepts(&context)? {
+            continue;
+        }
+        let cap = match layer.string(false, "line-cap", "butt", &context)?.as_str() {
+            "round" => LineCap::Round,
+            "square" => LineCap::Square,
+            _ => LineCap::Butt,
+        };
+        let join = match layer
+            .string(false, "line-join", "miter", &context)?
+            .as_str()
+        {
+            "round" => LineJoin::Round,
+            "bevel" => LineJoin::Bevel,
+            _ => LineJoin::Miter,
+        };
+        let line_layout = LineLayout {
+            cap,
+            join,
+            miter_limit: layer.number(false, "line-miter-limit", 2.0, &context)?,
+            round_limit: layer.number(false, "line-round-limit", 1.05, &context)?,
+        };
+        let width = layer.number(true, "line-width", 1.0, &context)?;
+        let opacity = layer.number(true, "line-opacity", 1.0, &context)?;
+        let mut color = layer.color(
+            "line-color",
+            Rgba::parse("#000").unwrap_or(Rgba::TRANSPARENT),
+            &context,
+        )?;
+        color.a *= opacity;
+        let dasharray: Option<Vec<f64>> = layer
+            .paint_value("line-dasharray", &context)?
+            .and_then(|value| {
+                value
+                    .as_array()
+                    .map(|items| items.iter().filter_map(Value::as_f64).collect())
+            })
+            .filter(|values: &Vec<f64>| {
+                !values.is_empty()
+                    && values
+                        .iter()
+                        .all(|value| value.is_finite() && *value >= 0.0)
+            });
+        let dash = dasharray.map(|dasharray| TileDash {
+            dasharray,
+            round: if dash_data_driven {
+                cap == LineCap::Round
+            } else {
+                constant_round_cap
+            },
+            integer_period: dash_data_driven,
+        });
+        let closed = feature.geometry_type == MvtGeometryType::Polygon;
+        let mut mesh = LineMesh::new();
+        for path in &feature.geometry {
+            let points: Vec<[f64; 2]> = path
+                .iter()
+                .map(|point| {
+                    [
+                        js_round(f64::from(point[0]) * scale),
+                        js_round(f64::from(point[1]) * scale),
+                    ]
+                })
+                .collect();
+            mesh.add_line(&points, &line_layout, closed);
+        }
+        if mesh.indices.is_empty() || width <= 0.0 || color.a < 0.01 {
+            continue;
+        }
+        lines.push(TileLine {
+            mesh,
+            color: color.straight(),
+            width: width as f32,
+            dash,
+        });
+    }
+    Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn line_layer(json: &str) -> StyleLayer {
+        StyleLayer::parse(&serde_json::from_str(json).unwrap()).unwrap()
+    }
+
+    fn source() -> MvtLayer {
+        let feature = |kind: &str, dash: Value| MvtFeature {
+            id: None,
+            geometry_type: MvtGeometryType::LineString,
+            geometry: vec![vec![[0, 0], [2048, 0], [2048, 2048]]],
+            properties: BTreeMap::from([
+                ("kind".to_owned(), Value::from(kind)),
+                ("dash".to_owned(), dash),
+            ]),
+        };
+        MvtLayer {
+            name: "streets".to_owned(),
+            extent: 4096,
+            features: vec![
+                feature("primary", serde_json::json!([3, 1.5])),
+                feature("track", serde_json::json!([1, 1])),
+            ],
+        }
+    }
+
+    #[test]
+    fn line_layers_lay_out_strips_with_their_layout_and_dashes() {
+        let layer = line_layer(
+            r##"{"id":"p","type":"line","source-layer":"streets","filter":["==",["get","kind"],"primary"],
+                 "layout":{"line-cap":"round","line-join":"bevel"},
+                 "paint":{"line-color":"#ff0000","line-opacity":0.5,"line-width":3,"line-dasharray":[3,1.5]}}"##,
+        );
+        let lines = layout_lines(&layer, &source(), 8).unwrap();
+        let [line] = &lines[..] else {
+            panic!("{lines:?}")
+        };
+        assert_eq!(line.width, 3.0);
+        assert_eq!(line.color, [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(
+            line.dash,
+            Some(TileDash {
+                dasharray: vec![3.0, 1.5],
+                round: true,
+                integer_period: false,
+            })
+        );
+        // Tile units: the 4096 extent doubles to MapLibre's 8192.
+        let max_x = line
+            .mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.point[0])
+            .fold(f64::MIN, f64::max);
+        assert_eq!(max_x, 4096.0);
+    }
+
+    #[test]
+    fn a_data_driven_dash_array_takes_round_ends_per_feature_and_an_integer_period() {
+        let data_driven = line_layer(
+            r#"{"id":"d","type":"line","source-layer":"streets",
+                 "layout":{"line-cap":["match",["get","kind"],"track","round","butt"]},
+                 "paint":{"line-dasharray":["get","dash"]}}"#,
+        );
+        let lines = layout_lines(&data_driven, &source(), 8).unwrap();
+        let dashes: Vec<_> = lines
+            .iter()
+            .map(|line| line.dash.clone().unwrap())
+            .collect();
+        assert_eq!(
+            (dashes[0].round, dashes[1].round),
+            (false, true),
+            "the cap per feature"
+        );
+        assert!(dashes.iter().all(|dash| dash.integer_period));
+
+        // A constant dash array only sees a constant round cap.
+        let constant = line_layer(
+            r#"{"id":"c","type":"line","source-layer":"streets",
+                 "layout":{"line-cap":["match",["get","kind"],"track","round","butt"]},
+                 "paint":{"line-dasharray":[1,1]}}"#,
+        );
+        let lines = layout_lines(&constant, &source(), 8).unwrap();
+        assert!(lines.iter().all(|line| !line.dash.as_ref().unwrap().round));
     }
 }

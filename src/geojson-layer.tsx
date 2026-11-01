@@ -5,6 +5,7 @@ import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, type R
 import { joinClassNames, toLatLng } from "./map-display";
 import {
   createFlatGeometryLayers,
+  flatLineShape,
   getGeometryCenter,
   resolveFeatureStyle,
   type FlatGeometryLayer,
@@ -30,9 +31,27 @@ export type GeoJsonLayerFeature<TProperties = Record<string, unknown>> = {
   sourceIndex: number;
 };
 
+/** MapLibre's `line-cap`. */
+export type GeoJsonLineCap = "butt" | "round" | "square";
+/** MapLibre's `line-join`. */
+export type GeoJsonLineJoin = "bevel" | "round" | "miter";
+
 export type GeoJsonLayerStyle = {
+  /** How open lines end, as MapLibre's `line-cap`. Default `"round"`. */
+  lineCap?: GeoJsonLineCap;
   lineColor?: string;
+  /**
+   * Dash and gap lengths in line widths, as MapLibre's `line-dasharray` (an odd count
+   * repeats with the first dash). Empty (the default) draws a solid line.
+   */
+  lineDasharray?: readonly number[];
+  /** How segments meet, as MapLibre's `line-join`. Default `"round"`. */
+  lineJoin?: GeoJsonLineJoin;
+  /** MapLibre's `line-miter-limit`: longer miter joins become bevels. Default 2. */
+  lineMiterLimit?: number;
   lineOpacity?: number;
+  /** MapLibre's `line-round-limit`: shorter round joins become miters. Default 1.05. */
+  lineRoundLimit?: number;
   lineWidth?: number;
   pointColor?: string;
   pointRadius?: number;
@@ -71,8 +90,13 @@ export function GeoJsonLayer<
   renderFeaturePopup,
   renderFeatureTooltip,
   selectedFeatureId,
+  lineCap,
   lineColor,
+  lineDasharray,
+  lineJoin,
+  lineMiterLimit,
   lineOpacity,
+  lineRoundLimit,
   lineWidth,
   pointColor,
   pointRadius,
@@ -96,8 +120,13 @@ export function GeoJsonLayer<
   const styleProps = useMemo(
     () =>
       compactGeoJsonLayerStyle({
+        lineCap,
         lineColor,
+        lineDasharray,
+        lineJoin,
+        lineMiterLimit,
         lineOpacity,
+        lineRoundLimit,
         lineWidth,
         pointColor,
         pointRadius,
@@ -107,8 +136,13 @@ export function GeoJsonLayer<
         polygonStrokeWidth,
       }),
     [
+      lineCap,
       lineColor,
+      lineDasharray,
+      lineJoin,
+      lineMiterLimit,
       lineOpacity,
+      lineRoundLimit,
       lineWidth,
       pointColor,
       pointRadius,
@@ -479,6 +513,7 @@ function getFlatLineLayerStyle(
   hovered = false,
 ) {
   return {
+    ...flatLineShape(style),
     color: style.lineColor,
     opacity: style.lineOpacity,
     weight: style.lineWidth + interactionStrokeDelta(selected, hovered, 1.5),

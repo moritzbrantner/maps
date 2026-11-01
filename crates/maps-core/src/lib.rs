@@ -9,6 +9,7 @@ mod bounded_runtime;
 mod engine;
 mod flat_runtime;
 mod geojson_vt;
+mod line_atlas;
 mod line_mesh;
 mod matrix_camera;
 mod mvt_features;
@@ -38,9 +39,10 @@ pub use flat_runtime::{
 };
 use geo_core::{BBox, Coordinate};
 pub use geojson_vt::{
-    GEOJSON_VT_EXTENT, GEOJSON_VT_MAX_ZOOM, GEOJSON_VT_TOLERANCE, SimplifiedLine,
+    GEOJSON_VT_EXTENT, GEOJSON_VT_MAX_ZOOM, GEOJSON_VT_TOLERANCE, SimplifiedLine, TileLinePiece,
 };
-pub use line_mesh::{LineCap, LineMesh, LineMeshVertex};
+pub use line_atlas::{DashEntry, LINE_ATLAS_HEIGHT, LINE_ATLAS_WIDTH, LineAtlas};
+pub use line_mesh::{LineCap, LineJoin, LineLayout, LineMesh, LineMeshVertex};
 pub use matrix_camera::{MapLocalRenderFrame, MapLocalViewportBounds};
 pub use mvt_features::{MvtFeature, MvtGeometryType, MvtLayer, decode_mvt_layers};
 pub use scenario::{

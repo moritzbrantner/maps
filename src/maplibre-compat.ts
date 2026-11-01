@@ -32,6 +32,12 @@ export type FlatLayerOptions = {
   fillColor?: string;
   fillOpacity?: number;
   interactive?: boolean;
+  /** MapLibre line layout and dashes (#322); lines only. */
+  lineCap?: "butt" | "round" | "square";
+  lineDasharray?: readonly number[];
+  lineJoin?: "bevel" | "round" | "miter";
+  lineMiterLimit?: number;
+  lineRoundLimit?: number;
   opacity?: number;
   radius?: number;
   weight?: number;
@@ -985,6 +991,22 @@ function getMapEventPoint(event: unknown) {
 }
 
 type ShapeKind = "line" | "polygon";
+/**
+ * Dashed lines get a batch per dash array and cap (#322), whose layer sets both as constants:
+ * no dash array is solid under round caps, a data-driven `line-dasharray` stores its period
+ * as an integer (`Uint16`), and only a constant `line-cap` gives dashes round ends.
+ */
+type BatchKind = ShapeKind | `dashed-line:${string}`;
+
+function dashedBatchKind(cap: string, dasharray: readonly number[]): BatchKind {
+  return `dashed-line:${JSON.stringify({ cap, dasharray })}`;
+}
+
+function parseDashedBatchKind(kind: BatchKind) {
+  return kind.startsWith("dashed-line:")
+    ? (JSON.parse(kind.slice("dashed-line:".length)) as { cap: string; dasharray: number[] })
+    : null;
+}
 
 /** The resolved per-feature paint of a batched line or polygon (also its feature-state). */
 type ShapePaint = {
@@ -998,7 +1020,7 @@ type ShapePaint = {
 /** Pointer events MapLibre also delivers through a map-level box query, so thin lines stay clickable. */
 const SHAPE_CLICK_TOLERANCE_PX = 6;
 
-const shapeBatches = new WeakMap<FlatLayerGroup, Partial<Record<ShapeKind, MapLibreShapeBatch>>>();
+const shapeBatches = new WeakMap<FlatLayerGroup, Partial<Record<string, MapLibreShapeBatch>>>();
 
 function resolveShapePaint(kind: ShapeKind, options: FlatLayerOptions): ShapePaint {
   if (kind === "line") {
@@ -1050,7 +1072,7 @@ class MapLibreShapeBatch {
   private flushQueued = false;
   private disposed = false;
 
-  static for(map: MapLibreMap, kind: ShapeKind, group: FlatLayerGroup) {
+  static for(map: MapLibreMap, kind: BatchKind, group: FlatLayerGroup) {
     let batches = shapeBatches.get(group);
 
     if (!batches) {
@@ -1070,10 +1092,10 @@ class MapLibreShapeBatch {
 
   private constructor(
     private readonly map: MapLibreMap,
-    private readonly kind: ShapeKind,
+    private readonly kind: BatchKind,
     readonly group: FlatLayerGroup,
   ) {
-    this.layerIds = kind === "line" ? [`${this.id}:line`] : [`${this.id}:fill`, `${this.id}:outline`];
+    this.layerIds = kind !== "polygon" ? [`${this.id}:line`] : [`${this.id}:fill`, `${this.id}:outline`];
     // Created now, not at the first flush, so the batch keeps its place under layers the group
     // adds after it (editor handles above their lines, endpoints above flows).
     this.inTestGroup(() => this.addStyleLayers());
@@ -1220,22 +1242,30 @@ class MapLibreShapeBatch {
       type: "geojson",
     } as never);
 
+    const isLine = this.kind !== "polygon";
+    const dashed = parseDashedBatchKind(this.kind);
     const outline = {
-      layout: {
-        "line-cap": "round",
-        "line-join": "round",
-      },
+      // Layout is per feature but never feature-state: changing it re-sends the data.
+      layout: isLine
+        ? {
+            "line-cap": dashed ? dashed.cap : ["coalesce", ["get", "lineCap"], "round"],
+            "line-join": ["coalesce", ["get", "lineJoin"], "round"],
+            "line-miter-limit": ["coalesce", ["get", "lineMiterLimit"], 2],
+            "line-round-limit": ["coalesce", ["get", "lineRoundLimit"], 1.05],
+          }
+        : { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-color": shapePaintValue("color", this.kind === "line" ? "#2563eb" : "#0f766e"),
+        "line-color": shapePaintValue("color", isLine ? "#2563eb" : "#0f766e"),
         "line-opacity": shapePaintValue("opacity", 1),
         "line-width": shapePaintValue("weight", 2),
+        ...(dashed ? { "line-dasharray": dashed.dasharray } : {}),
       },
       source: this.sourceId,
       type: "line",
     };
 
-    if (this.kind === "line") {
-      this.map.addLayer({ ...outline, id: this.layerIds[0]!, metadata: { flatBatch: "line" } } as never);
+    if (isLine) {
+      this.map.addLayer({ ...outline, id: this.layerIds[0]!, metadata: { flatBatch: dashed ? "dashed-line" : "line" } } as never);
       return;
     }
 
@@ -1397,7 +1427,7 @@ class MapLibreShapeLayer implements FlatLayer {
       group.layers.push(this);
     }
 
-    const batch = MapLibreShapeBatch.for(this.map, this.kind, group);
+    const batch = MapLibreShapeBatch.for(this.map, this.batchKind(), group);
 
     if (this.batch !== batch) {
       this.batch?.delete(this);
@@ -1473,9 +1503,23 @@ class MapLibreShapeLayer implements FlatLayer {
   }
 
   setStyle(options: FlatLayerOptions) {
+    const before = this.batchKind();
+    const layout = lineLayoutKey(this.options);
     Object.assign(this.options, options);
+    if (this.batch && this.batchKind() !== before) {
+      this.addTo(this.batch.group);
+    } else if (layout !== lineLayoutKey(this.options)) {
+      this.batch?.schedule();
+    }
     this.batch?.restyle(this);
     return this;
+  }
+
+  private batchKind(): BatchKind {
+    const dasharray = this.options.lineDasharray ?? [];
+    return this.kind === "line" && dasharray.length > 0
+      ? dashedBatchKind(this.options.lineCap ?? "round", dasharray)
+      : this.kind;
   }
 
   events() {
@@ -1516,6 +1560,7 @@ class MapLibreShapeLayer implements FlatLayer {
       geometry,
       properties: {
         ...resolveShapePaint(this.kind, this.options),
+        ...(this.kind === "line" ? lineLayoutProperties(this.options) : {}),
         ...(this.options.className ? { className: this.options.className } : {}),
         ...(this.options.interactive !== undefined ? { interactive: this.options.interactive } : {}),
         ...(this.options.bubblingMouseEvents !== undefined
@@ -1864,4 +1909,18 @@ export function attachMapLibreMarkerConstructor(
   marker: typeof import("maplibre-gl").Marker,
 ) {
   (map as unknown as { _mbMarkerConstructor?: typeof import("maplibre-gl").Marker })._mbMarkerConstructor = marker;
+}
+
+/** A line's MapLibre layout and dashes as feature properties (#322). */
+function lineLayoutProperties(options: FlatLayerOptions) {
+  return {
+    ...(options.lineCap ? { lineCap: options.lineCap } : {}),
+    ...(options.lineJoin ? { lineJoin: options.lineJoin } : {}),
+    ...(options.lineMiterLimit !== undefined ? { lineMiterLimit: options.lineMiterLimit } : {}),
+    ...(options.lineRoundLimit !== undefined ? { lineRoundLimit: options.lineRoundLimit } : {}),
+  };
+}
+
+function lineLayoutKey(options: FlatLayerOptions) {
+  return JSON.stringify(lineLayoutProperties(options));
 }
