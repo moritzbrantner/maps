@@ -75,8 +75,18 @@ export function isNorthUp(camera: Camera) {
 /** FLIP limits, as in render-engine: mean and 99th-percentile per-pixel error. */
 export const FLIP_MEAN_MAX = 0.005;
 export const FLIP_P99_MAX = 0.05;
-/** The first-party runtime may take at most this many times MapLibre's median frame time. */
+/** The first-party runtime may take at most this many times MapLibre's frame time. */
 export const FRAME_TIME_MARGIN = 1.1;
+
+/** One timed round in the fixture: untimed warm-up, then back-to-back frame batches. */
+export type FrameTiming = {
+  batchFrames: number;
+  batches: number;
+  /** Frames per camera orbit (the path both runtimes follow). */
+  orbitFrames: number;
+  warmupFrames: number;
+  warmupMs: number;
+};
 /** Bounds after pan/zoom agree when every edge is within this many screen pixels. */
 export const BOUNDS_TOLERANCE_PX = 1;
 

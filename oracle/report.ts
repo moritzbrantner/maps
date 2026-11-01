@@ -9,11 +9,11 @@ type Report = {
   flipP99Max: number;
   frameTimeGate: boolean;
   frameTimeMargin: number;
-  frames: number;
   generatedAt: string;
   maplibreVersion: string | null;
   passed: boolean;
   scenarios: Array<Scenario>;
+  timing: { batchFrames: number; batches: number; retries: number; rounds: number; warmupMs: number };
 };
 
 /** A gated scenario has every field; an unsupported one only has the MapLibre render. */
@@ -99,7 +99,7 @@ export function renderReport(report: Report) {
   <th scope="row"><a href="#${escape(s.name)}">${escape(s.name)}</a><small>${escape(s.capability)}</small></th>
   ${gateCell(s, "image", `${num(s.image.mean, 4)} / ${num(s.image.p99, 3)}`)}
   ${gateCell(s, "interaction", s.interaction.ok ? "same" : `${s.interaction.steps.filter((step) => !step.ok).length} of ${s.interaction.steps.length} differ`)}
-  ${gateCell(s, "time", s.time.ratio === null ? "–" : `${num(s.time.mapsMs, 2)} / ${num(s.time.maplibreMs, 2)} ms (${num(s.time.ratio, 2)}×)`)}
+  ${gateCell(s, "time", s.time.ratio === null ? "–" : `${num(s.time.mapsMs, 3)} / ${num(s.time.maplibreMs, 3)} ms (${num(s.time.ratio, 2)}×)`)}
   <td class="${s.passed ? "pass" : "fail"}">${escape(s.verdict)}</td>
 </tr>`,
     )
@@ -175,7 +175,7 @@ a { color: inherit; }
 <main>
 <h1>Maps vs MapLibre oracle</h1>
 <p class="meta">Commit ${escape(report.commit ?? "unknown")} · MapLibre GL ${escape(report.maplibreVersion ?? "?")} · ${escape(report.generatedAt)}<br />
-Gates per scenario: FLIP mean ≤ ${report.flipMeanMax} and p99 ≤ ${report.flipP99Max} (or MapLibre's own noise floor, if higher); identical picked ids and bounds within ${report.boundsTolerancePx} px; frame time ≤ ${report.frameTimeMargin}× MapLibre (${report.frameTimeGate ? "enforced" : "advisory"} on ${escape(report.adapter.renderer)}, median of ${report.frames} frames).<br />
+Gates per scenario: FLIP mean ≤ ${report.flipMeanMax} and p99 ≤ ${report.flipP99Max} (or MapLibre's own noise floor, if higher); identical picked ids and bounds within ${report.boundsTolerancePx} px; frame time ≤ ${report.frameTimeMargin}× MapLibre (${report.frameTimeGate ? "enforced" : "advisory"} on ${escape(report.adapter.renderer)}; each side's fastest of ${report.timing.rounds}+ interleaved rounds, a round being the median of ${report.timing.batches} batches of ${report.timing.batchFrames} back-to-back frames after a ${report.timing.warmupMs} ms warm-up; up to ${report.timing.retries} more round pairs before a ratio fails).<br />
 Overall: <strong>${report.passed ? "gate passes" : "gate fails"}</strong>; ${gated.filter((s) => s.gates!.image && s.gates!.interaction && s.gates!.time).length} of ${gated.length} gated scenarios at full parity, ${report.scenarios.length - gated.length} unsupported. Amber cells are known gaps owned by the linked issue; grey rows are capabilities Maps does not implement yet (MapLibre reference only).</p>
 <div class="overview"><table>
 <thead><tr><th>scenario</th><th>image (FLIP mean / p99)</th><th>interaction</th><th>frame time (Maps / MapLibre)</th><th>result</th></tr></thead>

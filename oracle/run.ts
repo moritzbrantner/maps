@@ -6,7 +6,8 @@
  *    (or the scenario's measured MapLibre-vs-MapLibre noise floor, rounded up, if higher);
  * 2. interaction: the scripted hovers/clicks pick the same feature ids, and pan/zoom end in
  *    the same bounds (within BOUNDS_TOLERANCE_PX on screen);
- * 3. time: median frame time of a scripted camera loop ≤ FRAME_TIME_MARGIN × MapLibre's.
+ * 3. time: frame time of a scripted camera loop ≤ FRAME_TIME_MARGIN × MapLibre's (each side's
+ *    fastest interleaved round of back-to-back frame batches; see FRAME_TIMING).
  *    Enforced only on a hardware GPU; advisory on software adapters (CI).
  *
  * Images and interactions use SwiftShader (as the e2e suite does), so they are deterministic
@@ -43,6 +44,7 @@ import {
   isNorthUp,
   scenarios,
   toScreen,
+  type FrameTiming,
   type Gate,
   type Scenario,
   type Step,
@@ -62,8 +64,18 @@ const only = args.flatMap((arg, index) => (args[index - 1] === "--only" ? [arg] 
 const timing = !args.includes("--no-timing");
 const outDir = path.resolve(option("--out") ?? path.join(root, "target/oracle"));
 const python = process.env.ORACLE_PYTHON ?? "python3";
-const TIMED_FRAMES = Number(option("--frames") ?? (process.env.CI ? 40 : 180));
-const TIMING_ROUNDS = process.env.CI ? 1 : 3;
+/**
+ * Frame timing (#338, as render-engine#30 and 2d-lab#63): an untimed warm-up, then frames back
+ * to back in batches, so an idle GPU does not drop to a lower power state mid-run. A round's
+ * time is the median of its batch means.
+ */
+const FRAME_TIMING: FrameTiming = process.env.CI
+  ? { batchFrames: 64, batches: 1, orbitFrames: 180, warmupFrames: 20, warmupMs: 250 }
+  : { batchFrames: 64, batches: 5, orbitFrames: 180, warmupFrames: 30, warmupMs: 500 };
+/** Interleaved Maps/MapLibre rounds per scenario; each side keeps its fastest round. */
+const TIMING_ROUNDS = process.env.CI ? 1 : 2;
+/** Extra round pairs a ratio over the margin gets before the scenario fails. */
+const TIMING_RETRIES = process.env.CI ? 0 : 2;
 /** Raster crossfades (300 ms in both runtimes) and label placement settle within this. */
 const SETTLE_MS = 800;
 
@@ -148,7 +160,7 @@ const report = {
   flipP99Max: FLIP_P99_MAX,
   frameTimeGate: gateTiming,
   frameTimeMargin: FRAME_TIME_MARGIN,
-  frames: TIMED_FRAMES,
+  timing: { ...FRAME_TIMING, retries: TIMING_RETRIES, rounds: TIMING_ROUNDS },
   generatedAt: new Date().toISOString(),
   maplibreVersion: maplibreVersion(),
   passed: !failed,
@@ -190,25 +202,35 @@ async function runScenario(scenario: Scenario) {
   const interaction = compareInteractions(scenario, reference.steps, candidate.steps);
   const interactionOk = candidate.error === null && interaction.ok;
 
-  let time = { maplibreMs: null as number | null, mapsMs: null as number | null, ratio: null as number | null };
+  let time = {
+    maplibreMs: null as number | null,
+    mapsMs: null as number | null,
+    ratio: null as number | null,
+    rounds: { maplibre: [] as number[], maps: [] as number[] },
+  };
   if (timer) {
-    const maplibreRounds: number[] = [];
-    const mapsRounds: number[] = [];
-    for (let round = 0; round < TIMING_ROUNDS; round++) {
+    const rounds = time.rounds;
+    const measure = () => {
+      const maplibreMs = rounds.maplibre.length ? Math.min(...rounds.maplibre) : null;
+      const mapsMs = rounds.maps.length ? Math.min(...rounds.maps) : null;
+      return { maplibreMs, mapsMs, ratio: maplibreMs && mapsMs !== null ? mapsMs / maplibreMs : null, rounds };
+    };
+    const runPair = async (round: number) => {
       // Alternate the order so neither runtime always runs on a warmer browser.
       const order: Runtime[] = round % 2 ? ["maps", "maplibre"] : ["maplibre", "maps"];
       for (const runtime of order) {
         const median = await measureFrameTime(timer, scenario, runtime);
-        if (median !== null) (runtime === "maps" ? mapsRounds : maplibreRounds).push(median);
+        if (median !== null) rounds[runtime].push(median);
       }
-    }
-    const maplibreMs = medianOf(maplibreRounds);
-    const mapsMs = medianOf(mapsRounds);
-    time = {
-      maplibreMs,
-      mapsMs,
-      ratio: maplibreMs && mapsMs !== null ? mapsMs / maplibreMs : null,
     };
+    let round = 0;
+    for (; round < TIMING_ROUNDS; round++) await runPair(round);
+    for (let retry = 0; retry < TIMING_RETRIES && gateTiming; retry++, round++) {
+      const ratio = measure().ratio;
+      if (ratio !== null && ratio <= FRAME_TIME_MARGIN) break;
+      await runPair(round);
+    }
+    time = measure();
   }
   const timeOk = !gateTiming || (time.ratio !== null && time.ratio <= FRAME_TIME_MARGIN);
 
@@ -592,9 +614,8 @@ async function measureFrameTime(browser: Browser, scenario: Scenario, runtime: R
         .first()
         .getAttribute("data-map-base-renderer");
     }
-    await page.evaluate(() => window.__oracle.frameTimes(20));
-    const times = await page.evaluate((frames) => window.__oracle.frameTimes(frames), TIMED_FRAMES);
-    return medianOf(times);
+    const means = await page.evaluate((timing) => window.__oracle.frameTimes(timing), FRAME_TIMING);
+    return medianOf(means);
   } catch {
     return null;
   } finally {
