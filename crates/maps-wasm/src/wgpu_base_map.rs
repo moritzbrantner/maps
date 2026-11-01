@@ -77,6 +77,8 @@ impl RetainedResource for RetainedPointGroup {
 struct RetainedPolygonGroup {
     polygons: RetainedPolygons,
     anchor: Option<[f64; 2]>,
+    /// The GeoJSON tile zoom the line geometry was built for.
+    tile_zoom: Option<u8>,
     fill: Option<wgpu::Buffer>,
     stroke: Option<wgpu::Buffer>,
     draws: Vec<RetainedPolygonDraw>,
@@ -95,6 +97,8 @@ struct RetainedPolygonCounters {
     prepared: u64,
     /// Anchor rebuilds of geometry (first draw and deterministic rebases).
     rebases: u64,
+    /// Rebuilds of line geometry for a new GeoJSON tile zoom (floored zoom changes, #334).
+    tile_zooms: u64,
     /// Geometry bytes written to GPU buffers.
     upload_bytes: u64,
 }
@@ -1242,6 +1246,7 @@ impl MapsWgpuBaseMapRenderer {
             RetainedPolygonGroup {
                 polygons,
                 anchor: None,
+                tile_zoom: None,
                 fill: None,
                 stroke: None,
                 draws: Vec::new(),
@@ -1316,7 +1321,7 @@ impl MapsWgpuBaseMapRenderer {
     /// retained points, cumulative retained point preparations, rebases and instance
     /// upload bytes, and the retained point frames (world copies) drawn last frame, then the
     /// same five for retained polygons: polygons, preparations, rebases, geometry upload
-    /// bytes and frames.
+    /// bytes and frames, then the cumulative retained line rebuilds for a new tile zoom.
     #[wasm_bindgen(js_name = frameStats)]
     pub fn frame_stats(&self) -> Vec<f64> {
         let (mut features, mut triangles, mut line_triangles) = (0_u64, 0_u64, 0_u64);
@@ -1368,6 +1373,7 @@ impl MapsWgpuBaseMapRenderer {
             self.retained_polygon_counters.rebases as f64,
             self.retained_polygon_counters.upload_bytes as f64,
             f64::from(self.frame_stats.retained_polygon_frames),
+            self.retained_polygon_counters.tile_zooms as f64,
         ]
     }
 
@@ -1728,14 +1734,20 @@ impl MapsWgpuBaseMapRenderer {
         let Some(view) = self.retained_view(placements, view_projection, clip) else {
             return Vec::new();
         };
+        let tile_zoom = view.tile_zoom();
         let mut frames = Vec::new();
         for group_key in groups {
             let Some(group) = self.retained_polygons.get_mut(&group_key) else {
                 continue;
             };
-            if view.needs_rebase(group.anchor) || group.fill.is_none() && group.stroke.is_none() {
+            // Lines follow MapLibre's GeoJSON tiles of the floored zoom (#334).
+            let rezoomed = group.polygons.has_lines() && group.tile_zoom != Some(tile_zoom);
+            let rebase =
+                view.needs_rebase(group.anchor) || group.fill.is_none() && group.stroke.is_none();
+            if rezoomed || rebase {
                 let anchor = view.center;
-                let geometry = group.polygons.geometry(anchor);
+                let geometry = group.polygons.geometry(anchor, tile_zoom);
+                group.tile_zoom = Some(tile_zoom);
                 group.fill = upload_retained_buffer(
                     &self.device,
                     &self.queue,
@@ -1752,7 +1764,11 @@ impl MapsWgpuBaseMapRenderer {
                 );
                 group.draws = geometry.draws;
                 group.anchor = Some(anchor);
-                self.retained_polygon_counters.rebases += 1;
+                if rebase {
+                    self.retained_polygon_counters.rebases += 1;
+                } else {
+                    self.retained_polygon_counters.tile_zooms += 1;
+                }
                 self.retained_polygon_counters.upload_bytes +=
                     (geometry.fill.len() + geometry.stroke.len()) as u64;
             }

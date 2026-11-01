@@ -335,6 +335,14 @@ impl RetainedView {
         })
     }
 
+    /// MapLibre's covering zoom for 512 px vector tiles (GeoJSON sources): the floored camera
+    /// zoom. The scale comes through `f32` matrices, so an integer zoom is matched within
+    /// 1e-4.
+    pub(crate) fn tile_zoom(&self) -> u8 {
+        let zoom = (self.px_per_world / 512.0).log2();
+        (zoom + 1.0e-4).floor().clamp(0.0, f64::from(u8::MAX)) as u8
+    }
+
     /// Whether offsets around `anchor` must be rebuilt for this view.
     pub(crate) fn needs_rebase(&self, anchor: Option<[f64; 2]>) -> bool {
         let Some(anchor) = anchor else {

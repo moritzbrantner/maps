@@ -177,6 +177,7 @@ beforeEach(() => {
       retainedPolygonRebases: 0,
       retainedPolygonUploadBytes: 0,
       retainedPolygonFrames: 0,
+      retainedPolygonTileZooms: 0,
       vectorTiles: 0,
     })),
     isDeviceLost: vi.fn(() => false),

@@ -213,7 +213,12 @@ export type MapsBrowserRuntimeOptions = {
   maxZoom?: number;
   /** Prepare Map Layers before presenting a changed Rust camera. */
   onCameraFrame?: () => void;
+  /**
+   * A context menu that is not part of a rotate drag, delivered on release like MapLibre.
+   * `client` is the viewport point, `position` the map-relative one.
+   */
   onContextMenu?: (context: {
+    client: { x: number; y: number };
     coordinates: [longitude: number, latitude: number];
     position: { x: number; y: number };
   }) => void;
@@ -238,7 +243,7 @@ type MouseRotation = {
   startY: number;
   lastX: number;
   moved: boolean;
-  /** Linux/macOS fire contextmenu on press; deliver it on release unless rotated. */
+  /** Linux/macOS fire contextmenu on press; deliver it on release unless rotated (client px). */
   pendingContextMenu: ScreenPoint | null;
 };
 
@@ -737,9 +742,9 @@ export function createMapsBrowserRuntime(
   function handleContextMenu(event: MouseEvent) {
     event.preventDefault();
     cancelKineticPan();
-    const position = pointerPosition(event.clientX, event.clientY);
+    const client = { x: event.clientX, y: event.clientY };
     if (mouseRotation) {
-      mouseRotation.pendingContextMenu = position;
+      mouseRotation.pendingContextMenu = client;
       return;
     }
     if (
@@ -748,13 +753,15 @@ export function createMapsBrowserRuntime(
     ) {
       return;
     }
-    emitContextMenu(position);
+    emitContextMenu(client);
   }
-  function emitContextMenu(position: ScreenPoint) {
+  function emitContextMenu(client: ScreenPoint) {
     const runtime = activeRuntime;
     if (!runtime) return;
+    const position = pointerPosition(client.x, client.y);
     try {
       config.onContextMenu?.({
+        client,
         coordinates: runtime.unproject(position.x, position.y),
         position,
       });

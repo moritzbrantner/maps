@@ -189,13 +189,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { center: [9.0, 47.4], zoom: 8 },
     capability: "GeoJSON lines: width, colour and opacity per feature, round caps and joins",
-    knownGaps: [
-      {
-        gate: "image",
-        issue: 334,
-        reason: "MapLibre's GeoJSON source simplifies lines by 0.375 px (geojson-vt); Maps draws exact coordinates",
-      },
-    ],
+    knownGaps: [],
     name: "line-styles",
     origin: "GeoJsonLayer getFeatureStyle lines; tlm-deutschland#235 venue routes (#232)",
     size: MAP_SIZE,
@@ -209,9 +203,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { bearing: 35, center: [10.4, 51.2], zoom: 5.55 },
     capability: "rotated camera: raster, polygons and points; pick and rotate/pan/zoom",
-    knownGaps: [
-      { gate: "interaction", issue: 327, reason: "right-drag rotate release selects the feature under the pointer" },
-    ],
+    knownGaps: [],
     name: "bearing",
     origin: "church-atlas#8 site discovery with a rotated map (#232)",
     size: MAP_SIZE,

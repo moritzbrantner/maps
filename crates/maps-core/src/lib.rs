@@ -8,6 +8,7 @@ mod aggregation;
 mod bounded_runtime;
 mod engine;
 mod flat_runtime;
+mod geojson_vt;
 mod line_mesh;
 mod matrix_camera;
 mod scenario;
@@ -34,6 +35,9 @@ pub use flat_runtime::{
     RasterRenderCamera, RasterSourceSpec, RasterTilePlacement,
 };
 use geo_core::{BBox, Coordinate};
+pub use geojson_vt::{
+    GEOJSON_VT_EXTENT, GEOJSON_VT_MAX_ZOOM, GEOJSON_VT_TOLERANCE, SimplifiedLine,
+};
 pub use line_mesh::{LineCap, LineMesh, LineMeshVertex};
 pub use matrix_camera::{MapLocalRenderFrame, MapLocalViewportBounds};
 pub use scenario::{

@@ -32,6 +32,7 @@ vi.mock("./canvas-flat-runtime", async () => {
     viewState: ViewState;
     maxBounds?: [number, number, number, number];
     onContextMenu?: (context: {
+      client: { x: number; y: number };
       coordinates: [number, number];
       position: { x: number; y: number };
     }) => void;
@@ -100,6 +101,7 @@ vi.mock("./canvas-flat-runtime", async () => {
         onContextMenu={(event) => {
           event.preventDefault();
           props.onContextMenu?.({
+            client: { x: event.clientX, y: event.clientY },
             coordinates: [8, 50],
             position: { x: 120, y: 80 },
           });

@@ -27,6 +27,13 @@
 
 ### Patch Changes
 
+- GeoJSON lines on the Maps flat runtime now follow MapLibre's GeoJSON source.
+  As geojson-vt does, they are simplified by 0.375 px at the floored camera
+  zoom and snapped to the 8192-unit tile grid. The line geometry is rebuilt when
+  that zoom changes.
+- On the Maps flat runtime, releasing a right-drag rotate no longer opens a
+  feature's context menu or selects the feature under the pointer. Feature
+  context menus now open on release, as in MapLibre.
 - Lines on the Maps flat runtime now render like MapLibre's line layers. Vector
   tile lines and GeoJSON lines use MapLibre's round-join tessellation, so
   sharp corners no longer crack and translucent lines no longer darken at every

@@ -12,7 +12,9 @@
 //!
 //! Lines are MapLibre round-joined, round-capped strips (`maps_core::LineMesh`, #326) drawn
 //! without the single-coverage stencil, as a MapLibre line layer is; a line that collapses
-//! to one point keeps a Canvas round-cap dot. Polygon outlines are a segment quad per
+//! to one point keeps a Canvas round-cap dot. Their path is the one MapLibre's GeoJSON
+//! source draws at the floored camera zoom (`maps_core::SimplifiedLine`, #334): simplified
+//! by 0.375 px and snapped to the tile grid, so it is rebuilt when that zoom changes. Polygon outlines are a segment quad per
 //! segment and a join disc at every vertex under that stencil. A direction
 //! marker is one triangle placed and oriented in screen space from its anchor and previous
 //! coordinate, so it keeps its CSS-px size and the projected heading Canvas uses. A circle
@@ -26,7 +28,7 @@
     allow(dead_code)
 )]
 
-use maps_core::{LineCap, LineMesh, project_web_mercator};
+use maps_core::{LineCap, LineMesh, SimplifiedLine, project_web_mercator};
 
 use crate::retained_points::wrap_world_delta;
 
@@ -71,6 +73,8 @@ struct RetainedPolygon {
     /// World coordinates without repeated consecutive points. Polygon rings are open
     /// (no closing point); a line has one path; a marker holds `[previous, anchor]`.
     rings: Vec<Vec<[f64; 2]>>,
+    /// A line's coordinates ranked for MapLibre's per-zoom simplification.
+    simplified: Option<SimplifiedLine>,
     fill: [f32; 4],
     stroke: [f32; 4],
     stroke_width: f32,
@@ -142,6 +146,7 @@ impl RetainedPolygons {
                 _ => return Err("retained shape kind or ring count is invalid"),
             };
             let mut lowered = Vec::with_capacity(rings as usize);
+            let mut simplified = None;
             for _ in 0..rings {
                 let size = *ring_sizes.next().ok_or("missing retained polygon ring")? as usize;
                 let mut ring = Vec::with_capacity(size);
@@ -163,7 +168,10 @@ impl RetainedPolygons {
                     // Distinct coordinates can meet in Mercator (a 360° wrap, clamped poles):
                     // Canvas then strokes a zero-length path, whose round caps form a dot,
                     // which the single join disc of a one-point path reproduces.
-                    Shape::Line => lowered.push(dedup(ring)),
+                    Shape::Line => {
+                        lowered.push(dedup(ring.clone()));
+                        simplified = Some(SimplifiedLine::new(ring));
+                    }
                     _ => {
                         let ring = open_ring(ring);
                         // Fewer than two distinct points draw nothing on Canvas either.
@@ -176,6 +184,7 @@ impl RetainedPolygons {
             polygons.push(RetainedPolygon {
                 shape,
                 rings: lowered,
+                simplified,
                 fill: [paint[0], paint[1], paint[2], paint[3]],
                 stroke: [paint[4], paint[5], paint[6], paint[7]],
                 stroke_width: paint[8].max(0.0),
@@ -189,8 +198,16 @@ impl RetainedPolygons {
         self.polygons.len()
     }
 
-    /// GPU geometry around `anchor`.
-    pub(crate) fn geometry(&self, anchor: [f64; 2]) -> RetainedPolygonGeometry {
+    /// Whether the geometry depends on the tile zoom passed to [`Self::geometry`].
+    pub(crate) fn has_lines(&self) -> bool {
+        self.polygons
+            .iter()
+            .any(|polygon| polygon.simplified.is_some())
+    }
+
+    /// GPU geometry around `anchor`, with lines as MapLibre's zoom-`tile_zoom` GeoJSON tiles
+    /// hold them.
+    pub(crate) fn geometry(&self, anchor: [f64; 2], tile_zoom: u8) -> RetainedPolygonGeometry {
         let offset = |[x, y]: [f64; 2]| -> [f32; 2] {
             [
                 wrap_world_delta(x - anchor[0]) as f32,
@@ -309,8 +326,13 @@ impl RetainedPolygons {
                 && polygon.stroke[3] > 0.0
             {
                 // MapLibre's round-joined, round-capped line strip (#326), tessellated in
-                // anchor offsets and extruded on the map plane in the shader.
-                let path: Vec<[f64; 2]> = polygon.rings[0]
+                // anchor offsets and extruded on the map plane in the shader, along the
+                // path its GeoJSON tile holds (#334).
+                let tiled = polygon
+                    .simplified
+                    .as_ref()
+                    .map_or_else(|| polygon.rings[0].clone(), |line| line.at_zoom(tile_zoom));
+                let path: Vec<[f64; 2]> = tiled
                     .iter()
                     .map(|&[x, y]| [wrap_world_delta(x - anchor[0]), y - anchor[1]])
                     .collect();
@@ -426,6 +448,8 @@ fn push_stroke_vertex(
 
 #[cfg(test)]
 mod tests {
+    use maps_core::GEOJSON_VT_MAX_ZOOM;
+
     use super::*;
 
     const PAINT: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
@@ -552,7 +576,7 @@ mod tests {
         lon_lat.extend(square(1.0, 1.0, 2.0));
         let polygons = RetainedPolygons::lower(&[2], &[5, 5], &lon_lat, &PAINT).unwrap();
 
-        let geometry = polygons.geometry([0.5, 0.5]);
+        let geometry = polygons.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM);
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!((draw.fan_first, draw.fan_count), (0, 8 * 3));
@@ -575,8 +599,9 @@ mod tests {
             RetainedPolygons::lower(&[1], &[5], &square(10.0, 10.0, 1.0), &PAINT).unwrap();
         let world = project_web_mercator(10.0, 10.0).unwrap();
 
-        let near = fill_offsets(&polygons.geometry([world.x, world.y]));
-        let moved = fill_offsets(&polygons.geometry([world.x - 0.01, world.y + 0.02]));
+        let near = fill_offsets(&polygons.geometry([world.x, world.y], GEOJSON_VT_MAX_ZOOM));
+        let moved =
+            fill_offsets(&polygons.geometry([world.x - 0.01, world.y + 0.02], GEOJSON_VT_MAX_ZOOM));
 
         assert!(
             near[0][0].abs() < 1.0e-9 && near[0][1].abs() < 1.0e-9,
@@ -594,7 +619,7 @@ mod tests {
         let polygons = RetainedPolygons::lower(&[1], &[5], &lon_lat, &PAINT).unwrap();
         let anchor = project_web_mercator(180.0, 0.0).unwrap();
 
-        let offsets = fill_offsets(&polygons.geometry([anchor.x, anchor.y]));
+        let offsets = fill_offsets(&polygons.geometry([anchor.x, anchor.y], GEOJSON_VT_MAX_ZOOM));
 
         let width = 2.0 / 360.0;
         for offset in &offsets {
@@ -611,7 +636,7 @@ mod tests {
         paint[3] = 0.0;
         let stroke_only =
             RetainedPolygons::lower(&[1], &[5], &square(0.0, 0.0, 1.0), &paint).unwrap();
-        let [draw] = stroke_only.geometry([0.5, 0.5]).draws[..] else {
+        let [draw] = stroke_only.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM).draws[..] else {
             panic!()
         };
         assert_eq!(draw.fan_count, 0);
@@ -621,7 +646,7 @@ mod tests {
         paint[8] = 0.0;
         let fill_only =
             RetainedPolygons::lower(&[1], &[5], &square(0.0, 0.0, 1.0), &paint).unwrap();
-        let [draw] = fill_only.geometry([0.5, 0.5]).draws[..] else {
+        let [draw] = fill_only.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM).draws[..] else {
             panic!()
         };
         assert!(draw.fan_count > 0);
@@ -638,7 +663,7 @@ mod tests {
             "repeated points are dropped"
         );
 
-        let geometry = lines.geometry([0.5, 0.5]);
+        let geometry = lines.geometry([0.5, 0.5], GEOJSON_VT_MAX_ZOOM);
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!(draw.fan_count, 0, "lines are never filled");
@@ -652,7 +677,7 @@ mod tests {
     #[test]
     fn a_line_that_collapses_in_mercator_is_a_round_cap_dot() {
         let lines = RetainedPolygons::lower(&[1], &[2], &[0.0, 0.0, 360.0, 0.0], &LINE).unwrap();
-        let geometry = lines.geometry([0.0, 0.0]);
+        let geometry = lines.geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM);
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!(draw.stroke_count, 6);
@@ -665,7 +690,7 @@ mod tests {
         let markers = RetainedPolygons::lower(&[1], &[2], &lon_lat, &MARKER).unwrap();
         let anchor = project_web_mercator(11.0, 10.0).unwrap();
 
-        let geometry = markers.geometry([anchor.x, anchor.y]);
+        let geometry = markers.geometry([anchor.x, anchor.y], GEOJSON_VT_MAX_ZOOM);
         let [draw] = geometry.draws[..] else { panic!() };
 
         assert_eq!((draw.fan_count, draw.stroke_count), (0, 3));
@@ -698,7 +723,7 @@ mod tests {
     #[test]
     fn a_circle_is_a_fill_disc_then_a_stroke_ring_in_separate_draws() {
         let circles = RetainedPolygons::lower(&[1], &[1], &[3.0, 4.0], &CIRCLE).unwrap();
-        let geometry = circles.geometry([0.0, 0.0]);
+        let geometry = circles.geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM);
         let [fill, ring] = geometry.draws[..] else {
             panic!()
         };
@@ -720,7 +745,13 @@ mod tests {
         let mut unstroked = CIRCLE;
         unstroked[8] = 0.0;
         let circles = RetainedPolygons::lower(&[1], &[1], &[3.0, 4.0], &unstroked).unwrap();
-        assert_eq!(circles.geometry([0.0, 0.0]).draws.len(), 1);
+        assert_eq!(
+            circles
+                .geometry([0.0, 0.0], GEOJSON_VT_MAX_ZOOM)
+                .draws
+                .len(),
+            1
+        );
         assert!(RetainedPolygons::lower(&[1], &[2], &[0.0; 4], &CIRCLE).is_err());
     }
 }

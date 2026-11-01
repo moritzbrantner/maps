@@ -274,9 +274,15 @@ export function MapsMapView({
 
   const handleMapContextMenu = useCallback(
     (input: {
+      client: { x: number; y: number };
       coordinates: [longitude: number, latitude: number];
       position: { x: number; y: number };
     }) => {
+      // The runtime delivers this on release and drops it after a rotate drag (MapLibre's
+      // rotate semantics), so a right-drag never opens a feature menu or selects a feature.
+      if (overlayControllerRef.current?.handleContextMenuAtClientPoint(input.client.x, input.client.y)) {
+        return;
+      }
       const context: MapContextMenuContext = {
         close: closeContextMenu,
         coordinates: input.coordinates,
@@ -586,18 +592,6 @@ export function MapsMapView({
           }
 
           if (overlayControllerRef.current?.handleClickAtClientPoint(event.clientX, event.clientY)) {
-            event.preventDefault();
-            event.stopPropagation();
-          }
-        }}
-        onContextMenuCapture={(event) => {
-          if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
-          if (
-            overlayControllerRef.current?.handleContextMenuAtClientPoint(
-              event.clientX,
-              event.clientY,
-            )
-          ) {
             event.preventDefault();
             event.stopPropagation();
           }
