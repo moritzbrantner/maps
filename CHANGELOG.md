@@ -17,6 +17,19 @@
 
 ### Minor Changes
 
+- `flatRuntime="maps"` draws relief from the map style, ported from MapLibre 6.15 (#324):
+  `raster-dem` sources (`mapbox`, `terrarium` and `custom` encodings, two-pixel tile
+  borders backfilled from loaded neighbours), `hillshade` layers (the prepare pass that
+  stores each DEM pixel's slope, then the `standard`, `basic`, `combined`, `igor` and
+  `multidirectional` shading with illumination direction, altitude and anchor,
+  exaggeration and shadow, highlight and accent colors) and the style's `terrain`: the
+  raster and hillshade layers render into a 1024² target per terrain tile, drawn on a
+  128 × 128 mesh lifted by the terrain DEM (with skirts, depth tested, sampled
+  trilinearly at full anisotropy), and the camera centers on the terrain elevation as
+  MapLibre's `centerClampedToGround`. Relief tiles follow MapLibre's `coveringTiles` with
+  terrain-aware bounds and level of detail, so each source loads the same tiles. Terrain
+  fog (pitch ≥ 60°), the sky, draping tileset and application layers on terrain and
+  picking on terrain are not ported yet (#352).
 - Fills take MapLibre 6.15's `fill-pattern` from the map style's `sprite` (#323).
   `tilesetLayers` accepts style-spec `fill` layers (`fill-color`, `fill-opacity`,
   `fill-pattern`, `fill-antialias`, `fill-outline-color`), and `GeoJsonLayer` styles gain

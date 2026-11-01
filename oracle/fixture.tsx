@@ -280,9 +280,45 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
         ? { layers: FILL_PATTERN_LAYERS }
         : null;
 
-/** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines`, `fill-pattern` and the unsupported scenario (#324). */
+/**
+ * The relief style (#324): the raster basemap, a hillshade layer on one Terrarium
+ * `raster-dem` source and, with `terrain`, 3D terrain on a second one.
+ */
+function reliefStyle(terrain: boolean) {
+  const dem = {
+    encoding: "terrarium",
+    maxzoom: 12,
+    tileSize: 256,
+    tiles: [`${TILE_ORIGIN}/dem/{z}/{x}/{y}.png`],
+    type: "raster-dem",
+  };
+  return {
+    layers: [
+      { id: "oracle-raster", source: "oracle", type: "raster" },
+      {
+        id: "hillshade",
+        paint: { "hillshade-exaggeration": 0.6, "hillshade-shadow-color": "#3b3b3b" },
+        source: "dem-hillshade",
+        type: "hillshade",
+      },
+    ],
+    sources: {
+      "dem-hillshade": dem,
+      ...(terrain ? { "dem-terrain": dem } : {}),
+      oracle: rasterSource("geographic"),
+    },
+    ...(terrain ? { terrain: { exaggeration: 1.2, source: "dem-terrain" } } : {}),
+    version: 8,
+  };
+}
+
+/** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines`, `fill-pattern`, relief (#324). */
 function referenceStyle(name: string) {
   switch (name) {
+    case "hillshade":
+      return reliefStyle(false);
+    case "hillshade-terrain":
+      return reliefStyle(true);
     case "symbols": {
       const style = vectorStyle();
       style.layers.push(...SYMBOL_LAYERS);
@@ -297,29 +333,6 @@ function referenceStyle(name: string) {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...FILL_PATTERN_LAYERS);
       return style;
-    }
-    case "hillshade-terrain": {
-      const dem = {
-        encoding: "terrarium",
-        maxzoom: 12,
-        tileSize: 256,
-        tiles: [`${TILE_ORIGIN}/dem/{z}/{x}/{y}.png`],
-        type: "raster-dem",
-      };
-      return {
-        layers: [
-          { id: "oracle-raster", source: "oracle", type: "raster" },
-          {
-            id: "hillshade",
-            paint: { "hillshade-exaggeration": 0.6, "hillshade-shadow-color": "#3b3b3b" },
-            source: "dem-hillshade",
-            type: "hillshade",
-          },
-        ],
-        sources: { "dem-hillshade": dem, "dem-terrain": dem, oracle: rasterSource("geographic") },
-        terrain: { exaggeration: 1.2, source: "dem-terrain" },
-        version: 8,
-      };
     }
     default:
       throw new Error(`no reference style for scenario ${name}`);
@@ -508,6 +521,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "vector-tiles":
     case "symbols":
     case "tileset-lines":
+    case "hillshade":
     case "hillshade-terrain":
       return () => null;
     case "line-styles":

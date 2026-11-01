@@ -55,6 +55,12 @@ mod wgpu_patterns;
     target_os = "unknown",
     feature = "wgpu-base-map"
 ))]
+mod wgpu_relief;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "wgpu-base-map"
+))]
 mod wgpu_retained;
 #[cfg(all(
     target_arch = "wasm32",

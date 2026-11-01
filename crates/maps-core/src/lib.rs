@@ -15,6 +15,7 @@ mod matrix_camera;
 mod mvt_features;
 mod scenario;
 pub mod symbol;
+pub mod terrain;
 mod tileset;
 mod vector_bucket;
 mod vector_tile;

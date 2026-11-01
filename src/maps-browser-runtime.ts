@@ -203,6 +203,15 @@ export type MapsCanvasFlatRuntimeController = {
   unproject(x: number, y: number): [longitude: number, latitude: number];
 };
 
+/**
+ * Relief of a MapLibre style (#324): the style JSON the renderer reads its `raster-dem`
+ * sources, `hillshade` layers and `terrain` from, and every raster source's tile template.
+ */
+export type MapsRelief = {
+  style: string;
+  sources: Record<string, { dem: boolean; url: string }>;
+};
+
 /** A runtime-owned decoder for tile images; Rust still owns scheduling and tile identity. */
 export type MapsTileImageLoader = {
   /** Rust validates and enforces the decoded-image retention and load budgets. */
@@ -223,6 +232,11 @@ export type MapsBrowserRuntimeOptions = {
    * the images `fill-pattern` names, for tileset fill layers and GeoJSON fills alike.
    */
   sprite?: string;
+  /**
+   * The map style's relief (#324): `hillshade` layers on `raster-dem` sources and `terrain`,
+   * drawn by the WebGPU renderer.
+   */
+  relief?: MapsRelief;
   tileLimits?: MapsFlatRasterRuntimeConfig["limits"];
   createTileImageLoader?: () => MapsTileImageLoader;
   maxBounds?: MapBounds;
@@ -290,6 +304,7 @@ export function createMapsBrowserRuntime(
   let activeController: MapsCanvasFlatRuntimeController | null = null;
   let synchronize: (() => MapsFlatRasterFrame) | null = null;
   let updateTileset: (() => void) | null = null;
+  let configureRelief: (() => void) | null = null;
   let emitViewState:
     | ((frame: MapsFlatRasterFrame, reason: MapViewStateChangeReason) => void)
     | null = null;
@@ -622,6 +637,7 @@ export function createMapsBrowserRuntime(
       tilesetStyle: () => config.tilesetStyle,
       tilesetLayers: () => config.tilesetLayers,
       sprite: () => config.sprite,
+      relief: () => config.relief,
       wasmPackage,
       onError: (error) => config.onError?.(error),
       onRendererFailure: activateCanvasFallback,
@@ -645,6 +661,7 @@ export function createMapsBrowserRuntime(
 
     synchronize = syncFrame;
     updateTileset = frameSynchronizer.updateTileset;
+    configureRelief = frameSynchronizer.configureRelief;
     emitViewState = notifyViewState;
 
     const retainedVectorBasemap: MapsRetainedVectorBasemap = {
@@ -965,9 +982,14 @@ export function createMapsBrowserRuntime(
     const previousStyle = config.tilesetStyle;
     const previousLayers = config.tilesetLayers;
     const previousSprite = config.sprite;
+    const previousRelief = config.relief;
     config = { ...next, viewState: copyViewState(next.viewState) };
     source = runtimeTileSource(config);
     if (previousSprite !== config.sprite) synchronize?.();
+    if (previousRelief !== config.relief) {
+      configureRelief?.();
+      synchronize?.();
+    }
     if (
       config.tileset &&
       (previousTileset !== config.tileset ||
@@ -1146,6 +1168,7 @@ function createFrameSynchronizer({
   tilesetStyle,
   tilesetLayers,
   sprite,
+  relief,
   wasmPackage,
   onError,
   onRendererFailure,
@@ -1167,6 +1190,7 @@ function createFrameSynchronizer({
   tilesetStyle: () => MapsVectorBasemapStyle | undefined;
   tilesetLayers: () => MapsTilesetLayers | undefined;
   sprite: () => string | undefined;
+  relief: () => MapsRelief | undefined;
   wasmPackage?: string;
   onError: (error: unknown) => void;
   onRendererFailure: () => void;
@@ -1260,6 +1284,81 @@ function createFrameSynchronizer({
       requests.set(url, request);
     }
     return request;
+  }
+
+  // Relief tiles (#324): the renderer plans which raster-dem (and, under terrain, raster)
+  // tiles each frame needs, as MapLibre's tile managers do; the host fetches them.
+  const reliefLoads = new Map<string, AbortController>();
+  const reliefFailures = new Set<string>();
+  let reliefStyle: string | null = null;
+  /** An upload not yet rendered: the next frame may want more tiles. */
+  let reliefDirty = false;
+  function configureRelief() {
+    const current = renderer();
+    if (!current?.setReliefStyle) return;
+    const style = relief()?.style ?? "";
+    if (style === reliefStyle) return;
+    reliefStyle = style;
+    for (const load of reliefLoads.values()) load.abort();
+    reliefLoads.clear();
+    reliefFailures.clear();
+    try {
+      current.setReliefStyle(style);
+    } catch (error) {
+      onError(error);
+    }
+    reliefDirty = style !== "";
+  }
+  configureRelief();
+
+  /** Fetches the relief tiles the last frame asked for. */
+  function syncRelief(current: MapsWgpuBaseMapRenderer) {
+    const spec = relief();
+    reliefDirty = false;
+    if (!spec || !current.reliefRequests) {
+      publishPendingTiles();
+      return;
+    }
+    for (const request of current.reliefRequests()) {
+      if (reliefLoads.has(request) || reliefFailures.has(request)) continue;
+      const [id = "", z, x, y] = request.split("|");
+      const source = spec.sources[id];
+      if (!source) continue;
+      const tile = { key: `${z}/${x}/${y}`, x: Number(x), y: Number(y), z: Number(z) };
+      const abort = new AbortController();
+      reliefLoads.set(request, abort);
+      const url = buildRasterTileUrl(source.url, tile);
+      const upload = source.dem
+        ? loadDemTile(url, abort.signal).then(({ rgba, size }) => {
+            if (abort.signal.aborted || renderer() !== current) return;
+            current.uploadDemTile!(id, tile, size, rgba);
+          })
+        : loadTile(url, tile, abort.signal).then((image) => {
+            if (!abort.signal.aborted && renderer() === current) {
+              current.uploadReliefRaster!(tile, image);
+            }
+            image.close();
+          });
+      upload
+        .then(
+          () => {
+            if (reliefLoads.get(request) !== abort) return;
+            reliefLoads.delete(request);
+            reliefDirty = true;
+            requestRender();
+          },
+          (error) => {
+            if (reliefLoads.get(request) !== abort) return;
+            reliefLoads.delete(request);
+            // Like MapLibre, a failed tile stays out instead of being retried every frame.
+            reliefFailures.add(request);
+            requestRender();
+            if (!abort.signal.aborted) onError(error);
+          },
+        )
+        .finally(publishPendingTiles);
+    }
+    publishPendingTiles();
   }
 
   function publishSourceStats() {
@@ -1386,7 +1485,7 @@ function createFrameSynchronizer({
   let pendingTilesAttribute = "0";
 
   function publishPendingTiles() {
-    const value = String(loads.size);
+    const value = String(loads.size + reliefLoads.size + (reliefDirty ? 1 : 0));
     if (value === pendingTilesAttribute) return;
     pendingTilesAttribute = value;
     canvas.dataset.mapBasePendingTiles = value;
@@ -1626,6 +1725,7 @@ function createFrameSynchronizer({
     if (currentRenderer) {
       try {
         const started = performance.now();
+        if (relief()) currentRenderer.setReliefCamera?.(frame.camera);
         const drawnTiles = currentRenderer.render(
           placements,
           frame.renderCamera,
@@ -1633,6 +1733,7 @@ function createFrameSynchronizer({
           margin,
           viewportClip,
         );
+        if (relief()) syncRelief(currentRenderer);
         stats.lastRenderMs = performance.now() - started;
         recordFrameStats(currentRenderer);
         const hasDecodedVisibleTile = frame.placements.some((placement) =>
@@ -1996,6 +2097,7 @@ function createFrameSynchronizer({
   }
 
   return {
+    configureRelief,
     updateTileset,
     /** The canvases lost their pixels (backing-store reset); the next frame renders. */
     invalidatePixels() {
@@ -2131,6 +2233,35 @@ async function loadRasterTile(url: string, signal: AbortSignal) {
   }
 
   return createImageBitmap(await response.blob());
+}
+
+/**
+ * A `raster-dem` tile's pixels as MapLibre's `RasterDEMTileSource` reads them: decoded without
+ * color-space conversion or premultiplication, then read back through a 2D canvas.
+ */
+async function loadDemTile(url: string, signal: AbortSignal) {
+  const response = await fetch(url, { headers: { Accept: RASTER_TILE_ACCEPT }, signal });
+  if (!response.ok) {
+    throw new Error(`raster-dem tile request failed with HTTP ${response.status}: ${url}`);
+  }
+  const image = await createImageBitmap(await response.blob(), {
+    colorSpaceConversion: "none",
+    premultiplyAlpha: "none",
+  });
+  try {
+    if (image.width !== image.height) throw new Error(`raster-dem tile is not square: ${url}`);
+    const canvas = new OffscreenCanvas(image.width, image.height);
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("raster-dem: no 2D canvas to read the tile");
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, image.width, image.height).data;
+    return {
+      rgba: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength),
+      size: image.width,
+    };
+  } finally {
+    image.close();
+  }
 }
 
 /**
