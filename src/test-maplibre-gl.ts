@@ -393,14 +393,7 @@ export class Map {
 
     if (typeof options.zoom === "number") {
       this.zoom = Math.max(this.minZoom, options.zoom);
-      const baseMap = this.baseMap as unknown as { zoom?: number };
-      if (typeof baseMap.zoom === "number") baseMap.zoom = this.zoom;
     }
-
-    // MapLibre's jumpTo fires its move events synchronously.
-    this.fire("movestart");
-    this.fire("move");
-    this.fire("moveend");
   }
 
   flyTo(options: { center?: [number, number]; zoom?: number }) {
