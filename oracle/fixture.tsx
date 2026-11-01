@@ -29,6 +29,7 @@ import {
   DEAD_SEA_SCROLLS,
   findScenario,
   TILE_ORIGIN,
+  type FrameTiming,
   type LngLat,
   type Scenario,
 } from "./scenarios.ts";
@@ -50,7 +51,7 @@ type OracleApi = {
   } | null;
   runtime: Runtime;
   scenario: Scenario;
-  frameTimes(frames: number): Promise<number[]>;
+  frameTimes(timing: FrameTiming): Promise<number[]>;
   viewState(): MapViewState | null;
 };
 
@@ -504,27 +505,46 @@ function clusterFeatureId(feature: AggregatedMapFeature<unknown>) {
     : `point:${feature.point.id}`;
 }
 
-/** Median-free raw rAF intervals while the camera moves every frame. */
-async function frameTimes(frames: number): Promise<number[]> {
+/**
+ * Mean frame time (ms) of each batch of back-to-back frames while the camera moves every
+ * frame, after an untimed warm-up of at least `warmupMs` and `warmupFrames`. Frames never
+ * wait on anything but the next rAF, so the GPU stays busy and in its high power state; a
+ * batch's mean also resolves far below the 0.1 ms granularity of a single rAF interval.
+ */
+async function frameTimes(timing: FrameTiming): Promise<number[]> {
   const controller = oracle.controller;
   if (!controller) throw new Error("no map controller");
   const start = controller.getViewState();
   const [lon, lat] = start.center;
-  const times: number[] = [];
-  let last = await nextFrame();
-  for (let frame = 0; frame < frames; frame++) {
-    const angle = (frame / frames) * Math.PI * 2;
+  let frame = 0;
+  const moveCamera = () => {
+    const angle = (frame++ / timing.orbitFrames) * Math.PI * 2;
     controller.setViewState({
       ...start,
       center: [lon + Math.cos(angle) * 0.4, lat + Math.sin(angle) * 0.25],
       zoom: start.zoom + Math.sin(angle * 2) * 0.2,
     });
-    const now = await nextFrame();
-    times.push(now - last);
-    last = now;
+  };
+
+  const warmupStart = await nextFrame();
+  let now = warmupStart;
+  while (frame < timing.warmupFrames || now - warmupStart < timing.warmupMs) {
+    moveCamera();
+    now = await nextFrame();
+  }
+
+  const means: number[] = [];
+  let batchStart = now;
+  for (let batch = 0; batch < timing.batches; batch++) {
+    for (let index = 0; index < timing.batchFrames; index++) {
+      moveCamera();
+      now = await nextFrame();
+    }
+    means.push((now - batchStart) / timing.batchFrames);
+    batchStart = now;
   }
   controller.setViewState(start);
-  return times;
+  return means;
 }
 
 function nextFrame() {
