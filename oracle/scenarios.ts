@@ -101,11 +101,22 @@ export const RHINE_POINT: LngLat = [8.51405, 47.58135];
 
 const MAP_SIZE = { height: 480, width: 720 };
 
+/**
+ * Scenes that leave Maps at Chromium's WebGPU canvas floor (#343): a clear-only WebGPU page
+ * takes about 1.0 ms per uncapped frame where a WebGL2 one takes 0.12 ms, so these stay
+ * above MapLibre's WebGL frame time while Maps waits in `getCurrentTexture`.
+ */
+const FRAME_TIME_GAP: KnownGap = {
+  gate: "time",
+  issue: 343,
+  reason: "WebGPU canvas presentation floor (about 1.0 ms per frame) above MapLibre's WebGL frame",
+};
+
 export const scenarios: Scenario[] = [
   {
     camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
     capability: "single source point: hover, select, clear, pan, wheel zoom",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "source-location",
     origin: "historical-source-atlas#63 source-location map (#232)",
     size: MAP_SIZE,
@@ -138,7 +149,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.6 },
     capability: "raster tile zoom level and parent/child crossfade end state (#303)",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "zoom-crossfade",
     origin: "maps#303 zoom-gap crossfade",
     size: MAP_SIZE,
@@ -157,7 +168,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [11.2, 50.6], zoom: 5.2 },
     capability: "point labels placed on their points",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "labels",
     origin: "PointLayer getPointLabel",
     size: MAP_SIZE,
@@ -170,7 +181,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.4 },
     capability: "density clusters: placement, counts, cluster and point picking",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "clusters",
     origin: "demo/RendererComparison cluster journey",
     size: MAP_SIZE,
@@ -186,7 +197,7 @@ export const scenarios: Scenario[] = [
     basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "Shortbread MVT fills and lines, class palette by feature kind (lake/glacier)",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "vector-tiles",
     origin: "Maps Tileset (#268); osmshrink#10 OSM preview (#232)",
     size: MAP_SIZE,
@@ -199,7 +210,7 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { center: [9.0, 47.4], zoom: 8 },
     capability: "GeoJSON lines: width, colour and opacity per feature, round caps and joins",
-    knownGaps: [],
+    knownGaps: [FRAME_TIME_GAP],
     name: "line-styles",
     origin: "GeoJsonLayer getFeatureStyle lines; tlm-deutschland#235 venue routes (#232)",
     size: MAP_SIZE,

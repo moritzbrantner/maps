@@ -428,7 +428,13 @@ describe("Map surface subscriptions by update frequency", () => {
       act(flushAnimationFrame);
     }
     // Before the split: stable 8, hover 8. One projection pass and paint per camera change.
-    expect(renders).toEqual({ hover: 0, stable: 0, view: 8 });
+    // Camera frames commit no React state (#343): view consumers follow the settled camera.
+    expect(renders).toEqual({ hover: 0, stable: 0, view: 0 });
+    expect(work()).toEqual({ paints: 8, projectPacked: 8, styles: 0 });
+    act(() => {
+      for (let frame = 0; frame < 3; frame++) flushAnimationFrame();
+    });
+    expect(renders).toEqual({ hover: 0, stable: 0, view: 1 });
     expect(work()).toEqual({ paints: 8, projectPacked: 8, styles: 0 });
 
     const base = mounted.container.querySelector('[data-flat-runtime="maps"]')!;

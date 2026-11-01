@@ -1235,11 +1235,15 @@ fn append_stroke_vertex(
     let Some(ground) = space.ground else {
         return append_application_vertex(output, space, at.0, at.1, color, edge);
     };
-    let ground_outset = (extruded.0 - centre.0).hypot(extruded.1 - centre.1);
+    // Plain sqrt: WASM has no hypot/fma instruction, and libm's software ones dominated
+    // pitched frames (#343). The operands are small, finite surface distances.
+    let ground_outset = length(extruded.0 - centre.0, extruded.1 - centre.1);
     let [cx, cy, _] = ground.clip(centre.0, centre.1);
     let [ex, ey, ew] = ground.clip(extruded.0, extruded.1);
-    let screen_outset =
-        ((ex - cx) / ew * space.width * 0.5).hypot((ey - cy) / ew * space.height * 0.5);
+    let screen_outset = length(
+        (ex - cx) / ew * space.width * 0.5,
+        (ey - cy) / ew * space.height * 0.5,
+    );
     // `edge[2]` is the outset in physical px on a flat map: scale it by the projection.
     let extent = f64::from(edge[2]) * screen_outset / ground_outset;
     if !(extent.is_finite() && extent > 0.0) {
@@ -1382,10 +1386,20 @@ fn append_application_vertex(
         return Err("wgpu application position is not representable as f32");
     }
 
-    for value in clip.into_iter().chain(color).chain(edge) {
-        output.extend_from_slice(&value.to_le_bytes());
+    let values = [
+        clip[0], clip[1], clip[2], color[0], color[1], color[2], color[3], edge[0], edge[1],
+        edge[2],
+    ];
+    let mut bytes = [0_u8; 40];
+    for (index, value) in values.into_iter().enumerate() {
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
     }
+    output.extend_from_slice(&bytes);
     Ok(())
+}
+
+fn length(x: f64, y: f64) -> f64 {
+    (x * x + y * y).sqrt()
 }
 
 fn valid_color(color: [f32; 4]) -> bool {

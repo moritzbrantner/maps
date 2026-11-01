@@ -252,9 +252,10 @@ describe("GPU-retained application points (#155)", () => {
     vi.mocked(runtime.projectPacked).mockClear();
     paints.length = 0;
     for (let step = 1; step <= 20; step += 1) {
-      act(() =>
-        controller.setViewState({ center: [step * 0.5, step * 0.25], zoom: 4 + step * 0.1 }),
-      );
+      act(() => {
+        controller.setViewState({ center: [step * 0.5, step * 0.25], zoom: 4 + step * 0.1 });
+        flushAnimationFrame();
+      });
     }
 
     // Every camera paint draws the retained group; nothing is re-lowered, re-projected
@@ -350,7 +351,10 @@ describe("GPU-retained labeled points (#204)", () => {
     vi.mocked(context.fillText).mockClear();
     paints.length = 0;
     for (let step = 1; step <= 10; step += 1) {
-      act(() => controller!.setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 }));
+      act(() => {
+        controller!.setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 });
+        flushAnimationFrame();
+      });
     }
 
     expect(paints.length).toBeGreaterThanOrEqual(10);
@@ -462,7 +466,10 @@ describe("GPU-retained application polygons (#196)", () => {
     vi.mocked(runtime.projectPacked).mockClear();
     paints.length = 0;
     for (let step = 1; step <= 10; step += 1) {
-      act(() => controller().setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 }));
+      act(() => {
+        controller().setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 });
+        flushAnimationFrame();
+      });
     }
     expect(paints.length).toBeGreaterThanOrEqual(10);
     for (const paint of paints) {
@@ -481,13 +488,19 @@ describe("GPU-retained application polygons (#196)", () => {
     const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;
 
     // A vertex behind a pitched camera would be clipped on the GPU but dropped by picking.
-    act(() => controller().setViewState({ center: [0, 0], zoom: 4, pitch: 40 }));
+    act(() => {
+      controller().setViewState({ center: [0, 0], zoom: 4, pitch: 40 });
+      flushAnimationFrame();
+    });
     await waitFor(() => {
       expect(overlay.dataset.mapOverlayBackend).toBe("wgpu");
       expect(paints.at(-1)?.order[0]).not.toBe(MAPS_WGPU_APPLICATION_RETAINED_POLYGONS);
     });
 
-    act(() => controller().setViewState({ center: [0, 0], zoom: 4, pitch: 0 }));
+    act(() => {
+      controller().setViewState({ center: [0, 0], zoom: 4, pitch: 0 });
+      flushAnimationFrame();
+    });
     await waitFor(() => {
       expect(overlay.dataset.mapOverlayBackend).toBe("wgpu-retained");
       expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]);
@@ -573,7 +586,10 @@ describe("GPU-retained lines and flows (#195)", () => {
     vi.mocked(runtime.projectPacked).mockClear();
     paints.length = 0;
     for (let step = 1; step <= 10; step += 1) {
-      act(() => controller!.setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 }));
+      act(() => {
+        controller!.setViewState({ center: [step * 0.5, 0], zoom: 4 + step * 0.1 });
+        flushAnimationFrame();
+      });
     }
     expect(paints.length).toBeGreaterThanOrEqual(10);
     for (const paint of paints) {
@@ -620,4 +636,10 @@ function layoutRect(canvas: HTMLCanvasElement, viewport: { width: number; height
     bottom: top + height,
     toJSON() {},
   } as DOMRect;
+}
+
+function flushAnimationFrame(now = 16) {
+  const pending = [...frames.values()];
+  frames.clear();
+  for (const callback of pending) callback(now);
 }
