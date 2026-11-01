@@ -77,6 +77,8 @@ impl RetainedResource for RetainedPointGroup {
 struct RetainedPolygonGroup {
     polygons: RetainedPolygons,
     anchor: Option<[f64; 2]>,
+    /// The GeoJSON tile zoom the line geometry was built for.
+    tile_zoom: Option<u8>,
     fill: Option<wgpu::Buffer>,
     stroke: Option<wgpu::Buffer>,
     draws: Vec<RetainedPolygonDraw>,
@@ -1242,6 +1244,7 @@ impl MapsWgpuBaseMapRenderer {
             RetainedPolygonGroup {
                 polygons,
                 anchor: None,
+                tile_zoom: None,
                 fill: None,
                 stroke: None,
                 draws: Vec::new(),
@@ -1728,14 +1731,21 @@ impl MapsWgpuBaseMapRenderer {
         let Some(view) = self.retained_view(placements, view_projection, clip) else {
             return Vec::new();
         };
+        let tile_zoom = view.tile_zoom();
         let mut frames = Vec::new();
         for group_key in groups {
             let Some(group) = self.retained_polygons.get_mut(&group_key) else {
                 continue;
             };
-            if view.needs_rebase(group.anchor) || group.fill.is_none() && group.stroke.is_none() {
+            // Lines follow MapLibre's GeoJSON tiles of the floored zoom (#334).
+            let rezoomed = group.polygons.has_lines() && group.tile_zoom != Some(tile_zoom);
+            if rezoomed
+                || view.needs_rebase(group.anchor)
+                || group.fill.is_none() && group.stroke.is_none()
+            {
                 let anchor = view.center;
-                let geometry = group.polygons.geometry(anchor);
+                let geometry = group.polygons.geometry(anchor, tile_zoom);
+                group.tile_zoom = Some(tile_zoom);
                 group.fill = upload_retained_buffer(
                     &self.device,
                     &self.queue,
