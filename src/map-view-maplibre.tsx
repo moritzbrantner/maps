@@ -349,9 +349,13 @@ export function MapView({
 
     map.setMaxBounds?.(bounds ? toMapLibreBounds(bounds) : null);
 
+    // This runs after every camera commit: an unchanged value must not schedule a render, or
+    // per-frame camera updates loop through this effect (#329).
     if (!bounds) {
       map.setMinZoom?.(0);
-      setBoundsMinZoom(undefined);
+      if (boundsMinZoom !== undefined) {
+        setBoundsMinZoom(undefined);
+      }
       return;
     }
 
@@ -365,7 +369,9 @@ export function MapView({
 
     if (nextMinZoom !== undefined) {
       map.setMinZoom?.(nextMinZoom);
-      setBoundsMinZoom(nextMinZoom);
+      if (boundsMinZoom !== nextMinZoom) {
+        setBoundsMinZoom(nextMinZoom);
+      }
 
       if (map.getZoom() < nextMinZoom) {
         map.jumpTo({ zoom: nextMinZoom });
@@ -582,7 +588,7 @@ export function MapView({
     };
   }, [mapDisplay, usesMapLibreRuntime]);
 
-  const syncFlatZoomConstraints = useEffectEvent(() => {
+  useEffect(() => {
     const map = mapRef.current;
 
     if (!map || !usesMapLibreRuntime) {
@@ -596,13 +602,7 @@ export function MapView({
       lastCommittedFlatStateRef.current = currentViewState;
       map.jumpTo({ zoom: currentViewState.zoom });
     }
-  });
-
-  // Only a constraint change re-applies the constraints: running this per view state change set
-  // MapLibre's bounds and React state on every camera frame and looped updates (#329).
-  useEffect(() => {
-    syncFlatZoomConstraints();
-  }, [resolvedMaxBounds, resolvedMaxZoom, usesMapLibreRuntime]);
+  }, [currentViewState, resolvedMaxZoom, syncFlatBoundsConstraints, usesMapLibreRuntime]);
 
   useEffect(() => {
     if (!usesMapLibreRuntime) {
