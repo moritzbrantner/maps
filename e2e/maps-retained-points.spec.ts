@@ -308,6 +308,7 @@ test("a mixed point and flow camera journey keeps both retained groups O(1) on W
     // Each flow is a line, a direction marker and two endpoint circles in one shape group.
     .toEqual([count, flowCount * 4]);
   // Retained shapes stay on unpitched cameras, so this journey pans, zooms and rotates.
+  const cameras = densePointJourney(30, { pitched: false });
   const journey = await page.evaluate(async (cameras) => {
     const probe = window.retainedPoints;
     const frame = () => new Promise(requestAnimationFrame);
@@ -327,7 +328,7 @@ test("a mixed point and flow camera journey keeps both retained groups O(1) on W
       });
     }
     return { after: probe.stats()!, before, steps };
-  }, densePointJourney(30, { pitched: false }));
+  }, cameras);
   const sorted = journey.steps.map((step) => step.ms).sort((left, right) => left - right);
   await testInfo.attach("retained-point-flow-journey", {
     body: JSON.stringify(
@@ -363,9 +364,19 @@ test("a mixed point and flow camera journey keeps both retained groups O(1) on W
     "retainedPointUploadBytes",
     "retainedPolygonPreparations",
     "retainedPolygonRebases",
-    "retainedPolygonUploadBytes",
   ] as const) {
     expect(journey.after[counter], counter).toBe(journey.before[counter]);
+  }
+  // Flow lines follow MapLibre's GeoJSON tiles: one rebuild per floored-zoom change (#334).
+  const tileZooms = [5, ...cameras.map((camera) => camera.zoom)].map((zoom) =>
+    Math.floor(zoom + 1e-4),
+  );
+  const tileZoomChanges = tileZooms.filter((zoom, index) => index > 0 && zoom !== tileZooms[index - 1]);
+  expect(journey.after.retainedPolygonTileZooms - journey.before.retainedPolygonTileZooms).toBe(
+    tileZoomChanges.length,
+  );
+  if (tileZoomChanges.length === 0) {
+    expect(journey.after.retainedPolygonUploadBytes).toBe(journey.before.retainedPolygonUploadBytes);
   }
   for (const step of journey.steps) {
     expect(step.upload).toBe(0);

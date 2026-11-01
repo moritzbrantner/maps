@@ -38,6 +38,11 @@ export type MapsWgpuFrameStats = {
   retainedPolygonUploadBytes: number;
   /** Retained polygon frames (world copies) drawn by the last frame. */
   retainedPolygonFrames: number;
+  /**
+   * Cumulative rebuilds of retained line geometry for a new floored zoom: lines follow
+   * MapLibre's GeoJSON tiles of that zoom (geojson-vt simplification).
+   */
+  retainedPolygonTileZooms: number;
   drawCalls: number;
   rasterTiles: number;
   retainedVectorBytes: number;
@@ -227,6 +232,7 @@ export async function loadMapsWgpuBaseMapRenderer(
           retainedPolygonRebases: stats[16] ?? 0,
           retainedPolygonUploadBytes: stats[17] ?? 0,
           retainedPolygonFrames: stats[18] ?? 0,
+          retainedPolygonTileZooms: stats[19] ?? 0,
         };
       },
       isDeviceLost() {
