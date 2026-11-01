@@ -290,6 +290,38 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { center: [8.6, 47.3], zoom: 7.4 },
+    capability:
+      "zoom-dependent symbols: camera and composite text-size and icon-size, camera and composite text/icon paint, stepped sizes",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-zoom",
+    origin: "Milestone E cartography (#80): labels that grow with the zoom on any vector basemap; symbol sizes and paint (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -25, center: [8.9, 47.55], zoom: 8.3 },
+    capability:
+      "line labels: symbol-placement line and line-center, glyphs along rotated lines, keep-upright, offsets, collision circles",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-lines",
+    origin: "Milestone E cartography (#80): river and road names along their lines; line placement (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -40, center: [8.9, 47.55], pitch: 45, zoom: 8.3 },
+    capability: "line labels on the pitched map plane (text-pitch-alignment map): perspective sizes and gamma",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-lines-pitch",
+    origin: "Milestone E cartography (#80): river and road names along their lines under a pitched camera (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],

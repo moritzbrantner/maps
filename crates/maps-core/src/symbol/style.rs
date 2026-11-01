@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 use super::color::Rgba;
 use super::expression::{EvaluationContext, evaluate, is_expression, uses_zoom};
+use super::zoom::ZoomCurve;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StyleLayerKind {
@@ -59,6 +60,7 @@ const CIRCLE_PAINT: &[&str] = &[
 const SYMBOL_LAYOUT: &[&str] = &[
     "visibility",
     "symbol-placement",
+    "symbol-spacing",
     "text-field",
     "text-font",
     "text-size",
@@ -75,6 +77,8 @@ const SYMBOL_LAYOUT: &[&str] = &[
     "text-transform",
     "text-rotation-alignment",
     "text-pitch-alignment",
+    "text-max-angle",
+    "text-keep-upright",
     "icon-image",
     "icon-size",
     "icon-anchor",
@@ -100,7 +104,9 @@ const SYMBOL_PAINT: &[&str] = &[
     "icon-halo-blur",
 ];
 /// Properties whose value must be the same at every zoom: Maps evaluates them per tile, and
-/// MapLibre re-evaluates these at the camera zoom (`text-size`) or each frame (paint).
+/// MapLibre re-evaluates these each frame. Symbol sizes and paint follow the camera zoom
+/// (`symbol::zoom`); other layout properties are evaluated at the tile zoom, as MapLibre's
+/// worker does.
 const ZOOM_CONSTANT: &[&str] = &[
     "fill-antialias",
     "fill-opacity",
@@ -111,7 +117,6 @@ const ZOOM_CONSTANT: &[&str] = &[
     "line-opacity",
     "line-width",
     "line-dasharray",
-    "text-size",
     "circle-radius",
     "circle-color",
     "circle-opacity",
@@ -119,17 +124,15 @@ const ZOOM_CONSTANT: &[&str] = &[
     "circle-stroke-width",
     "circle-stroke-color",
     "circle-stroke-opacity",
-    "text-color",
-    "text-opacity",
-    "text-halo-color",
-    "text-halo-width",
-    "text-halo-blur",
-    "icon-size",
-    "icon-opacity",
-    "icon-color",
-    "icon-halo-color",
-    "icon-halo-width",
-    "icon-halo-blur",
+];
+/// Layout properties MapLibre reads as one value for the whole layer.
+const LAYER_CONSTANT: &[&str] = &[
+    "symbol-placement",
+    "text-rotation-alignment",
+    "text-pitch-alignment",
+    "icon-rotation-alignment",
+    "icon-pitch-alignment",
+    "text-keep-upright",
 ];
 
 impl StyleLayer {
@@ -168,6 +171,12 @@ impl StyleLayer {
                 if ZOOM_CONSTANT.contains(&key.as_str()) && uses_zoom(value) {
                     return Err(format!("layer {id}: zoom-dependent {key} is not supported"));
                 }
+                if LAYER_CONSTANT.contains(&key.as_str()) && is_expression(value) {
+                    return Err(format!(
+                        "layer {id}: an expression for {key} is not supported"
+                    ));
+                }
+                ZoomCurve::find(value).map_err(|error| format!("layer {id}: {key}: {error}"))?;
                 if value.is_object() {
                     return Err(format!(
                         "layer {id}: legacy function for {key} is not supported"
@@ -196,9 +205,33 @@ impl StyleLayer {
                 _ => Ok(()),
             }
         };
-        only("symbol-placement", &["point"])?;
-        only("text-rotation-alignment", &["auto", "viewport"])?;
-        only("text-pitch-alignment", &["auto", "viewport"])?;
+        only("symbol-placement", &["point", "line", "line-center"])?;
+        // Line placement aligns text to its line (`auto` is `map` there); map-aligned or
+        // map-pitched point labels are not ported.
+        let point = layout
+            .get("symbol-placement")
+            .and_then(Value::as_str)
+            .is_none_or(|placement| placement == "point");
+        let along_line = !point
+            && layout
+                .get("text-rotation-alignment")
+                .and_then(Value::as_str)
+                != Some("viewport");
+        if point {
+            only("text-rotation-alignment", &["auto", "viewport"])?;
+        } else {
+            only("text-rotation-alignment", &["auto", "viewport", "map"])?;
+        }
+        if along_line {
+            only("text-pitch-alignment", &["auto", "viewport", "map"])?;
+        } else {
+            only("text-pitch-alignment", &["auto", "viewport"])?;
+        }
+        if !point && layout.contains_key("icon-image") {
+            return Err(format!(
+                "layer {id}: icon-image off point placement is not supported"
+            ));
+        }
         only("icon-rotation-alignment", &["auto", "viewport"])?;
         only("icon-pitch-alignment", &["auto", "viewport"])?;
         let zoom =
@@ -372,9 +405,11 @@ mod tests {
         for rejected in [
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-text-fit":"both"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-rotate":45}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-size":["interpolate",["linear"],["zoom"],5,1,10,2]}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line"}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"text-size":["interpolate",["linear"],["zoom"],5,10,10,20]}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-size":["+",["zoom"],1]}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","icon-image":"x"}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"text-rotation-alignment":"map"}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","text-rotation-alignment":"viewport-glyph"}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":["step",["zoom"],"point",8,"line"]}}]"#,
             r#"[{"id":"a","type":"circle","source-layer":"p","paint":{"circle-radius":["sqrt",["get","n"]]}}]"#,
             r#"[{"id":"a","type":"fill","source-layer":"p","paint":{"fill-translate":[1,1]}}]"#,
             r#"[{"id":"a","type":"fill","source-layer":"p","paint":{"fill-pattern":["step",["zoom"],"a",9,"b"]}}]"#,

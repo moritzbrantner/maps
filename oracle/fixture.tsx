@@ -337,17 +337,119 @@ const ICON_LAYERS: Array<Record<string, unknown>> = [
     type: "symbol",
   },
 ];
+/**
+ * The `symbol-zoom` style layers (#346): sizes and paint that follow the camera zoom. Place
+ * labels take a composite `text-size` and composite `text-opacity`, a camera `text-color`
+ * and `text-halo-width` (over 1 here: halos in their own pass); capitals an SDF star with a
+ * composite `icon-size` and `icon-halo-width` and a camera `icon-color`; lakes a stepped
+ * camera `text-size`.
+ */
+const ZOOM_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-stars",
+    layout: {
+      "icon-allow-overlap": true,
+      "icon-image": "capital",
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 6, ["/", ["get", "rank"], 8], 9, ["/", ["get", "rank"], 3]],
+    },
+    paint: {
+      "icon-color": ["interpolate", ["linear"], ["zoom"], 6, "#1d4ed8", 9, "#b91c1c"],
+      "icon-halo-color": "#fef3c7",
+      "icon-halo-width": ["interpolate", ["linear"], ["zoom"], 6, ["/", ["get", "rank"], 4], 9, 0.5],
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    id: "place-zoom-labels",
+    layout: {
+      "text-anchor": "top",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0, 0.8],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 6, ["-", 18, ["get", "rank"]], 10, ["-", 30, ["get", "rank"]]],
+    },
+    paint: {
+      "text-color": ["interpolate", ["linear"], ["zoom"], 6, "#0f766e", 9, "#7c2d12"],
+      "text-halo-color": "#ffffff",
+      "text-halo-width": ["interpolate", ["linear"], ["zoom"], 6, 0.5, 9, 2.5],
+      "text-opacity": ["interpolate", ["linear"], ["zoom"], 6, ["match", ["get", "kind"], "capital", 1, 0.4], 9, 1],
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-zoom-labels",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": ["step", ["zoom"], 11, 7, 15, 8, 20],
+    },
+    paint: { "text-color": "#1e3a8a", "text-halo-color": "#e0f2fe", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+];
+/**
+ * The `symbol-lines` style layers (#346): labels along lines. River names repeat along
+ * their lines (`symbol-placement: line`) with letter spacing and keep-upright flips; road
+ * classes sit once at the middle of each road (`line-center`), offset off the line, with
+ * a tighter `text-max-angle`; both collide with circles along their lines.
+ */
+const LINE_LABEL_LAYERS: Array<Record<string, unknown>> = [
+  {
+    id: "river-names",
+    layout: {
+      "symbol-placement": "line",
+      "symbol-spacing": 180,
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-letter-spacing": 0.1,
+      "text-size": 14,
+    },
+    paint: { "text-color": "#1d4ed8", "text-halo-color": "#eff6ff", "text-halo-width": 1.5 },
+    source: "oracle-vector",
+    "source-layer": "water_lines",
+    type: "symbol",
+  },
+  {
+    filter: ["in", ["get", "kind"], ["literal", ["motorway", "primary"]]],
+    id: "road-classes",
+    layout: {
+      "symbol-placement": "line-center",
+      "text-field": ["get", "kind"],
+      "text-font": ["NotoSans-Regular"],
+      "text-max-angle": 30,
+      "text-offset": [0, -0.7],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 7, 9, 10, 13],
+      "text-transform": "uppercase",
+    },
+    paint: { "text-color": "#7c2d12", "text-halo-color": "#ffffff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "streets",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
     ? { glyphs: GLYPHS_URL, layers: SYMBOL_LAYERS }
     : name === "symbol-icons"
       ? { glyphs: GLYPHS_URL, layers: ICON_LAYERS }
-      : name === "tileset-lines"
-        ? { layers: LINE_LAYERS }
-        : name === "fill-pattern"
-          ? { layers: FILL_PATTERN_LAYERS }
-          : null;
+      : name === "symbol-zoom"
+        ? { glyphs: GLYPHS_URL, layers: ZOOM_LAYERS }
+        : name === "symbol-lines" || name === "symbol-lines-pitch"
+          ? { glyphs: GLYPHS_URL, layers: LINE_LABEL_LAYERS }
+          : name === "tileset-lines"
+            ? { layers: LINE_LAYERS }
+            : name === "fill-pattern"
+              ? { layers: FILL_PATTERN_LAYERS }
+              : null;
 
 /**
  * The relief style (#324): the raster basemap, a hillshade layer on one Terrarium
@@ -406,6 +508,17 @@ function referenceStyle(name: string) {
     case "symbol-icons": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...ICON_LAYERS);
+      return style;
+    }
+    case "symbol-zoom": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...ZOOM_LAYERS);
+      return style;
+    }
+    case "symbol-lines":
+    case "symbol-lines-pitch": {
+      const style = vectorStyle();
+      style.layers.push(...LINE_LABEL_LAYERS);
       return style;
     }
     default:
@@ -595,6 +708,9 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "vector-tiles":
     case "symbols":
     case "symbol-icons":
+    case "symbol-zoom":
+    case "symbol-lines":
+    case "symbol-lines-pitch":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

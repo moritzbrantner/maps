@@ -7,9 +7,11 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use maps_core::symbol::layout::EXTENT;
 use maps_core::symbol::{
-    GlyphStore, ImageAtlas, ImageStore, LayerBucket, PatternVertex, PlacedSymbol, PlacementTile,
-    StyleLayer, StyleLayerKind, SymbolBucket, SymbolPaint, TileStyleBuckets, layout_tile,
+    AtlasRect, GlyphStore, ImageAtlas, ImageStore, LayerBucket, LineGlyphs, LineLabelContext,
+    PatternVertex, PlacedSymbol, PlacementTile, StyleLayer, StyleLayerKind, SymbolBucket,
+    SymbolDrawState, SymbolPaint, TileProjection, TileStyleBuckets, layout_tile, line_label_glyphs,
     parse_glyph_pbf, place_symbols, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
@@ -21,16 +23,16 @@ use crate::retained_polygons::{
     push_line_strip_vertex, push_pattern_fill_vertex, push_pattern_outline_segment,
 };
 
-/// Glyph vertex: clip position, atlas uv, (size, opacity, halo width, halo blur),
-/// (fill?, halo?, device pixel ratio, 0), premultiplied fill and halo colors.
-pub(crate) const GLYPH_VERTEX_FLOATS: usize = 20;
+/// Glyph vertex: (clip x w, clip y w, gamma scale, w), atlas uv, (size, opacity, halo width,
+/// halo blur), (fill?, halo?, device pixel ratio, kind), premultiplied fill and halo colors.
+pub(crate) const GLYPH_VERTEX_FLOATS: usize = 22;
 pub(crate) const GLYPH_VERTEX_SIZE: u64 = GLYPH_VERTEX_FLOATS as u64 * 4;
 /// Same layout as the application circle instances (`application_circle.wgsl`).
 pub(crate) const CIRCLE_INSTANCE_FLOATS: usize = 14;
 
 type TileKey = (u8, u32, u32);
-/// Tile-normalized point to (viewport CSS px, perspective ratio).
-type Projector<'a> = Box<dyn Fn([f64; 2]) -> Option<([f64; 2], f64)> + 'a>;
+/// Tile-normalized point to viewport CSS px and clip w.
+type Projector<'a> = Box<dyn Fn([f64; 2]) -> ([f64; 2], f64) + 'a>;
 
 struct StyleTile {
     z: u8,
@@ -350,9 +352,15 @@ impl StyleSymbols {
                 }
             }
         }
-        let bearing = match (to_viewport(0.0, 0.0), to_viewport(1.0, 0.0)) {
-            (Some((a, _)), Some((b, _))) => (b[1] - a[1]).atan2(b[0] - a[0]),
-            _ => 0.0,
+        // MapLibre's `bearingInRadians`, clockwise from north: under pitch the clip w row
+        // points where the camera faces; flat, east turns up on screen as the bearing grows.
+        let bearing = if vp[3].abs() + vp[7].abs() > 1.0e-9 * vp[15].abs() {
+            vp[3].atan2(vp[7])
+        } else {
+            match (to_viewport(0.0, 0.0), to_viewport(1.0, 0.0)) {
+                (Some((a, _)), Some((b, _))) => -(b[1] - a[1]).atan2(b[0] - a[0]),
+                _ => 0.0,
+            }
         };
 
         // Tiles intersecting the viewport, as MapLibre's covering tiles.
@@ -388,6 +396,13 @@ impl StyleSymbols {
                 .map(|p| p[1])
                 .fold(f64::NEG_INFINITY, f64::max);
             if max_x <= 0.0 || min_x >= viewport.0 || max_y <= 0.0 || min_y >= viewport.1 {
+                continue;
+            }
+            // Under pitch and bearing a tile's projected quad can miss the viewport inside its
+            // bounding box; MapLibre's frustum culling leaves such tiles out, labels and all.
+            if let [nw, ne, sw, se] = projected[..]
+                && !quad_meets_rect([nw, ne, se, sw], [viewport.0, viewport.1])
+            {
                 continue;
             }
             visible.push((*tile, *local, style_tile));
@@ -439,16 +454,26 @@ impl StyleSymbols {
         }
         let tile_ids: Vec<TileId> = visible.iter().map(|(tile, _, _)| *tile).collect();
         let order = symbol_tile_order(&tile_ids, bearing);
+        // Viewport CSS px and clip w of a local map-plane point, also behind the camera.
+        let project = |x: f64, y: f64| -> ([f64; 2], f64) {
+            let [cx, cy, w] = clip(x, y);
+            (
+                [
+                    (cx / w + 1.0) / 2.0 * surface.width - surface.margin,
+                    (1.0 - cy / w) / 2.0 * surface.height - surface.margin,
+                ],
+                w,
+            )
+        };
         let projectors: Vec<Projector<'_>> = order
             .iter()
             .map(|index| {
                 let local = visible[*index].1;
                 Box::new(move |uv: [f64; 2]| {
-                    let (point, w) = to_viewport(
+                    project(
                         local.west + uv[0] * local.size,
                         local.north - uv[1] * local.size,
-                    )?;
-                    Some((point, 0.5 + 0.5 * center_depth / w))
+                    )
                 }) as Projector<'_>
             })
             .collect();
@@ -458,10 +483,20 @@ impl StyleSymbols {
             .map(|(index, project)| PlacementTile {
                 tile: visible[*index].0,
                 buckets: &visible[*index].2.buckets,
-                project: project.as_ref(),
+                projection: TileProjection {
+                    project: project.as_ref(),
+                    center_w: center_depth,
+                    tile_px: visible[*index].1.size,
+                },
             })
             .collect();
-        let placed = place_symbols(&placement_tiles, self.layers.len(), viewport.0, viewport.1);
+        let placed = place_symbols(
+            &placement_tiles,
+            self.layers.len(),
+            viewport.0,
+            viewport.1,
+            zoom,
+        );
 
         let to_clip = |viewport_point: [f64; 2]| -> [f32; 2] {
             [
@@ -478,6 +513,13 @@ impl StyleSymbols {
         );
         // `transform.pitch !== 0`: the map plane's depth varies across the screen.
         let pitched = vp[3].abs() + vp[7].abs() > 1.0e-9 * vp[15].abs();
+        // The clip w row is the view direction: its map-plane part grows with the pitch.
+        let cos_pitch = vp[11].abs() / vp[3].hypot(vp[7]).hypot(vp[11]);
+        let quad_context = QuadContext {
+            surface,
+            center_w: center_depth,
+            cos_pitch,
+        };
         for (layer_index, layer) in self.layers.iter().enumerate() {
             if !layer.visible || zoom < layer.min_zoom || zoom >= layer.max_zoom {
                 continue;
@@ -549,7 +591,7 @@ impl StyleSymbols {
                             continue;
                         };
                         for circle in circles {
-                            let Some((point, ratio)) = (tile.project)(circle.anchor) else {
+                            let Some((point, ratio)) = tile.projection.anchor(circle.anchor) else {
                                 continue;
                             };
                             let depth_scale = 2.0 * ratio - 1.0;
@@ -586,65 +628,90 @@ impl StyleSymbols {
                 StyleLayerKind::Symbol => {
                     let symbols = &placed[layer_index];
                     // Symbols draw per tile in MapLibre's descending symbol tile order.
-                    let tiles: Vec<(&SymbolBucket, Vec<&PlacedSymbol>)> = (0..placement_tiles
-                        .len())
-                        .rev()
-                        .filter_map(|tile_index| {
-                            let Some(LayerBucket::Symbols(bucket)) =
-                                placement_tiles[tile_index].buckets.layers.get(layer_index)
-                            else {
-                                return None;
-                            };
-                            let tile_symbols: Vec<_> = symbols
-                                .iter()
-                                .filter(|symbol| symbol.tile == tile_index)
-                                .collect();
-                            (!tile_symbols.is_empty()).then_some((bucket, tile_symbols))
-                        })
-                        .collect();
+                    let tiles: Vec<(usize, &SymbolBucket, SymbolDrawState, Vec<&PlacedSymbol>)> =
+                        (0..placement_tiles.len())
+                            .rev()
+                            .filter_map(|tile_index| {
+                                let tile = &placement_tiles[tile_index];
+                                let Some(LayerBucket::Symbols(bucket)) =
+                                    tile.buckets.layers.get(layer_index)
+                                else {
+                                    return None;
+                                };
+                                let tile_symbols: Vec<_> = symbols
+                                    .iter()
+                                    .filter(|symbol| symbol.tile == tile_index)
+                                    .collect();
+                                let state =
+                                    SymbolDrawState::new(layer, zoom, f64::from(tile.tile.z))
+                                        .ok()?;
+                                (!tile_symbols.is_empty()).then_some((
+                                    tile_index,
+                                    bucket,
+                                    state,
+                                    tile_symbols,
+                                ))
+                            })
+                            .collect();
                     frame.placed_labels += tiles
                         .iter()
-                        .map(|(_, tile_symbols)| tile_symbols.len() as u32)
+                        .map(|(_, _, _, tile_symbols)| tile_symbols.len() as u32)
                         .sum::<u32>();
-                    let skipped = |key: &str| {
-                        layer.raw_paint(key).and_then(|value| value.as_f64()) == Some(0.0)
+                    let Some(layer_state) = tiles.first().map(|(_, _, state, _)| *state) else {
+                        continue;
                     };
                     // `drawSymbols`: a layer's icons over every tile, then its text.
-                    if !skipped("icon-opacity") {
-                        for (bucket, tile_symbols) in &tiles {
+                    if !layer_state.icon_hidden {
+                        for (_, bucket, state, tile_symbols) in &tiles {
                             let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                             let kind = if bucket.sdf_icons { 1.0 } else { 2.0 };
-                            let halo = bucket.sdf_icons && bucket.icon_halo;
-                            for mode in halo_passes(halo, bucket.icon_halo_pass) {
-                                for symbol in tile_symbols.iter().filter(|symbol| symbol.icon) {
-                                    let Some(icon) = &bucket.instances[symbol.instance].icon else {
-                                        continue;
-                                    };
-                                    let Some(position) = icon_atlas.icon(&icon.image) else {
-                                        continue;
-                                    };
-                                    let size = f64::from(icon.size)
-                                        * symbol.perspective_ratio.clamp(0.0, 4.0);
-                                    let corner = |offset: [f32; 2]| {
-                                        to_clip([
-                                            symbol.anchor[0] + f64::from(offset[0]) * size,
-                                            symbol.anchor[1] + f64::from(offset[1]) * size,
-                                        ])
-                                    };
-                                    let rect = position.padded;
-                                    push_quad(
+                            let icon_size = bucket.icon_size.at_zoom(zoom);
+                            let mut quads = Vec::new();
+                            for symbol in tile_symbols.iter().filter(|symbol| symbol.icon) {
+                                let Some(icon) = &bucket.instances[symbol.instance].icon else {
+                                    continue;
+                                };
+                                let Some(position) = icon_atlas.icon(&icon.image) else {
+                                    continue;
+                                };
+                                let paint = state.icon.resolve(&icon.paint);
+                                if paint.opacity < 0.1 {
+                                    continue;
+                                }
+                                let mut size = bucket.icon_size.for_feature(icon_size, icon.sizes);
+                                if !bucket.icon_offset {
+                                    size *= symbol.perspective_ratio.clamp(0.0, 4.0);
+                                }
+                                let corner = |x: f32, y: f32| {
+                                    quad_context.viewport_vertex([
+                                        symbol.anchor[0] + f64::from(x) * size,
+                                        symbol.anchor[1] + f64::from(y) * size,
+                                    ])
+                                };
+                                let rect = position.padded;
+                                quads.push(SymbolQuad {
+                                    corners: [
+                                        corner(icon.tl[0], icon.tl[1]),
+                                        corner(icon.br[0], icon.tl[1]),
+                                        corner(icon.tl[0], icon.br[1]),
+                                        corner(icon.br[0], icon.br[1]),
+                                    ],
+                                    uv: [
+                                        (f64::from(rect.x) / icon_atlas_size.0) as f32,
+                                        (f64::from(rect.y) / icon_atlas_size.1) as f32,
+                                        (f64::from(rect.x + rect.w) / icon_atlas_size.0) as f32,
+                                        (f64::from(rect.y + rect.h) / icon_atlas_size.1) as f32,
+                                    ],
+                                    size: size as f32,
+                                    paint,
+                                });
+                            }
+                            let halo = bucket.sdf_icons && state.icon_halo;
+                            for mode in halo_passes(halo, state.icon_halo_pass) {
+                                for quad in &quads {
+                                    quad.push(
                                         &mut frame.glyphs,
-                                        corner(icon.tl),
-                                        corner(icon.br),
-                                        [
-                                            (f64::from(rect.x) / icon_atlas_size.0) as f32,
-                                            (f64::from(rect.y) / icon_atlas_size.1) as f32,
-                                            (f64::from(rect.x + rect.w) / icon_atlas_size.0) as f32,
-                                            (f64::from(rect.y + rect.h) / icon_atlas_size.1) as f32,
-                                        ],
-                                        size as f32,
                                         [mode[0], mode[1], surface.pixel_ratio as f32, kind],
-                                        &icon.paint,
                                     );
                                 }
                             }
@@ -659,10 +726,8 @@ impl StyleSymbols {
                                     .as_ref()
                                     .is_some_and(|icon| icon.pixel_ratio != surface.pixel_ratio)
                             });
-                            let linear = bucket.sdf_icons
-                                || pitched
-                                || !bucket.icon_size_one
-                                || needs_linear;
+                            let linear =
+                                bucket.sdf_icons || pitched || !state.icon_size_one || needs_linear;
                             frame.draws.push(StyleDraw::Icons {
                                 first,
                                 count,
@@ -670,45 +735,142 @@ impl StyleSymbols {
                             });
                         }
                     }
-                    if !skipped("text-opacity") {
+                    if !layer_state.text_hidden {
                         let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
-                        for (bucket, tile_symbols) in &tiles {
-                            for mode in halo_passes(bucket.text_halo, bucket.text_halo_pass) {
-                                for symbol in tile_symbols.iter().filter(|symbol| symbol.text) {
-                                    let Some(text) = &bucket.instances[symbol.instance].text else {
-                                        continue;
-                                    };
-                                    let size = f64::from(text.size)
-                                        * symbol.perspective_ratio.clamp(0.0, 4.0);
+                        for (tile_index, bucket, state, tile_symbols) in &tiles {
+                            let projection = &placement_tiles[*tile_index].projection;
+                            let text_size = bucket.text_size.at_zoom(zoom);
+                            let mut quads = Vec::new();
+                            for symbol in tile_symbols.iter().filter(|symbol| symbol.text) {
+                                let instance = &bucket.instances[symbol.instance];
+                                let Some(text) = &instance.text else {
+                                    continue;
+                                };
+                                let paint = state.text.resolve(&text.paint);
+                                if paint.opacity < 0.1 {
+                                    continue;
+                                }
+                                let font_size = bucket.text_size.for_feature(text_size, text.sizes);
+                                let uv = |rect: AtlasRect| {
+                                    [
+                                        (f64::from(rect.x) / atlas_width) as f32,
+                                        (f64::from(rect.y) / atlas_height) as f32,
+                                        (f64::from(rect.x + rect.w) / atlas_width) as f32,
+                                        (f64::from(rect.y + rect.h) / atlas_height) as f32,
+                                    ]
+                                };
+                                let Some(line) = &text.line else {
+                                    let mut size = font_size;
+                                    if !bucket.icon_offset {
+                                        size *= symbol.perspective_ratio.clamp(0.0, 4.0);
+                                    }
                                     let font_scale = size / 24.0;
                                     for glyph in &text.glyphs {
                                         let Some(rect) = atlas.rect(&text.stack, glyph.codepoint)
                                         else {
                                             continue;
                                         };
-                                        let corner = |offset: [f32; 2]| {
-                                            to_clip([
-                                                symbol.anchor[0]
-                                                    + f64::from(offset[0]) * font_scale,
-                                                symbol.anchor[1]
-                                                    + f64::from(offset[1]) * font_scale,
+                                        let corner = |x: f32, y: f32| {
+                                            quad_context.viewport_vertex([
+                                                symbol.anchor[0] + f64::from(x) * font_scale,
+                                                symbol.anchor[1] + f64::from(y) * font_scale,
                                             ])
                                         };
-                                        push_quad(
-                                            &mut frame.glyphs,
-                                            corner(glyph.tl),
-                                            corner(glyph.br),
-                                            [
-                                                (f64::from(rect.x) / atlas_width) as f32,
-                                                (f64::from(rect.y) / atlas_height) as f32,
-                                                (f64::from(rect.x + rect.w) / atlas_width) as f32,
-                                                (f64::from(rect.y + rect.h) / atlas_height) as f32,
+                                        quads.push(SymbolQuad {
+                                            corners: [
+                                                corner(glyph.tl[0], glyph.tl[1]),
+                                                corner(glyph.br[0], glyph.tl[1]),
+                                                corner(glyph.tl[0], glyph.br[1]),
+                                                corner(glyph.br[0], glyph.br[1]),
                                             ],
-                                            size as f32,
-                                            [mode[0], mode[1], surface.pixel_ratio as f32, 0.0],
-                                            &text.paint,
-                                        );
+                                            uv: uv(rect),
+                                            size: size as f32,
+                                            paint: paint.clone(),
+                                        });
                                     }
+                                    continue;
+                                };
+                                let context = LineLabelContext {
+                                    projection,
+                                    pitch_with_map: bucket.pitch_with_map,
+                                    line: &line.line,
+                                    anchor: [
+                                        instance.anchor[0] * EXTENT,
+                                        instance.anchor[1] * EXTENT,
+                                    ],
+                                    segment: line.segment,
+                                };
+                                let glyphs = LineGlyphs {
+                                    offsets: &line.offsets,
+                                    line_offset: line.line_offset,
+                                };
+                                let Some(placed_glyphs) = line_label_glyphs(
+                                    font_size,
+                                    &glyphs,
+                                    bucket.keep_upright,
+                                    &context,
+                                    [viewport.0, viewport.1],
+                                    256.0 / surface.pixel_ratio,
+                                ) else {
+                                    continue;
+                                };
+                                // The shader's perspective ratio: on the map plane it grows
+                                // with the distance, as the plane shrinks.
+                                let anchor_w = (projection.project)(instance.anchor).1;
+                                let ratio = if bucket.pitch_with_map {
+                                    0.5 + 0.5 * anchor_w / center_depth
+                                } else {
+                                    0.5 + 0.5 * center_depth / anchor_w
+                                };
+                                let mut size = font_size;
+                                if !bucket.icon_offset {
+                                    size *= ratio.clamp(0.0, 4.0);
+                                }
+                                let font_scale = size / 24.0;
+                                for (glyph, (point, angle)) in
+                                    text.glyphs.iter().zip(&placed_glyphs)
+                                {
+                                    let Some(rect) = atlas.rect(&text.stack, glyph.codepoint)
+                                    else {
+                                        continue;
+                                    };
+                                    let (sin, cos) = angle.sin_cos();
+                                    let corner = |x: f32, y: f32| {
+                                        let (x, y) =
+                                            (f64::from(x) * font_scale, f64::from(y) * font_scale);
+                                        let label = [
+                                            point[0] + cos * x - sin * y,
+                                            point[1] + sin * x + cos * y,
+                                        ];
+                                        if bucket.pitch_with_map {
+                                            let (viewport_point, w) = (projection.project)([
+                                                label[0] / projection.tile_px,
+                                                label[1] / projection.tile_px,
+                                            ]);
+                                            quad_context.map_vertex(viewport_point, w)
+                                        } else {
+                                            quad_context.viewport_vertex(label)
+                                        }
+                                    };
+                                    quads.push(SymbolQuad {
+                                        corners: [
+                                            corner(glyph.tl[0], glyph.tl[1]),
+                                            corner(glyph.br[0], glyph.tl[1]),
+                                            corner(glyph.tl[0], glyph.br[1]),
+                                            corner(glyph.br[0], glyph.br[1]),
+                                        ],
+                                        uv: uv(rect),
+                                        size: size as f32,
+                                        paint: paint.clone(),
+                                    });
+                                }
+                            }
+                            for mode in halo_passes(state.text_halo, state.text_halo_pass) {
+                                for quad in &quads {
+                                    quad.push(
+                                        &mut frame.glyphs,
+                                        [mode[0], mode[1], surface.pixel_ratio as f32, 0.0],
+                                    );
                                 }
                             }
                         }
@@ -722,6 +884,35 @@ impl StyleSymbols {
         }
         frame
     }
+}
+
+/// Whether a convex quad (corners in order) overlaps the rectangle `0..size`: separating
+/// axes of the quad's edges (the rectangle's own axes are its bounding box test).
+fn quad_meets_rect(quad: [[f64; 2]; 4], size: [f64; 2]) -> bool {
+    let rect = [
+        [0.0, 0.0],
+        [size[0], 0.0],
+        [size[0], size[1]],
+        [0.0, size[1]],
+    ];
+    (0..4).all(|index| {
+        let (a, b) = (quad[index], quad[(index + 1) % 4]);
+        let axis = [b[1] - a[1], a[0] - b[0]];
+        let project = |p: &[f64; 2]| p[0] * axis[0] + p[1] * axis[1];
+        let (quad_min, quad_max) = quad
+            .iter()
+            .map(project)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), value| {
+                (lo.min(value), hi.max(value))
+            });
+        let (rect_min, rect_max) = rect
+            .iter()
+            .map(project)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), value| {
+                (lo.min(value), hi.max(value))
+            });
+        quad_max > rect_min && rect_max > quad_min
+    })
 }
 
 /// Asks the image atlas for every icon a tile's symbols use (MapLibre's `getImages`), before
@@ -750,33 +941,76 @@ fn halo_passes(halo: bool, separate: bool) -> &'static [[f32; 2]] {
     }
 }
 
-/// Six vertices of one glyph or icon quad: clip corners, atlas uv rect (u0, v0, u1, v1), size
-/// (`text-size` or `icon-size` with the perspective ratio), (fill?, halo?, device pixel
-/// ratio, kind: 0 glyph, 1 SDF icon, 2 plain icon) and the paint.
-fn push_quad(
-    out: &mut Vec<f32>,
-    tl: [f32; 2],
-    br: [f32; 2],
+/// What glyph and icon vertices need of the frame to reach clip space.
+#[derive(Clone, Copy)]
+struct QuadContext {
+    surface: StyleSurface,
+    /// The clip w at the viewport centre: MapLibre's `cameraToCenterDistance`.
+    center_w: f64,
+    cos_pitch: f64,
+}
+
+impl QuadContext {
+    fn clip(&self, viewport_point: [f64; 2]) -> [f64; 2] {
+        let surface = self.surface;
+        [
+            (viewport_point[0] + surface.margin) / surface.width * 2.0 - 1.0,
+            1.0 - (viewport_point[1] + surface.margin) / surface.height * 2.0,
+        ]
+    }
+
+    /// A vertex in viewport px: clip w 1 and the shader's gamma scale 1.
+    fn viewport_vertex(&self, viewport_point: [f64; 2]) -> [f32; 4] {
+        let [x, y] = self.clip(viewport_point);
+        [x as f32, y as f32, 1.0, 1.0]
+    }
+
+    /// A vertex on the map plane, projected to viewport px with clip w: MapLibre's
+    /// `gamma_scale / u_gamma_scale`, `w / (cos(pitch) cameraToCenterDistance)`, sharpens
+    /// the edges of glyphs that lie on the pitched plane.
+    fn map_vertex(&self, viewport_point: [f64; 2], w: f64) -> [f32; 4] {
+        let [x, y] = self.clip(viewport_point);
+        [
+            (x * w) as f32,
+            (y * w) as f32,
+            (w / (self.cos_pitch * self.center_w)) as f32,
+            w as f32,
+        ]
+    }
+}
+
+/// One glyph or icon quad: corners (tl, tr, bl, br) as (clip x w, clip y w, gamma scale,
+/// w), atlas uv rect (u0, v0, u1, v1), size (`text-size` or `icon-size` with the
+/// perspective ratio) and resolved paint.
+struct SymbolQuad {
+    corners: [[f32; 4]; 4],
     uv: [f32; 4],
     size: f32,
-    mode: [f32; 4],
-    paint: &SymbolPaint,
-) {
-    let [u0, v0, u1, v1] = uv;
-    for (position, uv) in [
-        ([tl[0], tl[1]], [u0, v0]),
-        ([br[0], tl[1]], [u1, v0]),
-        ([tl[0], br[1]], [u0, v1]),
-        ([tl[0], br[1]], [u0, v1]),
-        ([br[0], tl[1]], [u1, v0]),
-        ([br[0], br[1]], [u1, v1]),
-    ] {
-        out.extend_from_slice(&position);
-        out.extend_from_slice(&uv);
-        out.extend_from_slice(&[size, paint.opacity, paint.halo_width, paint.halo_blur]);
-        out.extend_from_slice(&mode);
-        out.extend_from_slice(&paint.color);
-        out.extend_from_slice(&paint.halo_color);
+    paint: SymbolPaint,
+}
+
+impl SymbolQuad {
+    /// Six vertices, with `mode` (fill?, halo?, device pixel ratio, kind: 0 glyph, 1 SDF
+    /// icon, 2 plain icon).
+    fn push(&self, out: &mut Vec<f32>, mode: [f32; 4]) {
+        let [u0, v0, u1, v1] = self.uv;
+        let [tl, tr, bl, br] = self.corners;
+        let paint = &self.paint;
+        for (position, uv) in [
+            (tl, [u0, v0]),
+            (tr, [u1, v0]),
+            (bl, [u0, v1]),
+            (bl, [u0, v1]),
+            (tr, [u1, v0]),
+            (br, [u1, v1]),
+        ] {
+            out.extend_from_slice(&position);
+            out.extend_from_slice(&uv);
+            out.extend_from_slice(&[self.size, paint.opacity, paint.halo_width, paint.halo_blur]);
+            out.extend_from_slice(&mode);
+            out.extend_from_slice(&paint.color);
+            out.extend_from_slice(&paint.halo_color);
+        }
     }
 }
 
@@ -1055,7 +1289,7 @@ mod tests {
         assert_eq!(frame.glyphs.len(), 6 * 2 * 6 * GLYPH_VERTEX_FLOATS);
         // The circle sits on the anchor: tile centre at the screen centre.
         assert!(frame.circles[0].abs() < 1e-6 && frame.circles[1].abs() < 1e-6);
-        assert_eq!(GLYPH_VERTEX_SIZE, 80);
+        assert_eq!(GLYPH_VERTEX_SIZE, 88);
         assert!(symbols.atlas().width > 0);
         symbols.evict("s", (7, 66, 45));
         assert!(symbols.missing_glyph_ranges().is_empty());
@@ -1162,6 +1396,6 @@ mod tests {
             assert!((actual - expected).abs() < 1e-3, "{actual} vs {expected}");
         }
         // Plain icon kind.
-        assert_eq!(frame.glyphs[11], 2.0);
+        assert_eq!(frame.glyphs[13], 2.0);
     }
 }

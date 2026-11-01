@@ -144,12 +144,12 @@ impl SymbolGpu {
                 shader_location: location,
             };
         let attributes = [
-            attribute(0, 0, wgpu::VertexFormat::Float32x2),
-            attribute(1, 8, wgpu::VertexFormat::Float32x2),
-            attribute(2, 16, wgpu::VertexFormat::Float32x4),
-            attribute(3, 32, wgpu::VertexFormat::Float32x4),
-            attribute(4, 48, wgpu::VertexFormat::Float32x4),
-            attribute(5, 64, wgpu::VertexFormat::Float32x4),
+            attribute(0, 0, wgpu::VertexFormat::Float32x4),
+            attribute(1, 16, wgpu::VertexFormat::Float32x2),
+            attribute(2, 24, wgpu::VertexFormat::Float32x4),
+            attribute(3, 40, wgpu::VertexFormat::Float32x4),
+            attribute(4, 56, wgpu::VertexFormat::Float32x4),
+            attribute(5, 72, wgpu::VertexFormat::Float32x4),
         ];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Maps SDF glyph pipeline"),

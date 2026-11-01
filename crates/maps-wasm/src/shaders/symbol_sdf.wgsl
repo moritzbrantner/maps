@@ -1,10 +1,13 @@
-// MapLibre 6.15 `symbol_sdf` (and `symbol_icon`, #346) for viewport-aligned point labels. Vertices arrive in clip
-// space (anchor projection, perspective ratio and 1/32 glyph offsets are applied on the CPU);
-// the fragment stage is MapLibre's: an SDF edge at 192/256, the halo ring inside
-// `(6 - halo_width / fontScale) / SDF_PX`, gamma 0.105 / devicePixelRatio over the font scale.
+// MapLibre 6.15 `symbol_sdf` (and `symbol_icon`, #346) for point and line labels. Vertices
+// arrive in homogeneous clip space (anchor projection, perspective ratio, glyph placement along
+// lines and 1/32 glyph offsets are applied on the CPU); the fragment stage is MapLibre's: an SDF
+// edge at 192/256, the halo ring inside `(6 - halo_width / fontScale) / SDF_PX`, gamma
+// 0.105 / devicePixelRatio over the font scale, scaled by `gamma_scale / u_gamma_scale` for
+// glyphs that lie on the pitched map plane (1 for viewport-aligned ones).
 
 struct GlyphInput {
-  @location(0) position: vec2<f32>,
+  // (clip x w, clip y w, gamma scale, w)
+  @location(0) position: vec4<f32>,
   @location(1) tex: vec2<f32>,
   // size (text-size x perspective ratio), opacity, halo width, halo blur
   @location(2) params: vec4<f32>,
@@ -22,6 +25,7 @@ struct VertexOutput {
   @location(2) mode: vec4<f32>,
   @location(3) fill_color: vec4<f32>,
   @location(4) halo_color: vec4<f32>,
+  @location(5) gamma_scale: f32,
 };
 
 @group(0) @binding(0) var atlas: texture_2d<f32>;
@@ -30,12 +34,13 @@ struct VertexOutput {
 @vertex
 fn vs_main(input: GlyphInput) -> VertexOutput {
   var output: VertexOutput;
-  output.position = vec4<f32>(input.position, 0.0, 1.0);
+  output.position = vec4<f32>(input.position.xy, 0.0, input.position.w);
   output.tex = input.tex;
   output.params = input.params;
   output.mode = input.mode;
   output.fill_color = input.fill_color;
   output.halo_color = input.halo_color;
+  output.gamma_scale = input.position.z;
   return output;
 }
 
@@ -51,6 +56,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let is_halo = input.mode.y > 0.5;
   let edge_gamma = 0.105 / input.mode.z;
   let kind = input.mode.w;
+  let gamma_scale = input.gamma_scale;
   let texel = textureSample(atlas, atlas_sampler, input.tex);
   // MapLibre's `symbol_icon`: the premultiplied image times the opacity.
   if (kind > 1.5) {
@@ -59,7 +65,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
   // `fontScale = u_is_text ? size / 24.0 : size`.
   let font_scale = select(size / 24.0, size, kind > 0.5);
-  // u_gamma_scale and the vertex gamma scale are 1 for viewport-pitched labels.
   let gamma = edge_gamma / font_scale;
   let inner_edge = (256.0 - 64.0) / 256.0;
   let dist = select(texel.r, texel.a, kind > 0.5);
@@ -67,15 +72,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   var text = vec4<f32>(0.0);
   var halo = vec4<f32>(0.0);
   if (is_plain) {
-    let alpha = smoothstep(inner_edge - gamma, inner_edge + gamma, dist);
+    let gamma_scaled = gamma * gamma_scale;
+    let alpha = smoothstep(inner_edge - gamma_scaled, inner_edge + gamma_scaled, dist);
     text = total_opacity * alpha * input.fill_color;
   }
   if (is_halo) {
     let gamma_halo = (halo_blur * 1.19 / SDF_PX + edge_gamma) / font_scale;
-    let inner_edge_halo = inner_edge + gamma_halo;
-    var alpha_halo = smoothstep(inner_edge_halo - gamma_halo, inner_edge_halo + gamma_halo, dist);
+    let gamma_scaled_halo = gamma_halo * gamma_scale;
+    let inner_edge_halo = inner_edge + gamma_scaled_halo;
+    var alpha_halo = smoothstep(inner_edge_halo - gamma_scaled_halo, inner_edge_halo + gamma_scaled_halo, dist);
     let halo_edge = (6.0 - halo_width / font_scale) / SDF_PX;
-    alpha_halo = min(smoothstep(halo_edge - gamma_halo, halo_edge + gamma_halo, dist), 1.0 - alpha_halo);
+    alpha_halo = min(smoothstep(halo_edge - gamma_scaled_halo, halo_edge + gamma_scaled_halo, dist), 1.0 - alpha_halo);
     halo = total_opacity * alpha_halo * input.halo_color;
   }
   if (is_plain && is_halo) {
