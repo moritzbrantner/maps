@@ -27,6 +27,12 @@
 
 ### Patch Changes
 
+- Polygons on the Maps WebGPU runtime draw MapLibre's `fill-antialias` outline: a
+  one-pixel line in the fill colour over each ring edge, faded by MapLibre's
+  `v_pos` distance. That interpolation is perspective-correct, so on a pitched
+  camera the outline shows beside thin far strokes and fades out along near
+  edges. Pitched polygon vertices also snap to MapLibre's GeoJSON tile grid,
+  and the outline is clipped per GeoJSON tile as MapLibre clips it.
 - GeoJSON lines on the Maps flat runtime now follow MapLibre's GeoJSON source.
   As geojson-vt does, they are simplified by 0.375 px at the floored camera
   zoom and snapped to the 8192-unit tile grid. The line geometry is rebuilt when
