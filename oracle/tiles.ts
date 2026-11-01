@@ -77,21 +77,63 @@ export function demPng(z: number, x: number, y: number): Buffer {
   return png;
 }
 
-/** A one-pattern sprite (16 px diagonal hatch) for the `fill-pattern` reference (#323). */
-export const SPRITE_JSON = { hatch: { height: 16, pixelRatio: 1, width: 16, x: 0, y: 0 } };
+/**
+ * The oracle sprite: the 16 px diagonal `hatch` pattern (`fill-pattern`, #323) and the
+ * `symbol-icons` images (#346): a crisp 12 px `town` square, an SDF `capital` star and a
+ * `lake` disc at pixel ratio 2.
+ */
+export const SPRITE_JSON = {
+  capital: { height: 24, pixelRatio: 1, sdf: true, width: 24, x: 28, y: 0 },
+  hatch: { height: 16, pixelRatio: 1, width: 16, x: 0, y: 0 },
+  lake: { height: 16, pixelRatio: 2, width: 16, x: 52, y: 0 },
+  town: { height: 12, pixelRatio: 1, width: 12, x: 16, y: 0 },
+};
+const SPRITE_SIZE = { height: 24, width: 68 };
+
+type Rgba = [number, number, number, number];
 
 export function spritePng(): Buffer {
-  const size = 16;
-  const rows = Buffer.alloc((size * 4 + 1) * size);
-  for (let row = 0; row < size; row++) {
-    const offset = row * (size * 4 + 1);
-    for (let column = 0; column < size; column++) {
-      const line = (row + column) % 8 < 2;
-      const pixel = offset + 1 + column * 4;
-      rows.set(line ? [37, 99, 235, 255] : [255, 255, 255, 0], pixel);
+  const { height, width } = SPRITE_SIZE;
+  const rows = Buffer.alloc((width * 4 + 1) * height);
+  const set = (x: number, y: number, rgba: Rgba) => rows.set(rgba, y * (width * 4 + 1) + 1 + x * 4);
+  const image = (
+    { height: h, width: w, x: left, y: top }: { height: number; width: number; x: number; y: number },
+    pixel: (column: number, row: number) => Rgba,
+  ) => {
+    for (let row = 0; row < h; row++) for (let column = 0; column < w; column++) set(left + column, top + row, pixel(column, row));
+  };
+  image(SPRITE_JSON.hatch, (column, row) => ((row + column) % 8 < 2 ? [37, 99, 235, 255] : [255, 255, 255, 0]));
+  image(SPRITE_JSON.town, (column, row) => {
+    const border = Math.min(column, row, 11 - column, 11 - row) < 2;
+    return border ? [31, 41, 55, 255] : [255, 255, 255, 255];
+  });
+  // A five-pointed star as a signed distance field: 192 on the edge, 32 per px (SDF_PX 8).
+  const star = Array.from({ length: 10 }, (_, index) => {
+    const angle = (index * Math.PI) / 5 - Math.PI / 2;
+    const radius = index % 2 === 0 ? 9 : 4;
+    return [12 + radius * Math.cos(angle), 12 + radius * Math.sin(angle)] as const;
+  });
+  image(SPRITE_JSON.capital, (column, row) => {
+    const [x, y] = [column + 0.5, row + 0.5];
+    let distance = Infinity;
+    let inside = false;
+    for (let index = 0; index < star.length; index++) {
+      const [ax, ay] = star[index]!;
+      const [bx, by] = star[(index + 1) % star.length]!;
+      const t = Math.max(0, Math.min(1, ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / ((bx - ax) ** 2 + (by - ay) ** 2)));
+      distance = Math.min(distance, Math.hypot(x - ax - t * (bx - ax), y - ay - t * (by - ay)));
+      if (ay > y !== by > y && x < ((bx - ax) * (y - ay)) / (by - ay) + ax) inside = !inside;
     }
-  }
-  return encodePng(size, size, rows, 6);
+    const value = 192 + 32 * (inside ? distance : -distance);
+    return [0, 0, 0, Math.round(Math.max(0, Math.min(255, value)))];
+  });
+  image(SPRITE_JSON.lake, (column, row) => {
+    const distance = Math.hypot(column + 0.5 - 8, row + 0.5 - 8);
+    if (distance > 7) return [255, 255, 255, 0];
+    const wave = Math.abs(row + 0.5 - 8 - 1.5 * Math.sin(column / 2)) < 1;
+    return wave ? [255, 255, 255, 255] : [37, 99, 235, 255];
+  });
+  return encodePng(width, height, rows, 6);
 }
 
 function encodePng(width: number, height: number, filteredRows: Buffer, colorType = 2) {

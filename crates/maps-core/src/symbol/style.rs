@@ -75,6 +75,17 @@ const SYMBOL_LAYOUT: &[&str] = &[
     "text-transform",
     "text-rotation-alignment",
     "text-pitch-alignment",
+    "icon-image",
+    "icon-size",
+    "icon-anchor",
+    "icon-offset",
+    "icon-padding",
+    "icon-allow-overlap",
+    "icon-ignore-placement",
+    "icon-optional",
+    "icon-keep-upright",
+    "icon-rotation-alignment",
+    "icon-pitch-alignment",
 ];
 const SYMBOL_PAINT: &[&str] = &[
     "text-color",
@@ -82,6 +93,11 @@ const SYMBOL_PAINT: &[&str] = &[
     "text-halo-color",
     "text-halo-width",
     "text-halo-blur",
+    "icon-opacity",
+    "icon-color",
+    "icon-halo-color",
+    "icon-halo-width",
+    "icon-halo-blur",
 ];
 /// Properties whose value must be the same at every zoom: Maps evaluates them per tile, and
 /// MapLibre re-evaluates these at the camera zoom (`text-size`) or each frame (paint).
@@ -108,6 +124,12 @@ const ZOOM_CONSTANT: &[&str] = &[
     "text-halo-color",
     "text-halo-width",
     "text-halo-blur",
+    "icon-size",
+    "icon-opacity",
+    "icon-color",
+    "icon-halo-color",
+    "icon-halo-width",
+    "icon-halo-blur",
 ];
 
 impl StyleLayer {
@@ -177,6 +199,8 @@ impl StyleLayer {
         only("symbol-placement", &["point"])?;
         only("text-rotation-alignment", &["auto", "viewport"])?;
         only("text-pitch-alignment", &["auto", "viewport"])?;
+        only("icon-rotation-alignment", &["auto", "viewport"])?;
+        only("icon-pitch-alignment", &["auto", "viewport"])?;
         let zoom =
             |key: &str, default: f64| object.get(key).and_then(Value::as_f64).unwrap_or(default);
         Ok(Self {
@@ -346,7 +370,9 @@ mod tests {
             Ok(1)
         );
         for rejected in [
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x"}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-text-fit":"both"}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-rotate":45}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-size":["interpolate",["linear"],["zoom"],5,1,10,2]}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"text-size":["interpolate",["linear"],["zoom"],5,10,10,20]}}]"#,
             r#"[{"id":"a","type":"circle","source-layer":"p","paint":{"circle-radius":["sqrt",["get","n"]]}}]"#,

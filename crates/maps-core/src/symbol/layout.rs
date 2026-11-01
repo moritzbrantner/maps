@@ -11,6 +11,7 @@ use serde_json::Value;
 use super::color::Rgba;
 use super::expression::{EvaluationContext, js_round, to_string};
 use super::glyphs::{GLYPH_PBF_BORDER, GlyphStore};
+use super::images::ImageStore;
 use super::polylabel::{classify_rings, pole_of_inaccessibility};
 use super::shaping::{ONE_EM, ShapeOptions, SymbolAnchor, shape_text};
 use super::style::{StyleLayer, StyleLayerKind};
@@ -40,8 +41,9 @@ pub struct SymbolGlyph {
     pub br: [f32; 2],
 }
 
+/// Evaluated `text-*` or `icon-*` paint; colors premultiplied.
 #[derive(Clone, Debug, PartialEq)]
-pub struct TextPaint {
+pub struct SymbolPaint {
     pub color: [f32; 4],
     pub halo_color: [f32; 4],
     pub halo_width: f32,
@@ -49,18 +51,83 @@ pub struct TextPaint {
     pub opacity: f32,
 }
 
+/// The text part of a symbol.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SymbolInstance {
-    /// Tile-normalized anchor, truncated to MapLibre's integer 8192-unit grid.
-    pub anchor: [f64; 2],
+pub struct SymbolText {
     /// Collision box around the anchor in CSS px at perspective ratio 1 (padding included).
     pub collision_box: [f64; 4],
     pub glyphs: Vec<SymbolGlyph>,
     /// `text-size` as the shader receives it (1/128 px steps).
     pub size: f32,
     pub stack: String,
-    pub paint: TextPaint,
+    pub paint: SymbolPaint,
+}
+
+/// The icon part of a symbol: MapLibre's `shapeIcon` and `getIconQuads` without
+/// `icon-text-fit`, one quad over the image and its one-pixel padding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SymbolIcon {
+    /// The style image id; its texture rect is the image's padded bin in the atlas.
+    pub image: String,
+    /// Quad corners relative to the anchor in 1/32-quantized CSS px at `icon-size` 1.
+    pub tl: [f32; 2],
+    pub br: [f32; 2],
+    /// Collision box around the anchor in CSS px at perspective ratio 1 (`icon-padding`).
+    pub collision_box: [f64; 4],
+    /// `icon-size` as the shader receives it (1/128 steps).
+    pub size: f32,
+    /// The image's pixel ratio: one unlike the device's makes MapLibre sample linearly.
+    pub pixel_ratio: f64,
+    pub paint: SymbolPaint,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SymbolInstance {
+    /// Tile-normalized anchor, truncated to MapLibre's integer 8192-unit grid.
+    pub anchor: [f64; 2],
+    pub text: Option<SymbolText>,
+    pub icon: Option<SymbolIcon>,
     pub feature_index: usize,
+}
+
+/// One symbol layer of one tile with the layer-wide placement and draw state MapLibre keeps
+/// on its `SymbolBucket` and reads off the layer when it places and draws.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SymbolBucket {
+    pub instances: Vec<SymbolInstance>,
+    pub text_allow_overlap: bool,
+    pub text_ignore_placement: bool,
+    pub text_optional: bool,
+    pub icon_allow_overlap: bool,
+    pub icon_ignore_placement: bool,
+    pub icon_optional: bool,
+    /// `bucket.sdfIcons`: the first icon decides; MapLibre cannot mix SDF and plain icons.
+    pub sdf_icons: bool,
+    /// `icon-size` is the constant 1: plain icons may then sample `NEAREST`.
+    pub icon_size_one: bool,
+    /// MapLibre's `hasHalo` (`*-halo-width` not the constant 0) for text and icons.
+    pub text_halo: bool,
+    pub icon_halo: bool,
+    /// `isGlyphOverlap`: negative letter spacing, or a halo width over 1 (any data-driven
+    /// one): halos then draw in their own pass before the fills, per tile.
+    pub text_halo_pass: bool,
+    pub icon_halo_pass: bool,
+}
+
+impl SymbolBucket {
+    #[must_use]
+    pub fn has_text(&self) -> bool {
+        self.instances
+            .iter()
+            .any(|instance| instance.text.is_some())
+    }
+
+    #[must_use]
+    pub fn has_icons(&self) -> bool {
+        self.instances
+            .iter()
+            .any(|instance| instance.icon.is_some())
+    }
 }
 
 /// A `line-dasharray` as one feature needs it from the dash atlas.
@@ -115,11 +182,7 @@ pub enum LayerBucket {
     },
     Lines(Vec<TileLine>),
     Circles(Vec<TileCircle>),
-    Symbols {
-        instances: Vec<SymbolInstance>,
-        allow_overlap: bool,
-        ignore_placement: bool,
-    },
+    Symbols(SymbolBucket),
 }
 
 /// Buckets of one tile, one per style layer (in style order).
@@ -147,12 +210,14 @@ fn context<'a>(feature: &'a MvtFeature, zoom: f64) -> EvaluationContext<'a> {
     }
 }
 
-/// Lays out every style layer for one tile at zoom `z`.
+/// Lays out every style layer for one tile at zoom `z`. Icons resolve against `images`, as
+/// MapLibre's worker lays symbols out once their images arrived.
 pub fn layout_tile(
     layers: &[StyleLayer],
     source: &[MvtLayer],
     z: u8,
     glyphs: &GlyphStore,
+    images: &ImageStore,
 ) -> Result<TileStyleBuckets, String> {
     let mut buckets = TileStyleBuckets::default();
     for layer in layers {
@@ -187,20 +252,65 @@ pub fn layout_tile(
                 };
                 let zoom = f64::from(z);
                 let constant = context(&probe, zoom);
-                LayerBucket::Symbols {
-                    instances: match features {
-                        Some(source) => layout_symbols(
-                            layer,
-                            source,
-                            z,
-                            glyphs,
-                            &mut buckets.missing_glyph_ranges,
-                        )?,
-                        None => Vec::new(),
+                let instances = match features {
+                    Some(source) => layout_symbols(
+                        layer,
+                        source,
+                        z,
+                        glyphs,
+                        images,
+                        &mut buckets.missing_glyph_ranges,
+                    )?,
+                    None => Vec::new(),
+                };
+                let sdf_icons = instances
+                    .iter()
+                    .find_map(|instance| instance.icon.as_ref())
+                    .and_then(|icon| images.image(&icon.image))
+                    .is_some_and(|image| image.sdf);
+                // `constantOr`: a data-driven value has no constant.
+                let constant_number = |key: &str| layer.raw_paint(key).map(Value::as_f64);
+                let has_halo = |key: &str| match constant_number(key) {
+                    None => false,
+                    Some(width) => width != Some(0.0),
+                };
+                let letter_spacing = layer
+                    .raw_layout("text-letter-spacing")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let halo_pass = |key: &str| {
+                    letter_spacing * ONE_EM < 0.0
+                        || match constant_number(key) {
+                            None => false,
+                            Some(width) => width.unwrap_or(f64::INFINITY) > 1.0,
+                        }
+                };
+                LayerBucket::Symbols(SymbolBucket {
+                    instances,
+                    text_allow_overlap: layer.boolean("text-allow-overlap", false, &constant)?,
+                    text_ignore_placement: layer.boolean(
+                        "text-ignore-placement",
+                        false,
+                        &constant,
+                    )?,
+                    text_optional: layer.boolean("text-optional", false, &constant)?,
+                    icon_allow_overlap: layer.boolean("icon-allow-overlap", false, &constant)?,
+                    icon_ignore_placement: layer.boolean(
+                        "icon-ignore-placement",
+                        false,
+                        &constant,
+                    )?,
+                    icon_optional: layer.boolean("icon-optional", false, &constant)?,
+                    sdf_icons,
+                    icon_size_one: match layer.raw_layout("icon-size") {
+                        None => true,
+                        Some(value) => value.as_f64() == Some(1.0),
                     },
-                    allow_overlap: layer.boolean("text-allow-overlap", false, &constant)?,
-                    ignore_placement: layer.boolean("text-ignore-placement", false, &constant)?,
-                }
+                    text_halo: has_halo("text-halo-width"),
+                    icon_halo: has_halo("icon-halo-width"),
+                    text_halo_pass: halo_pass("text-halo-width"),
+                    icon_halo_pass: halo_pass("icon-halo-width"),
+                })
             }
         };
         buckets.layers.push(bucket);
@@ -403,6 +513,7 @@ fn layout_symbols(
     source: &MvtLayer,
     z: u8,
     glyphs: &GlyphStore,
+    images: &ImageStore,
     missing: &mut BTreeSet<(String, u32)>,
 ) -> Result<Vec<SymbolInstance>, String> {
     let scale = scale(source);
@@ -412,118 +523,11 @@ fn layout_symbols(
         if !layer.accepts(&tile_context)? {
             continue;
         }
-        let text = match layer.raw_layout("text-field") {
-            None => continue,
-            Some(Value::String(tokens)) => resolve_tokens(tokens, feature),
-            Some(_) => match layer.value("text-field", &tile_context)? {
-                None | Some(Value::Null) => continue,
-                Some(value) => to_string(&value),
-            },
-        };
-        let text = match layer
-            .string(false, "text-transform", "none", &tile_context)?
-            .as_str()
-        {
-            "uppercase" => text.to_uppercase(),
-            "lowercase" => text.to_lowercase(),
-            _ => text,
-        };
-        if text.is_empty() {
+        let text = symbol_text(layer, feature, &tile_context, glyphs, missing)?;
+        let icon = symbol_icon(layer, feature, &tile_context, images)?;
+        if text.is_none() && icon.is_none() {
             continue;
         }
-        let stack = match layer.value("text-font", &tile_context)? {
-            Some(Value::Array(fonts)) => fonts
-                .iter()
-                .map(|font| font.as_str().unwrap_or_default())
-                .collect::<Vec<_>>()
-                .join(","),
-            _ => "Open Sans Regular,Arial Unicode MS Regular".to_owned(),
-        };
-        for c in text.chars() {
-            if !glyphs.has_range(&stack, u32::from(c)) {
-                missing.insert((stack.clone(), u32::from(c) / 256 * 256));
-            }
-        }
-        // `text-size` at the tile zoom ("this zoom") and at zoom + 1 (layout); both equal
-        // because zoom-dependent sizes are rejected.
-        let size = layer.number(false, "text-size", 16.0, &tile_context)?;
-        let font_scale = size / ONE_EM;
-        let anchor =
-            SymbolAnchor::parse(&layer.string(false, "text-anchor", "center", &tile_context)?)
-                .ok_or_else(|| format!("{}: invalid text-anchor", layer.id))?;
-        let justify = match layer
-            .string(false, "text-justify", "center", &tile_context)?
-            .as_str()
-        {
-            "auto" => anchor.justification(),
-            "left" => 0.0,
-            "right" => 1.0,
-            _ => 0.5,
-        };
-        let offset = match layer.value("text-offset", &tile_context)? {
-            Some(Value::Array(values)) if values.len() == 2 => [
-                values[0].as_f64().unwrap_or(0.0) * ONE_EM,
-                values[1].as_f64().unwrap_or(0.0) * ONE_EM,
-            ],
-            _ => [0.0, 0.0],
-        };
-        let options = ShapeOptions {
-            stack: &stack,
-            max_width: layer.number(false, "text-max-width", 10.0, &tile_context)? * ONE_EM,
-            line_height: layer.number(false, "text-line-height", 1.2, &tile_context)? * ONE_EM,
-            anchor,
-            justify,
-            spacing: layer.number(false, "text-letter-spacing", 0.0, &tile_context)? * ONE_EM,
-            translate: offset,
-        };
-        let Some(shaping) = shape_text(&text, glyphs, &options) else {
-            continue;
-        };
-        let padding = layer.number(false, "text-padding", 2.0, &tile_context)?;
-        let collision_box = [
-            shaping.left * font_scale - padding,
-            shaping.top * font_scale - padding,
-            shaping.right * font_scale + padding,
-            shaping.bottom * font_scale + padding,
-        ];
-        let quantize = |value: f64| (js_round(value * 32.0) / 32.0) as f32;
-        let rect_buffer = f64::from(GLYPH_PBF_BORDER + 1);
-        let mut quads = Vec::new();
-        for glyph in shaping.lines.iter().flatten() {
-            if !glyph.has_bitmap {
-                continue;
-            }
-            let metrics = glyph.metrics;
-            let half_advance = f64::from(metrics.advance) / 2.0;
-            let built_in = [glyph.x + half_advance + offset[0], glyph.y + offset[1]];
-            let x1 = (f64::from(metrics.left) - rect_buffer) - half_advance + built_in[0];
-            let y1 = (-f64::from(metrics.top) - rect_buffer) + built_in[1];
-            // Atlas bins: bitmap (with its SDF border) plus 1 px padding on each side.
-            let border = 2 * GLYPH_PBF_BORDER + 2;
-            let x2 = x1 + f64::from(metrics.width as i32 + border);
-            let y2 = y1 + f64::from(metrics.height as i32 + border);
-            quads.push(SymbolGlyph {
-                codepoint: glyph.codepoint,
-                tl: [quantize(x1), quantize(y1)],
-                br: [quantize(x2), quantize(y2)],
-            });
-        }
-        let paint = TextPaint {
-            color: layer
-                .color(
-                    "text-color",
-                    Rgba::parse("#000").unwrap_or(Rgba::TRANSPARENT),
-                    &tile_context,
-                )?
-                .premultiplied(),
-            halo_color: layer
-                .color("text-halo-color", Rgba::TRANSPARENT, &tile_context)?
-                .premultiplied(),
-            halo_width: layer.number(true, "text-halo-width", 0.0, &tile_context)? as f32,
-            halo_blur: layer.number(true, "text-halo-blur", 0.0, &tile_context)? as f32,
-            opacity: layer.number(true, "text-opacity", 1.0, &tile_context)? as f32,
-        };
-        let packed_size = (js_round(size * 128.0) / 128.0) as f32;
         for anchor in anchors(feature, scale) {
             // addSymbolAtAnchor: neighbouring tiles own anchors in their buffers.
             if anchor[0] < 0.0 || anchor[0] >= EXTENT || anchor[1] < 0.0 || anchor[1] >= EXTENT {
@@ -531,16 +535,239 @@ fn layout_symbols(
             }
             instances.push(SymbolInstance {
                 anchor: [anchor[0].trunc() / EXTENT, anchor[1].trunc() / EXTENT],
-                collision_box,
-                glyphs: quads.clone(),
-                size: packed_size,
-                stack: stack.clone(),
-                paint: paint.clone(),
+                text: text.clone(),
+                icon: icon.clone(),
                 feature_index,
             });
         }
     }
     Ok(instances)
+}
+
+/// A string layout property: `{token}` strings resolve against the feature (legacy), others
+/// evaluate as expressions. `None` for null or empty.
+fn string_property(
+    layer: &StyleLayer,
+    key: &str,
+    feature: &MvtFeature,
+    context: &EvaluationContext<'_>,
+) -> Result<Option<String>, String> {
+    let value = match layer.raw_layout(key) {
+        None => return Ok(None),
+        Some(Value::String(tokens)) => resolve_tokens(tokens, feature),
+        Some(_) => match layer.value(key, context)? {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => to_string(&value),
+        },
+    };
+    Ok(Some(value).filter(|value| !value.is_empty()))
+}
+
+/// MapLibre's `getIconPadding`: CSS order (top, right, bottom, left) from 1 to 4 values.
+fn icon_padding(value: Option<Value>) -> [f64; 4] {
+    let values: Vec<f64> = match value {
+        Some(Value::Number(number)) => number.as_f64().into_iter().collect(),
+        Some(Value::Array(items)) => items.iter().filter_map(Value::as_f64).collect(),
+        _ => Vec::new(),
+    };
+    match values[..] {
+        [all] => [all; 4],
+        [vertical, horizontal] => [vertical, horizontal, vertical, horizontal],
+        [top, horizontal, bottom] => [top, horizontal, bottom, horizontal],
+        [top, right, bottom, left] => [top, right, bottom, left],
+        _ => [2.0; 4],
+    }
+}
+
+fn symbol_paint(
+    layer: &StyleLayer,
+    prefix: &str,
+    context: &EvaluationContext<'_>,
+) -> Result<SymbolPaint, String> {
+    let key = |name: &str| format!("{prefix}-{name}");
+    Ok(SymbolPaint {
+        color: layer
+            .color(
+                &key("color"),
+                Rgba::parse("#000").unwrap_or(Rgba::TRANSPARENT),
+                context,
+            )?
+            .premultiplied(),
+        halo_color: layer
+            .color(&key("halo-color"), Rgba::TRANSPARENT, context)?
+            .premultiplied(),
+        halo_width: layer.number(true, &key("halo-width"), 0.0, context)? as f32,
+        halo_blur: layer.number(true, &key("halo-blur"), 0.0, context)? as f32,
+        opacity: layer.number(true, &key("opacity"), 1.0, context)? as f32,
+    })
+}
+
+/// `shapeIcon`, `getIconQuads` and the icon `CollisionFeature` for one feature. An image the
+/// style lacks leaves the symbol without an icon, as in MapLibre.
+fn symbol_icon(
+    layer: &StyleLayer,
+    feature: &MvtFeature,
+    context: &EvaluationContext<'_>,
+    images: &ImageStore,
+) -> Result<Option<SymbolIcon>, String> {
+    let Some(id) = string_property(layer, "icon-image", feature, context)? else {
+        return Ok(None);
+    };
+    let Some(image) = images.image(&id) else {
+        return Ok(None);
+    };
+    let anchor = SymbolAnchor::parse(&layer.string(false, "icon-anchor", "center", context)?)
+        .ok_or_else(|| format!("{}: invalid icon-anchor", layer.id))?;
+    let offset = match layer.value("icon-offset", context)? {
+        Some(Value::Array(values)) if values.len() == 2 => [
+            values[0].as_f64().unwrap_or(0.0),
+            values[1].as_f64().unwrap_or(0.0),
+        ],
+        _ => [0.0, 0.0],
+    };
+    let (horizontal, vertical) = anchor.alignment();
+    let display = [
+        f64::from(image.width) / image.pixel_ratio,
+        f64::from(image.height) / image.pixel_ratio,
+    ];
+    let left = offset[0] - display[0] * horizontal;
+    let top = offset[1] - display[1] * vertical;
+    let (right, bottom) = (left + display[0], top + display[1]);
+    // `makeBox` over the whole image: one image pixel of padding on every side.
+    let quantize = |value: f64| (js_round(value * 32.0) / 32.0) as f32;
+    let em = |stretch: f64, image_size: u32, icon_size: f64, origin: f64| {
+        quantize(stretch / f64::from(image_size) * icon_size + origin)
+    };
+    let tl = [
+        em(-1.0, image.width, display[0], left),
+        em(-1.0, image.height, display[1], top),
+    ];
+    let br = [
+        em(f64::from(image.width) + 1.0, image.width, display[0], left),
+        em(f64::from(image.height) + 1.0, image.height, display[1], top),
+    ];
+    // `icon-size` at the tile zoom and zoom + 1 are equal: zoom-dependent sizes are rejected.
+    let size = layer.number(false, "icon-size", 1.0, context)?;
+    let padding = icon_padding(layer.value("icon-padding", context)?);
+    Ok(Some(SymbolIcon {
+        image: id,
+        tl,
+        br,
+        collision_box: [
+            left * size - padding[3],
+            top * size - padding[0],
+            right * size + padding[1],
+            bottom * size + padding[2],
+        ],
+        size: (js_round(size * 128.0) / 128.0) as f32,
+        pixel_ratio: image.pixel_ratio,
+        paint: symbol_paint(layer, "icon", context)?,
+    }))
+}
+
+/// Shaped glyph quads, collision box and paint of one feature's `text-field`.
+fn symbol_text(
+    layer: &StyleLayer,
+    feature: &MvtFeature,
+    tile_context: &EvaluationContext<'_>,
+    glyphs: &GlyphStore,
+    missing: &mut BTreeSet<(String, u32)>,
+) -> Result<Option<SymbolText>, String> {
+    let Some(text) = string_property(layer, "text-field", feature, tile_context)? else {
+        return Ok(None);
+    };
+    let text = match layer
+        .string(false, "text-transform", "none", tile_context)?
+        .as_str()
+    {
+        "uppercase" => text.to_uppercase(),
+        "lowercase" => text.to_lowercase(),
+        _ => text,
+    };
+    let stack = match layer.value("text-font", tile_context)? {
+        Some(Value::Array(fonts)) => fonts
+            .iter()
+            .map(|font| font.as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => "Open Sans Regular,Arial Unicode MS Regular".to_owned(),
+    };
+    for c in text.chars() {
+        if !glyphs.has_range(&stack, u32::from(c)) {
+            missing.insert((stack.clone(), u32::from(c) / 256 * 256));
+        }
+    }
+    // `text-size` at the tile zoom ("this zoom") and at zoom + 1 (layout); both equal
+    // because zoom-dependent sizes are rejected.
+    let size = layer.number(false, "text-size", 16.0, tile_context)?;
+    let font_scale = size / ONE_EM;
+    let anchor =
+        SymbolAnchor::parse(&layer.string(false, "text-anchor", "center", tile_context)?)
+            .ok_or_else(|| format!("{}: invalid text-anchor", layer.id))?;
+    let justify = match layer
+        .string(false, "text-justify", "center", tile_context)?
+        .as_str()
+    {
+        "auto" => anchor.justification(),
+        "left" => 0.0,
+        "right" => 1.0,
+        _ => 0.5,
+    };
+    let offset = match layer.value("text-offset", tile_context)? {
+        Some(Value::Array(values)) if values.len() == 2 => [
+            values[0].as_f64().unwrap_or(0.0) * ONE_EM,
+            values[1].as_f64().unwrap_or(0.0) * ONE_EM,
+        ],
+        _ => [0.0, 0.0],
+    };
+    let options = ShapeOptions {
+        stack: &stack,
+        max_width: layer.number(false, "text-max-width", 10.0, tile_context)? * ONE_EM,
+        line_height: layer.number(false, "text-line-height", 1.2, tile_context)? * ONE_EM,
+        anchor,
+        justify,
+        spacing: layer.number(false, "text-letter-spacing", 0.0, tile_context)? * ONE_EM,
+        translate: offset,
+    };
+    let Some(shaping) = shape_text(&text, glyphs, &options) else {
+        return Ok(None);
+    };
+    let padding = layer.number(false, "text-padding", 2.0, tile_context)?;
+    let collision_box = [
+        shaping.left * font_scale - padding,
+        shaping.top * font_scale - padding,
+        shaping.right * font_scale + padding,
+        shaping.bottom * font_scale + padding,
+    ];
+    let quantize = |value: f64| (js_round(value * 32.0) / 32.0) as f32;
+    let rect_buffer = f64::from(GLYPH_PBF_BORDER + 1);
+    let mut quads = Vec::new();
+    for glyph in shaping.lines.iter().flatten() {
+        if !glyph.has_bitmap {
+            continue;
+        }
+        let metrics = glyph.metrics;
+        let half_advance = f64::from(metrics.advance) / 2.0;
+        let built_in = [glyph.x + half_advance + offset[0], glyph.y + offset[1]];
+        let x1 = (f64::from(metrics.left) - rect_buffer) - half_advance + built_in[0];
+        let y1 = (-f64::from(metrics.top) - rect_buffer) + built_in[1];
+        // Atlas bins: bitmap (with its SDF border) plus 1 px padding on each side.
+        let border = 2 * GLYPH_PBF_BORDER + 2;
+        let x2 = x1 + f64::from(metrics.width as i32 + border);
+        let y2 = y1 + f64::from(metrics.height as i32 + border);
+        quads.push(SymbolGlyph {
+            codepoint: glyph.codepoint,
+            tl: [quantize(x1), quantize(y1)],
+            br: [quantize(x2), quantize(y2)],
+        });
+    }
+    Ok(Some(SymbolText {
+        collision_box,
+        glyphs: quads,
+        size: (js_round(size * 128.0) / 128.0) as f32,
+        stack,
+        paint: symbol_paint(layer, "text", tile_context)?,
+    }))
 }
 
 /// Point-placement anchors of a feature in 8192-unit tile space (`addFeature`).

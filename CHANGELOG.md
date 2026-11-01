@@ -17,6 +17,15 @@
 
 ### Minor Changes
 
+- Tileset `symbol` layers draw icons from the map style's `sprite`, ported from MapLibre
+  6.15 (#346): `icon-image` (expressions or `{token}` strings), `icon-size`, `icon-anchor`,
+  `icon-offset`, `icon-padding`, `icon-allow-overlap`, `icon-ignore-placement`,
+  `icon-optional` and `text-optional`, with `icon-opacity` and, for SDF sprite images,
+  `icon-color` and `icon-halo-*`. Icons and text place jointly as in MapLibre's
+  `placement.ts`, icons draw before their layer's text, and plain icons sample `NEAREST`
+  unless they scale. Tiles lay their icons out once the sprite arrived. `icon-text-fit`,
+  `icon-rotate`, `icon-translate` and zoom-dependent `icon-size` are still rejected. The
+  oracle `symbol-icons` scenario is gated.
 - `flatRuntime="maps"` draws relief from the map style, ported from MapLibre 6.15 (#324):
   `raster-dem` sources (`mapbox`, `terrarium` and `custom` encodings, two-pixel tile
   borders backfilled from loaded neighbours), `hillshade` layers (the prepare pass that
