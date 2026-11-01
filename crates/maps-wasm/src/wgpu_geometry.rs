@@ -9,6 +9,9 @@ use std::borrow::Cow;
 pub(super) const APPLICATION_VERTEX_SIZE: u64 = 40;
 /// The edge of fills and markers: never faded.
 const FILL_EDGE: [f32; 3] = [0.0, 0.0, 1.0e6];
+/// Fill outline vertices carry their endpoint's window position (physical px) in `edge.xy`;
+/// `edge.z` is unused by `fs_outline`.
+const OUTLINE_EDGE: f32 = 0.0;
 pub(super) const APPLICATION_CIRCLE_INSTANCE_SIZE: u64 = 56;
 const LINE_CAP_SEGMENTS: usize = 12;
 const GEOMETRY_EPSILON: f64 = 1.0e-9;
@@ -277,6 +280,16 @@ impl WgpuApplicationFrame {
             point.x = x;
             point.y = y;
         }
+        // Polygon vertices lie where MapLibre's GeoJSON tiles quantize them (#331).
+        if let Some(tiles) = ground.geojson_tiles {
+            for point in self
+                .polygons
+                .iter_mut()
+                .flat_map(|polygon| polygon.rings.iter_mut().flatten())
+            {
+                (point.x, point.y) = tiles.snap(point.x, point.y);
+            }
+        }
         Ok(())
     }
 }
@@ -354,6 +367,9 @@ pub(super) struct PolygonDraw {
     /// Zero when the polygon has no visible fill; the cover follows the fan.
     pub(super) fan_count: u32,
     pub(super) cover_first: u32,
+    /// MapLibre's `fill-antialias` outline over the fill, under the stroke (#331).
+    pub(super) outline_first: u32,
+    pub(super) outline_count: u32,
     pub(super) stroke_first: u32,
     pub(super) stroke_count: u32,
 }
@@ -431,6 +447,8 @@ pub(super) struct GroundPerspective {
     center_depth: f64,
     width: f64,
     height: f64,
+    /// MapLibre's GeoJSON tile grid on this plane, which clips fill outlines (#331).
+    geojson_tiles: Option<GeoJsonTileGrid>,
 }
 
 impl GroundPerspective {
@@ -463,7 +481,20 @@ impl GroundPerspective {
             center_depth,
             width,
             height,
+            geojson_tiles: None,
         })
+    }
+
+    /// This plane with MapLibre's GeoJSON tile grid, which clips fill outlines (#331).
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", feature = "wgpu-base-map")),
+        allow(dead_code)
+    )]
+    pub(super) fn with_geojson_tiles(self, geojson_tiles: Option<GeoJsonTileGrid>) -> Self {
+        Self {
+            geojson_tiles,
+            ..self
+        }
     }
 
     /// Homogeneous clip position `(x, y, w)` of a flat-plane point.
@@ -507,6 +538,125 @@ fn invert_3x3(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
         return None;
     }
     Some(adjugate.map(|row| row.map(|value| value / determinant)))
+}
+
+/// MapLibre's GeoJSON source tiles (512 px, at the floored camera zoom) on the flat plane of
+/// a pitched camera (#331). geojson-vt clips each tile's polygons 128 of its 512 px beyond
+/// the tile, and each tile draws its clipped copy inside its own stencil; a fill outline's
+/// `v_pos` runs between the clipped endpoints, so the grid decides where it drifts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GeoJsonTileGrid {
+    /// Flat-plane position of the world's north-west corner (CSS px, +y south).
+    origin: [f64; 2],
+    /// One tile's flat-plane size (CSS px).
+    size: f64,
+}
+
+/// geojson-vt's `buffer` over MapLibre's 512 px GeoJSON tile.
+const GEOJSON_TILE_BUFFER: f64 = 128.0 / 512.0;
+/// MapLibre's GeoJSON tile extent (`EXTENT`).
+const GEOJSON_TILE_EXTENT: f64 = 8192.0;
+
+impl GeoJsonTileGrid {
+    /// The grid from a raster placement, whose quadtree key and local-plane extent fix the
+    /// world's position and size on the plane.
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", feature = "wgpu-base-map")),
+        allow(dead_code)
+    )]
+    pub(super) fn from_placement(placement: &WgpuRasterTilePlacement) -> Option<Self> {
+        let (z, x, y) = placement.key?;
+        let size = placement.local_size;
+        if !size.is_finite() || size <= 0.0 {
+            return None;
+        }
+        // Any quadtree tile spans 512 CSS px at its own zoom.
+        let zoom = f64::from(z) + (size / 512.0).log2();
+        let tile_zoom = (zoom + 1.0e-9).floor().max(0.0);
+        let grid = Self {
+            origin: [
+                placement.local_west - f64::from(x) * size,
+                -placement.local_north - f64::from(y) * size,
+            ],
+            size: size * (f64::from(z) - tile_zoom).exp2(),
+        };
+        (grid.origin.iter().all(|value| value.is_finite()) && grid.size.is_finite()).then_some(grid)
+    }
+
+    /// A flat-plane point rounded to the tile extent grid, as geojson-vt's `Math.round` of
+    /// the tile coordinates does.
+    fn snap(&self, x: f64, y: f64) -> (f64, f64) {
+        let unit = self.size / GEOJSON_TILE_EXTENT;
+        let round =
+            |value: f64, origin: f64| origin + ((value - origin) / unit + 0.5).floor() * unit;
+        (round(x, self.origin[0]), round(y, self.origin[1]))
+    }
+
+    /// The pieces of the flat segment `start -> end` that the tiles draw: per tile, the
+    /// segment parameters `(drawn, interpolated)` of the part inside the tile and of the
+    /// buffered part its clipped geometry holds.
+    fn pieces(
+        &self,
+        start: WgpuApplicationPoint,
+        end: WgpuApplicationPoint,
+    ) -> Vec<([f64; 2], [f64; 2])> {
+        let index = |value: f64, origin: f64| ((value - origin) / self.size).floor() as i64;
+        let (x0, x1) = (
+            index(start.x.min(end.x), self.origin[0]),
+            index(start.x.max(end.x), self.origin[0]),
+        );
+        let (y0, y1) = (
+            index(start.y.min(end.y), self.origin[1]),
+            index(start.y.max(end.y), self.origin[1]),
+        );
+        let mut pieces = Vec::new();
+        for column in x0..=x1 {
+            for row in y0..=y1 {
+                let west = self.origin[0] + column as f64 * self.size;
+                let north = self.origin[1] + row as f64 * self.size;
+                let clip = |margin: f64| {
+                    clip_segment(
+                        start,
+                        end,
+                        [west - margin, north - margin],
+                        [west + self.size + margin, north + self.size + margin],
+                    )
+                };
+                if let (Some(drawn), Some(interpolated)) =
+                    (clip(0.0), clip(self.size * GEOJSON_TILE_BUFFER))
+                    && drawn[1] > drawn[0]
+                {
+                    pieces.push((drawn, interpolated));
+                }
+            }
+        }
+        pieces
+    }
+}
+
+/// Liang-Barsky: the parameter range of `start -> end` inside the box `min..max`.
+fn clip_segment(
+    start: WgpuApplicationPoint,
+    end: WgpuApplicationPoint,
+    min: [f64; 2],
+    max: [f64; 2],
+) -> Option<[f64; 2]> {
+    let (mut low, mut high) = (0.0_f64, 1.0_f64);
+    for (origin, delta, min, max) in [
+        (start.x, end.x - start.x, min[0], max[0]),
+        (start.y, end.y - start.y, min[1], max[1]),
+    ] {
+        if delta == 0.0 {
+            if origin < min || origin > max {
+                return None;
+            }
+            continue;
+        }
+        let (a, b) = ((min - origin) / delta, (max - origin) / delta);
+        low = low.max(a.min(b));
+        high = high.min(a.max(b));
+    }
+    (low <= high).then_some([low, high])
 }
 
 /// Where application vertices are written: the screen (surface CSS px), or the flat map
@@ -876,6 +1026,22 @@ fn append_application_polygon(
         ] {
             append_application_vertex(output, space, x, y, polygon.fill_color, FILL_EDGE)?;
         }
+
+        draw.outline_first = vertex_index(output);
+        for ring in fill_rings() {
+            for (index, &start) in ring.iter().enumerate() {
+                let end = ring[(index + 1) % ring.len()];
+                append_fill_outline_segment(
+                    output,
+                    space,
+                    pixel_ratio,
+                    start,
+                    end,
+                    polygon.fill_color,
+                )?;
+            }
+        }
+        draw.outline_count = vertex_index(output) - draw.outline_first;
     }
 
     if polygon.stroke_width > 0.0 && polygon.stroke_color[3] > 0.0 && !rings.is_empty() {
@@ -1089,6 +1255,120 @@ fn append_stroke_vertex(
     )
 }
 
+/// One edge of MapLibre's `fill-antialias` outline (#331): a one-pixel `gl.LINES` segment in
+/// the fill colour (`fill-outline-color` unset), drawn over the fill. Its fragment shader
+/// (`fill_outline.fragment.glsl`) fades by the distance from the fragment centre to `v_pos`,
+/// the endpoints' window positions interpolated along the line. That interpolation is
+/// perspective-correct, so on a pitched camera `v_pos` drifts off the drawn line between
+/// endpoints of different depth: long near edges fade out a pixel from their vertices,
+/// while short far edges keep the outline beside their thin strokes.
+///
+/// Each GeoJSON tile draws the part of the edge inside it, with `v_pos` running between the
+/// endpoints of the part its buffered tile holds ([`GeoJsonTileGrid`]). Within that part
+/// `v_pos` is the window position interpolated linearly over the map plane, so a drawn piece
+/// is a quad half a physical pixel to either side along its minor axis (the pixels a
+/// one-pixel line produces, one per major-axis column) whose corners carry their own clip `w`
+/// and that `v_pos`: the hardware then interpolates it exactly as the line would.
+fn append_fill_outline_segment(
+    output: &mut Vec<u8>,
+    space: ApplicationSpace,
+    pixel_ratio: f64,
+    start: WgpuApplicationPoint,
+    end: WgpuApplicationPoint,
+    color: [f32; 4],
+) -> Result<(), &'static str> {
+    let (width, height) = (space.width * pixel_ratio, space.height * pixel_ratio);
+    let at = |t: f64| WgpuApplicationPoint {
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+    };
+    // Window position (physical px, +y down) and clip `w` of the segment at `t`.
+    let window = |t: f64| {
+        let point = at(t);
+        let [x, y, w] = clip_position(space, point.x, point.y);
+        (w > 0.0).then(|| {
+            (
+                [(x / w + 1.0) * 0.5 * width, (1.0 - y / w) * 0.5 * height],
+                w,
+            )
+        })
+    };
+    let (Some((a, _)), Some((b, _))) = (window(0.0), window(1.0)) else {
+        return Ok(());
+    };
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    if dx * dx + dy * dy <= GEOMETRY_EPSILON_SQUARED {
+        return Ok(());
+    }
+    let minor = if dx.abs() >= dy.abs() {
+        [0.0, 0.5]
+    } else {
+        [0.5, 0.0]
+    };
+    let pieces = match space.ground.and_then(|ground| ground.geojson_tiles) {
+        Some(tiles) => tiles.pieces(start, end),
+        None => vec![([0.0, 1.0], [0.0, 1.0])],
+    };
+    for (drawn, interpolated) in pieces {
+        let (Some((from, _)), Some((to, _))) = (window(interpolated[0]), window(interpolated[1]))
+        else {
+            continue;
+        };
+        let span = interpolated[1] - interpolated[0];
+        let v_pos = |t: f64| {
+            let along = if span > 0.0 {
+                (t - interpolated[0]) / span
+            } else {
+                0.0
+            };
+            [
+                from[0] + (to[0] - from[0]) * along,
+                from[1] + (to[1] - from[1]) * along,
+            ]
+        };
+        let (Some(first), Some(last)) = (window(drawn[0]), window(drawn[1])) else {
+            continue;
+        };
+        let ends = [(first, v_pos(drawn[0])), (last, v_pos(drawn[1]))];
+        for (end_index, side) in [
+            (0, -1.0),
+            (0, 1.0),
+            (1, 1.0),
+            (0, -1.0),
+            (1, 1.0),
+            (1, -1.0),
+        ] {
+            let ((position, w), v_pos) = ends[end_index];
+            let corner = [position[0] + minor[0] * side, position[1] + minor[1] * side];
+            let clip = [
+                ((corner[0] / width * 2.0 - 1.0) * w) as f32,
+                ((1.0 - corner[1] / height * 2.0) * w) as f32,
+                w as f32,
+            ];
+            let edge = [v_pos[0] as f32, v_pos[1] as f32, OUTLINE_EDGE];
+            if clip.iter().chain(&edge).any(|value| !value.is_finite()) {
+                return Err("wgpu application position is not representable as f32");
+            }
+            for value in clip.into_iter().chain(color).chain(edge) {
+                output.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Homogeneous clip position `(x, y, w)` of an application point.
+fn clip_position(space: ApplicationSpace, x: f64, y: f64) -> [f64; 3] {
+    match space.ground {
+        Some(ground) => ground.clip(x, y),
+        None => [
+            x / space.width * 2.0 - 1.0,
+            1.0 - y / space.height * 2.0,
+            1.0,
+        ],
+    }
+}
+
 fn append_application_vertex(
     output: &mut Vec<u8>,
     space: ApplicationSpace,
@@ -1097,14 +1377,7 @@ fn append_application_vertex(
     color: [f32; 4],
     edge: [f32; 3],
 ) -> Result<(), &'static str> {
-    let clip = match space.ground {
-        Some(ground) => ground.clip(x, y).map(|value| value as f32),
-        None => [
-            (x / space.width * 2.0 - 1.0) as f32,
-            (1.0 - y / space.height * 2.0) as f32,
-            1.0,
-        ],
-    };
+    let clip = clip_position(space, x, y).map(|value| value as f32);
     if clip.iter().any(|value| !value.is_finite()) {
         return Err("wgpu application position is not representable as f32");
     }
@@ -1385,10 +1658,12 @@ mod application_geometry_tests {
         // One fan triangle per ring edge; the closing repeat adds no edge.
         assert_eq!((draw.fan_first, draw.fan_count), (0, 8 * 3));
         assert_eq!(draw.cover_first, draw.fan_count);
+        // MapLibre's fill-antialias outline: one quad per ring edge, holes included (#331).
         assert_eq!(
-            draw.stroke_first,
-            draw.cover_first + POLYGON_COVER_VERTEX_COUNT
+            (draw.outline_first, draw.outline_count),
+            (draw.cover_first + POLYGON_COVER_VERTEX_COUNT, 8 * 6)
         );
+        assert_eq!(draw.stroke_first, draw.outline_first + draw.outline_count);
         // A rectangle and a round join per ring vertex.
         let per_vertex = 6 + 2 * LINE_CAP_SEGMENTS as u32 * 3;
         assert_eq!(draw.stroke_count, 8 * per_vertex);
@@ -1396,6 +1671,89 @@ mod application_geometry_tests {
             vertex_count(&geometry),
             draw.stroke_first + draw.stroke_count
         );
+    }
+
+    /// Vertex `index` of the triangle buffer: clip (x, y, w), RGBA, edge.
+    fn vertex(geometry: &ApplicationGeometry, index: u32) -> [f32; 10] {
+        let start = index as usize * APPLICATION_VERTEX_SIZE as usize;
+        let bytes = &geometry.triangle_vertices[start..start + APPLICATION_VERTEX_SIZE as usize];
+        std::array::from_fn(|value| {
+            f32::from_le_bytes(bytes[value * 4..value * 4 + 4].try_into().unwrap())
+        })
+    }
+
+    #[test]
+    fn fill_outline_is_a_one_pixel_quad_per_edge_carrying_its_endpoints_window_position() {
+        let (geometry, draw) = polygon_draw(polygon());
+        // The top edge (10, 10) -> (30, 10) is x-major: half a pixel above and below it.
+        let corners: Vec<[f32; 10]> = (0..6)
+            .map(|index| vertex(&geometry, draw.outline_first + index))
+            .collect();
+        let window = |clip: &[f32; 10]| ((clip[0] + 1.0) * 50.0, (1.0 - clip[1]) * 50.0);
+        let expected = [
+            ((10.0, 9.5), (10.0, 10.0)),
+            ((10.0, 10.5), (10.0, 10.0)),
+            ((30.0, 10.5), (30.0, 10.0)),
+            ((10.0, 9.5), (10.0, 10.0)),
+            ((30.0, 10.5), (30.0, 10.0)),
+            ((30.0, 9.5), (30.0, 10.0)),
+        ];
+        for (corner, (position, v_pos)) in corners.iter().zip(expected) {
+            let (x, y) = window(corner);
+            assert!((x - position.0).abs() < 1.0e-4 && (y - position.1).abs() < 1.0e-4);
+            assert_eq!((corner[7], corner[8]), v_pos);
+            // The fill colour, as MapLibre's outline without `fill-outline-color`.
+            assert_eq!(corner[3..7], [0.1, 0.4, 0.2, 0.8]);
+        }
+    }
+
+    #[test]
+    fn geojson_tiles_split_an_outline_edge_and_interpolate_over_their_buffered_part() {
+        let tiles = GeoJsonTileGrid {
+            origin: [0.0, 0.0],
+            size: 100.0,
+        };
+        let point = |x: f64, y: f64| WgpuApplicationPoint { x, y };
+        let pieces = tiles.pieces(point(50.0, 50.0), point(250.0, 50.0));
+        let expected = [
+            ([0.0, 0.25], [0.0, 0.375]),
+            ([0.25, 0.75], [0.125, 0.875]),
+            ([0.75, 1.0], [0.625, 1.0]),
+        ];
+        assert_eq!(pieces.len(), expected.len());
+        for ((drawn, interpolated), (want_drawn, want_interpolated)) in pieces.iter().zip(expected)
+        {
+            for (value, want) in drawn
+                .iter()
+                .chain(interpolated)
+                .zip(want_drawn.iter().chain(&want_interpolated))
+            {
+                assert!((value - want).abs() < 1.0e-12, "{pieces:?}");
+            }
+        }
+        // geojson-vt rounds tile coordinates to its extent (Math.round: halves go up).
+        let tiles = GeoJsonTileGrid {
+            origin: [-3.0, 0.0],
+            size: GEOJSON_TILE_EXTENT,
+        };
+        assert_eq!(tiles.snap(-1.5, 2.49), (-1.0, 2.0));
+    }
+
+    #[test]
+    fn geojson_tile_grid_is_the_floored_zoom_quadtree_of_a_raster_placement() {
+        // A zoom-6 raster tile seen at camera zoom 5.5: GeoJSON tiles are zoom 5.
+        let size = 512.0 * 0.5_f64.sqrt();
+        let grid = GeoJsonTileGrid::from_placement(&WgpuRasterTilePlacement {
+            key: Some((6, 34, 21)),
+            local_west: 10.0,
+            local_north: 20.0,
+            local_size: size,
+            opacity: 1.0,
+        })
+        .unwrap();
+        assert!((grid.size - size * 2.0).abs() < 1.0e-9);
+        assert!((grid.origin[0] - (10.0 - 34.0 * size)).abs() < 1.0e-9);
+        assert!((grid.origin[1] - (-20.0 - 21.0 * size)).abs() < 1.0e-9);
     }
 
     #[test]

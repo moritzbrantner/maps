@@ -1,8 +1,8 @@
 use super::wgpu_geometry::{
-    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw, GroundPerspective,
-    POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey, SurfaceClip,
-    WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
-    prepare_application_geometry, unpack_tile_draws,
+    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw, GeoJsonTileGrid,
+    GroundPerspective, POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey,
+    SurfaceClip, WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices,
+    camera_uniform_bytes, prepare_application_geometry, unpack_tile_draws,
 };
 use super::wgpu_mipmaps::{MipmapGenerator, mip_level_count};
 
@@ -177,6 +177,7 @@ pub struct MapsWgpuBaseMapRenderer {
     vertex_capacity: u64,
     application_pipeline: wgpu::RenderPipeline,
     polygon_pipelines: PolygonPipelines,
+    polygon_outline_pipeline: wgpu::RenderPipeline,
     stencil_view: wgpu::TextureView,
     application_vertex_buffer: wgpu::Buffer,
     application_vertex_capacity: u64,
@@ -462,38 +463,52 @@ impl MapsWgpuBaseMapRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let polygon_pipeline_with =
+            |label: &str,
+             fragment: &str,
+             stencil: Option<wgpu::DepthStencilState>,
+             write_mask: wgpu::ColorWrites| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&application_pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &application_shader,
+                        entry_point: Some("vs_main"),
+                        compilation_options: Default::default(),
+                        buffers: &application_vertex_buffers,
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        ..Default::default()
+                    },
+                    depth_stencil: stencil,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &application_shader,
+                        entry_point: Some(fragment),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: surface_view_format,
+                            blend: Some(premultiplied_blend_state()),
+                            write_mask,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
         let polygon_pipeline = |label: &str,
                                 stencil: Option<wgpu::DepthStencilState>,
                                 write_mask: wgpu::ColorWrites| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&application_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &application_shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &application_vertex_buffers,
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: stencil,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &application_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_view_format,
-                        blend: Some(premultiplied_blend_state()),
-                        write_mask,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
+            polygon_pipeline_with(label, "fs_main", stencil, write_mask)
         };
+        // MapLibre's fill outline blends over the fill without a coverage stencil (#331).
+        let polygon_outline_pipeline = polygon_pipeline_with(
+            "Maps polygon fill-antialias outline pipeline",
+            "fs_outline",
+            ignored_stencil(),
+            wgpu::ColorWrites::ALL,
+        );
         let stencil_face = |compare, pass_op| wgpu::StencilFaceState {
             compare,
             fail_op: wgpu::StencilOperation::Keep,
@@ -978,6 +993,7 @@ impl MapsWgpuBaseMapRenderer {
             vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
             application_pipeline,
             polygon_pipelines,
+            polygon_outline_pipeline,
             stencil_view,
             application_vertex_buffer,
             application_vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
@@ -1455,7 +1471,12 @@ impl MapsWgpuBaseMapRenderer {
 
         let application_geometry = application_frame
             .map(|mut frame| {
-                let ground = GroundPerspective::new(view_projection, frame.width, frame.height);
+                let ground = GroundPerspective::new(view_projection, frame.width, frame.height)
+                    .map(|ground| {
+                        ground.with_geojson_tiles(
+                            placements.iter().find_map(GeoJsonTileGrid::from_placement),
+                        )
+                    });
                 if let Some(ground) = &ground {
                     frame.place_on_ground(ground)?;
                 }
@@ -1912,6 +1933,14 @@ impl MapsWgpuBaseMapRenderer {
                 0..1,
             );
             draw_calls += 2;
+        }
+        if polygon.outline_count > 0 {
+            pass.set_pipeline(&self.polygon_outline_pipeline);
+            pass.draw(
+                polygon.outline_first..polygon.outline_first + polygon.outline_count,
+                0..1,
+            );
+            draw_calls += 1;
         }
         if polygon.stroke_count > 0 {
             let stroke = polygon.stroke_first..polygon.stroke_first + polygon.stroke_count;

@@ -36,3 +36,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   }
   return vec4<f32>(input.color.rgb * input.color.a, input.color.a) * coverage;
 }
+
+// MapLibre's `fill-antialias` outline (#331, `fill_outline.fragment.glsl`): `edge.xy` is the
+// endpoints' window position (physical px), interpolated perspective-correct along the
+// one-pixel segment as MapLibre's `v_pos`; the fragment fades by its distance from it.
+@fragment
+fn fs_outline(input: VertexOutput) -> @location(0) vec4<f32> {
+  let alpha = 1.0 - smoothstep(0.0, 1.0, length(input.edge.xy - input.position.xy));
+  if alpha <= 0.0 {
+    discard;
+  }
+  return vec4<f32>(input.color.rgb * input.color.a, input.color.a) * alpha;
+}

@@ -219,15 +219,10 @@ export const scenarios: Scenario[] = [
     basemap: "geographic",
     camera: { bearing: -20, center: [10.4, 51.2], pitch: 50, zoom: 5.55 },
     capability: "pitched camera: minified far tiles, polygons and points; pick and pan",
-    knownGaps: [
-      {
-        gate: "image",
-        issue: 331,
-        reason: "MapLibre's fill-antialias outline shows beside thin far polygon strokes",
-      },
-    ],
+    knownGaps: [],
     name: "pitch",
-    origin: "church-atlas#8 site discovery with a pitched map (#232); camera #328; mipmaps #314",
+    origin:
+      "church-atlas#8 site discovery with a pitched map (#232); camera #328; mipmaps #314; fill outlines #331",
     size: MAP_SIZE,
     steps: [
       { at: [7.6257, 51.9626], kind: "hover", label: "hover the Münster seat" },

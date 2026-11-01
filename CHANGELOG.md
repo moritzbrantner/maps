@@ -27,6 +27,12 @@
 
 ### Patch Changes
 
+- Polygons on the Maps WebGPU runtime draw MapLibre's `fill-antialias` outline: a
+  one-pixel line in the fill colour over each ring edge, faded by MapLibre's
+  `v_pos` distance. That interpolation is perspective-correct, so on a pitched
+  camera the outline shows beside thin far strokes and fades out along near
+  edges. Pitched polygon vertices also snap to MapLibre's GeoJSON tile grid,
+  and the outline is clipped per GeoJSON tile as MapLibre clips it.
 - On the MapLibre runtime, `controller.setViewState()` now moves the camera of
   an uncontrolled Map View (it only updated React state before). Camera frames
   no longer set the unchanged bounds minimum zoom from the constraints effect,
