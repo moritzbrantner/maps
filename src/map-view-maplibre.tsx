@@ -426,25 +426,19 @@ export function MapView({
     setViewState(next, "fly-to");
   });
 
-  const syncFlatView = useEffectEvent(() => {
+  const jumpFlatTo = useEffectEvent((next: MapViewState) => {
     const map = mapRef.current;
 
-    if (!map) {
+    if (!map || areMapViewStatesEqual(getMapLibreViewState(map), next)) {
       return;
     }
 
-    const current = getMapLibreViewState(map);
-
-    if (areMapViewStatesEqual(current, currentViewState)) {
-      return;
-    }
-
-    lastCommittedFlatStateRef.current = currentViewState;
+    lastCommittedFlatStateRef.current = next;
     map.jumpTo({
-      bearing: currentViewState.bearing ?? 0,
-      center: currentViewState.center,
-      pitch: currentViewState.pitch ?? 0,
-      zoom: currentViewState.zoom,
+      bearing: next.bearing ?? 0,
+      center: next.center,
+      pitch: next.pitch ?? 0,
+      zoom: next.zoom,
     });
   });
 
@@ -647,11 +641,14 @@ export function MapView({
 
     lastFlatViewportRenderKeyRef.current = flatViewportRenderKey;
 
-    // Controlled or not, a view state the map does not show yet (a controller `setViewState`)
-    // moves the MapLibre camera; one the map reported itself is already equal and a no-op.
-    syncFlatView();
+    // An uncontrolled camera leads its view state: only a controller call moves it (below).
+    // Re-syncing it here jumped MapLibre back to a stale state mid-interaction (#329).
+    if (controlled) {
+      jumpFlatTo(currentViewState);
+    }
+
     renderFlatLayers({ viewportOnly: true });
-  }, [flatViewportRenderKey, usesMapLibreRuntime]);
+  }, [controlled, flatViewportRenderKey, usesMapLibreRuntime]);
 
   useEffect(() => {
     if (!isReady || !fitToData || controlled || initialViewState || defaultViewState || viewState) {
@@ -695,12 +692,17 @@ export function MapView({
       },
       getViewState: () => currentViewState,
       setViewState: (next, reason = "programmatic") => {
+        // An uncontrolled MapLibre camera moves now; a controlled one follows its prop.
+        if (usesMapLibreRuntime && !controlled) {
+          jumpFlatTo(next);
+        }
         setViewState(next, reason);
       },
     };
 
     onMapControllerReady?.(controller);
   }, [
+    controlled,
     currentViewState,
     fitBoundsNow,
     fitToDataNow,
@@ -708,6 +710,7 @@ export function MapView({
     mapDisplay,
     onMapControllerReady,
     setViewState,
+    usesMapLibreRuntime,
   ]);
 
   const registerMapLibreLayer = useCallback(
