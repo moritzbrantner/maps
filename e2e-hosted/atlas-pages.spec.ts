@@ -133,6 +133,7 @@ test("real source A/B switches keep camera and overlays; out-of-coverage is expl
   await expect(page.getByRole("button", { name: "Flatten view" })).toBeVisible();
   await page.getByRole("combobox", { name: "Camera scene" }).selectOption("north");
   await expectGeographicTiles(page, "maps-liechtenstein-north");
+  await expect.poll(() => mapColors(page)).toBeGreaterThan(3);
   expect(northStatuses.length).toBeGreaterThan(0);
   expect(northStatuses.every((status) => status === 206)).toBe(true);
   await page.getByRole("combobox", { name: "Tile source" }).selectOption("atlas");
