@@ -37,6 +37,22 @@ jobs:
         bun install --frozen-lockfile
         bunx playwright install --with-deps chromium
         bash scripts/install-wasm-bindgen-ci.sh
+        # Pin asset-tooling's *producer* commit. The browser never downloads OSM inputs,
+        # runs Planetiler or resolves a floating release. Only the precomputed PMTiles
+        # archives with the committed SHA-256 pins are admitted into Pages (#270).
+        git init "$RUNNER_TEMP/maps-asset-tooling-source"
+        git -C "$RUNNER_TEMP/maps-asset-tooling-source" remote add origin https://github.com/moritzbrantner/asset-tooling.git
+        git -C "$RUNNER_TEMP/maps-asset-tooling-source" fetch --depth 1 origin 33f928cb2d47402207c256af051775ed7fb24e7c
+        git -C "$RUNNER_TEMP/maps-asset-tooling-source" checkout --detach FETCH_HEAD
+        (cd "$RUNNER_TEMP/maps-asset-tooling-source" && bun install --frozen-lockfile)
+        if [ ! -x /usr/bin/time ]; then sudo apt-get update && sudo apt-get install -y time; fi
+        # Reproducible Planetiler process environment: exact JRE build and archive pin.
+        curl -fL --retry 3 --connect-timeout 30 -o "$RUNNER_TEMP/maps-jre.tar.gz" 'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.10%2B7/OpenJDK21U-jre_x64_linux_hotspot_21.0.10_7.tar.gz'
+        echo "991be6ac6725e76109ecbd131d658f992dcbeacba3a8b4b6650302c8012b52fb  $RUNNER_TEMP/maps-jre.tar.gz" | sha256sum --check
+        mkdir -p "$RUNNER_TEMP/maps-jre"
+        tar -xzf "$RUNNER_TEMP/maps-jre.tar.gz" -C "$RUNNER_TEMP/maps-jre" --strip-components=1
+        rm "$RUNNER_TEMP/maps-jre.tar.gz"
+        echo "$RUNNER_TEMP/maps-jre/bin" >> "$GITHUB_PATH"
         python3 -m venv "$RUNNER_TEMP/flip"
         "$RUNNER_TEMP/flip/bin/pip" install --quiet flip-evaluator numpy pillow
         rm -rf .github-pages-template
@@ -55,6 +71,11 @@ jobs:
           (cd "$RUNNER_TEMP/maps-kernel-reference" && bun install --frozen-lockfile)
         fi
       build_command: |
+        # The producer verifies every addressed real tile, a water hole, a waterway,
+        # buildings, schema/coverage and a replay. The consumer then verifies both
+        # archive bytes against its own manifests before publishing immutable URLs.
+        (cd "$RUNNER_TEMP/maps-asset-tooling-source" && bun examples/maps-shortbread/build.ts acquire && bun examples/maps-shortbread/build.ts build && bun examples/maps-shortbread/build.ts verify)
+        node scripts/stage-atlas-shortbread.mjs "$RUNNER_TEMP/maps-asset-tooling-source"
         bun run build:wasm
         rm -rf public/wasm
         mkdir -p public/wasm

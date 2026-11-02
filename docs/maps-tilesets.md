@@ -29,6 +29,52 @@ metadata validator with the supported XYZ or PMTiles v3 transport. Producers
 must publish an archive separately from an immutable versioned source manifest;
 validating producer metadata alone never verifies the archive's compatibility.
 
+## Public real-world Atlas on Pages (#270)
+
+The first-party engine playground at `/` and `/engine/` defaults in the deployed
+build to a **real, precomputed Liechtenstein Shortbread PMTiles archive**. Its
+alternative northern subset is independently content-pinned and deliberately
+omits southern coverage. The original complete synthetic PMTiles and direct XYZ
+fixtures remain selectable for transport and benchmark inspection; the `MapView`
+and its application layers are *not* remounted when the data source changes.
+Changing source does not select a different visual style. Outside the declared
+region there is no automatic OSM/MapLibre/other provider fallback; the UI warns
+when the camera center leaves the selected archive bounds.
+
+The two committed producer manifests live in `demo/data/` and identify content
+revisions `sha256:a1741ca69459…` (2,730,127 bytes, 203 tiles) and
+`sha256:286216eaf88…` (1,340,459 bytes, 89 tiles). They cover respectively
+`[9.47,47.04,9.64,47.28]` and `[9.47,47.16,9.64,47.28]`, native zooms 10–14.
+These are real data from the retained Geofabrik January 2026 Liechtenstein PBF,
+not downloaded rendered OSM tiles, and use Planetiler 0.10.2's bounded Shortbread
+profile. The PBF's observed snapshot timestamp is 2026-01-01 21:21:30 UTC;
+it is not a claim about when geographic features historically existed.
+License: ODbL-1.0, **© OpenStreetMap contributors**
+([copyright and attribution](https://www.openstreetmap.org/copyright)).
+
+Asset-tooling remains the producer. Pages checks out its exact pinned commit,
+verifies the source/JAR/PMTiles-tool inputs, builds the precomputed archives with
+Java 21.0.10, exhaustively validates addressed MVT tiles and replays generation.
+`scripts/stage-atlas-shortbread.mjs` then compares the generated manifests against
+**Maps' committed pins**, hashes **both full archive byte streams**, and only
+stages them as `public/tilesets/<sha256>.pmtiles` if both match. The Pages build
+copies those digest-named files into the deployed static artifact. Neither large
+real archive nor raw OSM extract is checked into Maps Git. The GitHub Pages host
+is checked for HTTP 206 ranged reads, correct `Content-Range`, visible feature
+pixels, and lack of full-archive download by hosted Chromium acceptance.
+
+Local opt-in verification with the already acquired/generated asset-tooling
+checkout uses:
+
+```sh
+node scripts/stage-atlas-shortbread.mjs ../asset-tooling
+bun run test:browser -- --project=chromium e2e/maps-engine-tiles.spec.ts
+```
+
+No MapLibre renderer or browser-side tile generation is used by this public
+source. This is a bounded regional demonstration, not global geographic
+coverage or a promise of continuously current OSM data.
+
 ## Manifest version 1
 
 A complete local example lives in

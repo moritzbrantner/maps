@@ -61,7 +61,7 @@ test("standalone engine survives direct navigation and refresh under the Pages b
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/maps/engine/?e2e=1");
+  await page.goto("/maps/engine/?source=pmtiles&scene=points&e2e=1");
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
   await expect(page.locator('[data-map-runtime="maps"]')).toBeVisible();
   await expect(page.locator(".maplibregl-canvas")).toHaveCount(0);

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "sourceId": "maps-liechtenstein-north",
+  "dataRevision": "sha256:286216eaf8884d4ccf4a1b9e9fdc5e0f2fe14291ca9585e9416011baaf4dee92",
+  "format": "mvt",
+  "schema": {
+    "id": "shortbread",
+    "version": "1.0",
+    "sourceLayers": ["land", "water_polygons", "water_lines", "streets", "buildings", "boundaries"]
+  },
+  "projection": "web-mercator",
+  "scheme": "xyz",
+  "bounds": [9.47, 47.16, 9.64, 47.28],
+  "minZoom": 10,
+  "maxZoom": 14,
+  "tileSize": 512,
+  "attribution": "© OpenStreetMap contributors (ODbL-1.0)",
+  "license": "ODbL-1.0",
+  "provenance": "Geofabrik Liechtenstein PBF 38c281920dcf599754a1e58f399b88c35d18b40dff932bd4dd926aa1a79cda76; Planetiler 0.10.2 JAR f310bd0413e2e4512b27f4046d418664e8e1d3bf31603c2a70e23de06c167e4d; profile dfabde2760810c4a1d3431543742addae23e1882a55beeffe939af66eee16d70. Candidate only; no owner approval or runtime transport claim.",
+  "observation": { "snapshot": "2026-01-01T21:21:30Z" },
+  "archiveRef": {
+    "format": "pmtiles",
+    "version": 3,
+    "path": "liechtenstein-north.pmtiles",
+    "sha256": "286216eaf8884d4ccf4a1b9e9fdc5e0f2fe14291ca9585e9416011baaf4dee92",
+    "bytes": 1340459,
+    "mvtExtent": 4096
+  }
+}

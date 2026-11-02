@@ -286,6 +286,44 @@ body {
   font-size: 0.74rem;
   overflow-wrap: anywhere;
 }
+.engine-coverage-warning {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  margin: 0.8rem 0 0;
+  color: #ffe6b8;
+  background: #53482b;
+  border: 1px solid #8e773f;
+  border-radius: 6px;
+  font-size: 0.74rem;
+}
+.engine-coverage-warning button {
+  justify-self: start;
+  color: #fff1d0;
+}
+.engine-source-details {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid #36515a;
+  font-size: 0.7rem;
+  color: #b8c9c7;
+}
+.engine-source-details strong {
+  font-size: 0.79rem;
+  color: #eff6ea;
+}
+.engine-source-details a {
+  color: var(--engine-lime);
+}
+.engine-revision {
+  overflow-wrap: anywhere;
+}
+.engine-revision code {
+  font-size: 0.64rem;
+  color: #d4edd2;
+}
 .engine-map-hint {
   position: absolute;
   bottom: 1.15rem;
@@ -377,6 +415,14 @@ body {
   .engine-live-heading,
   .engine-metrics,
   .engine-capabilities {
+    display: none;
+  }
+  .engine-source-details {
+    margin-top: 0.6rem;
+    padding-top: 0.55rem;
+    font-size: 0.63rem;
+  }
+  .engine-revision {
     display: none;
   }
   .engine-controls {

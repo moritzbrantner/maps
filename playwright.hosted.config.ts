@@ -11,6 +11,10 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         launchOptions: {
           args: WEBGPU_SWIFTSHADER_ARGS,
+          // Optional exact browser binary for local acceptance; CI uses its pinned Playwright browser.
+          ...(process.env.MAPS_BROWSER_EXECUTABLE
+            ? { executablePath: process.env.MAPS_BROWSER_EXECUTABLE }
+            : {}),
         },
         viewport: { height: 1000, width: 1440 },
       },
@@ -23,11 +27,11 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:5182",
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
-    video: "retain-on-failure",
+    // A locally supplied Chrome binary need not come with Playwright's ffmpeg helper.
+    video: process.env.MAPS_BROWSER_EXECUTABLE ? "off" : "retain-on-failure",
   },
   webServer: {
-    command:
-      "bunx --bun vite preview --host 127.0.0.1 --port 5182 --strictPort --base /maps/",
+    command: "bunx --bun vite preview --host 127.0.0.1 --port 5182 --strictPort --base /maps/",
     reuseExistingServer: false,
     url: "http://127.0.0.1:5182/maps/",
   },

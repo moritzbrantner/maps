@@ -7,24 +7,30 @@ import type { MapSurfaceController, MapViewState } from "../src/map-display";
 import type { MapsRendererStats } from "../src/maps-browser-runtime";
 import { MapView } from "../src/map-view";
 import { createFixturePmtilesXyzTileset } from "../src/tileset-fixtures";
+import { createAtlasTileset } from "./atlas-tilesets";
 import { createShowcaseTileset } from "./showcase-tileset";
 
 type EngineController = MapSurfaceController & { getRendererStats(): MapsRendererStats | null };
-type SourceChoice = "pmtiles" | "mvt";
-type Scene = "points" | "west" | "east" | "south";
+type SourceChoice = "atlas" | "atlas-north" | "pmtiles" | "mvt";
+type Scene = "atlas" | "atlas-south" | "points" | "west" | "east" | "south";
 type Telemetry = {
   backend: "pending" | "wgpu" | "canvas2d";
   state: string;
   error: string | null;
   requests: number;
   decodes: number;
+  bucketBuilds: number;
   cacheReuses: number;
+  retainedBytes: number;
+  switchMs: number | null;
   baseTiles: number;
   pendingTiles: number;
 };
 
 const initialView: MapViewState = { center: [10.3, 50.4], zoom: 4.1 };
 const scenes: Record<Scene, MapViewState> = {
+  atlas: { center: [9.54, 47.19], zoom: 12.2 },
+  "atlas-south": { center: [9.53, 47.1], zoom: 12.3 },
   points: initialView,
   west: { center: [-95, 40], zoom: 3.1 },
   east: { center: [96, 30], zoom: 3.1 },
@@ -38,7 +44,10 @@ const initialTelemetry: Telemetry = {
   error: null,
   requests: 0,
   decodes: 0,
+  bucketBuilds: 0,
   cacheReuses: 0,
+  retainedBytes: 0,
+  switchMs: null,
   baseTiles: 0,
   pendingTiles: 0,
 };
@@ -59,25 +68,43 @@ export function EnginePage() {
     return counts.includes(requested as (typeof counts)[number]) ? requested : 1000;
   });
   const [source, setSource] = useState<SourceChoice>(() =>
-    new URLSearchParams(location.search).get("source") === "mvt" ? "mvt" : "pmtiles",
+    (() => {
+      const requested = new URLSearchParams(location.search).get("source");
+      if (
+        requested === "atlas" ||
+        requested === "atlas-north" ||
+        requested === "pmtiles" ||
+        requested === "mvt"
+      )
+        return requested;
+      // Local fixture suites remain opt-in and asset-tooling is not a dev-server dependency.
+      return import.meta.env.PROD ? "atlas" : "pmtiles";
+    })(),
   );
   const [scene, setScene] = useState<Scene>(() => {
     const requested = new URLSearchParams(location.search).get("scene");
-    return requested === "west" || requested === "east" || requested === "south"
-      ? requested
-      : "points";
+    return requested && requested in scenes
+      ? (requested as Scene)
+      : source.startsWith("atlas")
+        ? "atlas"
+        : "points";
   });
   const [tilted, setTilted] = useState(false);
   const [telemetry, setTelemetry] = useState<Telemetry>(initialTelemetry);
   const [selected, setSelected] = useState<string | null>(null);
+  const [cameraLabel, setCameraLabel] = useState<string>("Waiting for camera");
+  const [centerOutsideCoverage, setCenterOutsideCoverage] = useState(false);
   const points = useMemo(() => createPoints(count), [count]);
   const tileset = useMemo(
     () =>
-      source === "pmtiles"
-        ? createShowcaseTileset(import.meta.env.BASE_URL)
-        : createFixturePmtilesXyzTileset(import.meta.env.BASE_URL),
+      source === "atlas" || source === "atlas-north"
+        ? createAtlasTileset(source, import.meta.env.BASE_URL)
+        : source === "pmtiles"
+          ? createShowcaseTileset(import.meta.env.BASE_URL)
+          : createFixturePmtilesXyzTileset(import.meta.env.BASE_URL),
     [source],
   );
+  const isAtlas = source === "atlas" || source === "atlas-north";
   const onControllerReady = useCallback((controller: MapSurfaceController | null) => {
     controllerRef.current = controller as EngineController | null;
   }, []);
@@ -99,7 +126,10 @@ export function EnginePage() {
         error: stats.tileset?.error ?? null,
         requests: stats.tileset?.requests ?? 0,
         decodes: stats.tileset?.decodes ?? 0,
+        bucketBuilds: stats.tileset?.bucketBuilds ?? 0,
         cacheReuses: stats.tileset?.cacheReuses ?? 0,
+        retainedBytes: stats.tileset?.retainedBytes ?? 0,
+        switchMs: stats.tileset?.switchMs ?? null,
         baseTiles: Number(canvas.dataset.mapBaseTiles ?? 0),
         pendingTiles: Number(canvas.dataset.mapBasePendingTiles ?? 0),
       };
@@ -108,13 +138,23 @@ export function EnginePage() {
           ? current
           : next,
       );
-      const isTilted = (controller?.getViewState().pitch ?? 0) > 0;
+      const view = controller!.getViewState();
+      const label = `${view.center[1].toFixed(4)}° N, ${view.center[0].toFixed(4)}° E · z${view.zoom.toFixed(2)}`;
+      setCameraLabel((current) => (current === label ? current : label));
+      const [west, south, east, north] = tileset.bounds;
+      const outside =
+        view.center[0] < west ||
+        view.center[0] > east ||
+        view.center[1] < south ||
+        view.center[1] > north;
+      setCenterOutsideCoverage((current) => (current === outside ? current : outside));
+      const isTilted = (view.pitch ?? 0) > 0;
       setTilted((current) => (current === isTilted ? current : isTilted));
     };
     sample();
     const id = window.setInterval(sample, 700);
     return () => window.clearInterval(id);
-  }, []);
+  }, [tileset]);
 
   const toggleTilt = () => {
     const controller = controllerRef.current;
@@ -129,9 +169,10 @@ export function EnginePage() {
     setTilted(nextTilt);
   };
   const resetView = () => {
-    controllerRef.current?.setViewState(initialView);
-    setScene("points");
-    updateUrl("scene", "points");
+    const target: Scene = isAtlas ? "atlas" : "points";
+    controllerRef.current?.setViewState(scenes[target]);
+    setScene(target);
+    updateUrl("scene", target);
     setTilted(false);
   };
 
@@ -183,7 +224,10 @@ export function EnginePage() {
             <span className="engine-eyebrow">
               <span className="engine-online-dot" /> Live engine
             </span>
-            <p>Move the map. Inspect a cluster. Change the tile transport or point workload.</p>
+            <p>
+              Explore a first-party Rust/WASM map of real geography, switch archive coverage, or
+              test synthetic workloads.
+            </p>
           </div>
 
           <div className="engine-controls">
@@ -193,13 +237,16 @@ export function EnginePage() {
                 aria-label="Tile source"
                 value={source}
                 onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                  const choice: SourceChoice = event.target.value === "mvt" ? "mvt" : "pmtiles";
+                  const choice = event.target.value as SourceChoice;
+                  if (!["atlas", "atlas-north", "pmtiles", "mvt"].includes(choice)) return;
                   setSource(choice);
                   updateUrl("source", choice);
                 }}
               >
-                <option value="pmtiles">Packed PMTiles v3</option>
-                <option value="mvt">Direct MVT / XYZ</option>
+                <option value="atlas">Liechtenstein · real PMTiles</option>
+                <option value="atlas-north">Liechtenstein north · real PMTiles</option>
+                <option value="pmtiles">Synthetic · packed PMTiles</option>
+                <option value="mvt">Synthetic · direct MVT / XYZ</option>
               </NativeSelect>
             </label>
             <label>
@@ -236,6 +283,8 @@ export function EnginePage() {
                   updateUrl("scene", next);
                 }}
               >
+                <option value="atlas">Liechtenstein overview</option>
+                <option value="atlas-south">Southern coverage comparison</option>
                 <option value="points">Point workload</option>
                 <option value="west">West tile sample</option>
                 <option value="east">East tile sample</option>
@@ -243,6 +292,23 @@ export function EnginePage() {
               </NativeSelect>
             </label>
           </div>
+
+          {isAtlas && centerOutsideCoverage ? (
+            <p role="status" data-testid="engine-coverage" className="engine-coverage-warning">
+              Camera center outside this archive’s coverage. Only the declared region has tiles; no
+              provider fallback is used.
+              <Button
+                variant="outline"
+                onClick={() => {
+                  controllerRef.current?.setViewState(scenes.atlas);
+                  setScene("atlas");
+                  updateUrl("scene", "atlas");
+                }}
+              >
+                Go to Atlas
+              </Button>
+            </p>
+          ) : null}
 
           <div className="engine-actions">
             <Button variant="outline" onClick={toggleTilt}>
@@ -262,6 +328,10 @@ export function EnginePage() {
             </span>
           </div>
           <dl className="engine-metrics">
+            <div>
+              <dt>Camera</dt>
+              <dd data-testid="engine-camera">{cameraLabel}</dd>
+            </div>
             <div>
               <dt>Renderer</dt>
               <dd data-testid="engine-renderer">
@@ -287,8 +357,26 @@ export function EnginePage() {
               <dd>{telemetry.decodes}</dd>
             </div>
             <div>
+              <dt>Tile rebuilds</dt>
+              <dd>{telemetry.bucketBuilds}</dd>
+            </div>
+            <div>
               <dt>Cache reuses</dt>
               <dd>{telemetry.cacheReuses}</dd>
+            </div>
+            <div>
+              <dt>Retained tile bytes</dt>
+              <dd data-testid="engine-retained-bytes">
+                {telemetry.retainedBytes.toLocaleString("en")}
+              </dd>
+            </div>
+            <div>
+              <dt>Source switch</dt>
+              <dd data-testid="engine-switch-ms">
+                {telemetry.switchMs == null
+                  ? "Not measured"
+                  : `${telemetry.switchMs.toFixed(1)} ms`}
+              </dd>
             </div>
           </dl>
           {telemetry.error ? (
@@ -296,6 +384,26 @@ export function EnginePage() {
               {telemetry.error}
             </p>
           ) : null}
+          <div className="engine-source-details">
+            <span className="engine-eyebrow">Selected tile data</span>
+            <strong>{isAtlas ? "Geofabrik · Liechtenstein" : "Maps synthetic fixture"}</strong>
+            <span>
+              {tileset.attribution} · {tileset.license}
+            </span>
+            {tileset.observation ? (
+              <span>
+                OSM dataset observed {tileset.observation.snapshot}; not a historical validity date.
+              </span>
+            ) : null}
+            <span className="engine-revision">
+              Revision <code title={tileset.dataRevision}>{tileset.dataRevision}</code>
+            </span>
+            {isAtlas ? (
+              <a href="https://www.openstreetmap.org/copyright">
+                OpenStreetMap copyright and license ↗
+              </a>
+            ) : null}
+          </div>
           <div className="engine-capabilities">
             <span>Rust camera + tile scheduling</span>
             <span>WebGPU / Canvas2D presentation</span>
@@ -308,9 +416,19 @@ export function EnginePage() {
 
       <footer className="engine-status">
         <span>
-          <strong>Local vector source</strong> · Synthetic CC0 vector tiles; not real-world
-          geography.{" "}
-          <a href="https://github.com/moritzbrantner/maps/issues/270">Atlas source in progress ↗</a>
+          {isAtlas ? (
+            <>
+              <strong>First-party precomputed Atlas tiles</strong> · Geofabrik Liechtenstein ·{" "}
+              <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> ·
+              ODbL 1.0 ·{" "}
+              <span title={tileset.dataRevision}>rev {tileset.dataRevision.slice(7, 19)}</span>
+            </>
+          ) : (
+            <>
+              <strong>Synthetic local vector source</strong> · CC0 illustrative geometry, not
+              real-world geography
+            </>
+          )}
         </span>
         <span>{count.toLocaleString("en")} synthetic points · Rust/WASM clustering</span>
         <span role="status">{selected ? `Selected ${selected}` : "No selection"}</span>

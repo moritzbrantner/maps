@@ -18,7 +18,8 @@ test("hosted Pages runs the first-party PMTiles engine without external tile req
     }
   });
 
-  await page.goto("/maps/?e2e=1");
+  // The public default is the real Atlas; keep the synthetic coverage fixture explicit.
+  await page.goto("/maps/?source=pmtiles&scene=points&e2e=1");
 
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
   await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(

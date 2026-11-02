@@ -19,6 +19,7 @@ export default defineConfig({
       "src/**/*.test.tsx",
       "demo/**/*.test.ts",
       "scripts/engine-kernel-scenarios.test.mjs",
+      "scripts/stage-atlas-shortbread.test.mjs",
     ],
   },
 });

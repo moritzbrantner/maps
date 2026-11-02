@@ -78,6 +78,7 @@
     "build:js": "tsup --config tsup.config.ts",
     "build:styles": "node ./scripts/build-styles.mjs",
     "build:wasm": "node ./scripts/build-maps-wasm.mjs",
+    "atlas:stage": "node ./scripts/stage-atlas-shortbread.mjs",
     "build:package": "bun run build && bun run build:wasm",
     "analyze:bundles": "node ./scripts/analyze-bundles.mjs",
     "bench:heat-map": "bun run ./scripts/benchmark-heat-map.mjs",
