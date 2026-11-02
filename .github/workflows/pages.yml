@@ -60,6 +60,8 @@ jobs:
         mkdir -p public/wasm
         cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
         bun run bench:engine -- --output public/evidence/engine-benchmark.json
+        # Explicit content-pinned producer handoff; never fetch OSM rendered tiles.
+        bun scripts/fetch-atlas-tiles.ts
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
         # Vite now builds /benchmarks/ as a distinct reference lab entrypoint.
         # Copying the first-party home page would erase the benchmark route.

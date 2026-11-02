@@ -109,6 +109,26 @@ integrity or network-host performance is claimed by this fixture.
 Regeneration reproduced the committed archive SHA-256
 `26ac9ae8e322ba7e81ef1304d69e56ab55e9488348dfead315ca17d81712cf37`.
 
+## Published geographic Atlas region (#270)
+
+The Pages root uses `demo/atlas-source.ts` to select the reviewed Geofabrik
+Liechtenstein October 25, 2026 OSM extract (full or northern variant), while the
+synthetic PMTiles and XYZ fixtures remain available in the source selector.
+Asset Tooling owns the Planetiler generation and reviewable source manifest:
+the `maps-shortbread` release contains two digest-named archives, not a mutable
+URL masquerading as a source revision. `scripts/fetch-atlas-tiles.ts` validates
+its complete metadata against the checked-in consumer pin, verifies each archive's
+SHA-256 and byte length, and copies it into the Pages build. The browser then
+requests **same-origin HTTP 206 byte ranges** via the existing Rust/PMTiles
+source lifecycle, decoder and Canvas/WebGPU renderers. No OSM hosted tile
+service is contacted, and there is no fallback outside the bounded area.
+
+The regional pyramids span zoom 10–14 and may be overzoomed at higher camera
+levels. Source/zoom/coverage status is explicit in the page; selection retains
+the camera and application-layer features. The page provides linked ODbL
+attribution, the input snapshot date and the immutable data revision. OSM data
+is not CC0, and the observation timestamp is not historical validity.
+
 ## Runtime lifetime
 
 Rust retains the existing canonical `TileId(z,x,y)`, scheduler, load concurrency,
