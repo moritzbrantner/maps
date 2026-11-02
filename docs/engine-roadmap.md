@@ -4,6 +4,14 @@ This document is the authoritative long-term roadmap for evolving `@moritzbrantn
 
 The target is not "MapLibre rewritten in Rust". The target is a Maps-owned geographic engine with deterministic Rust semantics, a thin browser host, and replaceable Canvas2D/WebGPU pixel backends. The project should first reach Leaflet-class independence, then incrementally pursue MapLibre-class vector-map and cartography capabilities.
 
+The Pages root now directly demonstrates this first-party Map View and its
+Rust camera/scheduler, WebGPU/Canvas2D presentation, spatial clustering, and
+local PMTiles/MVT transport. Its fully covered synthetic CC0 geometry is a
+renderer and source-lifecycle demonstration only, not a claim of a completed
+real-world Atlas tileset. Real, licensed, content-pinned data is tracked in
+[#270](https://github.com/moritzbrantner/maps/issues/270) and produced by
+asset-tooling rather than this demo.
+
 "First-party" describes semantic ownership, not implementation isolation. Maps should own map behavior while composing existing lower-level workspace foundations for generic geo, assets, evidence and genuinely 3D primitives. For 2D rendering, `2d-lab` supplies experiments and evidence rather than runtime authority. ADR 0007 defines that boundary.
 
 ## Completion discipline

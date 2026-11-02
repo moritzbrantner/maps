@@ -1,48 +1,76 @@
 import { expect, test } from "@playwright/test";
 
-test("Pages showcase makes the Map Library capabilities and runtime boundary visible @smoke", async ({
+test("Pages opens the first-party engine on local PMTiles, not the legacy showcase @smoke", async ({
   page,
 }) => {
+  const externalTiles: string[] = [];
+  const pmtilesRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/openstreetmap\.org|maplibre-gl|unpkg\.com/.test(request.url())) {
+      externalTiles.push(request.url());
+    }
+    if (request.url().includes("showcase-pmtiles-v1.pmtiles")) {
+      pmtilesRequests.push(request.headers()["range"] ?? "");
+    }
+  });
+
   await page.goto("/?e2e=1");
 
-  await expect(page.getByRole("heading", { name: "Map building blocks, end to end." })).toBeVisible();
-  await expect(page.getByRole("tablist", { name: "Map examples" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Clusters" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Editor" })).toBeVisible();
-
-  const runtimeStatus = page.getByTestId("rust-runtime-status");
-  await expect(runtimeStatus).toHaveAttribute("data-state", "authoritative");
-  await expect(runtimeStatus).toContainText("Rust authoritative");
-  await expect(page.getByText("Rust/WASM + wgpu", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Benchmarks" })).toHaveAttribute(
-    "href",
-    "/benchmarks/",
+  await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
+  await expect(page.getByText("Synthetic CC0 vector tiles", { exact: false })).toBeVisible();
+  await expect(page.locator('[data-map-runtime="maps"]')).toHaveCount(1);
+  await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-source-id",
+    "maps-showcase",
   );
-  await expect(page.locator(".mb-maps").first()).toBeVisible();
+  await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-source-state",
+    "ready",
+  );
+  await expect(page.getByRole("tablist", { name: "Map examples" })).toHaveCount(0);
+  await expect(page.locator(".maplibregl-canvas")).toHaveCount(0);
+  expect(pmtilesRequests).toContain("bytes=0-16383");
+  expect(externalTiles).toEqual([]);
 });
 
-test("renderer comparison exposes the first-party Maps engine and MapLibre reference @smoke", async ({
+test("first-party source switch preserves Map View, camera and native clustering @smoke", async ({
   page,
 }) => {
   await page.goto("/?e2e=1");
+  const surface = page.locator('canvas[data-flat-runtime="maps"]');
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  const map = page.locator('[data-map-runtime="maps"]');
+  await expect(map).toBeVisible();
+  await page.getByRole("combobox", { name: "Tile source" }).selectOption("mvt");
+  await expect(surface).toHaveAttribute("data-map-source-id", "fixture-pmtiles-xyz");
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  await page.getByRole("combobox", { name: "Point count" }).selectOption("10000");
+  await expect(page.getByText("10,000 synthetic points", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Tilt view" }).click();
+  await expect(page.getByRole("button", { name: "Flatten view" })).toBeVisible();
+  await page.getByRole("combobox", { name: "Tile source" }).selectOption("pmtiles");
+  await expect(surface).toHaveAttribute("data-map-source-id", "maps-showcase");
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  await expect(page.getByRole("button", { name: "Flatten view" })).toBeVisible();
+  await page.getByRole("button", { name: "Reset view" }).click();
+  await expect(page.getByRole("button", { name: "Tilt view" })).toBeVisible();
+});
 
-  const comparison = page.getByTestId("renderer-comparison");
-  await comparison.scrollIntoViewIfNeeded();
-  await expect(comparison.getByText("First-party Maps engine")).toBeVisible();
-  await expect(comparison.getByText("Backend:").locator("..")).toContainText("Maps engine");
-  await expect(comparison.locator('[data-map-runtime="maps"]')).toBeVisible();
-  await expect(comparison.locator(".maplibregl-canvas")).toHaveCount(0);
-
-  const engine = comparison.getByLabel("Map engine");
-  await expect(engine.locator('option[value="maps"]')).toHaveText("Maps engine (first-party)");
-  await expect(engine.locator('option[value="canvas2d"]')).toHaveCount(0);
-
-  await engine.selectOption("maplibre");
-  await expect(comparison.getByText("Backend:").locator("..")).toContainText("MapLibre reference");
-  await expect(comparison.locator(".maplibregl-canvas")).toBeVisible();
-
-  await engine.selectOption("maps");
-  await expect(comparison.locator(".maplibregl-canvas")).toHaveCount(0);
-  await expect(comparison.locator('[data-map-runtime="maps"]')).toBeVisible();
-  await expect(comparison.getByText("Backend:").locator("..")).toContainText("Maps engine");
+test("invalid first-party archive surfaces the error without external fallback @smoke", async ({
+  page,
+}) => {
+  const externalTiles: string[] = [];
+  page.on("request", (request) => {
+    if (/openstreetmap\.org/.test(request.url())) externalTiles.push(request.url());
+  });
+  await page.route("**/tilesets/showcase-pmtiles-v1.pmtiles", (route) =>
+    route.fulfill({ status: 200, body: "incorrect range response" }),
+  );
+  await page.goto("/?e2e=1");
+  await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-source-state",
+    "error",
+  );
+  await expect(page.getByRole("alert")).toContainText(/PMTiles.*Range/i);
+  expect(externalTiles).toEqual([]);
 });

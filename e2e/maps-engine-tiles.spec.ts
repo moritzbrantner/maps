@@ -1,29 +1,28 @@
 import { expect, test } from "@playwright/test";
 import { createShortbreadTileFixture } from "./fixtures/shortbread-tile.mjs";
 
-const body = createShortbreadTileFixture({ dense: true });
-
-test("standalone dense vector basemap retains tile pixels during pan and zoom @smoke", async ({
+test("standalone first-party PMTiles retains tile pixels during pan and zoom @smoke", async ({
   page,
 }) => {
   // Exercise the pixel fallback too: WebGPU support must not decide whether the
   // basemap blocks input or retains coverage.
   await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
-  const requests = new Map<string, number>();
+  const ranges = new Map<string, number>();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
-    const url = route.request().url();
-    requests.set(url, (requests.get(url) ?? 0) + 1);
-    await route.fulfill({ body, contentType: "application/vnd.mapbox-vector-tile" });
+  page.on("request", (request) => {
+    if (request.url().includes("showcase-pmtiles-v1.pmtiles")) {
+      const range = request.headers()["range"] ?? "";
+      ranges.set(range, (ranges.get(range) ?? 0) + 1);
+    }
   });
-  await page.goto("/engine/?e2e=1&vectorTiles=fixture");
+  await page.goto("/engine/?e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
   await expect
     .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
     .toBeGreaterThan(0);
   await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-  const warmTiles = [...requests.keys()];
+  await expect(base).toHaveAttribute("data-map-source-state", "ready");
   // The tile pixels are owned by the base renderer; only application features
   // enter the changing overlay scene.
   await expect
@@ -51,7 +50,8 @@ test("standalone dense vector basemap retains tile pixels during pan and zoom @s
   await expect
     .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
     .toBeGreaterThan(0);
-  for (const url of warmTiles) expect(requests.get(url)).toBe(1);
+  expect(ranges.get("bytes=0-16383")).toBe(1);
+  await expect(base).toHaveAttribute("data-map-source-state", "ready");
   expect(errors).toEqual([]);
 });
 
@@ -134,48 +134,32 @@ test("tile worker rejects malformed data and remains usable, then disposes pendi
   expect(result).toEqual({ malformed: true, width: 512, cancelled: true, disposed: true });
 });
 
-test("pan predicts vector tiles beyond the stationary ring and reuses them @smoke", async ({
+test("complete synthetic PMTiles coverage survives multi-region camera changes @smoke", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 512, height: 512 });
-  const requests = new Map<string, number>();
-  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
-    const url = route.request().url();
-    requests.set(url, (requests.get(url) ?? 0) + 1);
-    await route.fulfill({ body, contentType: "application/vnd.mapbox-vector-tile" });
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("showcase-pmtiles-v1.pmtiles")) {
+      requests.push(request.headers()["range"] ?? "");
+    }
   });
-  await page.goto("/engine/?e2e=1&vectorTiles=fixture");
+  await page.goto("/engine/?e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
   await expect
     .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
     .toBeGreaterThan(0);
   await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-  const initial = new Set(requests.keys());
-  // A small eastward pan keeps the visible XYZ columns unchanged, but predicts
-  // column 19 beyond the stationary ring (columns 15..18 at this camera).
-  await page.mouse.move(300, 280);
-  await page.mouse.down();
-  await page.mouse.move(284, 280, { steps: 2 });
-  await expect
-    .poll(() => [...requests.keys()].filter((url) => /\/5\/19\//.test(url)).length)
-    .toBeGreaterThan(0);
-  await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-  const predicted = [...requests.keys()].filter((url) => /\/5\/19\//.test(url));
-  expect(predicted.every((url) => !initial.has(url))).toBe(true);
-  // Three separate drags move that predicted column into the viewport.
-  await page.mouse.up();
-  for (let step = 0; step < 3; step++) {
-    await page.mouse.move(420, 280);
-    await page.mouse.down();
-    await page.mouse.move(140, 280, { steps: 20 });
-    // Let outstanding tile work finish before continuing the journey.
+  // These regions span separate z2 tiles. The archive has complete z0–z2
+  // coverage, unlike the deliberately sparse error-path fixture.
+  for (const scene of ["west", "east", "south"] as const) {
+    const before = requests.length;
+    await page.getByRole("combobox", { name: "Camera scene" }).selectOption(scene);
+    await expect.poll(() => requests.length).toBeGreaterThan(before);
     await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-    await page.mouse.up();
+    await expect(base).toHaveAttribute("data-map-source-state", "ready");
   }
-  // Column 21 can only be predicted once column 19 has entered the cover.
-  await expect
-    .poll(() => [...requests.keys()].filter((url) => /\/5\/21\//.test(url)).length)
-    .toBeGreaterThan(0);
-  for (const url of predicted) expect(requests.get(url)).toBe(1);
+  expect(requests).toContain("bytes=0-16383");
+  expect(requests.length).toBeGreaterThan(2);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });

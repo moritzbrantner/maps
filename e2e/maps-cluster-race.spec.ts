@@ -36,7 +36,7 @@ test("100k clustered points stay responsive and clustered when the map style loa
     await route.continue();
   });
 
-  await page.goto("/?e2e=1&acceptance=maps-cluster-race");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-cluster-race");
   const map = page.getByLabel("Dense cluster race");
   await expect(map).toBeVisible();
 

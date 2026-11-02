@@ -7,15 +7,22 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        showcase: fileURLToPath(new URL("./index.html", import.meta.url)),
+        home: fileURLToPath(new URL("./index.html", import.meta.url)),
         engine: fileURLToPath(new URL("./engine/index.html", import.meta.url)),
+        benchmarks: fileURLToPath(new URL("./benchmarks/index.html", import.meta.url)),
       },
     },
   },
   optimizeDeps: {
     // Scan browser fixtures up front; late reference imports can otherwise reload
     // an already-ready acceptance page while assertions are in flight.
-    entries: ["index.html", "engine/index.html", "e2e/fixtures/*.html"],
+    entries: [
+      "index.html",
+      "engine/index.html",
+      "benchmarks/index.html",
+      "demo-reference/index.html",
+      "e2e/fixtures/*.html",
+    ],
     exclude: ["maplibre-gl"],
   },
   plugins: [react(), tailwindcss()],

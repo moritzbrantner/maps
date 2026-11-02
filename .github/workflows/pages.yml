@@ -60,8 +60,8 @@ jobs:
         cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
         bun run bench:engine -- --output public/evidence/engine-benchmark.json
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
-        mkdir -p dist/benchmarks
-        cp dist/index.html dist/benchmarks/index.html
+        # Vite now builds /benchmarks/ as a distinct reference lab entrypoint.
+        # Copying the first-party home page would erase the benchmark route.
         # MapLibre oracle report (#306). CI blocks on the gate; the report publishes either way.
         if ! CI=1 ORACLE_PYTHON="$RUNNER_TEMP/flip/bin/python" bun run oracle -- --out dist/oracle; then
           echo "::warning::MapLibre oracle gate failed; publishing its report anyway."

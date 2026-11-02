@@ -43,9 +43,16 @@ Tailwind preflight. If you need the legacy global reset, import:
 import "@moritzbrantner/maps/styles.full.css";
 ```
 
-Live demo: <https://moritzbrantner.github.io/maps/>
+First-party Maps engine and interactive tile/clustering playground: <https://moritzbrantner.github.io/maps/>
 
-Standalone Rust/WASM engine: <https://moritzbrantner.github.io/maps/engine/>
+Standalone engine route (same runtime): <https://moritzbrantner.github.io/maps/engine/>
+
+The current Pages tile source is an explicitly synthetic, CC0 PMTiles/MVT fixture
+that exercises the real first-party Rust/WASM tile, camera and rendering paths.
+It is **not** geographic OpenStreetMap data. The separately versioned, licensed
+real-world Atlas integration is tracked in [#270](https://github.com/moritzbrantner/maps/issues/270).
+The former component showcase remains only as the `demo-reference/` local test
+harness; the public root no longer mounts it.
 
 Engine benchmark stats (full-map interaction and projection): <https://moritzbrantner.github.io/maps/stats/>
 See [engine performance evidence](docs/engine-performance.md) for workload and measurement limits.

@@ -40,7 +40,7 @@ test("a failed aggregation runtime renders 100k points as a bounded, selectable 
     await route.fulfill({ status: 404, body: "" });
   });
 
-  await page.goto("/?e2e=1&acceptance=maps-cluster-race&aggregationWasm=missing");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-cluster-race&aggregationWasm=missing");
   const map = page.getByLabel("Dense cluster race");
   await expect(map).toBeVisible();
 

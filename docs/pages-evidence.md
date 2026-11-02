@@ -1,6 +1,21 @@
 # GitHub Pages evidence surface
 
-Maps keeps its interactive showcase authoritative at the project root and consumes `moritzbrantner/github-pages-template` only for the standardized `/stats/` and `/evidence/` routes.
+Maps publishes the first-party Rust/WASM Map View at the project root and at
+`/engine/`. Both entrypoints exercise Maps' own camera, tile scheduler, MVT
+decoder, WebGPU/Canvas2D renderer, clustering and selection. The default tile
+source is a small, reproducibly generated **synthetic CC0 PMTiles v3 archive**
+with complete z0–z2 coverage, served from the same Pages origin with HTTP 206
+range reads. The alternate direct-MVT source uses the same first-party source
+contract and renderer. These fixtures are **not real geography**. Publishing a
+content-pinned, licensed real-world Atlas region remains the separate [#270](https://github.com/moritzbrantner/maps/issues/270)
+work item, dependent on the asset-tooling artifact.
+
+The former OpenStreetMap-backed library showcase is no longer a public Pages
+entrypoint; it survives only at `/demo-reference/` in the development server
+as a regression harness. `/benchmarks/` remains a distinct, explicitly
+non-authoritative reference lab rather than the homepage. Maps consumes
+`moritzbrantner/github-pages-template` only for the standardized `/stats/` and
+`/evidence/` routes.
 
 The Pages build pins the template to an exact Git commit and runs it in `--augment` mode after the normal Vite build. The template therefore cannot replace Maps domain behavior or renderer logic.
 
@@ -50,4 +65,11 @@ GitHub Pages also publishes `/benchmarks/` as an interactive, non-authoritative 
 
 ## Engine inspector
 
-`/maps/engine/?view=inspector` is the renderer inspector on the engine page: a full-viewport first-party Map View over the live Shortbread basemap, with the base renderer (retained WebGPU buckets, Canvas overlay, or the Canvas2D fallback via `gpu=off`), frame cadence, per-frame draw calls, retained GPU resources, camera presets, style-class toggles and a scripted camera sweep. URL parameters: `lon`, `lat`, `zoom`, `bearing`, `path=overlay`, `gpu=off`, `tiles=<MVT URL template>`.
+`/maps/engine/?view=inspector` is the renderer inspector on the engine page:
+a full-viewport first-party Map View over the local synthetic PMTiles source by
+default, with retained WebGPU buckets or the Canvas2D fallback via `gpu=off`,
+frame cadence, draw calls, retained GPU resources, camera presets, style-class
+toggles and a scripted sweep. Optional fixture A/B and revision-2 source
+selection exercises invalidation; the inspector does not load external
+OpenStreetMap tiles by default. URL parameters: `lon`, `lat`, `zoom`,
+`bearing`, `source=a|b|a2`, `gpu=off`.

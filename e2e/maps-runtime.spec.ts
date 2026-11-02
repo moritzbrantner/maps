@@ -38,7 +38,7 @@ test("device loss preserves mixed Map Layers and selection on Canvas @smoke", as
       return devices.length;
     };
   });
-  await page.goto("/?e2e=1&acceptance=maps-runtime");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const base = map.locator('canvas[data-flat-runtime="maps"]');
   const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
@@ -93,7 +93,7 @@ test("device loss preserves mixed Map Layers and selection on Canvas @smoke", as
 });
 
 test("Maps runtime preserves constrained navigation and picking after resize @smoke", async ({ page }) => {
-  await page.goto("/?e2e=1&acceptance=maps-runtime-constrained");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-constrained");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
@@ -123,7 +123,7 @@ test("Maps runtime preserves constrained navigation and picking after resize @sm
 });
 
 test("Maps-owned MapView runs the real Rust/WASM flat runtime @smoke", async ({ page }) => {
-  await page.goto("/?e2e=1&acceptance=maps-runtime");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime");
 
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
@@ -352,7 +352,7 @@ for (const backend of ["canvas2d", "default"] as const) {
       });
     });
     try {
-      await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
+      await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-raster-fetch");
       const map = page.getByLabel("Maps Rust runtime acceptance");
       const canvas = map.locator('canvas[data-flat-runtime="maps"]');
       await expect
@@ -428,7 +428,7 @@ test("first-party raster loader requests image tiles and renders them @smoke", a
     });
   });
 
-  await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-raster-fetch");
 
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
@@ -457,7 +457,7 @@ test("raster failures release slots for the remaining visible tiles @smoke", asy
     });
   });
 
-  await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-raster-fetch");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   await expect(map).toHaveAttribute("data-map-ready", "true");
@@ -501,7 +501,7 @@ test("late raster cancellations preserve replacement request ownership @smoke", 
   });
   // Hold actual requests in flight until cancelled by the Map View.
   await page.route("https://tiles.example.test/**", () => {});
-  await page.goto("/?e2e=1&acceptance=maps-runtime-raster-fetch");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-raster-fetch");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   const viewState = page.getByTestId("maps-runtime-view-state");
@@ -547,7 +547,7 @@ test("late raster cancellations preserve replacement request ownership @smoke", 
 });
 
 test("wheel zoom keeps the surrounding page stationary @smoke", async ({ page }) => {
-  await page.goto("/?e2e=1&acceptance=maps-runtime");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime");
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');
   const viewState = page.getByTestId("maps-runtime-view-state");
@@ -567,7 +567,7 @@ test("wheel zoom keeps the surrounding page stationary @smoke", async ({ page })
 });
 
 test("ClusterLayer uses Rust aggregation and shared picking @smoke", async ({ page }) => {
-  await page.goto("/?e2e=1&acceptance=maps-runtime");
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime");
 
   const map = page.getByLabel("Maps Rust runtime acceptance");
   const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');

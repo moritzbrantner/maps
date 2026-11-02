@@ -56,7 +56,7 @@ test("Maps wgpu keeps mixed point and flow geometry on the first-party GPU path 
 
     const url = new URL(
       // Keep the unrelated comparison map below this fixture off live data.
-      "/?e2e=1&acceptance=maps-runtime-raster-fetch",
+      "/demo-reference/?e2e=1&acceptance=maps-runtime-raster-fetch",
       baseURL ?? "http://127.0.0.1:5181",
     );
     await page.goto(url.toString());
@@ -104,7 +104,7 @@ test("Maps wgpu accepts the existing projected GeoJSON polygon frame @smoke", as
   const page = await browser.newPage();
 
   try {
-    const url = new URL("/?e2e=1&acceptance=maps-runtime", baseURL ?? "http://127.0.0.1:5181");
+    const url = new URL("/demo-reference/?e2e=1&acceptance=maps-runtime", baseURL ?? "http://127.0.0.1:5181");
     await page.goto(url.toString());
 
     const map = page.getByLabel("Maps Rust runtime acceptance");
@@ -150,7 +150,7 @@ test("Pages first-party engine decodes Shortbread vector tiles into wgpu linewor
   });
 
   try {
-    const url = new URL("/?e2e=1&vectorTiles=fixture", baseURL ?? "http://127.0.0.1:5181");
+    const url = new URL("/demo-reference/?e2e=1&vectorTiles=fixture", baseURL ?? "http://127.0.0.1:5181");
     await page.goto(url.toString());
 
     const comparison = page.getByTestId("renderer-comparison");
@@ -200,7 +200,7 @@ test("Pages Shortbread basemap renders through the Canvas fallback @smoke", asyn
     });
   });
 
-  await page.goto("/?e2e=1&vectorTiles=fixture");
+  await page.goto("/demo-reference/?e2e=1&vectorTiles=fixture");
 
   const comparison = page.getByTestId("renderer-comparison");
   const map = comparison.getByLabel("Renderer parity map");
@@ -265,7 +265,7 @@ test("Shortbread fills preserve forest islands beneath application points @smoke
       headers: { "Access-Control-Allow-Origin": "*" },
     });
   });
-  await page.goto("/?e2e=1&vectorTiles=fixture");
+  await page.goto("/demo-reference/?e2e=1&vectorTiles=fixture");
   const map = page.getByTestId("renderer-comparison").getByLabel("Renderer parity map");
   const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
   await expect(map).toHaveAttribute("data-map-ready", "true");
@@ -360,7 +360,7 @@ test("WebGPU Shortbread fills preserve island holes and application painter orde
 
   try {
     await page.goto(
-      new URL("/?e2e=1&vectorTiles=fixture", baseURL ?? "http://127.0.0.1:5181").toString(),
+      new URL("/demo-reference/?e2e=1&vectorTiles=fixture", baseURL ?? "http://127.0.0.1:5181").toString(),
     );
     const comparison = page.getByTestId("renderer-comparison");
     const map = comparison.getByLabel("Renderer parity map");
@@ -443,7 +443,7 @@ test("WebGPU Shortbread fills preserve island holes and application painter orde
 test("Canvas fill-only polygons do not inherit a previous stroke width @smoke", async ({
   page,
 }) => {
-  await page.goto("/?e2e=1");
+  await page.goto("/demo-reference/?e2e=1");
   const pixels = await page.evaluate(async () => {
     const modulePath = "/src/canvas-map-renderer.ts";
     const { createCanvasMapScene, drawCanvasMapScene } = await import(modulePath);
