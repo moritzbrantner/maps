@@ -135,9 +135,15 @@ test("public Pages entry presents the first-party real Atlas, with pinned ranged
 test("real Atlas features remain rendered while zooming and panning across tile boundaries", async ({
   page,
 }) => {
-  await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+  // Unlike the explicit Canvas2D path above, this exercises WebGPU when available.
   await page.goto("/maps/engine/?source=atlas&scene=atlas&e2e=1");
   const canvas = await waitForRealTiles(page);
+  await test.info().attach("atlas-camera-renderer.json", {
+    contentType: "application/json",
+    body: Buffer.from(
+      JSON.stringify({ backend: await canvas.getAttribute("data-map-base-renderer") }),
+    ),
+  });
   const firstCamera = await page.getByTestId("engine-camera").textContent();
 
   // Movement is not required to issue a new HTTP range request: decoded tiles may be reused.
