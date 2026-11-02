@@ -95,8 +95,9 @@ test("public Pages entry presents the first-party real Atlas, with pinned ranged
   await expect(page.locator(".maplibregl-canvas")).toHaveCount(0);
   await expect(page.getByText("© OpenStreetMap contributors").first()).toBeVisible();
   await expect(page.getByText("2026-01-01T21:21:30Z")).toBeVisible();
-  const pixels = await mapPixels(page);
-  expect(new Set(pixels.map((value) => value.join(","))).size).toBeGreaterThan(3);
+  await expect
+    .poll(async () => new Set((await mapPixels(page)).map((pixel) => pixel.join(","))).size)
+    .toBeGreaterThan(3);
   await test.info().attach("atlas-rendered-map.png", {
     contentType: "image/png",
     body: await page.screenshot(),
@@ -188,8 +189,7 @@ test("two real regions and synthetic XYZ switch without camera or overlay resets
   await expect(canvas).toHaveAttribute("data-map-source-revision", `sha256:${northRevision}`);
   await expect(canvas).toHaveAttribute("data-map-source-state", "ready");
   await expect(page.getByTestId("engine-coverage")).toContainText("no provider fallback");
-  const north = await mapPixels(page);
-  expect(differentPixels(first, north)).toBeGreaterThan(20);
+  await expect.poll(async () => differentPixels(first, await mapPixels(page))).toBeGreaterThan(20);
   await expect(page.getByTestId("engine-camera")).toHaveText(camera!);
 
   await page.getByLabel("Tile source").selectOption("mvt");
@@ -204,8 +204,7 @@ test("two real regions and synthetic XYZ switch without camera or overlay resets
   const warmMs = Math.round(performance.now() - warmStart);
   await expect(page.getByTestId("engine-camera")).toHaveText(camera!);
   await expect(page.getByTestId("engine-coverage")).toHaveCount(0);
-  const restored = await mapPixels(page);
-  expect(differentPixels(first, restored)).toBeLessThan(20);
+  await expect.poll(async () => differentPixels(first, await mapPixels(page))).toBeLessThan(20);
   await test.info().attach("atlas-warm-revisit-evidence.json", {
     contentType: "application/json",
     body: Buffer.from(

@@ -357,7 +357,7 @@ export function EnginePage() {
               <dd>{telemetry.decodes}</dd>
             </div>
             <div>
-              <dt>Tile rebuilds</dt>
+              <dt>GPU tile uploads</dt>
               <dd>{telemetry.bucketBuilds}</dd>
             </div>
             <div>
