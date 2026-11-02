@@ -116,6 +116,9 @@ body {
   height: 100%;
 }
 .engine-panel {
+  /* The shared UI base layer gives native selects background: var(--background)
+     !important. Scope the token so its higher-priority rule stays readable. */
+  --background: #26434a;
   position: absolute;
   z-index: 5;
   top: clamp(0.8rem, 2.3vw, 2rem);
@@ -187,7 +190,6 @@ body {
 }
 .engine-controls select[data-slot="native-select"] {
   color: #f1f6f2 !important;
-  background-color: #26434a !important;
 }
 .engine-controls [data-slot="native-select-icon"] {
   color: #d6e5de;

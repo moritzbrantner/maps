@@ -32,9 +32,6 @@ const scenes: Record<Scene, MapViewState> = {
 };
 const emptyStyle = { tiles: false as const };
 const counts = [1000, 10000, 100000] as const;
-// NativeSelect inherits a light theme background from @moritzbrantner/ui in
-// Chromium. Keep this panel's dark control contrast explicit at the element.
-const selectStyle = { backgroundColor: "#26434a", color: "#f1f6f2" };
 const initialTelemetry: Telemetry = {
   backend: "pending",
   state: "loading",
@@ -194,7 +191,6 @@ export function EnginePage() {
               <span>Tile source</span>
               <NativeSelect
                 aria-label="Tile source"
-                style={selectStyle}
                 value={source}
                 onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                   const choice: SourceChoice = event.target.value === "mvt" ? "mvt" : "pmtiles";
@@ -210,7 +206,6 @@ export function EnginePage() {
               <span>Point count</span>
               <NativeSelect
                 aria-label="Point count"
-                style={selectStyle}
                 value={count}
                 onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                   const next = Number(event.target.value);
@@ -231,7 +226,6 @@ export function EnginePage() {
               <span>Camera scene</span>
               <NativeSelect
                 aria-label="Camera scene"
-                style={selectStyle}
                 value={scene}
                 onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                   const next = event.target.value as Scene;
