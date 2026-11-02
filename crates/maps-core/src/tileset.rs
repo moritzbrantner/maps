@@ -41,7 +41,9 @@ pub enum TilesetTransport {
         #[serde(rename = "urlTemplate")]
         url_template: String,
     },
-    Pmtiles { url: String },
+    Pmtiles {
+        url: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,7 +136,11 @@ impl MapsTileset {
                     || !(url.starts_with("https://")
                         || url.starts_with("http://")
                         || url.starts_with('/'))
-                    || !url.split('?').next().unwrap_or_default().ends_with(".pmtiles")
+                    || !url
+                        .split('?')
+                        .next()
+                        .unwrap_or_default()
+                        .ends_with(".pmtiles")
                     || self.max_zoom > 26
                 {
                     return Err(
