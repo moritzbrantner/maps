@@ -137,6 +137,9 @@ test("tile worker rejects malformed data and remains usable, then disposes pendi
 test("complete synthetic PMTiles coverage survives multi-region camera changes @smoke", async ({
   page,
 }) => {
+  // Inspect actual tile pixels in the deterministic Canvas2D fallback. A range
+  // request is not required when a new camera can reuse decoded/cached tiles.
+  await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
   await page.setViewportSize({ width: 512, height: 512 });
   const requests: string[] = [];
   page.on("request", (request) => {
@@ -147,8 +150,8 @@ test("complete synthetic PMTiles coverage survives multi-region camera changes @
   await page.goto("/engine/?e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
   await expect(base).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
-  // The vector renderer can draw retained tiles while the raster-only
-  // data-map-base-tiles counter is zero, especially at narrow viewports.
+  await expect(base).toHaveAttribute("data-map-base-renderer", "canvas2d");
+  await expect(page.locator('canvas[data-map-base-fallback="canvas2d"]')).toBeVisible();
   await expect
     .poll(async () => Number(await base.getAttribute("data-map-source-retained-tiles")))
     .toBeGreaterThan(0);
@@ -160,11 +163,49 @@ test("complete synthetic PMTiles coverage survives multi-region camera changes @
     "rgb(38, 67, 74)",
   );
   for (const scene of ["west", "east", "south"] as const) {
-    const before = requests.length;
     await page.getByRole("combobox", { name: "Camera scene" }).selectOption(scene);
-    await expect.poll(() => requests.length).toBeGreaterThan(before);
+    await expect(page).toHaveURL(new RegExp(`[?&]scene=${scene}(?:&|$)`));
     await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
     await expect(base).toHaveAttribute("data-map-source-state", "ready");
+    await expect
+      .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
+      .toBeGreaterThan(0);
+    // The test fixture paints every tile edge-to-edge. Uncovered regions reveal
+    // the Canvas2D map background (#f9f4ee), even when some tiles are retained.
+    // Sample cell centers throughout the *visible viewport*, not the overscan.
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const canvas = document.querySelector<HTMLCanvasElement>(
+            'canvas[data-map-base-fallback="canvas2d"]',
+          );
+          const context = canvas?.getContext("2d");
+          if (!canvas || !context) return 81;
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          const ratioX = canvas.width / canvas.clientWidth;
+          const ratioY = canvas.height / canvas.clientHeight;
+          const marginX = -parseFloat(canvas.style.left || "0");
+          const marginY = -parseFloat(canvas.style.top || "0");
+          const width = canvas.clientWidth - 2 * marginX;
+          const height = canvas.clientHeight - 2 * marginY;
+          let missing = 0;
+          for (let row = 0; row < 9; row += 1) {
+            for (let column = 0; column < 9; column += 1) {
+              const x = Math.floor((marginX + ((column + 0.5) * width) / 9) * ratioX);
+              const y = Math.floor((marginY + ((row + 0.5) * height) / 9) * ratioY);
+              const offset = (y * canvas.width + x) * 4;
+              if (
+                pixels[offset + 3] !== 255 ||
+                (pixels[offset] === 249 && pixels[offset + 1] === 244 && pixels[offset + 2] === 238)
+              ) {
+                missing += 1;
+              }
+            }
+          }
+          return missing;
+        }),
+      )
+      .toBe(0);
   }
   expect(requests).toContain("bytes=0-16383");
   expect(requests.length).toBeGreaterThan(2);
