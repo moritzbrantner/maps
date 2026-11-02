@@ -73,8 +73,29 @@ fn source_identity_excludes_transport_and_observation_but_not_revision_or_schema
         effective_date: Some("1816-01-01".into()),
     });
     assert_eq!(a.identity(), token_rotation.identity());
+    token_rotation.transport = maps_core::TilesetTransport::Pmtiles {
+        url: "https://cdn.example.test/revisions/r1.pmtiles?token=rotated".into(),
+    };
+    assert!(token_rotation.validate().is_ok());
+    assert_eq!(a.identity(), token_rotation.identity());
     token_rotation.data_revision = "r2".into();
     assert_ne!(a.identity(), token_rotation.identity());
+}
+
+#[test]
+fn pmtiles_transport_rejects_incompatible_zoom_and_urls() {
+    let mut archive = source("archive", "sha256-r1");
+    archive.transport = maps_core::TilesetTransport::Pmtiles {
+        url: "/tilesets/sha256-r1.pmtiles".into(),
+    };
+    assert!(archive.validate().is_ok());
+    archive.max_zoom = 27;
+    assert!(archive.validate().is_err());
+    archive.max_zoom = 2;
+    archive.transport = maps_core::TilesetTransport::Pmtiles {
+        url: "javascript:invalid.pmtiles".into(),
+    };
+    assert!(archive.validate().is_err());
 }
 
 #[test]

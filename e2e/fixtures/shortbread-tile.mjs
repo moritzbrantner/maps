@@ -7,6 +7,7 @@ export function createShortbreadTileFixture({
   islandEast = 3072,
   streetRows = 128,
   pointsPerStreet = 256,
+  streetJitter = 0,
 } = {}) {
   const water = polygon([
     [
@@ -54,10 +55,19 @@ export function createShortbreadTileFixture({
   if (dense) {
     const streets = [];
     for (let row = 0; row < streetRows; row++) {
-      const points = Array.from({ length: pointsPerStreet }, (_, column) => [
-        column * 16,
-        16 + row * 31 + Math.round(Math.sin(column / 8) * 10),
-      ]);
+      const points = Array.from({ length: pointsPerStreet }, (_, column) => {
+        // Optional reproducible geometric variation for the real range-read fixture.
+        const noise = (salt) => {
+          let value = (row + 1) * 0x9e3779b1 + (column + 1) * 0x85ebca6b + salt;
+          value = Math.imul(value ^ (value >>> 16), 0x7feb352d);
+          value = Math.imul(value ^ (value >>> 15), 0x846ca68b);
+          return (((value ^ (value >>> 16)) >>> 0) % (streetJitter * 2 + 1)) - streetJitter;
+        };
+        return [
+          column * 16 + (streetJitter ? noise(17) : 0),
+          16 + row * 31 + Math.round(Math.sin(column / 8) * 10) + (streetJitter ? noise(29) : 0),
+        ];
+      });
       streets.push(feature(2, path(points, false)));
     }
     layers.push(layer("streets", streets));

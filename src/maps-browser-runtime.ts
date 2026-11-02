@@ -1,4 +1,4 @@
-import { fetchMapsTilesetTile } from "./maps-tileset-transport";
+import { createMapsTilesetTileReader } from "./maps-tileset-transport";
 import { type MapsTileset } from "./maps-tileset";
 import {
   tilesetStyleTable,
@@ -1094,7 +1094,8 @@ function runtimeTileSource(options: MapsBrowserRuntimeOptions) {
   const tileset = options.tileset;
   return tileset
     ? {
-        url: tileset.transport.urlTemplate,
+        url:
+          tileset.transport.kind === "xyz" ? tileset.transport.urlTemplate : tileset.transport.url,
         options: {
           minZoom: tileset.minZoom,
           maxZoom: tileset.maxZoom,
@@ -1202,6 +1203,7 @@ function createFrameSynchronizer({
   const inactive = new Map<string, Map<string, { vector: VectorResource; image: ImageBitmap }>>();
   let activeDescriptor = tileset();
   let sourceIdentity = activeDescriptor ? runtime.activateTileset(activeDescriptor) : "";
+  let tileReader = activeDescriptor ? createMapsTilesetTileReader(activeDescriptor) : null;
   let styleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
   let sourceSwitchStarted = performance.now();
   let sourceSwitchMs: number | null = null;
@@ -1396,6 +1398,8 @@ function createFrameSynchronizer({
     const changed = sourceIdentity !== nextIdentity;
     if (changed || transportChanged) {
       // Rust validates before any in-flight browser work is cancelled.
+      tileReader?.dispose();
+      tileReader = createMapsTilesetTileReader(descriptor);
       for (const load of loads.values()) {
         load.abort.abort();
       }
@@ -2018,10 +2022,11 @@ function createFrameSynchronizer({
 
       const requestedIdentity = sourceIdentity;
       const descriptor = tileset();
+      const reader = tileReader;
       const loadImage = descriptor
         ? (async () => {
             requests++;
-            const bytes = await fetchMapsTilesetTile(descriptor, tile, abort.signal);
+            const bytes = await reader!.fetchTile(tile, abort.signal);
             const pixels = await decodeShortbreadTilePixels(bytes, wasmPackage);
             abort.signal.throwIfAborted();
             if (disposed || loads.get(tile.key) !== load || requestedIdentity !== sourceIdentity)
@@ -2105,6 +2110,7 @@ function createFrameSynchronizer({
     },
     dispose() {
       disposed = true;
+      tileReader?.dispose();
       for (const entries of inactive.values())
         for (const resource of entries.values()) resource.image.close();
       inactive.clear();

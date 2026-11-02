@@ -33,10 +33,29 @@ describe("Maps Tileset", () => {
     { ...fixtureTileset, bounds: [-180, 20, 180, 10] },
     { ...fixtureTileset, maxZoom: 32 },
     { ...fixtureTileset, tileSize: 0 },
-    { ...fixtureTileset, transport: { kind: "pmtiles", url: "/region.pmtiles" } },
+    { ...fixtureTileset, transport: { kind: "pmtiles", url: "javascript:region.pmtiles" } },
+    { ...fixtureTileset, transport: { kind: "pmtiles", url: "/region.mbtiles" } },
+    { ...fixtureTileset, maxZoom: 27, transport: { kind: "pmtiles", url: "/region.pmtiles" } },
     { ...fixtureTileset, transport: { kind: "xyz", urlTemplate: "javascript:{z}/{x}/{y}" } },
   ])("rejects malformed or incompatible source before activation", (input) => {
     expect(() => validateMapsTileset(input)).toThrow(/Maps Tileset/);
+  });
+});
+
+it("accepts a PMTiles v3 archive as transport without changing data identity", () => {
+  const archive = {
+    ...fixtureTileset,
+    transport: { kind: "pmtiles", url: "/tilesets/revision-r1.pmtiles" },
+  };
+  expect(validateMapsTileset(archive)).toEqual(archive);
+  expect(
+    validateMapsTileset({
+      ...archive,
+      transport: { kind: "pmtiles", url: "https://cdn.test/tilesets/revision-r1.pmtiles?token=x" },
+    }),
+  ).toMatchObject({
+    sourceId: fixtureTileset.sourceId,
+    dataRevision: fixtureTileset.dataRevision,
   });
 });
 

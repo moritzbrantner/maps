@@ -96,7 +96,7 @@ const rasterStyle = (pattern: string) => ({
 });
 
 /** The Maps Tileset for `vector` scenarios (tiles from `oracle/vector-tiles.ts`). */
-const tileset: MapsTileset = {
+const tileset = {
   attribution: "Natural Earth",
   bounds: [...LAND_BOUNDS],
   dataRevision: "natural-earth-10m-alpine-foreland-v1",
@@ -116,7 +116,7 @@ const tileset: MapsTileset = {
   tileSize: 512,
   transport: { kind: "xyz", urlTemplate: `${TILE_ORIGIN}/vector/{z}/{x}/{y}.mvt` },
   version: 1,
-};
+} satisfies MapsTileset;
 
 /**
  * The Maps Shortbread class palette (`getShortbreadClassStyle`, the same table `tileset`

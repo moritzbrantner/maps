@@ -20,8 +20,8 @@ export type MapsTilesetMetadata = {
 
 /** A metadata-valid artifact becomes activatable only with a supported transport. */
 export type MapsTileset = MapsTilesetMetadata & {
-  /** Future archive transports extend this boundary, without changing canonical tile identity. */
-  transport: { kind: "xyz"; urlTemplate: string };
+  /** Transport URLs never participate in canonical source identity. */
+  transport: { kind: "xyz"; urlTemplate: string } | { kind: "pmtiles"; url: string };
 };
 
 const SOURCE_LAYERS = [
@@ -148,16 +148,28 @@ export function validateMapsTileset(input: unknown): MapsTileset {
   const metadata = validateMapsTilesetMetadata(input);
   const value = record(input);
   const transport = record(value.transport);
-  if (transport.kind !== "xyz" || typeof transport.urlTemplate !== "string") {
-    return fail("unsupported transport; expected XYZ");
+  if (transport.kind === "xyz" && typeof transport.urlTemplate === "string") {
+    const urlTemplate = transport.urlTemplate;
+    if (
+      urlTemplate.length > 8192 ||
+      !["{z}", "{x}", "{y}"].every((token) => urlTemplate.includes(token)) ||
+      !/^(https?:\/\/|\/)/.test(urlTemplate)
+    ) {
+      fail("XYZ requires an HTTP(S) or root-relative z/x/y template");
+    }
+    return { ...metadata, transport: { kind: "xyz", urlTemplate } };
   }
-  const urlTemplate = transport.urlTemplate;
-  if (
-    urlTemplate.length > 8192 ||
-    !["{z}", "{x}", "{y}"].every((token) => urlTemplate.includes(token)) ||
-    !/^(https?:\/\/|\/)/.test(urlTemplate)
-  ) {
-    fail("XYZ requires an HTTP(S) or root-relative z/x/y template");
+  if (transport.kind === "pmtiles" && typeof transport.url === "string") {
+    const url = transport.url;
+    if (
+      url.length > 8192 ||
+      !/^(https?:\/\/|\/)/.test(url) ||
+      !url.split("?")[0]?.endsWith(".pmtiles") ||
+      metadata.maxZoom > 26
+    ) {
+      fail("PMTiles v3 requires an HTTP(S) or root-relative .pmtiles URL and maxZoom ≤ 26");
+    }
+    return { ...metadata, transport: { kind: "pmtiles", url } };
   }
-  return { ...metadata, transport: { kind: "xyz", urlTemplate } };
+  return fail("unsupported Tileset transport; expected XYZ or PMTiles v3");
 }
