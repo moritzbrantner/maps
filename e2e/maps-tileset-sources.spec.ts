@@ -192,7 +192,7 @@ for (const canvas of [false, true]) {
     await test.info().attach("styled-a", { body: styled, contentType: "image/png" });
     await test.info().attach("warm-a", { body: warmPixels, contentType: "image/png" });
     expect(warmPixels.equals(styled)).toBe(true);
-    await page.getByRole("button", { name: "Revision 2" }).click();
+    await page.getByRole("button", { name: "Revision 2", exact: true }).click();
     await expect(surface).toHaveAttribute("data-map-source-revision", "2");
     await expect(surface).toHaveAttribute("data-map-source-state", "ready");
     expect(Number(await surface.getAttribute("data-map-source-requests"))).toBeGreaterThan(
