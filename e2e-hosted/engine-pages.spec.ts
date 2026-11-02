@@ -1,4 +1,60 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function expectPaintedEngineTiles(page: Page) {
+  const base = page.locator('canvas[data-flat-runtime="maps"]');
+  await expect(base).toHaveAttribute("data-map-source-state", "ready");
+  // On WebGPU the vector basemap is GPU-retained, so the raster-only
+  // data-map-base-tiles counter legitimately remains zero.
+  await expect
+    .poll(async () => {
+      const backend = await base.getAttribute("data-map-base-renderer");
+      const counter = backend === "wgpu" ? "data-map-vector-tiles" : "data-map-base-tiles";
+      return Number(await base.getAttribute(counter));
+    })
+    .toBeGreaterThan(0);
+
+  // Verify presented pixels too, on either backend. The committed synthetic
+  // fixture puts water and forest in the unobscured right side of this Map View.
+  await expect
+    .poll(
+      async () => {
+        const screenshot = await page.screenshot();
+        return page.evaluate(async (encoded) => {
+          const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+          const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+          const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+          context.drawImage(bitmap, 0, 0);
+          const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+          const bounds = document
+            .querySelector<HTMLElement>('[data-map-runtime="maps"]')!
+            .getBoundingClientRect();
+          const scaleX = bitmap.width / innerWidth;
+          const scaleY = bitmap.height / innerHeight;
+          const closeTo = (offset: number, color: readonly number[]) =>
+            color.every((channel, index) => Math.abs(pixels[offset + index]! - channel) <= 12);
+          let water = 0;
+          let forest = 0;
+          for (let row = 0; row < 7; row += 1) {
+            for (let column = 0; column < 9; column += 1) {
+              const x = Math.floor(
+                (bounds.left + bounds.width * (0.43 + ((column + 0.5) * 0.52) / 9)) * scaleX,
+              );
+              const y = Math.floor(
+                (bounds.top + bounds.height * (0.2 + ((row + 0.5) * 0.65) / 7)) * scaleY,
+              );
+              const offset = (y * bitmap.width + x) * 4;
+              if (closeTo(offset, [168, 204, 224])) water += 1;
+              if (closeTo(offset, [196, 216, 180])) forest += 1;
+            }
+          }
+          bitmap.close();
+          return Math.min(water, forest);
+        }, screenshot.toString("base64"));
+      },
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(8);
+}
 
 test("standalone engine survives direct navigation and refresh under the Pages base path", async ({
   page,
@@ -9,23 +65,11 @@ test("standalone engine survives direct navigation and refresh under the Pages b
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
   await expect(page.locator('[data-map-runtime="maps"]')).toBeVisible();
   await expect(page.locator(".maplibregl-canvas")).toHaveCount(0);
-  await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
-    "data-map-source-state",
-    "ready",
-  );
+  await expectPaintedEngineTiles(page);
   await expect(page.getByRole("link", { name: "Stats" })).toHaveAttribute("href", "/maps/stats/");
-  await expect
-    .poll(async () =>
-      Number(await page.locator("[data-flat-runtime=maps]").getAttribute("data-map-base-tiles")),
-    )
-    .toBeGreaterThan(0);
   await page.reload();
   await expect(page.locator('[data-map-runtime="maps"]')).toBeVisible();
-  await expect
-    .poll(async () =>
-      Number(await page.locator("[data-flat-runtime=maps]").getAttribute("data-map-base-tiles")),
-    )
-    .toBeGreaterThan(0);
+  await expectPaintedEngineTiles(page);
   expect(errors).toEqual([]);
 });
 
