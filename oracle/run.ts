@@ -26,7 +26,9 @@
  * gate is enforced (a hardware GPU).
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { arch, platform, release } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,6 +37,13 @@ import { createServer } from "vite";
 
 import { WEBGPU_SWIFTSHADER_ARGS } from "../e2e/helpers/webgpu-args.ts";
 import { renderReport } from "./report.ts";
+import {
+  judgeOracleGates,
+  summarizeTiming,
+  type TimingAttempt,
+  type TimingFingerprint,
+  type TimingRuntime,
+} from "./timing-evidence.ts";
 import {
   BOUNDS_TOLERANCE_PX,
   FLIP_MEAN_MAX,
@@ -46,14 +55,13 @@ import {
   scenarios,
   toScreen,
   type FrameTiming,
-  type Gate,
   type Scenario,
   type Step,
 } from "./scenarios.ts";
 import { demPng, SPRITE_JSON, spritePng, tilePng } from "./tiles.ts";
 import { vectorTile } from "./vector-tiles.ts";
 
-type Runtime = "maplibre" | "maps";
+type Runtime = TimingRuntime;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -128,7 +136,11 @@ if (timing) {
 const gateTiming = timing && !adapter.software;
 console.log(
   `timing adapter: ${adapter.renderer}; frame-time gate: ${
-    gateTiming ? `enforced (≤ ${FRAME_TIME_MARGIN.toFixed(2)}× MapLibre)` : timing ? "advisory" : "off"
+    gateTiming
+      ? `enforced (≤ ${FRAME_TIME_MARGIN.toFixed(2)}× MapLibre)`
+      : timing
+        ? "advisory"
+        : "off"
   }`,
 );
 console.log(
@@ -142,7 +154,8 @@ try {
     const result = await runScenario(scenario);
     results.push(result);
     failed ||= !result.passed;
-    const fmt = (value: number | null, digits = 3) => (value === null ? "-" : value.toFixed(digits));
+    const fmt = (value: number | null, digits = 3) =>
+      value === null ? "-" : value.toFixed(digits);
     console.log(
       `${scenario.name.padEnd(24)}${fmt(result.image.mean, 4).padStart(10)}${fmt(result.image.p99, 4).padStart(10)}  ${(result.unsupported ? "-" : result.interaction.ok ? "same" : "DIFFER").padEnd(8)}${fmt(result.time.mapsMs).padStart(9)}${fmt(result.time.maplibreMs).padStart(9)}${fmt(result.time.ratio, 2).padStart(7)}  ${result.verdict}`,
     );
@@ -164,6 +177,16 @@ const report = {
   timing: { ...FRAME_TIMING, retries: TIMING_RETRIES, rounds: TIMING_ROUNDS },
   generatedAt: new Date().toISOString(),
   maplibreVersion: maplibreVersion(),
+  timingEnvironment: timing
+    ? {
+        browserVersion: timer?.version() ?? null,
+        browserFlags: process.env.CI ? [...WEBGPU_SWIFTSHADER_ARGS, ...UNTHROTTLED_ARGS] : GPU_ARGS,
+        host: { arch: arch(), node: process.version, platform: platform(), release: release() },
+        sourceDirty: gitDirty(),
+        bunLockSha256: fileSha256("bun.lock"),
+        wasmSha256: fileSha256("public/wasm/maps_wasm_bg.wasm"),
+      }
+    : null,
   passed: !failed,
   scenarios: results,
 };
@@ -203,77 +226,54 @@ async function runScenario(scenario: Scenario) {
   const interaction = compareInteractions(scenario, reference.steps, candidate.steps);
   const interactionOk = candidate.error === null && interaction.ok;
 
-  let time = {
-    maplibreMs: null as number | null,
-    mapsMs: null as number | null,
-    ratio: null as number | null,
-    rounds: { maplibre: [] as number[], maps: [] as number[] },
-  };
+  const attempts: TimingAttempt[] = [];
+  const measure = () =>
+    summarizeTiming(attempts, {
+      expectedBatches: FRAME_TIMING.batches,
+      minRounds: TIMING_ROUNDS,
+      requireHardwareRenderers: gateTiming,
+      viewport: scenario.size,
+    });
   if (timer) {
-    const rounds = time.rounds;
-    const measure = () => {
-      const maplibreMs = rounds.maplibre.length ? Math.min(...rounds.maplibre) : null;
-      const mapsMs = rounds.maps.length ? Math.min(...rounds.maps) : null;
-      return { maplibreMs, mapsMs, ratio: maplibreMs && mapsMs !== null ? mapsMs / maplibreMs : null, rounds };
-    };
     const runPair = async (round: number) => {
       // Alternate the order so neither runtime always runs on a warmer browser.
       const order: Runtime[] = round % 2 ? ["maps", "maplibre"] : ["maplibre", "maps"];
       for (const runtime of order) {
-        const median = await measureFrameTime(timer, scenario, runtime);
-        if (median !== null) rounds[runtime].push(median);
+        attempts.push(await measureFrameTime(timer, scenario, runtime, round));
       }
     };
     let round = 0;
     for (; round < TIMING_ROUNDS; round++) await runPair(round);
     for (let retry = 0; retry < TIMING_RETRIES && gateTiming; retry++, round++) {
-      const ratio = measure().ratio;
-      if (ratio !== null && ratio <= FRAME_TIME_MARGIN) break;
+      const current = measure();
+      // Incomplete evidence cannot be repaired by selecting only later, successful rounds.
+      if (
+        current.validity !== "valid" ||
+        (current.ratio !== null && current.ratio <= FRAME_TIME_MARGIN)
+      ) {
+        break;
+      }
       await runPair(round);
     }
-    time = measure();
   }
-  const timeOk = !gateTiming || (time.ratio !== null && time.ratio <= FRAME_TIME_MARGIN);
-
-  const outcomes: Record<Gate, boolean> = { image: imageOk, interaction: interactionOk, time: timeOk };
-  const verdicts: string[] = [];
-  let passed = true;
-  // An advisory time gate (software adapter, CI) judges no time known gap either way.
-  const judged: Gate[] = gateTiming ? ["image", "interaction", "time"] : ["image", "interaction"];
-  for (const gate of judged) {
-    const gaps = scenario.knownGaps
-      .filter((entry) => entry.gate === gate)
-      .map((entry) => `#${entry.issue}`)
-      .join(" ");
-    if (outcomes[gate] && gaps) {
-      passed = false;
-      verdicts.push(`${gate} PASSES: remove known gaps ${gaps}`);
-    } else if (!outcomes[gate] && gaps) {
-      verdicts.push(`${gate}: known gap ${gaps}`);
-    } else if (!outcomes[gate]) {
-      passed = false;
-      verdicts.push(`${gate} FAILS`);
-    }
-  }
-  if (timing && !gateTiming && time.ratio !== null && time.ratio > FRAME_TIME_MARGIN) {
-    verdicts.push("time slower (advisory)");
-  }
+  const time = measure();
+  const judged = judgeOracleGates(scenario.knownGaps, imageOk, interactionOk, time, gateTiming);
 
   return {
     capability: scenario.capability,
     errors: { maplibre: reference.error, maps: candidate.error },
     files,
-    gates: outcomes,
+    gates: judged.gates,
     image: { ...flip, floor, meanMax, p99Max },
     interaction,
     knownGaps: scenario.knownGaps,
     mapsBaseRenderer: candidate.baseRenderer,
     name: scenario.name,
     origin: scenario.origin,
-    passed,
+    passed: judged.passed,
     time,
     unsupported: null,
-    verdict: verdicts.length ? verdicts.join("; ") : "ok",
+    verdict: judged.verdict,
   };
 }
 
@@ -285,7 +285,11 @@ async function unsupportedResult(scenario: Scenario, write: (file: string, png: 
   return {
     capability: scenario.capability,
     errors: { maplibre: reference.error, maps: null },
-    files: { flip: null, maplibre: write(`${scenario.name}.maplibre.png`, reference.png), maps: null },
+    files: {
+      flip: null,
+      maplibre: write(`${scenario.name}.maplibre.png`, reference.png),
+      maps: null,
+    },
     gates: null,
     image: { floor: null, mean: null, meanMax: null, p99: null, p99Max: null },
     interaction: { ok: true, steps: [] },
@@ -294,7 +298,12 @@ async function unsupportedResult(scenario: Scenario, write: (file: string, png: 
     name: scenario.name,
     origin: scenario.origin,
     passed: true,
-    time: { maplibreMs: null, mapsMs: null, ratio: null },
+    time: summarizeTiming([], {
+      expectedBatches: FRAME_TIMING.batches,
+      minRounds: TIMING_ROUNDS,
+      requireHardwareRenderers: gateTiming,
+      viewport: scenario.size,
+    }),
     unsupported,
     verdict: `unsupported: #${unsupported.issue}`,
   };
@@ -338,7 +347,9 @@ async function openFixture(browser: Browser, scenario: Scenario, runtime: Runtim
   await page.goto(`${baseUrl}/oracle/index.html?${query}`);
   await waitReady(page, runtime).catch((error: Error) => {
     const logged = [...errors, ...consoleErrors.slice(0, 5)];
-    throw new Error(`${error.message}${logged.length ? `; page errors: ${logged.join(" | ")}` : ""}`);
+    throw new Error(
+      `${error.message}${logged.length ? `; page errors: ${logged.join(" | ")}` : ""}`,
+    );
   });
   return { errors, page };
 }
@@ -359,7 +370,10 @@ function serveTile(pathname: string): { body: Buffer; contentType: string } | nu
   if (glyphs) {
     // Only the Latin-1 range is committed; other ranges are empty glyph sets.
     const file = path.join(root, "oracle/glyphs", glyphs[1]!, `${glyphs[2]}.pbf`);
-    return { body: existsSync(file) ? readFileSync(file) : Buffer.alloc(0), contentType: "application/x-protobuf" };
+    return {
+      body: existsSync(file) ? readFileSync(file) : Buffer.alloc(0),
+      contentType: "application/x-protobuf",
+    };
   }
   if (pathname === "/sprite/oracle.json") {
     return { body: Buffer.from(JSON.stringify(SPRITE_JSON)), contentType: "application/json" };
@@ -401,42 +415,60 @@ async function waitReady(page: Page, runtime: Runtime) {
   if (runtime === "maps") {
     await page.waitForSelector('[data-map-ready="true"]', { timeout: 30_000 });
     const canvasState = () =>
-      page.evaluate(() => JSON.stringify(document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]')?.dataset ?? null));
-    await page.waitForFunction(
-      () => {
-        const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]');
-        return (
-          canvas !== null &&
-          canvas.dataset.mapBaseRenderer !== "pending" &&
-          (Number(canvas.dataset.mapBaseTiles) > 0 || Number(canvas.dataset.mapVectorTiles) > 0) &&
-          canvas.dataset.mapSourceState !== "loading" &&
-          canvas.dataset.mapBasePendingTiles === "0"
-        );
-      },
-      undefined,
-      { timeout: 30_000 },
-    ).catch(async (error: Error) => {
-      throw new Error(`${error.message}; canvas ${await canvasState()}`);
-    });
-  } else {
-    await page.waitForFunction(
-      () => {
-        const map = window.__oracle?.maplibre;
-        return Boolean(map && map.loaded() && map.areTilesLoaded() && !map.isMoving());
-      },
-      undefined,
-      { timeout: 30_000 },
-    ).catch(async (error: Error) => {
-      const state = await page.evaluate(() => {
-        const map = window.__oracle?.maplibre;
-        return map
-          ? { areTilesLoaded: map.areTilesLoaded(), isMoving: map.isMoving(), loaded: map.loaded() }
-          : null;
+      page.evaluate(() =>
+        JSON.stringify(
+          document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]')?.dataset ??
+            null,
+        ),
+      );
+    await page
+      .waitForFunction(
+        () => {
+          const canvas = document.querySelector<HTMLCanvasElement>(
+            'canvas[data-flat-runtime="maps"]',
+          );
+          return (
+            canvas !== null &&
+            canvas.dataset.mapBaseRenderer !== "pending" &&
+            (Number(canvas.dataset.mapBaseTiles) > 0 ||
+              Number(canvas.dataset.mapVectorTiles) > 0) &&
+            canvas.dataset.mapSourceState !== "loading" &&
+            canvas.dataset.mapBasePendingTiles === "0"
+          );
+        },
+        undefined,
+        { timeout: 30_000 },
+      )
+      .catch(async (error: Error) => {
+        throw new Error(`${error.message}; canvas ${await canvasState()}`);
       });
-      throw new Error(`${error.message}; maplibre ${JSON.stringify(state)}`);
-    });
+  } else {
+    await page
+      .waitForFunction(
+        () => {
+          const map = window.__oracle?.maplibre;
+          return Boolean(map && map.loaded() && map.areTilesLoaded() && !map.isMoving());
+        },
+        undefined,
+        { timeout: 30_000 },
+      )
+      .catch(async (error: Error) => {
+        const state = await page.evaluate(() => {
+          const map = window.__oracle?.maplibre;
+          return map
+            ? {
+                areTilesLoaded: map.areTilesLoaded(),
+                isMoving: map.isMoving(),
+                loaded: map.loaded(),
+              }
+            : null;
+        });
+        throw new Error(`${error.message}; maplibre ${JSON.stringify(state)}`);
+      });
   }
-  await page.waitForFunction(() => window.__oracle?.controller !== null, undefined, { timeout: 10_000 });
+  await page.waitForFunction(() => window.__oracle?.controller !== null, undefined, {
+    timeout: 10_000,
+  });
   await settle(page, runtime);
 }
 
@@ -451,7 +483,8 @@ async function settle(page: Page, runtime: Runtime) {
       const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]');
       const map = window.__oracle.maplibre;
       const busy = maps
-        ? canvas?.dataset.mapBasePendingTiles !== "0" || canvas?.dataset.mapSourceState === "loading"
+        ? canvas?.dataset.mapBasePendingTiles !== "0" ||
+          canvas?.dataset.mapSourceState === "loading"
         : !map || !map.areTilesLoaded() || map.isMoving();
       return JSON.stringify({ busy, view });
     }, runtime === "maps");
@@ -485,7 +518,8 @@ async function perform(
   if (step.kind === "hover" || step.kind === "click") {
     let point = northUp ? toScreen(step.at, camera, scenario.size) : picks.get(index);
     if (!point) {
-      if (runtime !== "maplibre") throw new Error(`${scenario.name}: no reference pixel for step ${index}`);
+      if (runtime !== "maplibre")
+        throw new Error(`${scenario.name}: no reference pixel for step ${index}`);
       point = await page.evaluate((at) => window.__oracle.maplibre!.project(at), step.at);
       picks.set(index, point);
     }
@@ -539,7 +573,11 @@ async function perform(
  * How far two rotated/pitched cameras put the view's corners apart, in screen pixels: the
  * center offset plus the corner displacement of the zoom, bearing and pitch differences.
  */
-function viewErrorPx(a: NonNullable<StepResult["view"]>, b: NonNullable<StepResult["view"]>, scenario: Scenario) {
+function viewErrorPx(
+  a: NonNullable<StepResult["view"]>,
+  b: NonNullable<StepResult["view"]>,
+  scenario: Scenario,
+) {
   const world = 512 * 2 ** a.zoom;
   const dx = Math.abs(a.center[0] - b.center[0]) * (world / 360);
   const dy = Math.abs(mercatorY(a.center[1]) - mercatorY(b.center[1])) * (world / (2 * Math.PI));
@@ -558,7 +596,8 @@ function compareInteractions(scenario: Scenario, reference: StepResult[], candid
   const steps = scenario.steps.map((step, index) => {
     const expected = reference[index];
     const actual = candidate[index];
-    const same = (a: unknown, b: unknown) => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
+    const same = (a: unknown, b: unknown) =>
+      JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
     let boundsPx: number | null = null;
     if (expected?.bounds && actual?.bounds && expected.zoom !== null) {
       // Edge error in screen pixels at the reference zoom.
@@ -608,22 +647,63 @@ function sortKeys(value: unknown) {
   return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-async function measureFrameTime(browser: Browser, scenario: Scenario, runtime: Runtime) {
-  const { page } = await openFixture(browser, scenario, runtime);
+async function measureFrameTime(
+  browser: Browser,
+  scenario: Scenario,
+  runtime: Runtime,
+  round: number,
+): Promise<TimingAttempt> {
+  const attempt: TimingAttempt = {
+    batchMeansMs: null,
+    error: null,
+    fingerprint: null,
+    rendererAfter: null,
+    rendererBefore: null,
+    round,
+    runtime,
+  };
+  let page: Page | null = null;
   try {
-    if (runtime === "maps") {
-      timingBaseRenderer = await page
-        .locator('canvas[data-flat-runtime="maps"]')
-        .first()
-        .getAttribute("data-map-base-renderer");
+    const fixture = await openFixture(browser, scenario, runtime);
+    page = fixture.page;
+    attempt.fingerprint = await page.evaluate((): TimingFingerprint => ({
+      devicePixelRatio: window.devicePixelRatio,
+      platform: navigator.platform,
+      userAgent: navigator.userAgent,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      visibility: document.visibilityState,
+    }));
+    attempt.rendererBefore = await timingRenderer(page, runtime);
+    attempt.batchMeansMs = await page.evaluate(
+      (config) => window.__oracle.frameTimes(config),
+      FRAME_TIMING,
+    );
+    attempt.rendererAfter = await timingRenderer(page, runtime);
+    if (fixture.errors.length) {
+      attempt.error = `page error: ${fixture.errors.join(" | ")}`;
     }
-    const means = await page.evaluate((timing) => window.__oracle.frameTimes(timing), FRAME_TIMING);
-    return medianOf(means);
-  } catch {
-    return null;
+    if (runtime === "maps") {
+      timingBaseRenderer = attempt.rendererAfter;
+    }
+  } catch (error) {
+    attempt.error = error instanceof Error ? error.message : String(error);
   } finally {
-    await page.close();
+    await page?.close();
   }
+  return attempt;
+}
+
+async function timingRenderer(page: Page, runtime: Runtime): Promise<string | null> {
+  return page.evaluate((target) => {
+    if (target === "maps") {
+      return (
+        document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]')?.dataset
+          .mapBaseRenderer ?? null
+      );
+    }
+    const canvas = document.querySelector<HTMLCanvasElement>("canvas.maplibregl-canvas");
+    return canvas?.getContext("webgl2") ? "webgl2" : null;
+  }, runtime);
 }
 
 async function probeAdapter(browser: Browser) {
@@ -635,14 +715,27 @@ async function probeAdapter(browser: Browser) {
       const gl = document.createElement("canvas").getContext("webgl2");
       const info = gl?.getExtension("WEBGL_debug_renderer_info");
       const webgl = gl && info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "no webgl";
-      const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<{ info?: { description?: string; vendor?: string; architecture?: string } } | null> } }).gpu;
+      const gpu = (
+        navigator as Navigator & {
+          gpu?: {
+            requestAdapter(): Promise<{
+              info?: { description?: string; vendor?: string; architecture?: string };
+            } | null>;
+          };
+        }
+      ).gpu;
       const adapter = await gpu?.requestAdapter();
       const webgpu = adapter?.info
-        ? [adapter.info.vendor, adapter.info.architecture, adapter.info.description].filter(Boolean).join(" ")
+        ? [adapter.info.vendor, adapter.info.architecture, adapter.info.description]
+            .filter(Boolean)
+            .join(" ")
         : "no webgpu";
       return `WebGL: ${webgl}; WebGPU: ${webgpu}`;
     });
-    return { renderer, software: /swiftshader|llvmpipe|lavapipe|software|no webgl/i.test(renderer) };
+    return {
+      renderer,
+      software: /swiftshader|llvmpipe|lavapipe|software|no webgl/i.test(renderer),
+    };
   } finally {
     await page.close();
   }
@@ -665,15 +758,19 @@ function runFlip(referenceFile: string, testFile: string, heatmapFile: string | 
   return JSON.parse(result.stdout) as { mean: number; p99: number };
 }
 
-function medianOf(values: number[]) {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)]!;
-}
-
 function gitCommit() {
   const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
   return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function gitDirty() {
+  const result = spawnSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim().length > 0 : null;
+}
+
+function fileSha256(relativePath: string) {
+  const file = path.join(root, relativePath);
+  return existsSync(file) ? createHash("sha256").update(readFileSync(file)).digest("hex") : null;
 }
 
 function maplibreVersion() {
