@@ -5,7 +5,11 @@ import type { MapsTileset } from "../../src/maps-tileset";
 import { createRoot } from "react-dom/client";
 import { configureMapsWasmPackage } from "../../src/aggregation-wasm";
 import { MapView } from "../../src/map-view";
-import { createFixtureTileset } from "../../src/tileset-fixtures";
+import {
+  createFixturePmtilesTileset,
+  createFixturePmtilesXyzTileset,
+  createFixtureTileset,
+} from "../../src/tileset-fixtures";
 import type { MapsVectorBasemapStyle } from "../../src/maps-tileset-style";
 import "../../styles.css";
 
@@ -50,6 +54,13 @@ function Host() {
       <button onClick={() => setSource(createFixtureTileset("a"))}>Source A</button>
       <button onClick={() => setSource(createFixtureTileset("b"))}>Source B</button>
       <button onClick={() => setSource(createFixtureTileset("a", "2"))}>Revision 2</button>
+      <button onClick={() => setSource(createFixturePmtilesTileset())}>PMTiles v3</button>
+      <button onClick={() => setSource(createFixturePmtilesTileset("2"))}>
+        PMTiles revision 2
+      </button>
+      <button onClick={() => setSource(createFixturePmtilesXyzTileset())}>
+        PMTiles equivalent XYZ
+      </button>
       <button onClick={() => setSource({ ...source, sourceId: "" })}>Malformed manifest</button>
       <button
         onClick={() => {
@@ -64,10 +75,16 @@ function Host() {
         onClick={() =>
           setSource((current) => ({
             ...current,
-            transport: {
-              kind: "xyz",
-              urlTemplate: `${current.transport.urlTemplate}&credential=refreshed`,
-            },
+            transport:
+              current.transport.kind === "xyz"
+                ? {
+                    kind: "xyz",
+                    urlTemplate: `${current.transport.urlTemplate}&credential=refreshed`,
+                  }
+                : {
+                    kind: "pmtiles",
+                    url: `${current.transport.url}${current.transport.url.includes("?") ? "&" : "?"}credential=refreshed`,
+                  },
           }))
         }
       >
@@ -123,7 +140,9 @@ function Host() {
           onSelectedFeatureIdChange={setSelected}
         />
       </MapView>
-      <output aria-label="Tile transport">{source.transport.urlTemplate}</output>
+      <output aria-label="Tile transport">
+        {source.transport.kind === "xyz" ? source.transport.urlTemplate : source.transport.url}
+      </output>
       <output aria-label="Source observation">{source.observation?.snapshot ?? "none"}</output>
       <output aria-label="Selected Map Feature">{selected ?? "none"}</output>
     </>

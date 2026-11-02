@@ -33,13 +33,16 @@ pub struct TilesetSchema {
     pub source_layers: Vec<String>,
 }
 
-/// A future archive transport can extend this tagged boundary; no reader lives here.
+/// The browser owns transport I/O; neither transport affects canonical tile identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum TilesetTransport {
     Xyz {
         #[serde(rename = "urlTemplate")]
         url_template: String,
+    },
+    Pmtiles {
+        url: String,
     },
 }
 
@@ -113,18 +116,38 @@ impl MapsTileset {
         {
             return Err("invalid Maps Tileset coverage bounds");
         }
-        let TilesetTransport::Xyz { url_template } = &self.transport;
-        if url_template.len() > 8192
-            || !["{z}", "{x}", "{y}"]
-                .iter()
-                .all(|token| url_template.contains(token))
-            || !(url_template.starts_with("https://")
-                || url_template.starts_with("http://")
-                || url_template.starts_with('/'))
-        {
-            return Err(
-                "Maps Tileset XYZ transport requires an HTTP(S) or root-relative template with z/x/y",
-            );
+        match &self.transport {
+            TilesetTransport::Xyz { url_template } => {
+                if url_template.len() > 8192
+                    || !["{z}", "{x}", "{y}"]
+                        .iter()
+                        .all(|token| url_template.contains(token))
+                    || !(url_template.starts_with("https://")
+                        || url_template.starts_with("http://")
+                        || url_template.starts_with('/'))
+                {
+                    return Err(
+                        "Maps Tileset XYZ transport requires an HTTP(S) or root-relative template with z/x/y",
+                    );
+                }
+            }
+            TilesetTransport::Pmtiles { url } => {
+                if url.len() > 8192
+                    || !(url.starts_with("https://")
+                        || url.starts_with("http://")
+                        || url.starts_with('/'))
+                    || !url
+                        .split('?')
+                        .next()
+                        .unwrap_or_default()
+                        .ends_with(".pmtiles")
+                    || self.max_zoom > 26
+                {
+                    return Err(
+                        "Maps Tileset PMTiles v3 transport requires an HTTP(S) or root-relative .pmtiles URL and maxZoom <= 26",
+                    );
+                }
+            }
         }
         if self.observation.as_ref().is_some_and(|o| {
             o.snapshot.trim().is_empty()

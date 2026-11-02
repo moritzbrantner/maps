@@ -1,5 +1,151 @@
+import { readFileSync } from "node:fs";
 import { createShortbreadTileFixture } from "./fixtures/shortbread-tile.mjs";
 import { expect, test } from "@playwright/test";
+
+for (const canvas of [false, true]) {
+  test(`PMTiles v3 uses genuine partial 206 reads and the same MVT pixels (${canvas ? "Canvas" : "WebGPU"}) @smoke`, async ({
+    page,
+  }) => {
+    const requests: string[] = [];
+    const responses: Array<{ status: number; range: string | undefined }> = [];
+    page.on("request", (request) => {
+      if (request.url().includes("fixture-pmtiles-v1.pmtiles")) {
+        requests.push(request.headers()["range"] ?? "");
+      }
+    });
+    page.on("response", (response) => {
+      if (response.url().includes("fixture-pmtiles-v1.pmtiles")) {
+        responses.push({ status: response.status(), range: response.headers()["content-range"] });
+      }
+    });
+    await page.goto(`/e2e/fixtures/tileset-sources.html${canvas ? "?canvas" : ""}`);
+    const surface = page.locator('canvas[data-flat-runtime="maps"]');
+    const view = page.locator('[data-map-runtime="maps"]');
+    await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+    const sourceA = await view.screenshot();
+    const camera = await page.evaluate(() => window.tilesetController!.getViewState());
+    await page.getByRole("button", { name: "PMTiles v3", exact: true }).click();
+    await expect(surface).toHaveAttribute("data-map-source-id", "fixture-pmtiles");
+    await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+    const archivedPixels = await view.screenshot();
+    expect(archivedPixels.equals(sourceA)).toBe(false);
+    expect(requests).toContain("bytes=0-16383");
+    expect(requests.length).toBeGreaterThanOrEqual(3); // Header/root, metadata, tile data.
+    expect(responses.every((response) => response.status === 206)).toBe(true);
+    const first = responses.find((response) => response.range?.startsWith("bytes 0-16383/"));
+    expect(first?.range).toMatch(/^bytes 0-16383\/\d+$/);
+    expect(Number(first?.range?.split("/")[1])).toBeGreaterThan(16_384);
+    expect(await page.evaluate(() => window.tilesetController!.getViewState())).toEqual(camera);
+    await page.getByRole("button", { name: "PMTiles equivalent XYZ", exact: true }).click();
+    await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+    expect((await view.screenshot()).equals(archivedPixels)).toBe(true);
+    await expect(page.locator("[data-map-overlay-primitives]")).toHaveAttribute(
+      "data-map-overlay-primitives",
+      "1",
+    );
+    await expect(page.locator(".maplibregl-map")).toHaveCount(0);
+  });
+}
+
+test("PMTiles archive revision and refresh keep Rust source identity semantics @smoke", async ({
+  page,
+}) => {
+  await page.goto("/e2e/fixtures/tileset-sources.html");
+  const surface = page.locator('canvas[data-flat-runtime="maps"]');
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  await page.getByRole("button", { name: "PMTiles v3", exact: true }).click();
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  const identity = await surface.getAttribute("data-map-source-identity");
+  await page.getByRole("button", { name: "Refresh tile URL" }).click();
+  await expect(page.getByLabel("Tile transport")).toContainText("credential=refreshed");
+  await expect(surface).toHaveAttribute("data-map-source-identity", identity!);
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  await page.getByRole("button", { name: "PMTiles revision 2" }).click();
+  await expect(surface).toHaveAttribute("data-map-source-revision", "2");
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  await expect(surface).not.toHaveAttribute("data-map-source-identity", identity!);
+});
+
+for (const [name, status, headers] of [
+  ["ignored Range", 200, {}],
+  ["missing Content-Range", 206, {}],
+  ["inconsistent Content-Range", 206, { "Content-Range": "bytes 1-10/99999" }],
+  ["HTTP failure", 503, {}],
+] as const) {
+  test(`PMTiles reports ${name} as a visible source error @smoke`, async ({ page }) => {
+    await page.route("**/tilesets/*.pmtiles**", (route) =>
+      route.fulfill({ status, body: "bad archive", headers }),
+    );
+    await page.goto("/e2e/fixtures/tileset-sources.html");
+    const surface = page.locator('canvas[data-flat-runtime="maps"]');
+    await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+    await page.getByRole("button", { name: "PMTiles v3", exact: true }).click();
+    await expect(surface).toHaveAttribute("data-map-source-state", "error");
+    await expect(surface).toHaveAttribute("data-map-base-tile-error", /PMTiles.*(Range|HTTP)/i);
+    await expect(page.locator(".maplibregl-map")).toHaveCount(0);
+  });
+}
+
+test("PMTiles missing tile is a visible failure; switching restores the prior basemap @smoke", async ({
+  page,
+}) => {
+  await page.goto("/e2e/fixtures/tileset-sources.html?canvas");
+  const surface = page.locator('canvas[data-flat-runtime="maps"]');
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  await page.getByRole("button", { name: "PMTiles v3", exact: true }).click();
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  await page.evaluate(() => window.tilesetController!.setViewState({ center: [95, 60], zoom: 1 }));
+  await expect(surface).toHaveAttribute("data-map-source-state", "error");
+  await expect(surface).toHaveAttribute("data-map-base-tile-error", /missing tile/i);
+  await page.getByRole("button", { name: "Source A", exact: true }).click();
+  await expect(surface).toHaveAttribute("data-map-source-id", "fixture-a");
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+});
+
+test("a late PMTiles range response cannot replace the active source or application selection @smoke", async ({
+  page,
+}) => {
+  // Simulate a network layer that returns after cancellation, as in the XYZ journey.
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) =>
+      original(input, String(input).includes(".pmtiles") ? { ...init, signal: undefined } : init);
+  });
+  const pending: import("@playwright/test").Route[] = [];
+  await page.route("**/tilesets/*.pmtiles**", (route) => {
+    pending.push(route);
+  });
+  await page.goto("/e2e/fixtures/tileset-sources.html");
+  const surface = page.locator('canvas[data-flat-runtime="maps"]');
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  const root = page.locator('[data-map-runtime="maps"]');
+  const box = await root.boundingBox();
+  await page.mouse.click(box!.x + 320, box!.y + 240);
+  await expect(page.getByLabel("Selected Map Feature")).toHaveText("application-point");
+  const camera = await page.evaluate(() => window.tilesetController!.getViewState());
+  await page.getByRole("button", { name: "PMTiles v3", exact: true }).click();
+  await expect.poll(() => pending.length).toBe(1);
+  await page.getByRole("button", { name: "Source B", exact: true }).click();
+  await expect(surface).toHaveAttribute("data-map-source-id", "fixture-b");
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  const pixels = await root.screenshot();
+
+  const archive = readFileSync("public/tilesets/fixture-pmtiles-v1.pmtiles");
+  const lateResponse = page.waitForResponse((response) =>
+    response.url().includes("fixture-pmtiles-v1.pmtiles"),
+  );
+  await pending[0]!.fulfill({
+    status: 206,
+    body: archive.subarray(0, 16_384),
+    headers: { "Content-Range": `bytes 0-16383/${archive.length}`, ETag: '"fixture-v1"' },
+  });
+  await (await lateResponse).finished();
+  await expect(surface).toHaveAttribute("data-map-source-id", "fixture-b");
+  await expect(surface).toHaveAttribute("data-map-source-state", "ready");
+  expect((await root.screenshot()).equals(pixels)).toBe(true);
+  await expect(page.getByLabel("Selected Map Feature")).toHaveText("application-point");
+  expect(await page.evaluate(() => window.tilesetController!.getViewState())).toEqual(camera);
+});
 
 for (const canvas of [false, true]) {
   test(`Map View switches versioned MVT sources and reuses style data (${canvas ? "Canvas" : "WebGPU"}) @smoke`, async ({
@@ -46,7 +192,7 @@ for (const canvas of [false, true]) {
     await test.info().attach("styled-a", { body: styled, contentType: "image/png" });
     await test.info().attach("warm-a", { body: warmPixels, contentType: "image/png" });
     expect(warmPixels.equals(styled)).toBe(true);
-    await page.getByRole("button", { name: "Revision 2" }).click();
+    await page.getByRole("button", { name: "Revision 2", exact: true }).click();
     await expect(surface).toHaveAttribute("data-map-source-revision", "2");
     await expect(surface).toHaveAttribute("data-map-source-state", "ready");
     expect(Number(await surface.getAttribute("data-map-source-requests"))).toBeGreaterThan(
