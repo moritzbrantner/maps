@@ -68,12 +68,12 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   let requests = 0;
-  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", (route) => {
+  await page.route("**/tilesets/fixture-pmtiles-v1.mvt**", (route) => {
     requests++;
     return route.fulfill({ body: fixture, contentType: "application/vnd.mapbox-vector-tile" });
   });
   await page.goto(
-    `http://127.0.0.1:${server.httpServer.address().port}/maps/engine/?e2e=1&vectorTiles=fixture`,
+    `http://127.0.0.1:${server.httpServer.address().port}/maps/engine/?view=benchmark`,
   );
   await page.locator("[data-map-runtime=maps]").waitFor();
   // One complete untimed journey warms decode, pixels and the camera path.

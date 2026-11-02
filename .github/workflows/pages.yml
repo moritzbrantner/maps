@@ -1,6 +1,7 @@
-name: Deploy Example Website
+name: Deploy Maps Engine Pages
 
 on:
+  pull_request:
   push:
     branches:
       - main
@@ -16,7 +17,7 @@ concurrency:
 
 jobs:
   build-example:
-    name: Build or reuse Example artifact
+    name: Build or reuse Maps Pages artifact
     permissions:
       actions: read
       contents: read
@@ -24,7 +25,7 @@ jobs:
     uses: moritzbrantner/reusable-workflows/.github/workflows/build-artifact.yml@680d4f7bda61361b10865d8835bc7ef69a24061b
     with:
       source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      artifact_key: maps-example-pages-v5
+      artifact_key: maps-engine-pages-v1
       rust_toolchain: stable
       rust_targets: wasm32-unknown-unknown
       bun_version: latest
@@ -60,8 +61,8 @@ jobs:
         cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
         bun run bench:engine -- --output public/evidence/engine-benchmark.json
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
-        mkdir -p dist/benchmarks
-        cp dist/index.html dist/benchmarks/index.html
+        # Vite now builds /benchmarks/ as a distinct reference lab entrypoint.
+        # Copying the first-party home page would erase the benchmark route.
         # MapLibre oracle report (#306). CI blocks on the gate; the report publishes either way.
         if ! CI=1 ORACLE_PYTHON="$RUNNER_TEMP/flip/bin/python" bun run oracle -- --out dist/oracle; then
           echo "::warning::MapLibre oracle gate failed; publishing its report anyway."
@@ -107,7 +108,7 @@ jobs:
       artifact_retention_days: 7
 
   verify-hosted-example:
-    name: Verify hosted Example
+    name: Verify hosted Maps Pages
     needs: build-example
     permissions:
       actions: read
@@ -136,7 +137,7 @@ jobs:
       upload_artifacts_on: failure
 
   deploy-example:
-    name: Deploy Example
+    name: Deploy Maps Pages
     needs:
       - build-example
       - verify-hosted-example

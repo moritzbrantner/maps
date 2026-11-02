@@ -1,29 +1,28 @@
 import { expect, test } from "@playwright/test";
 import { createShortbreadTileFixture } from "./fixtures/shortbread-tile.mjs";
 
-const body = createShortbreadTileFixture({ dense: true });
-
-test("standalone dense vector basemap retains tile pixels during pan and zoom @smoke", async ({
+test("standalone first-party PMTiles retains tile pixels during pan and zoom @smoke", async ({
   page,
 }) => {
   // Exercise the pixel fallback too: WebGPU support must not decide whether the
   // basemap blocks input or retains coverage.
   await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
-  const requests = new Map<string, number>();
+  const ranges = new Map<string, number>();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
-    const url = route.request().url();
-    requests.set(url, (requests.get(url) ?? 0) + 1);
-    await route.fulfill({ body, contentType: "application/vnd.mapbox-vector-tile" });
+  page.on("request", (request) => {
+    if (request.url().includes("showcase-pmtiles-v1.pmtiles")) {
+      const range = request.headers()["range"] ?? "";
+      ranges.set(range, (ranges.get(range) ?? 0) + 1);
+    }
   });
-  await page.goto("/engine/?e2e=1&vectorTiles=fixture");
+  await page.goto("/engine/?e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
   await expect
     .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
     .toBeGreaterThan(0);
   await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-  const warmTiles = [...requests.keys()];
+  await expect(base).toHaveAttribute("data-map-source-state", "ready");
   // The tile pixels are owned by the base renderer; only application features
   // enter the changing overlay scene.
   await expect
@@ -51,7 +50,8 @@ test("standalone dense vector basemap retains tile pixels during pan and zoom @s
   await expect
     .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
     .toBeGreaterThan(0);
-  for (const url of warmTiles) expect(requests.get(url)).toBe(1);
+  expect(ranges.get("bytes=0-16383")).toBe(1);
+  await expect(base).toHaveAttribute("data-map-source-state", "ready");
   expect(errors).toEqual([]);
 });
 
@@ -134,48 +134,80 @@ test("tile worker rejects malformed data and remains usable, then disposes pendi
   expect(result).toEqual({ malformed: true, width: 512, cancelled: true, disposed: true });
 });
 
-test("pan predicts vector tiles beyond the stationary ring and reuses them @smoke", async ({
+test("complete synthetic PMTiles coverage survives multi-region camera changes @smoke", async ({
   page,
 }) => {
+  // Inspect actual tile pixels in the deterministic Canvas2D fallback. A range
+  // request is not required when a new camera can reuse decoded/cached tiles.
+  await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
   await page.setViewportSize({ width: 512, height: 512 });
-  const requests = new Map<string, number>();
-  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", async (route) => {
-    const url = route.request().url();
-    requests.set(url, (requests.get(url) ?? 0) + 1);
-    await route.fulfill({ body, contentType: "application/vnd.mapbox-vector-tile" });
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("showcase-pmtiles-v1.pmtiles")) {
+      requests.push(request.headers()["range"] ?? "");
+    }
   });
-  await page.goto("/engine/?e2e=1&vectorTiles=fixture");
+  await page.goto("/engine/?e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
+  await expect(base).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
+  await expect(base).toHaveAttribute("data-map-base-renderer", "canvas2d");
+  await expect(page.locator('canvas[data-map-base-fallback="canvas2d"]')).toBeVisible();
   await expect
-    .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
+    .poll(async () => Number(await base.getAttribute("data-map-source-retained-tiles")))
     .toBeGreaterThan(0);
   await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-  const initial = new Set(requests.keys());
-  // A small eastward pan keeps the visible XYZ columns unchanged, but predicts
-  // column 19 beyond the stationary ring (columns 15..18 at this camera).
-  await page.mouse.move(300, 280);
-  await page.mouse.down();
-  await page.mouse.move(284, 280, { steps: 2 });
-  await expect
-    .poll(() => [...requests.keys()].filter((url) => /\/5\/19\//.test(url)).length)
-    .toBeGreaterThan(0);
-  await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-  const predicted = [...requests.keys()].filter((url) => /\/5\/19\//.test(url));
-  expect(predicted.every((url) => !initial.has(url))).toBe(true);
-  // Three separate drags move that predicted column into the viewport.
-  await page.mouse.up();
-  for (let step = 0; step < 3; step++) {
-    await page.mouse.move(420, 280);
-    await page.mouse.down();
-    await page.mouse.move(140, 280, { steps: 20 });
-    // Let outstanding tile work finish before continuing the journey.
+  // These regions span separate z2 tiles. The archive has complete z0–z2
+  // coverage, unlike the deliberately sparse error-path fixture.
+  await expect(page.getByRole("combobox", { name: "Tile source" })).toHaveCSS(
+    "background-color",
+    "rgb(38, 67, 74)",
+  );
+  for (const scene of ["west", "east", "south"] as const) {
+    await page.getByRole("combobox", { name: "Camera scene" }).selectOption(scene);
+    await expect(page).toHaveURL(new RegExp(`[?&]scene=${scene}(?:&|$)`));
     await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
-    await page.mouse.up();
+    await expect(base).toHaveAttribute("data-map-source-state", "ready");
+    await expect
+      .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
+      .toBeGreaterThan(0);
+    // The test fixture paints every tile edge-to-edge. Uncovered regions reveal
+    // the Canvas2D map background (#f9f4ee), even when some tiles are retained.
+    // Sample cell centers throughout the *visible viewport*, not the overscan.
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const canvas = document.querySelector<HTMLCanvasElement>(
+            'canvas[data-map-base-fallback="canvas2d"]',
+          );
+          const context = canvas?.getContext("2d");
+          if (!canvas || !context) return 81;
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          const ratioX = canvas.width / canvas.clientWidth;
+          const ratioY = canvas.height / canvas.clientHeight;
+          const marginX = -parseFloat(canvas.style.left || "0");
+          const marginY = -parseFloat(canvas.style.top || "0");
+          const width = canvas.clientWidth - 2 * marginX;
+          const height = canvas.clientHeight - 2 * marginY;
+          let missing = 0;
+          for (let row = 0; row < 9; row += 1) {
+            for (let column = 0; column < 9; column += 1) {
+              const x = Math.floor((marginX + ((column + 0.5) * width) / 9) * ratioX);
+              const y = Math.floor((marginY + ((row + 0.5) * height) / 9) * ratioY);
+              const offset = (y * canvas.width + x) * 4;
+              if (
+                pixels[offset + 3] !== 255 ||
+                (pixels[offset] === 249 && pixels[offset + 1] === 244 && pixels[offset + 2] === 238)
+              ) {
+                missing += 1;
+              }
+            }
+          }
+          return missing;
+        }),
+      )
+      .toBe(0);
   }
-  // Column 21 can only be predicted once column 19 has entered the cover.
-  await expect
-    .poll(() => [...requests.keys()].filter((url) => /\/5\/21\//.test(url)).length)
-    .toBeGreaterThan(0);
-  for (const url of predicted) expect(requests.get(url)).toBe(1);
+  expect(requests).toContain("bytes=0-16383");
+  expect(requests.length).toBeGreaterThan(2);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });

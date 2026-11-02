@@ -1,21 +1,18 @@
 import { expect, test } from "@playwright/test";
-import { createShortbreadTileFixture } from "../e2e/fixtures/shortbread-tile.mjs";
 
 test("standalone engine survives direct navigation and refresh under the Pages base path", async ({
   page,
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("https://vector.openstreetmap.org/shortbread_v1/**", (route) =>
-    route.fulfill({
-      body: createShortbreadTileFixture(),
-      contentType: "application/vnd.mapbox-vector-tile",
-    }),
-  );
-  await page.goto("/maps/engine/?e2e=1&vectorTiles=fixture");
+  await page.goto("/maps/engine/?e2e=1");
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
   await expect(page.locator('[data-map-runtime="maps"]')).toBeVisible();
   await expect(page.locator(".maplibregl-canvas")).toHaveCount(0);
+  await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-source-state",
+    "ready",
+  );
   await expect(page.getByRole("link", { name: "Stats" })).toHaveAttribute("href", "/maps/stats/");
   await expect
     .poll(async () =>

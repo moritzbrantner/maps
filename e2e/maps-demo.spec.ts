@@ -60,7 +60,7 @@ test.beforeEach(async ({ page }) => {
     consoleErrors.push(error.message);
   });
 
-  await page.goto("/?e2e=1");
+  await page.goto("/demo-reference/?e2e=1");
   await page.addStyleTag({
     content: `
       *, *::before, *::after {
@@ -402,7 +402,7 @@ test("Timeline slider is named and keyboard operable", async ({ page }) => {
 
 test("Mobile layout does not overflow horizontally @mobile", async ({ page }) => {
   await page.setViewportSize({ height: 844, width: 390 });
-  await page.goto("/?e2e=1");
+  await page.goto("/demo-reference/?e2e=1");
   await page.addStyleTag({
     content: `
       *, *::before, *::after {
@@ -428,7 +428,7 @@ test("Mobile layout does not overflow horizontally @mobile", async ({ page }) =>
 test("Mobile layout does not overflow horizontally on any top-level tab @mobile", async ({ page }) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ height: 844, width: 390 });
-  await page.goto("/?e2e=1");
+  await page.goto("/demo-reference/?e2e=1");
   await page.addStyleTag({
     content: `
       *, *::before, *::after {
@@ -454,7 +454,7 @@ test("Mobile layout does not overflow horizontally on any top-level tab @mobile"
 for (const view of ["Editor", "Globe", "Heat", "Timeline"] as const) {
   test(`${view} mobile visual baseline @mobile`, async ({ page }) => {
     await page.setViewportSize({ height: 844, width: 390 });
-    await page.goto("/?e2e=1");
+    await page.goto("/demo-reference/?e2e=1");
     await page.addStyleTag({
       content: `
         *, *::before, *::after {

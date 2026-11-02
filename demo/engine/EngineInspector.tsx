@@ -1,4 +1,5 @@
 import { createFixtureTileset } from "../../src/tileset-fixtures";
+import { createShowcaseTileset } from "../showcase-tileset";
 import type { MapsVectorBasemapStyle } from "../../src/maps-tileset-style";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -33,12 +34,12 @@ type InspectorController = MapSurfaceController &
 type BasemapPath = "retained" | "overlay";
 
 const PRESETS: Array<{ label: string; view: MapViewState }> = [
-  { label: "Europe", view: { center: [10.3, 50.4], zoom: 4.4 } },
-  { label: "Alps", view: { center: [10.5, 46.8], zoom: 8 } },
-  { label: "Hamburg port", view: { center: [9.95, 53.535], zoom: 13 } },
-  { label: "Berlin", view: { center: [13.405, 52.52], zoom: 12 } },
-  { label: "Berlin Mitte", view: { center: [13.392, 52.517], zoom: 15.5 } },
-  { label: "Rotated Berlin", view: { center: [13.405, 52.52], zoom: 13.5, bearing: 35 } },
+  { label: "Overview", view: { center: [10.3, 50.4], zoom: 2.2 } },
+  { label: "North sample", view: { center: [10.5, 46.8], zoom: 4.1 } },
+  { label: "West sample", view: { center: [-95, 40], zoom: 3.5 } },
+  { label: "East sample", view: { center: [96, 30], zoom: 3.5 } },
+  { label: "Southern sample", view: { center: [13.4, -30], zoom: 4.2 } },
+  { label: "Rotated sample", view: { center: [13.4, 50.5], zoom: 4.1, bearing: 35 } },
 ];
 
 const FRAME_WINDOW = 240;
@@ -55,15 +56,17 @@ export function EngineInspector() {
         ? "a2"
         : params.get("source") === "a"
           ? "a"
-          : "",
+          : "pmtiles",
   );
   const activeTileset = useMemo(
     () =>
-      sourceChoice === "a2"
-        ? createFixtureTileset("a", "2", import.meta.env.BASE_URL)
-        : sourceChoice === "a" || sourceChoice === "b"
-          ? createFixtureTileset(sourceChoice, "1", import.meta.env.BASE_URL)
-          : undefined,
+      sourceChoice === "pmtiles"
+        ? createShowcaseTileset(import.meta.env.BASE_URL)
+        : sourceChoice === "a2"
+          ? createFixtureTileset("a", "2", import.meta.env.BASE_URL)
+          : sourceChoice === "a" || sourceChoice === "b"
+            ? createFixtureTileset(sourceChoice, "1", import.meta.env.BASE_URL)
+            : undefined,
     [sourceChoice],
   );
   const initialView = useMemo(() => readInitialView(params), [params]);
@@ -163,7 +166,7 @@ export function EngineInspector() {
           tileset={activeTileset}
           tilesetStyle={publicTilesetStyle}
           mapLabel="Maps engine inspector map"
-          mapStyle={{ attribution: "© OpenStreetMap contributors", tiles: false }}
+          mapStyle={{ tiles: false }}
           onMapControllerReady={handleController}
           onViewStateChange={refreshTiles}
           style={{ height: "100%", minHeight: 0 }}
@@ -187,8 +190,8 @@ export function EngineInspector() {
             {backendLabel}
           </p>
           <nav className="engine-inspector__links">
-            <a href={import.meta.env.BASE_URL}>Demo</a>
-            <a href={`${import.meta.env.BASE_URL}engine/`}>Engine</a>
+            <a href={import.meta.env.BASE_URL}>Engine</a>
+            <a href={`${import.meta.env.BASE_URL}engine/`}>Standalone</a>
             <a href={`${import.meta.env.BASE_URL}benchmarks/`}>Benchmarks</a>
             <a href="https://github.com/moritzbrantner/maps/issues/167">#167</a>
           </nav>
@@ -201,7 +204,7 @@ export function EngineInspector() {
             value={sourceChoice}
             onChange={(event) => setSourceChoice(event.target.value)}
           >
-            <option value="">Live Shortbread comparison</option>
+            <option value="pmtiles">Maps synthetic PMTiles v3</option>
             <option value="a">Fixture A</option>
             <option value="b">Fixture B</option>
             <option value="a2">Fixture A · revision 2</option>

@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 test("Maps-owned bearing and pitch stay aligned through browser interaction @smoke", async ({
   page,
 }) => {
-  await page.goto("/?acceptance=maps-runtime-oriented");
+  await page.goto("/demo-reference/?acceptance=maps-runtime-oriented");
 
   const map = page.getByLabel("Maps oriented Rust runtime acceptance");
   const canvas = map.locator('canvas[data-flat-runtime="maps"]');

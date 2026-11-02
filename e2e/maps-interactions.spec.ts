@@ -48,7 +48,7 @@ test.beforeEach(async ({ page }) => {
     consoleErrors.push(error.message);
   });
 
-  await page.goto("/?e2e=1");
+  await page.goto("/demo-reference/?e2e=1");
   await page.addStyleTag({
     content: `
       *, *::before, *::after {
