@@ -8,7 +8,8 @@ import { configureMapsWasmPackage } from "../src/aggregation-wasm";
 import { EnginePage } from "./EnginePage";
 
 // `?view=inspector` shows the renderer inspector (#167) on the same engine page entry.
-const inspector = new URLSearchParams(location.search).get("view") === "inspector";
+const view = new URLSearchParams(location.search).get("view");
+const inspector = view === "inspector";
 if (inspector && new URLSearchParams(location.search).get("gpu") === "off") {
   // Same capability probe the browser runtime uses: forces the Canvas2D backend.
   Object.defineProperty(Navigator.prototype, "gpu", { configurable: true, get: () => undefined });
@@ -31,6 +32,11 @@ async function bootstrap() {
     await import("./engine/engine-inspector.css");
     const { EngineInspector } = await import("./engine/EngineInspector");
     root.render(<EngineInspector />);
+    return;
+  }
+  if (view === "benchmark") {
+    const { EngineBenchmarkFixture } = await import("./engine/EngineBenchmarkFixture");
+    root.render(<EngineBenchmarkFixture />);
     return;
   }
   root.render(<EnginePage />);

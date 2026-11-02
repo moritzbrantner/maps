@@ -146,12 +146,19 @@ test("complete synthetic PMTiles coverage survives multi-region camera changes @
   });
   await page.goto("/engine/?e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
+  await expect(base).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
+  // The vector renderer can draw retained tiles while the raster-only
+  // data-map-base-tiles counter is zero, especially at narrow viewports.
   await expect
-    .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
+    .poll(async () => Number(await base.getAttribute("data-map-source-retained-tiles")))
     .toBeGreaterThan(0);
   await expect(base).toHaveAttribute("data-map-base-pending-tiles", "0");
   // These regions span separate z2 tiles. The archive has complete z0–z2
   // coverage, unlike the deliberately sparse error-path fixture.
+  await expect(page.getByRole("combobox", { name: "Tile source" })).toHaveCSS(
+    "background-color",
+    "rgb(38, 67, 74)",
+  );
   for (const scene of ["west", "east", "south"] as const) {
     const before = requests.length;
     await page.getByRole("combobox", { name: "Camera scene" }).selectOption(scene);
