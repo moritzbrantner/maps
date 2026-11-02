@@ -193,7 +193,7 @@
     "postcss": "8.5.31",
     "source-map-js": "1.2.2",
     "tinypool": "2.2.0",
-    "undici": "7.30.1",
+    "undici": "8.12.3",
     "vite": "8.3.5"
   },
   "packageManager": "bun@1.4.4",
