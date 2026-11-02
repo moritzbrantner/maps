@@ -360,7 +360,7 @@ export function EnginePage() {
             <a href="https://www.openstreetmap.org/copyright">
               © OpenStreetMap contributors · ODbL 1.0
             </a>{" "}
-            · 2026-10-25 snapshot ·{" "}
+            · 2026-01-01 snapshot ·{" "}
             <a
               href={`https://github.com/moritzbrantner/asset-tooling/releases/download/maps-shortbread/${atlasReleaseIndex.tilesets[source === "atlas" ? 0 : 1]!.archiveRef.path}`}
             >

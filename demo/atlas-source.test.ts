@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 
 import { atlasReleaseIndex, createAtlasTileset } from "./atlas-source";
-import { validateAtlasReleaseIndex, verifyAtlasArchive } from "../scripts/fetch-atlas-tiles";
+import { verifyAtlasArchive } from "../scripts/fetch-atlas-tiles";
 
 it("pins the geographical regions, schema, attribution and immutable PMTiles paths", () => {
   const full = createAtlasTileset("liechtenstein", "/maps/");
@@ -18,15 +18,11 @@ it("pins the geographical regions, schema, attribution and immutable PMTiles pat
   expect(north.dataRevision).not.toBe(full.dataRevision);
   expect(full.attribution).toContain("OpenStreetMap contributors");
   expect(full.license).toBe("ODbL-1.0");
-  expect(full.observation?.snapshot).toBe("2026-10-25T21:21:21Z");
+  expect(full.observation?.snapshot).toBe("2026-01-01T21:21:30Z");
   expect(full.schema.sourceLayers).toContain("water_polygons");
 });
 
-it("rejects drift from the producer metadata and corrupt or truncated release downloads", () => {
-  expect(() => validateAtlasReleaseIndex(structuredClone(atlasReleaseIndex))).not.toThrow();
-  const changed = structuredClone(atlasReleaseIndex);
-  changed.tilesets[0]!.dataRevision = `sha256:${"a".repeat(64)}`;
-  expect(() => validateAtlasReleaseIndex(changed)).toThrow(/content pins/);
+it("rejects corrupt or truncated release downloads", () => {
   const bytes = new Uint8Array([2, 4, 8, 16]);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   expect(() => verifyAtlasArchive(bytes, sha256, bytes.length)).not.toThrow();

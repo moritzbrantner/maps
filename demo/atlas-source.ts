@@ -1,11 +1,11 @@
 import { validateMapsTileset, type MapsTileset } from "../src/maps-tileset";
 
-/** Exact reviewed Asset Tooling #409 output; resolved by the #270 Pages build. */
+/** Published Asset Tooling #483 output; resolved by the #270 Pages build. */
 const source = {
   provider: "Geofabrik",
-  url: "https://download.geofabrik.de/europe/liechtenstein-261025.osm.pbf",
-  sha256: "bd5cca3fdcb4e9900ad74b4c33e554750088705bd4b4deaa35c1517d7be2378b",
-  snapshot: "2026-10-25T21:21:21Z",
+  url: "https://download.geofabrik.de/europe/liechtenstein-260101.osm.pbf",
+  sha256: "38c281920dcf599754a1e58f399b88c35d18b40dff932bd4dd926aa1a79cda76",
+  snapshot: "2026-01-01T21:21:30Z",
   license: "ODbL-1.0",
   licenseUrl: "https://www.openstreetmap.org/copyright",
 } as const;
@@ -19,18 +19,18 @@ const provenance =
 const regions = [
   {
     sourceId: "maps-liechtenstein",
-    archiveSha256: "749bc3ac9a430b41fb7613686b7898b43ed11d8e8321624559ea591f49cc8fdf",
-    archiveBytes: 2_780_045,
+    archiveSha256: "a1741ca69459439c72efc66b8c3ceef3447a70ba1a25537c4b29f8c5e4eb00f4",
+    archiveBytes: 2_730_127,
     archiveName:
-      "liechtenstein-749bc3ac9a430b41fb7613686b7898b43ed11d8e8321624559ea591f49cc8fdf.pmtiles",
+      "liechtenstein-a1741ca69459439c72efc66b8c3ceef3447a70ba1a25537c4b29f8c5e4eb00f4.pmtiles",
     bounds: [9.47, 47.04, 9.64, 47.28],
   },
   {
     sourceId: "maps-liechtenstein-north",
-    archiveSha256: "7761a554051b9d8a77cf9c1f790b03a4e66a15fbe91dde46c488a10e0f95bf3e",
-    archiveBytes: 1_366_814,
+    archiveSha256: "286216eaf8884d4ccf4a1b9e9fdc5e0f2fe14291ca9585e9416011baaf4dee92",
+    archiveBytes: 1_340_459,
     archiveName:
-      "liechtenstein-north-7761a554051b9d8a77cf9c1f790b03a4e66a15fbe91dde46c488a10e0f95bf3e.pmtiles",
+      "liechtenstein-north-286216eaf8884d4ccf4a1b9e9fdc5e0f2fe14291ca9585e9416011baaf4dee92.pmtiles",
     bounds: [9.47, 47.16, 9.64, 47.28],
   },
 ] as const;

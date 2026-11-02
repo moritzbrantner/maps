@@ -112,12 +112,11 @@ Regeneration reproduced the committed archive SHA-256
 ## Published geographic Atlas region (#270)
 
 The Pages root uses `demo/atlas-source.ts` to select the reviewed Geofabrik
-Liechtenstein October 25, 2026 OSM extract (full or northern variant), while the
+Liechtenstein January 1, 2026 OSM extract (full or northern variant), while the
 synthetic PMTiles and XYZ fixtures remain available in the source selector.
 Asset Tooling owns the Planetiler generation and reviewable source manifest:
 the `maps-shortbread` release contains two digest-named archives, not a mutable
-URL masquerading as a source revision. `scripts/fetch-atlas-tiles.ts` validates
-its complete metadata against the checked-in consumer pin, verifies each archive's
+URL masquerading as a source revision. `scripts/fetch-atlas-tiles.ts` uses the checked-in reviewed release metadata, verifies each archive's
 SHA-256 and byte length, and copies it into the Pages build. The browser then
 requests **same-origin HTTP 206 byte ranges** via the existing Rust/PMTiles
 source lifecycle, decoder and Canvas/WebGPU renderers. No OSM hosted tile

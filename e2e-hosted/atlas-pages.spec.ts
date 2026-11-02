@@ -1,9 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const fullArchive =
-  "liechtenstein-749bc3ac9a430b41fb7613686b7898b43ed11d8e8321624559ea591f49cc8fdf.pmtiles";
+  "liechtenstein-a1741ca69459439c72efc66b8c3ceef3447a70ba1a25537c4b29f8c5e4eb00f4.pmtiles";
 const northArchive =
-  "liechtenstein-north-7761a554051b9d8a77cf9c1f790b03a4e66a15fbe91dde46c488a10e0f95bf3e.pmtiles";
+  "liechtenstein-north-286216eaf8884d4ccf4a1b9e9fdc5e0f2fe14291ca9585e9416011baaf4dee92.pmtiles";
 
 async function expectGeographicTiles(page: Page, sourceId: string): Promise<void> {
   const surface = page.locator('canvas[data-flat-runtime="maps"]');
@@ -19,6 +19,38 @@ async function expectGeographicTiles(page: Page, sourceId: string): Promise<void
       );
     })
     .toBeGreaterThan(0);
+}
+
+// Inspect presented map pixels, rather than assuming that loaded tiles rendered.
+async function mapColors(page: Page): Promise<number> {
+  const screenshot = await page.screenshot();
+  return page.evaluate(async (encoded) => {
+    const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+    context.drawImage(bitmap, 0, 0);
+    const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    const bounds = document
+      .querySelector<HTMLElement>('[data-map-runtime="maps"]')!
+      .getBoundingClientRect();
+    const colors = new Set<string>();
+    for (let row = 0; row < 14; row++) {
+      for (let column = 0; column < 16; column++) {
+        const x = Math.floor(
+          ((bounds.left + bounds.width * (0.54 + ((column + 0.5) * 0.44) / 16)) * bitmap.width) /
+            innerWidth,
+        );
+        const y = Math.floor(
+          ((bounds.top + bounds.height * (0.14 + ((row + 0.5) * 0.72) / 14)) * bitmap.height) /
+            innerHeight,
+        );
+        const i = (y * bitmap.width + x) * 4;
+        colors.add(`${data[i]},${data[i + 1]},${data[i + 2]}`);
+      }
+    }
+    bitmap.close();
+    return colors.size;
+  }, screenshot.toString("base64"));
 }
 
 test("published Atlas is geographic, ranged, attributed and independent of tile services", async ({
@@ -41,24 +73,44 @@ test("published Atlas is geographic, ranged, attributed and independent of tile 
   });
   await page.goto("/maps/?e2e=1");
   await expectGeographicTiles(page, "maps-liechtenstein");
+  await expect.poll(() => mapColors(page)).toBeGreaterThan(3);
+  await test.info().attach("atlas-rendered-map.png", {
+    contentType: "image/png",
+    body: await page.screenshot(),
+  });
   expect(ranges.length).toBeGreaterThan(0);
   expect(
     ranges.every(
       (response) =>
-        response.status === 206 && /^bytes \d+-\d+\/2780045$/.test(response.contentRange ?? ""),
+        response.status === 206 && /^bytes \d+-\d+\/2730127$/.test(response.contentRange ?? ""),
     ),
   ).toBe(true);
   expect(ranges.some((response) => response.range === "bytes=0-16383")).toBe(true);
   expect(external).toEqual([]);
   await expect(page.getByText("© OpenStreetMap contributors · ODbL 1.0")).toBeVisible();
-  await expect(page.getByText("2026-10-25 snapshot", { exact: false })).toBeVisible();
+  await expect(page.getByText("2026-01-01 snapshot", { exact: false })).toBeVisible();
 
   const partial = await request.get(`/maps/tilesets/${fullArchive}`, {
     headers: { Range: "bytes=0-16383" },
   });
   expect(partial.status()).toBe(206);
-  expect(partial.headers()["content-range"]).toBe(`bytes 0-16383/2780045`);
+  expect(partial.headers()["content-range"]).toBe(`bytes 0-16383/2730127`);
   expect((await partial.body()).length).toBe(16_384);
+});
+
+test("a corrupt real archive fails visibly without a provider fallback", async ({ page }) => {
+  await page.route(`**/tilesets/${fullArchive}`, (route) =>
+    route.fulfill({
+      status: 206,
+      headers: { "Content-Range": "bytes 0-16383/2730127" },
+      body: Buffer.alloc(16_384),
+    }),
+  );
+  await page.goto("/maps/?source=atlas&scene=liechtenstein&e2e=1");
+  const surface = page.locator('canvas[data-flat-runtime="maps"]');
+  await expect(surface).toHaveAttribute("data-map-source-state", "error", { timeout: 30_000 });
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(surface).toHaveAttribute("data-map-source-id", "maps-liechtenstein");
 });
 
 test("real source A/B switches keep camera and overlays; out-of-coverage is explicit", async ({

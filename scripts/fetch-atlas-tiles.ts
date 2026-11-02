@@ -4,20 +4,11 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 
 import { atlasReleaseIndex } from "../demo/atlas-source.ts";
 
 const RELEASE_URL =
   "https://github.com/moritzbrantner/asset-tooling/releases/download/maps-shortbread";
-
-export function validateAtlasReleaseIndex(value: unknown): void {
-  if (!value || typeof value !== "object" || !isDeepStrictEqual(value, atlasReleaseIndex)) {
-    throw new Error(
-      "Asset Tooling Maps release metadata differs from the reviewed #270 content pins",
-    );
-  }
-}
 
 export function verifyAtlasArchive(bytes: Uint8Array, sha256: string, length: number): void {
   if (bytes.byteLength !== length) {
@@ -40,10 +31,8 @@ async function download(name: string): Promise<Uint8Array> {
 export async function fetchAtlasTiles(
   outDir: string = fileURLToPath(new URL("../public/tilesets", import.meta.url)),
 ): Promise<void> {
-  // A rolling release URL is used solely to retrieve bytes. Its *content* must
-  // match this consumer's immutable pins, including the full metadata contract.
-  const index = JSON.parse(Buffer.from(await download("maps-shortbread.json")).toString("utf8"));
-  validateAtlasReleaseIndex(index);
+  // The checked-in index records the reviewed release metadata. The rolling
+  // manifest may move, but digest-named archives remain addressable.
   await mkdir(outDir, { recursive: true });
   for (const tileset of atlasReleaseIndex.tilesets) {
     const { path: name, sha256, bytes: length } = tileset.archiveRef;
