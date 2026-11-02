@@ -463,6 +463,52 @@ describe("Map surface subscriptions by update frequency", () => {
 });
 
 describe("plain browser host lifecycle", () => {
+  it("presents setViewState on rAF rather than synchronously, with immediate read flushing", async () => {
+    const { createMapsBrowserRuntime } = await import("./maps-browser-runtime");
+    const onViewStateChange = vi.fn();
+    const host = createMapsBrowserRuntime(
+      document.createElement("canvas"),
+      document.createElement("canvas"),
+      {
+        mapStyle: { tiles: false },
+        viewState: { center: [0, 0], zoom: 4 },
+        onViewStateChange,
+      },
+    );
+    await host.ready;
+    flushAnimationFrame();
+    const controller = host.controller!;
+    vi.mocked(runtime.setViewState).mockClear();
+    vi.mocked(runtime.frame).mockClear();
+    vi.mocked(renderer.render).mockClear();
+
+    controller.setViewState({ center: [1, 2], zoom: 5 });
+    controller.setViewState({ center: [3, 4], zoom: 6 });
+    expect(vi.mocked(runtime.setViewState)).not.toHaveBeenCalled();
+    expect(vi.mocked(runtime.frame)).not.toHaveBeenCalled();
+    expect(vi.mocked(renderer.render)).not.toHaveBeenCalled();
+    expect(frames.size).toBe(1);
+
+    flushAnimationFrame();
+    expect(vi.mocked(runtime.setViewState)).toHaveBeenCalledExactlyOnceWith({
+      center: [3, 4],
+      zoom: 6,
+    });
+    expect(vi.mocked(runtime.frame)).toHaveBeenCalledOnce();
+    expect(onViewStateChange).toHaveBeenCalledOnce();
+
+    controller.setViewState({ center: [5, 6], zoom: 7 });
+    expect(vi.mocked(runtime.setViewState)).toHaveBeenCalledTimes(1);
+    controller.flushCameraFrame();
+    expect(vi.mocked(runtime.setViewState)).toHaveBeenLastCalledWith({
+      center: [5, 6],
+      zoom: 7,
+    });
+    expect(vi.mocked(runtime.setViewState)).toHaveBeenCalledTimes(2);
+    expect(frames.size).toBe(0);
+    host.dispose();
+  });
+
   it("applies camera and viewport changes made while the GPU is initializing", async () => {
     const { createMapsBrowserRuntime } = await import("./maps-browser-runtime");
     let finish!: (renderer: MapsWgpuBaseMapRenderer) => void;
