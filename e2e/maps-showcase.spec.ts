@@ -14,10 +14,10 @@ test("Pages opens the first-party engine on local PMTiles, not the legacy showca
     }
   });
 
-  await page.goto("/?e2e=1");
+  await page.goto("/?source=pmtiles&scene=points&e2e=1");
 
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
-  await expect(page.getByText("Synthetic CC0 vector tiles", { exact: false })).toBeVisible();
+  await expect(page.getByText("Synthetic local vector source", { exact: false })).toBeVisible();
   await expect(page.locator('[data-map-runtime="maps"]')).toHaveCount(1);
   await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
     "data-map-source-id",
@@ -36,7 +36,7 @@ test("Pages opens the first-party engine on local PMTiles, not the legacy showca
 test("first-party source switch preserves Map View, camera and native clustering @smoke", async ({
   page,
 }) => {
-  await page.goto("/?e2e=1");
+  await page.goto("/?source=pmtiles&scene=points&e2e=1");
   const surface = page.locator('canvas[data-flat-runtime="maps"]');
   await expect(surface).toHaveAttribute("data-map-source-state", "ready");
   const map = page.locator('[data-map-runtime="maps"]');
@@ -66,7 +66,7 @@ test("invalid first-party archive surfaces the error without external fallback @
   await page.route("**/tilesets/showcase-pmtiles-v1.pmtiles", (route) =>
     route.fulfill({ status: 200, body: "incorrect range response" }),
   );
-  await page.goto("/?e2e=1");
+  await page.goto("/?source=pmtiles&scene=points&e2e=1");
   await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
     "data-map-source-state",
     "error",
