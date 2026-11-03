@@ -87,6 +87,9 @@ const TIMING_ROUNDS = process.env.CI ? 1 : 2;
 const TIMING_RETRIES = process.env.CI ? 0 : 2;
 /** Raster crossfades (300 ms in both runtimes) and label placement settle within this. */
 const SETTLE_MS = 800;
+/** MapLibre defers a first ambiguous wheel event for 40 ms; never send tick two on that boundary.
+ * This remains inside its 400 ms multi-notch gesture window. (#365) */
+const WHEEL_TICK_GAP_MS = 100;
 
 if (args.includes("--list")) {
   for (const scenario of scenarios) console.log(`${scenario.name}\t${scenario.capability}`);
@@ -144,7 +147,7 @@ console.log(
   }`,
 );
 console.log(
-  `${"scenario".padEnd(24)}${"FLIP mean".padStart(10)}${"FLIP p99".padStart(10)}  ${"picks".padEnd(8)}${"maps ms".padStart(9)}${"ml ms".padStart(9)}${"ratio".padStart(7)}  result`,
+  `${"scenario".padEnd(24)}${"FLIP mean".padStart(10)}${"FLIP p99".padStart(10)}  ${"input".padEnd(8)}${"maps ms".padStart(9)}${"ml ms".padStart(9)}${"ratio".padStart(7)}  result`,
 );
 
 let failed = false;
@@ -318,6 +321,10 @@ type StepResult = {
   /** Camera after a pan/wheel/rotate step on a rotated or pitched scenario. */
   view: { center: [number, number]; zoom: number; bearing: number; pitch: number } | null;
   zoom: number | null;
+  /** Ordered events since the start of this step, for failures on the same source SHA. */
+  events: Array<{ kind: string; layer: string; id: string | null; source: string }>;
+  inputs: Array<{ kind: string; x: number; y: number; timeMs: number; deltaY: number | null }>;
+  readiness: Record<string, unknown>;
 };
 
 /**
@@ -477,6 +484,7 @@ async function settle(page: Page, runtime: Runtime) {
   let previous = "";
   let stableSince = Date.now();
   const deadline = Date.now() + 10_000;
+  let settled = false;
   while (Date.now() < deadline) {
     const state = await page.evaluate((maps) => {
       const view = window.__oracle.viewState();
@@ -492,10 +500,12 @@ async function settle(page: Page, runtime: Runtime) {
       previous = state;
       stableSince = Date.now();
     } else if (!JSON.parse(state).busy && Date.now() - stableSince >= 250) {
+      settled = true;
       break;
     }
     await page.waitForTimeout(50);
   }
+  if (!settled) throw new Error(`${runtime}: map did not become idle (last state ${previous})`);
   await page.waitForTimeout(SETTLE_MS);
   await page.evaluate(
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
@@ -509,6 +519,10 @@ async function perform(
   index: number,
   picks: PickPoints,
 ): Promise<StepResult> {
+  const eventOffsets = await page.evaluate(() => ({
+    events: window.__oracle.events.length,
+    inputs: window.__oracle.inputs.length,
+  }));
   const box = (await page.locator("#map").boundingBox())!;
   const center = { x: box.x + scenario.size.width / 2, y: box.y + scenario.size.height / 2 };
   const runtime = new URL(page.url()).searchParams.get("runtime") as Runtime;
@@ -537,18 +551,32 @@ async function perform(
     await page.mouse.move(center.x + step.at[0], center.y + step.at[1]);
     for (let tick = 0; tick < step.ticks; tick++) {
       await page.mouse.wheel(0, step.deltaY);
-      await page.waitForTimeout(40);
+      await page.waitForTimeout(WHEEL_TICK_GAP_MS);
     }
   }
   await settle(page, runtime);
-  const state = await page.evaluate(() => {
+  const state = await page.evaluate((offsets) => {
     const hovered: Record<string, string | null> = {};
     const selected: Record<string, string | null> = {};
     for (const event of window.__oracle.events) {
       (event.kind === "hover" ? hovered : selected)[event.layer] = event.id;
     }
-    return { hovered, selected, view: window.__oracle.viewState() };
-  });
+    const map = window.__oracle.maplibre;
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-flat-runtime="maps"]');
+    return {
+      events: window.__oracle.events.slice(offsets.events),
+      inputs: window.__oracle.inputs.slice(offsets.inputs),
+      hovered,
+      readiness: map
+        ? { loaded: map.loaded(), tilesLoaded: map.areTilesLoaded(), moving: map.isMoving() }
+        : {
+            sourceState: canvas?.dataset.mapSourceState ?? null,
+            pendingTiles: canvas?.dataset.mapBasePendingTiles ?? null,
+          },
+      selected,
+      view: window.__oracle.viewState(),
+    };
+  }, eventOffsets);
   const moved = step.kind !== "hover" && step.kind !== "click";
   return {
     bounds: moved && northUp && state.view ? boundsOf(state.view, scenario.size) : null,
@@ -566,6 +594,9 @@ async function perform(
           }
         : null,
     zoom: state.view?.zoom ?? null,
+    events: state.events,
+    inputs: state.inputs,
+    readiness: state.readiness,
   };
 }
 
@@ -627,10 +658,15 @@ function compareInteractions(scenario: Scenario, reference: StepResult[], candid
         : boundsPx <= BOUNDS_TOLERANCE_PX;
     return {
       bounds: { maplibre: expected?.bounds ?? null, maps: actual?.bounds ?? null, px: boundsPx },
+      boundsOk: boundsSame,
+      events: { maplibre: expected?.events ?? [], maps: actual?.events ?? [] },
       view: { maplibre: expected?.view ?? null, maps: actual?.view ?? null },
       hovered: { maplibre: expected?.hovered ?? null, maps: actual?.hovered ?? null },
+      inputs: { maplibre: expected?.inputs ?? [], maps: actual?.inputs ?? [] },
       label: step.label,
       ok: picksSame && boundsSame,
+      picksOk: picksSame,
+      readiness: { maplibre: expected?.readiness ?? null, maps: actual?.readiness ?? null },
       selected: { maplibre: expected?.selected ?? null, maps: actual?.selected ?? null },
     };
   });

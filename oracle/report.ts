@@ -42,9 +42,14 @@ type Scenario = {
     steps: Array<{
       label: string;
       ok: boolean;
+      picksOk: boolean;
+      boundsOk: boolean;
       hovered: { maplibre: unknown; maps: unknown };
       selected: { maplibre: unknown; maps: unknown };
       bounds: { px: number | null };
+      events: { maplibre: unknown; maps: unknown };
+      inputs: { maplibre: unknown; maps: unknown };
+      readiness: { maplibre: unknown; maps: unknown };
     }>;
   };
   knownGaps: Array<{ gate: string; issue: number; reason: string }>;
@@ -151,14 +156,15 @@ export function renderReport(report: Report) {
     <input type="range" min="0" max="100" value="50" aria-label="Swipe between MapLibre (left) and Maps (right)" />
   </div>
   <table class="steps">
-    <thead><tr><th>step</th><th>picked (MapLibre)</th><th>picked (Maps)</th><th>bounds Δ px</th></tr></thead>
+    <thead><tr><th>step</th><th>picked (MapLibre)</th><th>picked (Maps)</th><th>bounds Δ px</th><th>gate</th></tr></thead>
     <tbody>${s.interaction.steps
       .map(
         (step) =>
-          `<tr class="${step.ok ? "pass" : "fail"}"><td>${escape(step.label)}</td><td>hover ${escape(ids(step.hovered.maplibre))}<br />select ${escape(ids(step.selected.maplibre))}</td><td>hover ${escape(ids(step.hovered.maps))}<br />select ${escape(ids(step.selected.maps))}</td><td>${num(step.bounds.px, 2)}</td></tr>`,
+          `<tr class="${step.ok ? "pass" : "fail"}"><td>${escape(step.label)}</td><td>hover ${escape(ids(step.hovered.maplibre))}<br />select ${escape(ids(step.selected.maplibre))}</td><td>hover ${escape(ids(step.hovered.maps))}<br />select ${escape(ids(step.selected.maps))}</td><td>${num(step.bounds.px, 2)}</td><td>pick ${step.picksOk ? "same" : "DIFFER"}; camera ${step.boundsOk ? "same" : "DIFFER"}</td></tr>`,
       )
       .join("")}</tbody>
   </table>
+  ${s.interaction.steps.some((step) => !step.ok) ? `<details><summary>Failed input steps: event ordering and readiness</summary><pre>${escape(JSON.stringify(s.interaction.steps.filter((step) => !step.ok).map((step) => ({ label: step.label, inputs: step.inputs, pickEvents: step.events, readiness: step.readiness })), null, 2))}</pre></details>` : ""}
   ${s.knownGaps.map((gap) => `<p class="gap">Known gap (${escape(gap.gate)}): ${escape(gap.reason)} — <a href="${ISSUES}${gap.issue}">#${gap.issue}</a></p>`).join("")}
   ${s.time.validity === "not-run" ? "" : `<details><summary>Raw timing rounds (${escape(s.time.validity)})</summary><pre>${escape(JSON.stringify(s.time, null, 2))}</pre></details>`}
   ${s.errors.maps ? `<p class="gap">Maps page error: ${escape(s.errors.maps)}</p>` : ""}
