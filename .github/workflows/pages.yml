@@ -13,7 +13,9 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages' }}
-  cancel-in-progress: false
+  # Superseded previews must not consume another long browser-runner slot.
+  # Main deployments still complete in order to preserve published evidence.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-example:
@@ -25,7 +27,9 @@ jobs:
     uses: moritzbrantner/reusable-workflows/.github/workflows/build-artifact.yml@680d4f7bda61361b10865d8835bc7ef69a24061b
     with:
       source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      artifact_key: maps-engine-pages-v1
+      # PR previews omit publication-only measurements. Distinct receipt keys
+      # prevent a PR artifact from being reused for a same-SHA main deployment.
+      artifact_key: ${{ github.event_name == 'pull_request' && 'maps-engine-pages-pr-v2' || 'maps-engine-pages-publish-v2' }}
       rust_toolchain: stable
       rust_targets: wasm32-unknown-unknown
       bun_version: latest
@@ -37,8 +41,10 @@ jobs:
         bun install --frozen-lockfile
         bunx playwright install --with-deps chromium
         bash scripts/install-wasm-bindgen-ci.sh
-        python3 -m venv "$RUNNER_TEMP/flip"
-        "$RUNNER_TEMP/flip/bin/pip" install --quiet flip-evaluator numpy pillow
+        if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+          python3 -m venv "$RUNNER_TEMP/flip"
+          "$RUNNER_TEMP/flip/bin/pip" install --quiet flip-evaluator numpy pillow
+        fi
         rm -rf .github-pages-template
         git init .github-pages-template
         git -C .github-pages-template remote add origin https://github.com/moritzbrantner/github-pages-template.git
@@ -63,9 +69,12 @@ jobs:
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
         # Vite now builds /benchmarks/ as a distinct reference lab entrypoint.
         # Copying the first-party home page would erase the benchmark route.
-        # MapLibre oracle report (#306). CI blocks on the gate; the report publishes either way.
-        if ! CI=1 ORACLE_PYTHON="$RUNNER_TEMP/flip/bin/python" bun run oracle -- --out dist/oracle; then
-          echo "::warning::MapLibre oracle gate failed; publishing its report anyway."
+        # CI owns the required MapLibre oracle gate on PRs. Publish the report
+        # only with deployable builds, avoiding a duplicate 7-9 minute PR run.
+        if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+          if ! CI=1 ORACLE_PYTHON="$RUNNER_TEMP/flip/bin/python" bun run oracle -- --out dist/oracle; then
+            echo "::warning::MapLibre oracle gate failed; publishing its report anyway."
+          fi
         fi
         bun run bench:engine:interaction -- --output dist/evidence/engine-interaction.json
         # Capture exact parent/candidate kernel harnesses. The profiler owns
@@ -86,15 +95,21 @@ jobs:
           rm -f dist/evidence/point-journey.json
         fi
         node .github-pages-template/bin/github-pages-template.mjs build --config ./pages.config.json --out ./dist --augment
-        # Descriptive interaction benchmarks (SwiftShader, shared runner), appended to the
-        # history published at /benchmarks/history.json. A failed run republishes the
-        # previous history instead of blocking the deploy; unreadable history fails it.
+        # The published history contains main-only descriptive measurements.
+        # PR previews display that existing history without inventing a new
+        # candidate observation or repeating a 9-14 minute browser benchmark.
+        # A failed main benchmark republishes previous history; a failed history
+        # fetch remains a real error rather than a fabricated empty report.
         history_url="https://moritzbrantner.github.io/${{ github.event.repository.name }}/benchmarks/history.json"
         mkdir -p dist/benchmarks
-        if CI=1 node scripts/benchmark-interactions.mjs --engines=maps-wgpu,maps-canvas2d,maplibre --basemaps=vector,raster --repeats=2 --json=benchmark-results/interactions.json; then
+        if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && CI=1 node scripts/benchmark-interactions.mjs --engines=maps-wgpu,maps-canvas2d,maplibre --basemaps=vector,raster --repeats=2 --json=benchmark-results/interactions.json; then
           node scripts/build-benchmark-history.mjs --run=benchmark-results/interactions.json --previous="$history_url" --out=dist/benchmarks/history.json
         else
-          echo "::warning::Interaction benchmark failed; republishing the previous benchmark history."
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "PR preview: retaining published main benchmark history without new measurements."
+          else
+            echo "::warning::Interaction benchmark failed; republishing the previous benchmark history."
+          fi
           # Republish the previous history; only a missing history (first run) may be absent.
           status=$(curl -sSL -o dist/benchmarks/history.json -w "%{http_code}" "$history_url" || echo 000)
           case "$status" in
