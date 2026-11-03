@@ -35,6 +35,7 @@
         "geojson-vt": "5.0.4",
         "jsdom": "30.1.3",
         "leaflet": "1.9.4",
+        "mobile-analysis": "git+https://github.com/moritzbrantner/mobile-analysis.git#67da1e9ecb4dea5e56b23bfe4b89ceca8577495d",
         "oxfmt": "0.74.0",
         "oxlint": "1.89.0",
         "playwright": "1.64.1",
@@ -47,6 +48,7 @@
         "vite": "8.3.5",
         "vitest": "5.0.5",
         "vt-pbf": "3.1.3",
+        "xstate": "5.33.3",
       },
       "peerDependencies": {
         "@moritzbrantner/timeline-editor": "^1.0.0",
@@ -63,6 +65,7 @@
     "@moritzbrantner/ui",
     "@moenarch/editor-core",
     "@moritzbrantner/timeline-editor",
+    "mobile-analysis",
   ],
   "overrides": {
     "brace-expansion": "5.0.12",
@@ -755,6 +758,8 @@
 
     "mlly": ["mlly@1.8.2", "", { "dependencies": { "acorn": "^8.16.0", "pathe": "^2.0.3", "pkg-types": "^1.3.1", "ufo": "^1.6.3" } }, "sha512-d+ObxMQFmbt10sretNDytwt85VrbkhhUA/JBGm1MPaWJ65Cl4wOgLaB1NYvJSZ0Ef03MMEU/0xpPMXUIQ29UfA=="],
 
+    "mobile-analysis": ["mobile-analysis@github:moritzbrantner/mobile-analysis#67da1e9", { "dependencies": { "playwright": "1.64.1", "xstate": "5.33.3" }, "hasInstallScript": true }, "moritzbrantner-mobile-analysis-67da1e9"],
+
     "motion": ["motion@13.5.1", "", { "dependencies": { "framer-motion": "13.5.1", "tslib": "^2.4.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" }, "optionalPeers": ["react", "react-dom"] }, "sha512-eV9SUem6KnzEa9+eT+dVBeDlhy5TTdn09YWR1WhUsKoZCJPw/n4TcYhjbxq2Gy5PTwDr//4H3r5vxkcZnNnO1w=="],
 
     "motion-dom": ["motion-dom@13.5.1", "", { "dependencies": { "motion-utils": "13.5.0" } }, "sha512-/7CVCD20Mz1KobktorpdgvowV0V41J7UxqE+qWS3GkSJqrRr5ft+2RloOYtEKv+wvBp3JaSFBclhxt4ja8ovHg=="],
@@ -938,6 +943,8 @@
     "xml-name-validator": ["xml-name-validator@5.0.0", "", {}, "sha512-EvGK8EJ3DhaHfbRlETOWAS5pO9MZITeauHKJyb8wyajUfQUenkIg2MvLDTZ4T/TgIcm3HU0TFBgWWboAZ30UHg=="],
 
     "xmlchars": ["xmlchars@2.2.0", "", {}, "sha512-JZnDKK8B0RCDw84FNdDAIpZK+JuJw+s7Lz8nksI7SIuU3UXJJslUthsi+uWBUYOwPFwW7W7PRLRfUKpxjtjFCw=="],
+
+    "xstate": ["xstate@5.33.3", "", {}, "sha512-AnDRjS/GyKHmbA1PyhVCYBqYsA7EGe3KGgeD0ht3NFsXzoz7leX/HQDFX9QlHFJ/ltLHPsgChJYwPzRvB/0b4g=="],
 
     "@maplibre/mlt/@mapbox/point-geometry": ["@mapbox/point-geometry@1.1.0", "", {}, "sha512-YGcBz1cg4ATXDCM/71L9xveh4dynfGmcLDqufR+nQQy3fKwsAZsWd/x4621/6uJaeB9mwOHE6hPeDgXz9uViUQ=="],
 
