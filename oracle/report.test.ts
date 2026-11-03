@@ -33,7 +33,15 @@ describe("oracle interaction evidence", () => {
       name: "source-location",
       origin: "oracle",
       passed: false,
-      time: { validity: "not-run", ratio: null, mapsMs: null, maplibreMs: null },
+      time: {
+        validity: "not-run" as const,
+        ratio: null,
+        mapsMs: null,
+        maplibreMs: null,
+        rounds: { maplibre: [], maps: [] },
+        attempts: [],
+        invalidReasons: [],
+      },
       unsupported: null,
       verdict: "interaction FAILS",
     };
