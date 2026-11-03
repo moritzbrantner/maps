@@ -10,6 +10,18 @@ Maps uses shared tooling instead of growing a private performance/evaluation pla
 - **Moonlight** owns baseline/candidate comparison policy and verdicts.
 - **reusable-workflows** may transport/reuse exact build and evidence artifacts; it does not reinterpret evidence.
 
+Maps CI and Pages consume the same source-addressed Linux runtime-profiler binary
+from the upstream `Publish Score History` run using
+`scripts/install-runtime-profiler-ci.sh`. The publisher has already built and
+smoke-tested these bytes; the consumer downloads the GitHub Actions artifact
+with the workflow token, installs it, and checks `--version` and `detect`.
+The Pages flow still fetches that exact upstream source commit because it uses
+the profiler's score-history helper script; it no longer rebuilds the CLI.
+The source/run pin is only advanced deliberately when adopting a new profiler,
+not by a recurring checksum-refresh job. Upstream Actions artifacts expire in
+90 days, so a later source-addressed publication or release is needed for a
+long-lived consumer pin.
+
 ## Required flow
 
 ```text
