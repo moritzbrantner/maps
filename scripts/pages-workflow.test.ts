@@ -8,6 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(resolve(root, ".github/workflows/pages.yml"), "utf8");
 
 test("PR preview and deployment builds cannot exchange Pages artifacts", () => {
+  assert.match(workflow, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
   assert.match(
     workflow,
     /artifact_key: \$\{\{ github\.event_name == 'pull_request' && 'maps-engine-pages-pr-v2' \|\| 'maps-engine-pages-publish-v2' \}\}/,

@@ -13,7 +13,9 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages' }}
-  cancel-in-progress: false
+  # Superseded previews must not consume another long browser-runner slot.
+  # Main deployments still complete in order to preserve published evidence.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-example:
