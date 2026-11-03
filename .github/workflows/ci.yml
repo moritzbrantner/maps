@@ -365,8 +365,6 @@ jobs:
           rm -rf dist
           cp -R .artifacts/maps-browser-package/dist ./dist
       - name: Consume precompiled pinned runtime-profiler
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           bash scripts/install-runtime-profiler-ci.sh "$RUNNER_TEMP/maps-profiler/bin/runtime-profiler"
           echo "$RUNNER_TEMP/maps-profiler/bin" >> "$GITHUB_PATH"

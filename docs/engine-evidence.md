@@ -13,14 +13,15 @@ Maps uses shared tooling instead of growing a private performance/evaluation pla
 Maps CI and Pages consume the same source-addressed Linux runtime-profiler binary
 from the upstream `Publish Score History` run using
 `scripts/install-runtime-profiler-ci.sh`. The publisher has already built and
-smoke-tested these bytes; the consumer downloads the GitHub Actions artifact
-with the workflow token, installs it, and checks `--version` and `detect`.
+smoke-tested these bytes; the consumer downloads the public, source-pinned
+release asset **without a workflow token**, installs it, and checks `--version`
+and `detect`.
 The Pages flow still fetches that exact upstream source commit because it uses
 the profiler's score-history helper script; it no longer rebuilds the CLI.
 The source/run pin is only advanced deliberately when adopting a new profiler,
-not by a recurring checksum-refresh job. Upstream Actions artifacts expire in
-90 days, so a later source-addressed publication or release is needed for a
-long-lived consumer pin.
+not by a recurring checksum-refresh job. The producer's Actions artifact also
+retains a 90-day receipt; the separately published release asset is the durable
+consumer endpoint.
 
 ## Required flow
 

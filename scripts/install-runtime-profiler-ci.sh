@@ -6,27 +6,24 @@ if [[ $# -ne 1 || -z "$1" ]]; then
   exit 2
 fi
 
-# The public, GitHub-produced artifact is tied to an exact validated source
-# commit and history workflow run. GitHub supplies its archive integrity digest.
-producer_repo=moritzbrantner/runtime-profiler
-producer_run_id=41738722345
-producer_source_sha=6211c8470db3a3b616d8e107c77f7fd347ae7cb6
-artifact_name="runtime-profiler-linux-x86_64-$producer_source_sha"
+# The producer's public prerelease retains immutable source-addressed assets.
+# Reusable workflow setup commands have no GitHub token; never introduce one.
+producer_source_sha=6d2c92edfc03456cde3d99d2aa6f4be5e008ecc4
+download_url="https://github.com/moritzbrantner/runtime-profiler/releases/download/cli-artifacts/runtime-profiler-linux-x86_64-$producer_source_sha"
 
-if [[ -z "${GH_TOKEN:-}" ]] || ! command -v gh >/dev/null 2>&1; then
-  printf 'gh and GH_TOKEN are required to consume the trusted publisher artifact\n' >&2
+if ! command -v curl >/dev/null 2>&1; then
+  printf 'curl is required to consume the trusted public publisher asset\n' >&2
   exit 127
 fi
 
 download="$(mktemp -d "${RUNNER_TEMP:-/tmp}/maps-profiler-download.XXXXXXXX")"
 trap 'rm -rf -- "$download"' EXIT
-gh run download "$producer_run_id" \
-  --repo "$producer_repo" \
-  --name "$artifact_name" \
-  --dir "$download"
+curl --fail --location --silent --show-error --retry 3 --retry-connrefused \
+  --proto '=https' --proto-redir '=https' \
+  --output "$download/runtime-profiler" "$download_url"
 
 if [[ ! -f "$download/runtime-profiler" ]]; then
-  printf 'runtime-profiler artifact did not contain the expected Linux CLI\n' >&2
+  printf 'runtime-profiler release asset was unavailable or empty\n' >&2
   exit 1
 fi
 install -D -m 755 "$download/runtime-profiler" "$1"
