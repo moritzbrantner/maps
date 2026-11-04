@@ -36,6 +36,56 @@ fn clusters_points_and_sums_maps_owned_metrics() {
 }
 
 #[test]
+fn formats_cluster_labels_from_exact_point_counts() {
+    let points = normalize_map_points(
+        (0..12_004)
+            .map(|index| {
+                let (latitude, longitude) = if index < 7_969 {
+                    (52.52, 13.405)
+                } else {
+                    (48.8566, 2.3522)
+                };
+                MapPoint::new(latitude, longitude).with_id(index.to_string())
+            })
+            .collect::<Vec<_>>(),
+    );
+    let mut index = PointAggregationIndex::new(points, PointAggregationOptions::default())
+        .expect("aggregation index should build");
+
+    let whole_cluster = index
+        .get_viewport_aggregation(ViewportAggregationQuery {
+            bounds: [-180.0, -85.0, 180.0, 85.0],
+            zoom: 0.0,
+        })
+        .expect("viewport should aggregate")
+        .features
+        .into_iter()
+        .find_map(|feature| match feature {
+            AggregatedMapFeature::Cluster(cluster) => Some(cluster),
+            AggregatedMapFeature::Point(_) => None,
+        })
+        .expect("low zoom should return one cluster");
+    assert_eq!(whole_cluster.point_count, 12_004);
+    assert_eq!(whole_cluster.point_count_abbreviated, "12.004k");
+
+    let separate_clusters = index
+        .get_viewport_aggregation(ViewportAggregationQuery {
+            bounds: [-180.0, -85.0, 180.0, 85.0],
+            zoom: 4.0,
+        })
+        .expect("viewport should aggregate");
+    let berlin_cluster = separate_clusters
+        .features
+        .iter()
+        .find_map(|feature| match feature {
+            AggregatedMapFeature::Cluster(cluster) if cluster.point_count == 7_969 => Some(cluster),
+            _ => None,
+        })
+        .expect("high zoom should separate the Berlin cluster");
+    assert_eq!(berlin_cluster.point_count_abbreviated, "7.969k");
+}
+
+#[test]
 fn matches_javascript_supercluster_float32_cluster_centroid() {
     let points = normalize_map_points(vec![
         MapPoint::new(52.5200, 13.4050).with_id("berlin-a"),
