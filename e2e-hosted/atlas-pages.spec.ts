@@ -114,6 +114,26 @@ test("a corrupt real archive fails visibly without a provider fallback", async (
   await expect(surface).toHaveAttribute("data-map-source-id", "maps-liechtenstein");
 });
 
+test("zooming far below Atlas source zoom does not overflow the tile cover", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/maps/?source=atlas&scene=liechtenstein&e2e=1");
+  await expectGeographicTiles(page, "maps-liechtenstein");
+  const surface = page.locator('canvas[data-flat-runtime="maps"]');
+  const bounds = (await surface.boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width * 0.75, bounds.y + bounds.height * 0.5);
+  for (let step = 0; step < 5; step++) {
+    await page.mouse.wheel(0, 2_000);
+    await expect(surface).toHaveAttribute("data-map-source-id", "maps-liechtenstein");
+  }
+  await expect(page.getByText("© OpenStreetMap contributors · ODbL 1.0")).toBeVisible();
+  expect(errors).toEqual([]);
+  await page.getByRole("button", { name: "Reset view" }).click();
+  await expectGeographicTiles(page, "maps-liechtenstein");
+  await expect.poll(() => mapColors(page), { timeout: 20_000 }).toBeGreaterThan(3);
+  expect(errors).toEqual([]);
+});
+
 test("real source A/B switches keep camera and overlays; out-of-coverage is explicit", async ({
   page,
 }) => {
