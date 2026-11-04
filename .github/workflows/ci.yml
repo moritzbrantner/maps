@@ -364,8 +364,10 @@ jobs:
         run: |
           rm -rf dist
           cp -R .artifacts/maps-browser-package/dist ./dist
-      - name: Install pinned runtime-profiler
-        run: cargo install --git https://github.com/moritzbrantner/runtime-profiler.git --rev 5fa0e1b652e95003ccad11f32a4df67b96eac6f8 --locked runtime-profiler
+      - name: Consume precompiled pinned runtime-profiler
+        run: |
+          bash scripts/install-runtime-profiler-ci.sh "$RUNNER_TEMP/maps-profiler/bin/runtime-profiler"
+          echo "$RUNNER_TEMP/maps-profiler/bin" >> "$GITHUB_PATH"
       - name: Install pinned Moonlight runtime evaluator
         run: cargo install --git https://github.com/moritzbrantner/moonlight.git --rev b5803275fb62b1fee659c42a31209adca6e3da04 --locked moonlight-cli --bin moonlight-runtime-profile
       - name: Capture and evaluate runtime evidence
