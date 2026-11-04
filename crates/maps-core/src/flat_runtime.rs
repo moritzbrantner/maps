@@ -757,7 +757,10 @@ impl FlatRasterRuntime {
             raster_alignment: raster_alignment(self.camera)?,
         };
         let viewport_placements = visible_tile_placements(
-            self.camera, self.source, self.limits.max_visible_tiles, self.tileset.as_ref(),
+            self.camera,
+            self.source,
+            self.limits.max_visible_tiles,
+            self.tileset.as_ref(),
         )?;
         let visible_bounds = visible_bounds_for_camera(self.camera)?;
         let visible_tiles = viewport_placements
@@ -977,7 +980,10 @@ impl FlatRasterRuntime {
             .with_viewport(surface)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
         match visible_tile_placements(
-            surface_camera, self.source, self.limits.max_visible_tiles, self.tileset.as_ref(),
+            surface_camera,
+            self.source,
+            self.limits.max_visible_tiles,
+            self.tileset.as_ref(),
         ) {
             Ok(mut placements) => {
                 for placement in &mut placements {
@@ -1332,7 +1338,8 @@ fn visible_tile_placements(
                     .map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
                 let tile = TileId::new(
                     tile_zoom,
-                    u32::try_from(canonical_x).map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
+                    u32::try_from(canonical_x)
+                        .map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
                     u32::try_from(y).map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
                 )
                 .ok_or(FlatRasterRuntimeError::InvalidSource)?;
@@ -2422,14 +2429,20 @@ mod tests {
     #[test]
     fn regional_tileset_zoom_out_does_not_overflow_uncovered_world() {
         let camera = MapCamera::new(
-            9.53, 47.15, 4.0, 0.0, 0.0,
+            9.53,
+            47.15,
+            4.0,
+            0.0,
+            0.0,
             ViewportSize::new(1360.0, 900.0).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         let mut runtime = FlatRasterRuntime::new(
             camera,
             RasterSourceSpec::new(10, 14, 512).unwrap(),
             FlatRasterRuntimeLimits::default(),
-        ).unwrap();
+        )
+        .unwrap();
         let tileset: MapsTileset = serde_json::from_value(serde_json::json!({
             "version": 1, "sourceId": "liechtenstein", "dataRevision": "sha256:fixture",
             "format": "mvt", "schema": {"id": "shortbread", "version": "1.0", "sourceLayers": ["streets"]},
@@ -2442,7 +2455,9 @@ mod tests {
         runtime.activate_tileset(tileset).unwrap();
         for zoom in [4.0, 2.0, 0.0] {
             runtime.set_view_state(9.53, 47.15, zoom).unwrap();
-            let plan = runtime.frame_plan().expect("regional cover must stay bounded");
+            let plan = runtime
+                .frame_plan()
+                .expect("regional cover must stay bounded");
             assert!(plan.placements.len() <= DEFAULT_MAX_VISIBLE_TILES);
             assert!(plan.placements.iter().all(|p| p.tile.z == 10));
         }
