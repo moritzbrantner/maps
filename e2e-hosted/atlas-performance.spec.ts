@@ -22,11 +22,13 @@ test("capture Atlas cold load and warm regional revisit evidence", async ({ page
   const coldRequests = archiveResponses.length;
   const coldTransferredBytes = archiveResponses.reduce((sum, response) => sum + response.bytes, 0);
 
-  await page.getByRole("combobox", { name: "Camera scene" }).selectOption("north");
-  await expect(canvas).toHaveAttribute("data-map-source-state", "ready");
+  await page.getByRole("combobox", { name: "Tile source" }).selectOption("atlas-north");
+  await expect(canvas).toHaveAttribute("data-map-source-id", "maps-liechtenstein-north");
+  await expect(canvas).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
   const revisitStart = Date.now();
-  await page.getByRole("button", { name: "View covered region" }).click();
-  await expect(canvas).toHaveAttribute("data-map-source-state", "ready");
+  await page.getByRole("combobox", { name: "Tile source" }).selectOption("atlas");
+  await expect(canvas).toHaveAttribute("data-map-source-id", "maps-liechtenstein");
+  await expect(canvas).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
   await expect.poll(async () => Number(await canvas.getAttribute((await canvas.getAttribute("data-map-base-renderer")) === "wgpu" ? "data-map-vector-tiles" : "data-map-base-tiles"))).toBeGreaterThan(0);
   const warmRevisitMs = Date.now() - revisitStart;
 
