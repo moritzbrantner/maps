@@ -266,6 +266,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "geojson"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "510c094bfc76ea34d02eee00833254945b70491d79a9c0b050abed6eaa799ffb"
+dependencies = [
+ "geo-types",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tinyvec",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -437,7 +451,7 @@ name = "maps-core"
 version = "0.1.0"
 dependencies = [
  "earcut",
- "geojson",
+ "geojson 1.0.0",
  "moenarch-geo-core",
  "serde",
  "serde_json",
@@ -859,7 +873,7 @@ version = "3.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e50a9957334452435631002367eabde8cb703766e7496c1645f56c86eb13f27"
 dependencies = [
- "geojson",
+ "geojson 0.24.2",
  "serde_json",
  "thiserror",
  "twox-hash",
@@ -945,6 +959,15 @@ source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=db9a53a4aaaad28d5
 dependencies = [
  "three-d-animation",
  "three-d-core",
+]
+
+[[package]]
+name = "tinyvec"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+dependencies = [
+ "serde_core",
 ]
 
 [[package]]
