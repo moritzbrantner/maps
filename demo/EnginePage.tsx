@@ -382,7 +382,8 @@ export function EnginePage() {
 }
 
 function coverageMessage(coverage: "inside" | "outside" | "zoom"): string {
-  if (coverage === "zoom") return "Zoom in to at least level 10 for Atlas tiles.";
+  if (coverage === "zoom")
+    return "Atlas geography is available only at zoom 10–14. At this scale the regional basemap is hidden; the synthetic points are independent. Use View covered region to return to the map.";
   if (coverage === "outside")
     return "Outside this archive's coverage. No provider fallback is used.";
   return "Geographic data from Liechtenstein, with gaps outside the source bounds.";
