@@ -73,7 +73,8 @@ test("published Atlas is geographic, ranged, attributed and independent of tile 
   });
   await page.goto("/maps/?e2e=1");
   await expectGeographicTiles(page, "maps-liechtenstein");
-  await expect.poll(() => mapColors(page)).toBeGreaterThan(3);
+  // Decoded tiles can be ready before WebGPU has presented the first colorful frame.
+  await expect.poll(() => mapColors(page), { timeout: 20_000 }).toBeGreaterThan(3);
   await test.info().attach("atlas-rendered-map.png", {
     contentType: "image/png",
     body: await page.screenshot(),
@@ -133,7 +134,7 @@ test("real source A/B switches keep camera and overlays; out-of-coverage is expl
   await expect(page.getByRole("button", { name: "Flatten view" })).toBeVisible();
   await page.getByRole("combobox", { name: "Camera scene" }).selectOption("north");
   await expectGeographicTiles(page, "maps-liechtenstein-north");
-  await expect.poll(() => mapColors(page)).toBeGreaterThan(3);
+  await expect.poll(() => mapColors(page), { timeout: 20_000 }).toBeGreaterThan(3);
   expect(northStatuses.length).toBeGreaterThan(0);
   expect(northStatuses.every((status) => status === 206)).toBe(true);
   await page.getByRole("combobox", { name: "Tile source" }).selectOption("atlas");
