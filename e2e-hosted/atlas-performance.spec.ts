@@ -17,7 +17,7 @@ test("capture Atlas cold load and warm regional revisit evidence", async ({ page
   await page.goto("/maps/?source=atlas&scene=liechtenstein&e2e=1");
   const canvas = page.locator('canvas[data-flat-runtime="maps"]');
   await expect(canvas).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
-  await expect.poll(async () => Number(await canvas.getAttribute("data-map-base-tiles"))).toBeGreaterThan(0);
+  await expect.poll(async () => Number(await canvas.getAttribute((await canvas.getAttribute("data-map-base-renderer")) === "wgpu" ? "data-map-vector-tiles" : "data-map-base-tiles"))).toBeGreaterThan(0);
   const coldReadyMs = Date.now() - start;
   const coldRequests = archiveResponses.length;
   const coldTransferredBytes = archiveResponses.reduce((sum, response) => sum + response.bytes, 0);
@@ -27,7 +27,7 @@ test("capture Atlas cold load and warm regional revisit evidence", async ({ page
   const revisitStart = Date.now();
   await page.getByRole("button", { name: "View covered region" }).click();
   await expect(canvas).toHaveAttribute("data-map-source-state", "ready");
-  await expect.poll(async () => Number(await canvas.getAttribute("data-map-base-tiles"))).toBeGreaterThan(0);
+  await expect.poll(async () => Number(await canvas.getAttribute((await canvas.getAttribute("data-map-base-renderer")) === "wgpu" ? "data-map-vector-tiles" : "data-map-base-tiles"))).toBeGreaterThan(0);
   const warmRevisitMs = Date.now() - revisitStart;
 
   expect(coldRequests).toBeGreaterThan(0);
