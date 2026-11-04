@@ -210,6 +210,25 @@ body {
 .engine-actions button:hover {
   background: #35555b;
 }
+.engine-source-note {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+  padding: 0.65rem;
+  color: #c1d8d3;
+  background: #19383c;
+  border: 1px solid #3a6761;
+  border-radius: 7px;
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+.engine-source-note strong {
+  color: #e4f1dd;
+}
+.engine-source-note button {
+  color: #eaf3ed;
+  border-color: #547077;
+}
 .engine-divider {
   height: 1px;
   background: #345057;
@@ -397,6 +416,14 @@ body {
   .engine-actions button {
     padding: 0.38rem;
     font-size: 0.73rem;
+  }
+  .engine-source-note {
+    margin-top: 0.5rem;
+    padding: 0.45rem;
+    font-size: 0.66rem;
+  }
+  .engine-source-note strong {
+    display: none;
   }
   .engine-map-hint {
     left: 0.65rem;

@@ -7,7 +7,7 @@ test("standalone engine page loads only the custom Map View @smoke", async ({ pa
   page.on("request", (request) => {
     if (/maplibre-gl|leaflet(?:\.js|\/)/.test(request.url())) referenceRequests.push(request.url());
   });
-  await page.goto("/engine/?e2e=1");
+  await page.goto("/engine/?source=pmtiles&e2e=1");
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
   await expect(page.locator('[data-map-runtime="maps"]')).toHaveCount(1);
   await expect(page.locator('[data-map-runtime="maps"]')).toBeVisible();

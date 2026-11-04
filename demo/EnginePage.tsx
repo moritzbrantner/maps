@@ -7,11 +7,12 @@ import type { MapSurfaceController, MapViewState } from "../src/map-display";
 import type { MapsRendererStats } from "../src/maps-browser-runtime";
 import { MapView } from "../src/map-view";
 import { createFixturePmtilesXyzTileset } from "../src/tileset-fixtures";
+import { atlasReleaseIndex, createAtlasTileset } from "./atlas-source";
 import { createShowcaseTileset } from "./showcase-tileset";
 
 type EngineController = MapSurfaceController & { getRendererStats(): MapsRendererStats | null };
-type SourceChoice = "pmtiles" | "mvt";
-type Scene = "points" | "west" | "east" | "south";
+type SourceChoice = "atlas" | "atlas-north" | "pmtiles" | "mvt";
+type Scene = "liechtenstein" | "north" | "outside" | "points" | "west" | "east" | "south";
 type Telemetry = {
   backend: "pending" | "wgpu" | "canvas2d";
   state: string;
@@ -24,7 +25,12 @@ type Telemetry = {
 };
 
 const initialView: MapViewState = { center: [10.3, 50.4], zoom: 4.1 };
+const atlasView: MapViewState = { center: [9.53, 47.14], zoom: 12.2 };
+const atlasNorthView: MapViewState = { center: [9.53, 47.22], zoom: 12.2 };
 const scenes: Record<Scene, MapViewState> = {
+  liechtenstein: atlasView,
+  north: atlasNorthView,
+  outside: { center: [9.9, 47.2], zoom: 12.2 },
   points: initialView,
   west: { center: [-95, 40], zoom: 3.1 },
   east: { center: [96, 30], zoom: 3.1 },
@@ -42,6 +48,7 @@ const initialTelemetry: Telemetry = {
   baseTiles: 0,
   pendingTiles: 0,
 };
+const isAtlas = (source: SourceChoice) => source === "atlas" || source === "atlas-north";
 
 const featureId = (feature: AggregatedMapFeature) =>
   feature.kind === "cluster" ? `cluster:${feature.clusterId}` : `point:${feature.point.id}`;
@@ -58,26 +65,33 @@ export function EnginePage() {
     const requested = Number(new URLSearchParams(location.search).get("points"));
     return counts.includes(requested as (typeof counts)[number]) ? requested : 1000;
   });
-  const [source, setSource] = useState<SourceChoice>(() =>
-    new URLSearchParams(location.search).get("source") === "mvt" ? "mvt" : "pmtiles",
-  );
+  const [source, setSource] = useState<SourceChoice>(() => {
+    const requested = new URLSearchParams(location.search).get("source");
+    if (requested === "mvt" || requested === "pmtiles" || requested === "atlas-north") {
+      return requested;
+    }
+    return "atlas";
+  });
   const [scene, setScene] = useState<Scene>(() => {
     const requested = new URLSearchParams(location.search).get("scene");
-    return requested === "west" || requested === "east" || requested === "south"
-      ? requested
-      : "points";
+    if (requested && requested in scenes) return requested as Scene;
+    if (source === "atlas") return "liechtenstein";
+    if (source === "atlas-north") return "north";
+    return "points";
   });
   const [tilted, setTilted] = useState(false);
   const [telemetry, setTelemetry] = useState<Telemetry>(initialTelemetry);
   const [selected, setSelected] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<"inside" | "outside" | "zoom">("inside");
   const points = useMemo(() => createPoints(count), [count]);
-  const tileset = useMemo(
-    () =>
-      source === "pmtiles"
-        ? createShowcaseTileset(import.meta.env.BASE_URL)
-        : createFixturePmtilesXyzTileset(import.meta.env.BASE_URL),
-    [source],
-  );
+  const tileset = useMemo(() => {
+    if (source === "atlas") return createAtlasTileset("liechtenstein", import.meta.env.BASE_URL);
+    if (source === "atlas-north") {
+      return createAtlasTileset("liechtenstein-north", import.meta.env.BASE_URL);
+    }
+    if (source === "pmtiles") return createShowcaseTileset(import.meta.env.BASE_URL);
+    return createFixturePmtilesXyzTileset(import.meta.env.BASE_URL);
+  }, [source]);
   const onControllerReady = useCallback((controller: MapSurfaceController | null) => {
     controllerRef.current = controller as EngineController | null;
   }, []);
@@ -110,11 +124,25 @@ export function EnginePage() {
       );
       const isTilted = (controller?.getViewState().pitch ?? 0) > 0;
       setTilted((current) => (current === isTilted ? current : isTilted));
+      if (controller && isAtlas(source)) {
+        const camera = controller.getViewState();
+        const [west, south, east, north] = tileset.bounds;
+        let next: "inside" | "outside" | "zoom" = "inside";
+        if (camera.zoom < tileset.minZoom) next = "zoom";
+        else if (
+          camera.center[0] < west ||
+          camera.center[0] > east ||
+          camera.center[1] < south ||
+          camera.center[1] > north
+        )
+          next = "outside";
+        setCoverage((current) => (current === next ? current : next));
+      }
     };
     sample();
     const id = window.setInterval(sample, 700);
     return () => window.clearInterval(id);
-  }, []);
+  }, [source, tileset]);
 
   const toggleTilt = () => {
     const controller = controllerRef.current;
@@ -129,9 +157,12 @@ export function EnginePage() {
     setTilted(nextTilt);
   };
   const resetView = () => {
-    controllerRef.current?.setViewState(initialView);
-    setScene("points");
-    updateUrl("scene", "points");
+    let next: Scene = "points";
+    if (source === "atlas") next = "liechtenstein";
+    if (source === "atlas-north") next = "north";
+    controllerRef.current?.setViewState(scenes[next]);
+    setScene(next);
+    updateUrl("scene", next);
     setTilted(false);
   };
 
@@ -183,7 +214,7 @@ export function EnginePage() {
             <span className="engine-eyebrow">
               <span className="engine-online-dot" /> Live engine
             </span>
-            <p>Move the map. Inspect a cluster. Change the tile transport or point workload.</p>
+            <p>Explore real Liechtenstein data or switch to synthetic engine fixtures.</p>
           </div>
 
           <div className="engine-controls">
@@ -193,13 +224,17 @@ export function EnginePage() {
                 aria-label="Tile source"
                 value={source}
                 onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                  const choice: SourceChoice = event.target.value === "mvt" ? "mvt" : "pmtiles";
+                  const requested = event.target.value;
+                  if (!["atlas", "atlas-north", "pmtiles", "mvt"].includes(requested)) return;
+                  const choice = requested as SourceChoice;
                   setSource(choice);
                   updateUrl("source", choice);
                 }}
               >
-                <option value="pmtiles">Packed PMTiles v3</option>
-                <option value="mvt">Direct MVT / XYZ</option>
+                <option value="atlas">Atlas · Liechtenstein (OSM)</option>
+                <option value="atlas-north">Atlas · northern coverage</option>
+                <option value="pmtiles">Synthetic PMTiles fixture</option>
+                <option value="mvt">Synthetic MVT / XYZ fixture</option>
               </NativeSelect>
             </label>
             <label>
@@ -236,6 +271,9 @@ export function EnginePage() {
                   updateUrl("scene", next);
                 }}
               >
+                <option value="liechtenstein">Liechtenstein</option>
+                <option value="north">Northern Liechtenstein</option>
+                <option value="outside">Outside Atlas coverage</option>
                 <option value="points">Point workload</option>
                 <option value="west">West tile sample</option>
                 <option value="east">East tile sample</option>
@@ -252,6 +290,15 @@ export function EnginePage() {
               Reset view
             </Button>
           </div>
+          {isAtlas(source) ? (
+            <div role="status" className="engine-source-note">
+              <strong>Regional coverage · zoom 10–14</strong>
+              <span>{coverageMessage(coverage)}</span>
+              <Button variant="outline" onClick={resetView}>
+                View covered region
+              </Button>
+            </div>
+          ) : null}
 
           <div className="engine-divider" />
 
@@ -307,16 +354,38 @@ export function EnginePage() {
       </section>
 
       <footer className="engine-status">
-        <span>
-          <strong>Local vector source</strong> · Synthetic CC0 vector tiles; not real-world
-          geography.{" "}
-          <a href="https://github.com/moritzbrantner/maps/issues/270">Atlas source in progress ↗</a>
-        </span>
+        {isAtlas(source) ? (
+          <span>
+            <strong>Atlas · Geofabrik / OpenStreetMap</strong> ·{" "}
+            <a href="https://www.openstreetmap.org/copyright">
+              © OpenStreetMap contributors · ODbL 1.0
+            </a>{" "}
+            · 2026-01-01 snapshot ·{" "}
+            <a
+              href={`https://github.com/moritzbrantner/asset-tooling/releases/download/maps-shortbread/${atlasReleaseIndex.tilesets[source === "atlas" ? 0 : 1]!.archiveRef.path}`}
+            >
+              Download source tiles
+            </a>{" "}
+            · {tileset.dataRevision}
+          </span>
+        ) : (
+          <span>
+            <strong>Local vector source</strong> · Synthetic CC0 vector tiles; not real-world
+            geography.
+          </span>
+        )}
         <span>{count.toLocaleString("en")} synthetic points · Rust/WASM clustering</span>
         <span role="status">{selected ? `Selected ${selected}` : "No selection"}</span>
       </footer>
     </main>
   );
+}
+
+function coverageMessage(coverage: "inside" | "outside" | "zoom"): string {
+  if (coverage === "zoom") return "Zoom in to at least level 10 for Atlas tiles.";
+  if (coverage === "outside")
+    return "Outside this archive's coverage. No provider fallback is used.";
+  return "Geographic data from Liechtenstein, with gaps outside the source bounds.";
 }
 
 function createPoints(count: number): MapPoint[] {
