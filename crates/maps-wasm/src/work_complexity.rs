@@ -20,10 +20,10 @@
 
 use std::path::{Path, PathBuf};
 
+use maps_core::symbol::ImageAtlas;
 use maps_core::{
     FlatRasterRuntime, FlatRasterRuntimeLimits, MapCamera, RasterSourceSpec, ViewportSize,
 };
-use maps_core::symbol::ImageAtlas;
 
 use crate::retained_frame::{FRAME_UNIFORM_SIZE, LocalFrame, pack_frame_uniforms};
 use crate::retained_points::{
@@ -565,8 +565,21 @@ fn retained_polygon_camera_journey(count: u64) -> WorkSample {
     let mut point_counts = Vec::with_capacity(count as usize);
     let mut lon_lat = Vec::with_capacity(count as usize * 8);
     let paint_record: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
-        0.2, 0.4, 0.6, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, RETAINED_SHAPE_POLYGON, 0.0, 1.0,
-        1.0, 2.0, 1.05,
+        0.2,
+        0.4,
+        0.6,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        RETAINED_SHAPE_POLYGON,
+        0.0,
+        1.0,
+        1.0,
+        2.0,
+        1.05,
     ];
     let mut paint = Vec::with_capacity(count as usize * RETAINED_POLYGON_PAINT_LENGTH);
     for index in 0..count {
@@ -575,7 +588,13 @@ fn retained_polygon_camera_journey(count: u64) -> WorkSample {
         ring_counts.push(1);
         point_counts.push(4);
         lon_lat.extend_from_slice(&[
-            west, south, west + 0.01, south, west + 0.01, south + 0.01, west,
+            west,
+            south,
+            west + 0.01,
+            south,
+            west + 0.01,
+            south + 0.01,
+            west,
             south + 0.01,
         ]);
         paint.extend_from_slice(&paint_record);
@@ -589,7 +608,10 @@ fn retained_polygon_camera_journey(count: u64) -> WorkSample {
     let (geometry, rebased) = state.prepare(&view, &atlas).expect("initial geometry");
     assert!(rebased, "first draw establishes a local frame");
     assert_eq!(geometry.draws.len(), count as usize);
-    assert!(!geometry.fill.is_empty(), "the first draw must contain fill geometry");
+    assert!(
+        !geometry.fill.is_empty(),
+        "the first draw must contain fill geometry"
+    );
 
     let mut rebuilds = 0;
     let mut upload_bytes = 0;

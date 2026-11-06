@@ -995,20 +995,17 @@ mod tests {
 
     #[test]
     fn line_refreshes_on_tile_zoom_change_without_rebasing_the_anchor() {
-        let polygons = RetainedPolygons::lower(
-            &[1],
-            &[3],
-            &[0.0, 0.0, 1.0, 0.0, 2.0, 1.0],
-            &LINE,
-        )
-        .expect("valid line");
+        let polygons = RetainedPolygons::lower(&[1], &[3], &[0.0, 0.0, 1.0, 0.0, 2.0, 1.0], &LINE)
+            .expect("valid line");
         let mut state = RetainedPolygonState::new(polygons);
         let atlas = ImageAtlas::default();
         let first = retained_test_view(5);
         assert!(state.prepare(&first, &atlas).is_some());
         assert!(state.prepare(&first, &atlas).is_none());
         let next = retained_test_view(6);
-        let (_, rebased) = state.prepare(&next, &atlas).expect("zoom-dependent geometry");
+        let (_, rebased) = state
+            .prepare(&next, &atlas)
+            .expect("zoom-dependent geometry");
         assert!(!rebased);
         assert!(state.prepare(&next, &atlas).is_none());
     }
