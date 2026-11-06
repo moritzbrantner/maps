@@ -23,11 +23,15 @@ use std::path::{Path, PathBuf};
 use maps_core::{
     FlatRasterRuntime, FlatRasterRuntimeLimits, MapCamera, RasterSourceSpec, ViewportSize,
 };
+use maps_core::symbol::ImageAtlas;
 
 use crate::retained_frame::{FRAME_UNIFORM_SIZE, LocalFrame, pack_frame_uniforms};
 use crate::retained_points::{
     InstanceUpload, REBASE_DISTANCE_PX, RETAINED_POINT_INSTANCE_SIZE, RETAINED_POINT_PAINT_LENGTH,
     RetainedPointCounters, RetainedPointState, RetainedView,
+};
+use crate::retained_polygons::{
+    RETAINED_POLYGON_PAINT_LENGTH, RETAINED_SHAPE_POLYGON, RetainedPolygonState, RetainedPolygons,
 };
 use crate::wgpu_geometry::{
     APPLICATION_CIRCLE, APPLICATION_CIRCLE_RECORD_LENGTH, WgpuApplicationFrame,
@@ -39,6 +43,9 @@ type WorkSample = (Vec<(&'static str, u64)>, Vec<(&'static str, u64)>);
 
 /// Static application points at each camera scale point.
 const STATIC_FEATURES: [u64; 3] = [1_000, 10_000, 100_000];
+/// Retained polygon groups need a smaller upper scale because one shape generates
+/// multiple fill/stroke vertices on the initial, unmeasured upload.
+const STATIC_SHAPES: [u64; 3] = [100, 1_000, 10_000];
 /// Changed points of the in-place update operation.
 const CHANGED_FEATURES: [u64; 3] = [1, 10, 100];
 /// Camera frames of the ordinary pan and zoom/bearing/pitch journeys.
@@ -184,6 +191,27 @@ fn runtime(longitude: f64, latitude: f64, zoom: f64) -> FlatRasterRuntime {
     .expect("runtime")
 }
 
+fn camera_view(runtime: &mut FlatRasterRuntime) -> (RetainedView, [f32; 16]) {
+    let plan = runtime.frame_plan().expect("frame plan");
+    let view_projection = plan.render_camera.view_projection;
+    let view = RetainedView::from_placements(
+        plan.placements.iter().map(|placement| {
+            (
+                placement.tile.z,
+                placement.tile.x,
+                placement.tile.y,
+                placement.local_west,
+                placement.local_north,
+                placement.local_size,
+            )
+        }),
+        view_projection,
+        VIEWPORT[0],
+    )
+    .expect("retained view");
+    (view, view_projection)
+}
+
 /// Which mirrored points the oracle checks in one frame.
 #[derive(Clone, Copy)]
 enum Check {
@@ -317,23 +345,7 @@ impl RetainedGroup {
 
     /// One camera frame, as `prepare_retained_point_draws` runs it, then the oracle.
     fn frame(&mut self, runtime: &mut FlatRasterRuntime, frame: u64, check: Check) -> Executed {
-        let plan = runtime.frame_plan().expect("frame plan");
-        let view_projection = plan.render_camera.view_projection;
-        let view = RetainedView::from_placements(
-            plan.placements.iter().map(|placement| {
-                (
-                    placement.tile.z,
-                    placement.tile.x,
-                    placement.tile.y,
-                    placement.local_west,
-                    placement.local_north,
-                    placement.local_size,
-                )
-            }),
-            view_projection,
-            VIEWPORT[0],
-        )
-        .expect("retained view");
+        let (view, view_projection) = camera_view(runtime);
 
         let mut executed = Executed::default();
         if let Some(upload) = self.state.place(&view, &mut self.counters) {
@@ -543,6 +555,81 @@ fn assert_ordinary_camera_bounds(sample: &WorkSample) {
         "frame-uniform-bytes",
         JOURNEY_FRAMES * UNIFORM_STRIDE,
     );
+}
+
+/// Uses the same retained-shape refresh state as the WebGPU backend. The first
+/// geometry build is outside the measured camera phase; every subsequent build
+/// would create real geometry bytes and be recorded as a regression.
+fn retained_polygon_camera_journey(count: u64) -> WorkSample {
+    let mut ring_counts = Vec::with_capacity(count as usize);
+    let mut point_counts = Vec::with_capacity(count as usize);
+    let mut lon_lat = Vec::with_capacity(count as usize * 8);
+    let paint_record: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
+        0.2, 0.4, 0.6, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, RETAINED_SHAPE_POLYGON, 0.0, 1.0,
+        1.0, 2.0, 1.05,
+    ];
+    let mut paint = Vec::with_capacity(count as usize * RETAINED_POLYGON_PAINT_LENGTH);
+    for index in 0..count {
+        let west = (index % 100) as f64 * 0.02 - 1.0;
+        let south = (index / 100) as f64 * 0.0005 - 1.0;
+        ring_counts.push(1);
+        point_counts.push(4);
+        lon_lat.extend_from_slice(&[
+            west, south, west + 0.01, south, west + 0.01, south + 0.01, west,
+            south + 0.01,
+        ]);
+        paint.extend_from_slice(&paint_record);
+    }
+    let shapes = RetainedPolygons::lower(&ring_counts, &point_counts, &lon_lat, &paint)
+        .expect("valid shapes");
+    let mut state = RetainedPolygonState::new(shapes);
+    let atlas = ImageAtlas::default();
+    let mut camera = runtime(0.0, 0.0, 5.0);
+    let (view, _) = camera_view(&mut camera);
+    let (geometry, rebased) = state.prepare(&view, &atlas).expect("initial geometry");
+    assert!(rebased, "first draw establishes a local frame");
+    assert_eq!(geometry.draws.len(), count as usize);
+    assert!(!geometry.fill.is_empty(), "the first draw must contain fill geometry");
+
+    let mut rebuilds = 0;
+    let mut upload_bytes = 0;
+    let mut frame_uniforms = 0;
+    for _ in 0..JOURNEY_FRAMES {
+        camera.pan_by_pixels(37.0, -23.0).expect("pan");
+        let (view, _) = camera_view(&mut camera);
+        if let Some((geometry, _)) = state.prepare(&view, &atlas) {
+            rebuilds += 1;
+            upload_bytes += (geometry.fill.len()
+                + geometry.stroke.len()
+                + geometry.pattern_covers.len()
+                + geometry.pattern_outlines.len()) as u64;
+        }
+        let anchor = state.anchor().expect("retained anchor");
+        let copies = view.anchor_frames(anchor).count() as u64;
+        assert!(copies > 0, "camera must still draw the retained group");
+        frame_uniforms += copies;
+    }
+    (
+        vec![("staticShapes", count)],
+        vec![
+            ("geometry-rebuilds", rebuilds),
+            ("geometry-upload-bytes", upload_bytes),
+            ("frame-uniform-writes", frame_uniforms),
+        ],
+    )
+}
+
+#[test]
+fn retained_polygons_camera_pan_does_no_per_shape_work() {
+    let samples: Vec<WorkSample> = STATIC_SHAPES
+        .iter()
+        .map(|&count| retained_polygon_camera_journey(count))
+        .collect();
+    report("retained-polygons-camera-pan", &samples, |sample| {
+        assert_metric(sample, "geometry-rebuilds", 0);
+        assert_metric(sample, "geometry-upload-bytes", 0);
+        assert_metric(sample, "frame-uniform-writes", JOURNEY_FRAMES);
+    });
 }
 
 #[test]
