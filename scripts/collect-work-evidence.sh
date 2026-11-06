@@ -27,6 +27,7 @@ cargo test --quiet --locked -p maps-wasm --lib -- --exact \
   work_complexity::retained_points_deep_pan_rebases_are_counted_and_bounded_by_travel \
   work_complexity::retained_points_update_rewrites_only_the_changed_points \
   work_complexity::retained_points_dataset_replacement_is_declared_linear_work \
+  work_complexity::retained_polygons_camera_pan_does_no_per_shape_work \
   work_complexity::projected_points_camera_pan_is_the_linear_comparison_path >&2
 
 # Contract order; a missing fragment means a test did not run or failed.
@@ -36,6 +37,7 @@ operations=(
   retained-points-camera-deep-pan-rebase
   retained-points-update-features
   retained-points-replace-dataset
+  retained-polygons-camera-pan
   projected-points-camera-pan
 )
 fragments=()
