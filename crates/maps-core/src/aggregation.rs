@@ -245,10 +245,7 @@ impl PointAggregationIndex {
             };
             let expansion_zoom = self.get_cluster_expansion_zoom(cluster_id)?;
             let metrics = self.metrics_for_cluster(cluster_id)?;
-            let point_count_abbreviated = feature
-                .property("point_count_abbreviated")
-                .map(json_value_to_string)
-                .unwrap_or_else(|| point_count.to_string());
+            let point_count_abbreviated = format_cluster_point_count(point_count);
 
             return Ok(Some(AggregatedMapFeature::Cluster(AggregatedMapCluster {
                 cluster_id,
@@ -430,6 +427,22 @@ fn point_count_from_feature(feature: &Feature) -> Option<usize> {
         .and_then(|value| usize::try_from(value).ok())
 }
 
+/// Formats the integer count without a floating-point division or a dependency-provided label.
+fn format_cluster_point_count(count: usize) -> String {
+    if count < 1_000 {
+        return count.to_string();
+    }
+
+    let thousands = count / 1_000;
+    let remainder = count % 1_000;
+    if remainder == 0 {
+        return format!("{thousands}k");
+    }
+
+    let fraction = format!("{remainder:03}");
+    format!("{thousands}.{}k", fraction.trim_end_matches('0'))
+}
+
 fn point_id_from_feature(feature: &Feature) -> Option<String> {
     match feature.id.as_ref()? {
         Id::String(value) => Some(value.clone()),
@@ -459,14 +472,6 @@ fn feature_identity(feature: &Feature) -> Option<String> {
 
 fn rounded_zoom(zoom: f64) -> u8 {
     zoom.round().clamp(0.0, f64::from(u8::MAX)) as u8
-}
-
-fn json_value_to_string(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(value) => value.clone(),
-        JsonValue::Number(value) => value.to_string(),
-        _ => value.to_string(),
-    }
 }
 
 fn zero_metrics(metric_keys: &[String]) -> MapMetricRecord {
@@ -516,5 +521,25 @@ fn summarize_features(
         visible_point_count,
         visible_unclustered_count,
         zoom: query.zoom,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_cluster_point_count;
+
+    #[test]
+    fn abbreviates_cluster_counts_without_fractional_artifacts() {
+        for (count, expected) in [
+            (999, "999"),
+            (1_000, "1k"),
+            (1_050, "1.05k"),
+            (1_500, "1.5k"),
+            (7_969, "7.969k"),
+            (12_004, "12.004k"),
+            (14_264, "14.264k"),
+        ] {
+            assert_eq!(format_cluster_point_count(count), expected);
+        }
     }
 }

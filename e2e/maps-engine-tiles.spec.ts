@@ -16,7 +16,7 @@ test("standalone first-party PMTiles retains tile pixels during pan and zoom @sm
       ranges.set(range, (ranges.get(range) ?? 0) + 1);
     }
   });
-  await page.goto("/engine/?e2e=1");
+  await page.goto("/engine/?source=pmtiles&e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
   await expect
     .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
@@ -147,7 +147,7 @@ test("complete synthetic PMTiles coverage survives multi-region camera changes @
       requests.push(request.headers()["range"] ?? "");
     }
   });
-  await page.goto("/engine/?e2e=1");
+  await page.goto("/engine/?source=pmtiles&e2e=1");
   const base = page.locator("[data-flat-runtime=maps]");
   await expect(base).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
   await expect(base).toHaveAttribute("data-map-base-renderer", "canvas2d");

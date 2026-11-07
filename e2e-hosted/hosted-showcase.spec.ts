@@ -18,7 +18,7 @@ test("hosted Pages runs the first-party PMTiles engine without external tile req
     }
   });
 
-  await page.goto("/maps/?e2e=1");
+  await page.goto("/maps/?source=pmtiles&e2e=1");
 
   await expect(page.getByRole("heading", { name: "Maps engine", exact: true })).toBeVisible();
   await expect(page.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(

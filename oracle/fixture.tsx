@@ -41,10 +41,19 @@ configureMapsWasmPackage("/wasm/maps_wasm.js");
 
 type Runtime = "maplibre" | "maps";
 type PickEvent = { kind: "hover" | "select"; layer: string; id: string | null; source: string };
+type InputEvent = {
+  kind: string;
+  x: number;
+  y: number;
+  timeMs: number;
+  deltaY: number | null;
+};
 
 type OracleApi = {
   controller: MapSurfaceController | null;
   events: PickEvent[];
+  /** Captured DOM inputs, ordered independently of asynchronous pick callbacks. */
+  inputs: InputEvent[];
   maplibre: {
     loaded(): boolean;
     areTilesLoaded(): boolean;
@@ -70,6 +79,7 @@ const runtime: Runtime = params.get("runtime") === "maps" ? "maps" : "maplibre";
 const oracle: OracleApi = {
   controller: null,
   events: [],
+  inputs: [],
   maplibre: null,
   runtime,
   scenario,
@@ -77,6 +87,26 @@ const oracle: OracleApi = {
   viewState: () => oracle.controller?.getViewState() ?? null,
 };
 window.__oracle = oracle;
+
+// Capture-phase observation does not alter the events delivered to either map runtime.
+// Failed parity reports can then distinguish an input/timing race from an actual pick error.
+for (const kind of ["pointermove", "pointerdown", "pointerup", "click", "wheel"]) {
+  document.addEventListener(
+    kind,
+    (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest("#map")) return;
+      const pointer = event as PointerEvent | WheelEvent;
+      oracle.inputs.push({
+        deltaY: event instanceof WheelEvent ? event.deltaY : null,
+        kind,
+        timeMs: performance.now(),
+        x: pointer.clientX,
+        y: pointer.clientY,
+      });
+    },
+    true,
+  );
+}
 
 /** The alpine line collection, built once on first use. */
 const alpineLineCache: { collection: ReturnType<typeof buildAlpineLines> | null } = { collection: null };

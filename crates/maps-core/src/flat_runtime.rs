@@ -756,8 +756,12 @@ impl FlatRasterRuntime {
             view_projection,
             raster_alignment: raster_alignment(self.camera)?,
         };
-        let viewport_placements =
-            visible_tile_placements(self.camera, self.source, self.limits.max_visible_tiles)?;
+        let viewport_placements = visible_tile_placements(
+            self.camera,
+            self.source,
+            self.limits.max_visible_tiles,
+            self.tileset.as_ref(),
+        )?;
         let visible_bounds = visible_bounds_for_camera(self.camera)?;
         let visible_tiles = viewport_placements
             .iter()
@@ -975,7 +979,12 @@ impl FlatRasterRuntime {
             .camera
             .with_viewport(surface)
             .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-        match visible_tile_placements(surface_camera, self.source, self.limits.max_visible_tiles) {
+        match visible_tile_placements(
+            surface_camera,
+            self.source,
+            self.limits.max_visible_tiles,
+            self.tileset.as_ref(),
+        ) {
             Ok(mut placements) => {
                 for placement in &mut placements {
                     // Screen rectangles stay in viewport coordinates.
@@ -1266,6 +1275,7 @@ fn visible_tile_placements(
     camera: MapCamera,
     source: RasterSourceSpec,
     limit: usize,
+    tileset: Option<&MapsTileset>,
 ) -> Result<Vec<RasterTilePlacement>, FlatRasterRuntimeError> {
     let center = project_web_mercator(camera.longitude, camera.latitude)
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
@@ -1279,37 +1289,73 @@ fn visible_tile_placements(
     let ground_bounds = camera_ground_world_bounds(camera)?;
     let min_x = (ground_bounds.west * dimension as f64).floor() as i64;
     let max_x = ((ground_bounds.east * dimension as f64).ceil() as i64 - 1).max(min_x);
-    let min_y = ((ground_bounds.north * dimension as f64).floor() as i64).clamp(0, dimension - 1);
-    let max_y =
+    let mut min_y =
+        ((ground_bounds.north * dimension as f64).floor() as i64).clamp(0, dimension - 1);
+    let mut max_y =
         ((ground_bounds.south * dimension as f64).ceil() as i64 - 1).clamp(min_y, dimension - 1);
-    let columns =
-        usize::try_from(max_x - min_x + 1).map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
-    let rows =
-        usize::try_from(max_y - min_y + 1).map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
-    let required = columns
-        .checked_mul(rows)
-        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
-
-    if required > limit {
-        return Err(FlatRasterRuntimeError::TileCoverOverflow { required, limit });
+    // Geographic sources can cover only a tiny part of the viewport at low camera zoom.
+    // Clip the Cartesian cover before applying the resource budget or allocating placements.
+    let mut x_ranges = vec![(min_x, max_x)];
+    if let Some(tileset) = tileset {
+        let [west, south, east, north] = tileset.bounds;
+        let north_y = project_web_mercator(0.0, north)
+            .ok_or(FlatRasterRuntimeError::InvalidBounds)?
+            .y;
+        let south_y = project_web_mercator(0.0, south)
+            .ok_or(FlatRasterRuntimeError::InvalidBounds)?
+            .y;
+        min_y = min_y.max((north_y * dimension as f64).floor() as i64);
+        max_y = max_y.min((south_y * dimension as f64).ceil() as i64 - 1);
+        x_ranges.clear();
+        let longitude_ranges = if west < east {
+            vec![(west, east)]
+        } else {
+            vec![(west, 180.0), (-180.0, east)]
+        };
+        for world_copy in min_x.div_euclid(dimension)..=max_x.div_euclid(dimension) {
+            for &(west, east) in &longitude_ranges {
+                let first = ((west + 180.0) / 360.0 * dimension as f64).floor() as i64
+                    + world_copy * dimension;
+                let last = ((east + 180.0) / 360.0 * dimension as f64).ceil() as i64 - 1
+                    + world_copy * dimension;
+                let start = first.max(min_x);
+                let end = last.min(max_x);
+                if start <= end {
+                    x_ranges.push((start, end));
+                }
+            }
+        }
     }
-
-    let mut placements = Vec::with_capacity(required);
-
+    if min_y > max_y {
+        return Ok(Vec::new());
+    }
+    let mut placements = Vec::new();
     for y in min_y..=max_y {
-        for unwrapped_x in min_x..=max_x {
-            let canonical_x = unwrapped_x.rem_euclid(dimension);
-            let world_copy = i32::try_from(unwrapped_x.div_euclid(dimension))
-                .map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
-            let tile = TileId::new(
-                tile_zoom,
-                u32::try_from(canonical_x).map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
-                u32::try_from(y).map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
-            )
-            .ok_or(FlatRasterRuntimeError::InvalidSource)?;
-            placements.push(raster_tile_placement(
-                camera, center, size, tile, world_copy, true,
-            ));
+        for &(first_x, last_x) in &x_ranges {
+            for unwrapped_x in first_x..=last_x {
+                let canonical_x = unwrapped_x.rem_euclid(dimension);
+                let world_copy = i32::try_from(unwrapped_x.div_euclid(dimension))
+                    .map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
+                let tile = TileId::new(
+                    tile_zoom,
+                    u32::try_from(canonical_x)
+                        .map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
+                    u32::try_from(y).map_err(|_| FlatRasterRuntimeError::InvalidSource)?,
+                )
+                .ok_or(FlatRasterRuntimeError::InvalidSource)?;
+                if tileset.is_some_and(|source| !source.covers(tile)) {
+                    continue;
+                }
+                if placements.len() >= limit {
+                    return Err(FlatRasterRuntimeError::TileCoverOverflow {
+                        required: placements.len() + 1,
+                        limit,
+                    });
+                }
+                placements.push(raster_tile_placement(
+                    camera, center, size, tile, world_copy, true,
+                ));
+            }
         }
     }
 
@@ -2331,6 +2377,7 @@ mod tests {
             camera,
             RasterSourceSpec::new(0, 19, 512).unwrap(),
             DEFAULT_MAX_VISIBLE_TILES,
+            None,
         )
         .unwrap()
         .into_iter()
@@ -2377,6 +2424,43 @@ mod tests {
             runtime.frame_plan(),
             Err(FlatRasterRuntimeError::TileCoverOverflow { .. })
         ));
+    }
+
+    #[test]
+    fn regional_tileset_zoom_out_does_not_overflow_uncovered_world() {
+        let camera = MapCamera::new(
+            9.53,
+            47.15,
+            4.0,
+            0.0,
+            0.0,
+            ViewportSize::new(1360.0, 900.0).unwrap(),
+        )
+        .unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(10, 14, 512).unwrap(),
+            FlatRasterRuntimeLimits::default(),
+        )
+        .unwrap();
+        let tileset: MapsTileset = serde_json::from_value(serde_json::json!({
+            "version": 1, "sourceId": "liechtenstein", "dataRevision": "sha256:fixture",
+            "format": "mvt", "schema": {"id": "shortbread", "version": "1.0", "sourceLayers": ["streets"]},
+            "transport": {"kind": "pmtiles", "url": "/liechtenstein.pmtiles"},
+            "projection": "web-mercator", "scheme": "xyz",
+            "bounds": [9.47, 47.04, 9.64, 47.28],
+            "minZoom": 10, "maxZoom": 14, "tileSize": 512,
+            "attribution": "OSM", "license": "ODbL-1.0", "provenance": "fixture"
+        })).unwrap();
+        runtime.activate_tileset(tileset).unwrap();
+        for zoom in [4.0, 2.0, 0.0] {
+            runtime.set_view_state(9.53, 47.15, zoom).unwrap();
+            let plan = runtime
+                .frame_plan()
+                .expect("regional cover must stay bounded");
+            assert!(plan.placements.len() <= DEFAULT_MAX_VISIBLE_TILES);
+            assert!(plan.placements.iter().all(|p| p.tile.z == 10));
+        }
     }
 
     #[test]

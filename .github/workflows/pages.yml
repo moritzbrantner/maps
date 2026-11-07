@@ -52,9 +52,9 @@ jobs:
         git -C .github-pages-template checkout --detach FETCH_HEAD
         git init "$RUNNER_TEMP/maps-runtime-profiler-source"
         git -C "$RUNNER_TEMP/maps-runtime-profiler-source" remote add origin https://github.com/moritzbrantner/runtime-profiler.git
-        git -C "$RUNNER_TEMP/maps-runtime-profiler-source" fetch --depth 1 origin 5fa0e1b652e95003ccad11f32a4df67b96eac6f8
+        git -C "$RUNNER_TEMP/maps-runtime-profiler-source" fetch --depth 1 origin 6d2c92edfc03456cde3d99d2aa6f4be5e008ecc4
         git -C "$RUNNER_TEMP/maps-runtime-profiler-source" checkout --detach FETCH_HEAD
-        cargo install --path "$RUNNER_TEMP/maps-runtime-profiler-source" --locked --root "$RUNNER_TEMP/maps-profiler"
+        bash scripts/install-runtime-profiler-ci.sh "$RUNNER_TEMP/maps-profiler/bin/runtime-profiler"
         git fetch --deepen=1 origin "$(git rev-parse HEAD)"
         git worktree add --detach "$RUNNER_TEMP/maps-kernel-reference" HEAD^
         if [ -f "$RUNNER_TEMP/maps-kernel-reference/scripts/run-engine-kernel-scenario.mjs" ]; then
@@ -66,6 +66,8 @@ jobs:
         mkdir -p public/wasm
         cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
         bun run bench:engine -- --output public/evidence/engine-benchmark.json
+        # Explicit content-pinned producer handoff; never fetch OSM rendered tiles.
+        bun scripts/fetch-atlas-tiles.ts
         VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base "/${{ github.event.repository.name }}/"
         # Vite now builds /benchmarks/ as a distinct reference lab entrypoint.
         # Copying the first-party home page would erase the benchmark route.
