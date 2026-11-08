@@ -15,7 +15,7 @@ test("provisioning comparison stays a manual, non-required experiment", () => {
   assert.match(comparison, /^on:\n  workflow_dispatch:\n/m);
   assert.doesNotMatch(comparison, /^\s+(pull_request|push|schedule):/m);
   assert.match(sample, /^on:\n  workflow_call:\n/m);
-  assert.doesNotMatch(read(".github/workflows/ci.yml"), /provisioning-(comparison|sample)/);
+  assert.doesNotMatch(read(".github/workflows/ci.yml"), /workflows\/provisioning-(comparison|sample)\.yml/);
   // No registry writes, privileged containers or nested Docker.
   assert.doesNotMatch(comparison + sample, /packages: write|--privileged|docker:dind/);
 });

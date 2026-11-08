@@ -87,3 +87,10 @@ creation-to-start and dependency-ready-to-job-start record queue delay
 separately. Runner-minutes are not interchangeable with critical-path latency.
 The PR records the final executed comparison, including raw and audit-normalized
 cost. This CI timing comparison is not a Maps runtime-profiler/Moonlight verdict.
+
+## Provisioning
+
+Conventional Ubuntu, the locked Nix shell and a prebuilt agent image are
+compared by the manual `Maps Provisioning Comparison` workflow; see
+[provisioning-comparison.md](provisioning-comparison.md) for method, results,
+rollback and the current recommendation.
