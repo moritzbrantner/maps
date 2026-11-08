@@ -17,11 +17,11 @@ pub const FIELD_OF_VIEW_Y_RADIANS: f64 = 0.643_501_108_793_284_4;
 pub const MAX_MERCATOR_HORIZON_ANGLE_DEGREES: f64 = 89.25;
 const RAY_EPSILON: f64 = 1.0e-12;
 
-/// Conservative local-map-plane bounds for the ground visible through a viewport.
+/// Local-map-plane bounds for the ground visible through a viewport.
 ///
 /// Coordinates use the same CSS-pixel local frame as raster placements: +x east, +y north.
-/// The bounds are available only when every viewport corner has a finite forward intersection
-/// with the z=0 map plane. Cameras whose top edge crosses the horizon therefore fail closed.
+/// As MapLibre's `getBounds`, a viewport reaching past the Mercator horizon is bounded by the
+/// horizon line rather than its top edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapLocalViewportBounds {
     pub west: f64,
@@ -39,6 +39,7 @@ pub struct MapLocalViewportBounds {
 pub struct MapLocalRenderFrame {
     flat_camera: MapCamera,
     view_projection: Mat4,
+    pitch_degrees: f64,
 }
 
 impl MapCamera {
@@ -102,6 +103,7 @@ impl MapCamera {
         Some(MapLocalRenderFrame {
             flat_camera,
             view_projection: shared_camera.view_projection_matrix(),
+            pitch_degrees: self.pitch,
         })
     }
 
@@ -120,11 +122,9 @@ impl MapCamera {
         self.local_render_frame()?.unproject(screen)
     }
 
-    /// Returns conservative local ground bounds for the viewport under this camera.
-    ///
-    /// This is the tile-cover primitive for bearing/pitch-aware runtimes. It deliberately fails
-    /// when any viewport corner lies beyond the ground horizon, allowing callers to reject that
-    /// camera instead of under-fetching tiles from an unbounded footprint.
+    /// Returns the local ground bounds visible under this camera, stopping at the Mercator
+    /// horizon line as MapLibre's `getBounds` does. Tile covers use the camera frustum instead
+    /// (`terrain::covering_tiles`).
     #[must_use]
     pub fn local_viewport_bounds_matrix(self) -> Option<MapLocalViewportBounds> {
         self.local_render_frame()?.viewport_ground_bounds()
@@ -175,14 +175,19 @@ impl MapLocalRenderFrame {
         self.flat_camera.unproject_screen(flat_screen)
     }
 
-    /// Returns an axis-aligned conservative bound of the ground footprint in the local map plane.
+    /// Returns the axis-aligned bound of the ground footprint in the local map plane.
+    ///
+    /// As MapLibre's `getBounds`, the top edge stops at the Mercator horizon line
+    /// (`getMercatorHorizon`) when the viewport reaches past it, so a steep camera has finite
+    /// bounds of the ground below that line.
     #[must_use]
     pub fn viewport_ground_bounds(self) -> Option<MapLocalViewportBounds> {
         let width = self.flat_camera.viewport.width;
         let height = self.flat_camera.viewport.height;
+        let top = (height / 2.0 - mercator_horizon(height, self.pitch_degrees)).max(0.0);
         let corners = [
-            ScreenCoordinate { x: 0.0, y: 0.0 },
-            ScreenCoordinate { x: width, y: 0.0 },
+            ScreenCoordinate { x: 0.0, y: top },
+            ScreenCoordinate { x: width, y: top },
             ScreenCoordinate {
                 x: width,
                 y: height,
@@ -261,6 +266,18 @@ impl MapLocalRenderFrame {
 #[must_use]
 pub fn camera_to_center_distance(viewport_height: f64) -> f64 {
     0.5 / (FIELD_OF_VIEW_Y_RADIANS * 0.5).tan() * viewport_height
+}
+
+/// MapLibre's `getMercatorHorizon`: the horizon line's height above the viewport center in CSS
+/// pixels, short of the true horizon to simulate the earth's curvature.
+#[must_use]
+pub fn mercator_horizon(viewport_height: f64, pitch_degrees: f64) -> f64 {
+    camera_to_center_distance(viewport_height)
+        * ((90.0 - pitch_degrees).to_radians().tan() * 0.85).min(
+            (MAX_MERCATOR_HORIZON_ANGLE_DEGREES - pitch_degrees)
+                .to_radians()
+                .tan(),
+        )
 }
 
 /// MapLibre's `MercatorTransform._calculateNearFarZ` for a camera on the ground plane with no
@@ -362,7 +379,23 @@ mod tests {
     }
 
     #[test]
-    fn camera_crossing_ground_horizon_fails_closed() {
-        assert!(camera(0.0, 85.0).local_viewport_bounds_matrix().is_none());
+    fn camera_crossing_ground_horizon_is_bounded_by_the_mercator_horizon() {
+        let frame = camera(0.0, 85.0).local_render_frame().unwrap();
+        // The viewport's top edge looks past the ground horizon.
+        assert!(
+            frame
+                .unproject(ScreenCoordinate { x: 400.0, y: 0.0 })
+                .is_none()
+        );
+
+        let bounds = camera(0.0, 85.0).local_viewport_bounds_matrix().unwrap();
+        let below = camera(0.0, 60.0).local_viewport_bounds_matrix().unwrap();
+        assert!(
+            [bounds.west, bounds.south, bounds.east, bounds.north]
+                .into_iter()
+                .all(f64::is_finite)
+        );
+        assert!(bounds.north > below.north);
+        assert!(bounds.west < bounds.east && bounds.south < bounds.north);
     }
 }

@@ -144,6 +144,32 @@ pub fn covering_tiles(
     options: CoveringOptions,
     terrain: Option<TileElevationRange<'_>>,
 ) -> Vec<CoveredTile> {
+    covering_tiles_within(transform, options, terrain, &CoveringBudget::default())
+}
+
+/// Maps-owned refinements of [`covering_tiles`] for the first-party raster runtime (#332).
+///
+/// None of them changes which tiles MapLibre selects inside a source's bounds and zoom range;
+/// they keep the traversal bounded and keep Maps' source-minimum-zoom policy consistent
+/// between north-up and oriented cameras.
+#[derive(Clone, Copy, Default)]
+pub struct CoveringBudget<'a> {
+    /// Emit a tile whose desired zoom lies below the source's `min_zoom` at `min_zoom` instead of
+    /// dropping it (MapLibre drops it; the Maps flat cover clamps the covering zoom).
+    pub fill_below_min_zoom: bool,
+    /// Whether a canonical `(z, x, y)` tile intersects the source; rejected subtrees are skipped.
+    pub covers: Option<&'a dyn Fn(u8, u32, u32) -> bool>,
+    /// Stop once more than this many tiles are found; the caller reports the overflow.
+    pub max_tiles: Option<usize>,
+}
+
+/// [`covering_tiles`] with the Maps-owned [`CoveringBudget`] refinements.
+pub fn covering_tiles_within(
+    transform: &TerrainTransform,
+    options: CoveringOptions,
+    terrain: Option<TileElevationRange<'_>>,
+    budget: &CoveringBudget<'_>,
+) -> Vec<CoveredTile> {
     let camera = transform.camera;
     let frustum = transform.frustum();
     let camera_coord = transform.camera_mercator();
@@ -204,6 +230,12 @@ pub fn covering_tiles(
 
     let mut result: Vec<(f64, CoveredTile)> = Vec::new();
     while let Some(entry) = stack.pop() {
+        if budget
+            .covers
+            .is_some_and(|covers| !covers(entry.zoom, entry.x, entry.y))
+        {
+            continue;
+        }
         let tiles = f64::from(1_u32 << entry.zoom);
         let (mut min_elevation, mut max_elevation) =
             (culling_elevation.min(0.0), culling_elevation.max(0.0));
@@ -244,7 +276,10 @@ pub fn covering_tiles(
             );
         }
         let tile_desired_z = round(tile_desired_z).max(0.0);
-        let z = tile_desired_z.min(max_zoom);
+        let mut z = tile_desired_z.min(max_zoom);
+        if budget.fill_below_min_zoom {
+            z = z.max(f64::from(options.min_zoom).min(max_zoom));
+        }
         if f64::from(entry.zoom) >= z {
             if entry.zoom < options.min_zoom {
                 continue;
@@ -260,6 +295,9 @@ pub fn covering_tiles(
                     wrap: entry.wrap,
                 },
             ));
+            if budget.max_tiles.is_some_and(|limit| result.len() > limit) {
+                break;
+            }
             continue;
         }
         for i in 0..4 {

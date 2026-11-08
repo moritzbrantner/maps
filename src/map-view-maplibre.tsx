@@ -75,6 +75,9 @@ import {
   type MapLibreMapContextMenuEvent,
 } from "./map-view-utils";
 
+/** Steepest camera pitch, in degrees; the Maps camera (`MapCamera`) clamps to the same. */
+const MAP_CAMERA_MAX_PITCH = 85;
+
 export {
   MapSurfaceContext,
   type MapLibreLayerRegistrationOptions,
@@ -498,6 +501,8 @@ export function MapView({
         container: containerRef.current,
         ...(resolvedMaxBounds ? { maxBounds: toMapLibreBounds(resolvedMaxBounds) } : {}),
         ...(resolvedMaxZoom === undefined ? {} : { maxZoom: resolvedMaxZoom }),
+        // The Maps camera's pitch range (`MapCamera` clamps to 85°); MapLibre defaults to 60°.
+        maxPitch: MAP_CAMERA_MAX_PITCH,
         pitch: currentViewState.pitch ?? 0,
         style: resolveMapLibreDisplayStyle(mapStyle, mapDisplay),
         zoom: currentViewState.zoom,

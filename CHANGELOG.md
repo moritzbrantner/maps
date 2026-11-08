@@ -17,6 +17,14 @@
 
 ### Minor Changes
 
+- Rotated and pitched cameras cover tiles with MapLibre 6.16's `coveringTiles` (#332): tiles
+  are culled against the camera frustum, and above `maxConstantZoomPitch` (60°) far tiles
+  come from lower zooms, so frame placements and requests hold mixed zooms. Cameras whose
+  viewport reaches past the ground horizon (pitch above about 71.6°) are no longer rejected
+  as unsupported; their visible bounds stop at MapLibre's Mercator horizon line. Oriented
+  covers keep the north-up policy of filling at the source's minimum zoom. The MapLibre
+  runtime now accepts the Maps camera's pitch range (`maxPitch` 85°). The oracle
+  `steep-pitch` scenario (65°) is gated.
 - Tileset `symbol` layers follow the camera zoom and their lines, ported from MapLibre 6.15
   (#346). `text-size` and `icon-size` take camera and composite functions (interpolated
   at the drawn zoom between the tile's covering stops, camera sizes capped at the tile's

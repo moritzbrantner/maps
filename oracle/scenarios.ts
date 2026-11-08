@@ -252,6 +252,17 @@ export const scenarios: Scenario[] = [
     ],
   },
   {
+    basemap: "zoom-tinted",
+    camera: { bearing: -20, center: [10.4, 51.2], pitch: 65, zoom: 5.55 },
+    capability:
+      "pitch above maxConstantZoomPitch: frustum-culled raster cover with far tiles from lower zooms; pan",
+    knownGaps: [],
+    name: "steep-pitch",
+    origin: "pitched tile covering (#332), follow-up to the pitched camera (#328)",
+    size: MAP_SIZE,
+    steps: [{ by: [-100, 40], kind: "pan", label: "drag pan" }],
+  },
+  {
     basemap: "geographic",
     camera: { center: [19, 39.5], zoom: 3.9 },
     capability: "weighted flows with direction and endpoints, clustered entities, country overlay",

@@ -699,6 +699,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
         </>
       );
     case "zoom-crossfade":
+    case "steep-pitch":
       return () => null;
     case "labels":
       return (context) => (
