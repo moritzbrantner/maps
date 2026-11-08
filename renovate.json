@@ -59,6 +59,16 @@
         "digest"
       ],
       "groupName": "git-pinned crate revisions"
+    },
+    {
+      "description": "Hold Rust geojson on 0.24.x until the stable supercluster crate supports geojson 1.x; see #299.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "geojson"
+      ],
+      "allowedVersions": ">=0.24.0 <0.25.0"
     }
   ]
 }
