@@ -149,6 +149,8 @@ type MapsOverlayLayersProps = {
     interaction: MapScreenInteractionState,
   ) => boolean;
   retainedPoints?: MapsOverlayRetainedPoints;
+  /** Closes feature overlays whose Map Feature left the composition. */
+  retireFeatureOverlays?: (isRendered: (overlayKey: string) => boolean) => void;
   surface: MapsOverlayInteractionSurface;
   unproject: MapsUnprojectCoordinate;
 };
@@ -264,6 +266,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       project,
       renderApplicationFrame,
       retainedPoints,
+      retireFeatureOverlays,
       surface,
       unproject,
     },
@@ -654,6 +657,35 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       [],
     );
 
+    /**
+     * A replaced or removed Map Feature takes its hover, tooltip, popup and context menu with
+     * it. Runs once per committed composition: a camera move neither adds nor removes
+     * features, and layers whose features depend on the viewport are retired only with the
+     * layer itself, since panning a cluster or heat cell away must not close its popup.
+     */
+    const reconciledEntriesRef = useRef<readonly MapsOverlayEntry[] | null>(null);
+    const retireDepartedFeatures = (snapshot: MapsOverlaySnapshot) => {
+      if (reconciledEntriesRef.current === entries) return;
+      reconciledEntriesRef.current = entries;
+      const rendered = new Set<string>();
+      for (const interaction of snapshot.interactions.values()) rendered.add(interaction.key);
+      const viewportLayers = entries.flatMap((entry) =>
+        entry.kind === "cluster"
+          ? [`${entry.prefix}|`]
+          : entry.kind === "heat"
+            ? [`${entry.runtimeKey}|`]
+            : [],
+      );
+      const isRendered = (key: string) =>
+        rendered.has(key) || viewportLayers.some((prefix) => key.startsWith(prefix));
+      for (const [layer, interaction] of hoveredByLayerRef.current) {
+        if (isRendered(interaction.key)) continue;
+        hoveredByLayerRef.current.delete(layer);
+        interaction.clearHover();
+      }
+      retireFeatureOverlays?.(isRendered);
+    };
+
     useLayoutEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) {
@@ -706,6 +738,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           heatRuntime,
           requestHeatRender,
         );
+        retireDepartedFeatures(snapshot);
         const interaction: MapScreenInteractionState = {
           hoveredPrimitiveIds: snapshot.hoveredPrimitiveIds,
           selectedPrimitiveIds: snapshot.selectedPrimitiveIds,
@@ -871,6 +904,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       renderApplicationFrame,
       requestHeatRender,
       retainedPoints,
+      retireFeatureOverlays,
       surface,
       unproject,
     ]);
@@ -1400,6 +1434,7 @@ function createFeatureInteraction<TFeature>(
     click(position) {
       surface.handleFeatureClick(feature, position, {
         getFeatureId,
+        overlayKey: `${layer}|${featureId}`,
         onFeatureSelect: options.onFeatureSelect,
         onSelectedFeatureIdChange: options.onSelectedFeatureIdChange,
         renderFeaturePopup: options.renderFeaturePopup,
@@ -1409,6 +1444,7 @@ function createFeatureInteraction<TFeature>(
       surface.handleFeatureContextMenu(feature, position, {
         coordinates,
         getFeatureId,
+        overlayKey: `${layer}|${featureId}`,
         onFeatureContextMenu: options.onFeatureContextMenu,
         onFeatureSelect: options.onFeatureSelect,
         onSelectedFeatureIdChange: options.onSelectedFeatureIdChange,
@@ -1447,6 +1483,7 @@ function createClusterFeatureInteraction(
     renderFeatureContextMenu: options.renderFeatureContextMenu,
     renderFeaturePopup: options.renderFeaturePopup,
     renderFeatureTooltip: options.renderFeatureTooltip,
+    overlayKey: `${layer}|${rendererFeatureId}`,
   };
 
   return {

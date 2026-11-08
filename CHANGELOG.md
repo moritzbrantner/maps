@@ -161,6 +161,7 @@
 
 ### Patch Changes
 
+- `flatRuntime="maps"` Map Views close the hover, tooltip, popup and context menu of a Map Feature that leaves the composition, report maxZoom corrections to controlled owners, and keep saved controllers inert after unmount.
 - Maps runtime camera frames no longer go through React (#343). As in MapLibre,
   `setViewState` moves the camera and renders it on the next animation frame
   (a following `getViewState()` sees it at once), and an uncontrolled Map View
