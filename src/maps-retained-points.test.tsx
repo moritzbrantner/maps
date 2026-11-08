@@ -154,6 +154,7 @@ beforeEach(() => {
     updateRetainedPoints: vi.fn((_group: number, indices: Uint32Array) => indices.length),
     evictRetainedPolygons: vi.fn(),
     setRetainedPolygons: vi.fn((_group: number, ringCounts: Uint32Array) => ringCounts.length),
+    updateRetainedPolygons: vi.fn((_group: number, indices: Uint32Array) => indices.length),
     frameStats: vi.fn(() => ({
       drawCalls: 0,
       rasterTiles: 0,
@@ -510,20 +511,65 @@ describe("GPU-retained application polygons (#196)", () => {
     });
   });
 
+  it("updates one changed polygon in place without re-uploading the group (#189)", async () => {
+    const collection = polygonCollection(1_000);
+    const { rerenderPolygons } = await mountPolygons(collection);
+    await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1));
+
+    const moved = { ...collection, features: collection.features.slice() };
+    const ring = [
+      [40, 10],
+      [42, 10],
+      [41, 12],
+      [40, 10],
+    ];
+    moved.features[321] = {
+      ...collection.features[321]!,
+      geometry: { coordinates: [ring], type: "Polygon" },
+    };
+    rerenderPolygons(moved);
+    await waitFor(() => expect(renderer.updateRetainedPolygons).toHaveBeenCalledTimes(1));
+
+    // Only the changed polygon crosses the bridge; the 999 others stay on the GPU.
+    const [group, indices, ringCounts, pointCounts, lonLat, paint, dashCounts, dashes, patterns] =
+      vi.mocked(renderer.updateRetainedPolygons!).mock.calls[0]!;
+    expect(group).toBe(1);
+    expect(Array.from(indices)).toEqual([321]);
+    expect(Array.from(ringCounts)).toEqual([1]);
+    expect(Array.from(pointCounts)).toEqual([4]);
+    expect(Array.from(lonLat)).toEqual(ring.flat());
+    expect(paint).toHaveLength(MAPS_RETAINED_POLYGON_PAINT_STRIDE);
+    expect(Array.from(dashCounts)).toEqual([0]);
+    expect(dashes).toHaveLength(0);
+    expect(patterns).toEqual([]);
+    expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1);
+    expect(renderer.evictRetainedPolygons).not.toHaveBeenCalled();
+
+    // An identical dataset changes nothing on the renderer.
+    rerenderPolygons({ ...moved, features: moved.features.slice() });
+    await waitFor(() =>
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]),
+    );
+    expect(renderer.updateRetainedPolygons).toHaveBeenCalledTimes(1);
+    expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1);
+  });
+
   it("re-lowers on interaction changes and returns mixed frames to the screen path", async () => {
     const { container, rerenderPolygons } = await mountPolygons(polygonCollection(3));
     await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(1));
 
     rerenderPolygons(polygonCollection(3), "zone-1");
-    await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(2));
-    const paint = vi.mocked(renderer.setRetainedPolygons!).mock.calls[1]![4];
-    // Hovering widens the stroke of that polygon only.
-    expect(paint[MAPS_RETAINED_POLYGON_PAINT_STRIDE + 8]).toBeGreaterThan(paint[8]!);
+    await waitFor(() => expect(renderer.updateRetainedPolygons).toHaveBeenCalledTimes(1));
+    const [, indices, , , , paint] = vi.mocked(renderer.updateRetainedPolygons!).mock.calls[0]!;
+    // Hovering widens the stroke of that polygon only, which is updated in place (#189).
+    expect(Array.from(indices)).toEqual([1]);
+    const before = vi.mocked(renderer.setRetainedPolygons!).mock.calls[0]![4];
+    expect(paint[8]).toBeGreaterThan(before[MAPS_RETAINED_POLYGON_PAINT_STRIDE + 8]!);
 
     // An unlabeled point after the polygons joins their shape group (#195).
     rerenderPolygons(polygonCollection(3, true));
-    await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(3));
-    expect(vi.mocked(renderer.setRetainedPolygons!).mock.calls[2]![1]).toHaveLength(4);
+    await waitFor(() => expect(renderer.setRetainedPolygons).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(renderer.setRetainedPolygons!).mock.calls[1]![1]).toHaveLength(4);
     expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POLYGONS, 1, 1]);
     expect(renderer.setRetainedPoints).not.toHaveBeenCalled();
     const overlay = container.querySelector<HTMLCanvasElement>('[data-map-overlay-runtime="maps"]')!;

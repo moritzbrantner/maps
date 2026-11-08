@@ -1,4 +1,5 @@
-//! Multi-scale operation work evidence for GPU-retained application points (#155, #189).
+//! Multi-scale operation work evidence for GPU-retained application points (#155, #189)
+//! and shapes (#196, #189).
 //!
 //! These tests feed the `operations` in `.performance/contract.json` through
 //! `scripts/collect-work-evidence.sh`. They drive the renderer-independent half of the
@@ -31,7 +32,9 @@ use crate::retained_points::{
     RetainedPointCounters, RetainedPointState, RetainedView,
 };
 use crate::retained_polygons::{
-    RETAINED_POLYGON_PAINT_LENGTH, RETAINED_SHAPE_POLYGON, RetainedPolygonState, RetainedPolygons,
+    GeometryMirror, RETAINED_POLYGON_FILL_VERTEX_SIZE, RETAINED_POLYGON_PAINT_LENGTH,
+    RETAINED_POLYGON_STROKE_VERTEX_SIZE, RETAINED_SHAPE_POLYGON, RetainedPolygonState,
+    RetainedPolygonUpload, RetainedPolygons,
 };
 use crate::wgpu_geometry::{
     APPLICATION_CIRCLE, APPLICATION_CIRCLE_RECORD_LENGTH, WgpuApplicationFrame,
@@ -557,100 +560,403 @@ fn assert_ordinary_camera_bounds(sample: &WorkSample) {
     );
 }
 
-/// Uses the same retained-shape refresh state as the WebGPU backend. The first
-/// geometry build is outside the measured camera phase; every subsequent build
-/// would create real geometry bytes and be recorded as a regression.
-fn retained_polygon_camera_journey(count: u64) -> WorkSample {
-    let mut ring_counts = Vec::with_capacity(count as usize);
-    let mut point_counts = Vec::with_capacity(count as usize);
-    let mut lon_lat = Vec::with_capacity(count as usize * 8);
-    let paint_record: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
-        0.2,
-        0.4,
-        0.6,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        RETAINED_SHAPE_POLYGON,
-        0.0,
-        1.0,
-        1.0,
-        2.0,
-        1.05,
-    ];
-    let mut paint = Vec::with_capacity(count as usize * RETAINED_POLYGON_PAINT_LENGTH);
-    for index in 0..count {
-        let west = (index % 100) as f64 * 0.02 - 1.0;
-        let south = (index / 100) as f64 * 0.0005 - 1.0;
-        ring_counts.push(1);
-        point_counts.push(4);
-        lon_lat.extend_from_slice(&[
-            west,
-            south,
-            west + 0.01,
-            south,
-            west + 0.01,
-            south + 0.01,
-            west,
-            south + 0.01,
-        ]);
-        paint.extend_from_slice(&paint_record);
-    }
-    let shapes = RetainedPolygons::lower(&ring_counts, &point_counts, &lon_lat, &paint)
+/// One retained shape: an open ring of `[longitude, latitude]` points and its paint record.
+type Shape = (Vec<[f64; 2]>, [f32; RETAINED_POLYGON_PAINT_LENGTH]);
+
+/// A filled polygon without a stroke.
+const FILLED: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
+    0.2,
+    0.4,
+    0.6,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    RETAINED_SHAPE_POLYGON,
+    0.0,
+    1.0,
+    1.0,
+    2.0,
+    1.05,
+];
+/// A filled polygon with a 1.5 CSS px outline, so updates touch both geometry buffers.
+const STROKED: [f32; RETAINED_POLYGON_PAINT_LENGTH] = [
+    0.2,
+    0.4,
+    0.6,
+    1.0,
+    0.1,
+    0.1,
+    0.1,
+    1.0,
+    1.5,
+    RETAINED_SHAPE_POLYGON,
+    0.0,
+    1.0,
+    1.0,
+    2.0,
+    1.05,
+];
+/// Fill vertices of an `n`-gon: a fan triangle per edge plus the six-vertex cover.
+const fn fill_vertices(sides: u64) -> u64 {
+    sides * 3 + 6
+}
+/// Stroke vertices of an `n`-gon: a segment quad and a join quad per vertex.
+const fn stroke_vertices(sides: u64) -> u64 {
+    sides * 12
+}
+/// Geometry bytes of one stroked `n`-gon.
+const fn stroked_shape_bytes(sides: u64) -> u64 {
+    fill_vertices(sides) * RETAINED_POLYGON_FILL_VERTEX_SIZE
+        + stroke_vertices(sides) * RETAINED_POLYGON_STROKE_VERTEX_SIZE
+}
+/// Argument bytes per shape of `setRetainedPolygons` for one-ring `n`-gons without dashes or
+/// patterns: `u32` ring count, `u32` point count, `f64` longitude/latitude per point, the
+/// `f32` paint record and a `u32` dash count (the pattern list stays empty).
+const fn polygon_bridge_bytes(sides: u64) -> u64 {
+    4 + 4 + sides * 16 + RETAINED_POLYGON_PAINT_LENGTH as u64 * 4 + 4
+}
+/// Changed shapes of the in-place update operation, per total shape count.
+const CHANGED_SHAPES: [(u64, u64); 8] = [
+    (100, 1),
+    (100, 10),
+    (1_000, 1),
+    (1_000, 10),
+    (1_000, 100),
+    (10_000, 1),
+    (10_000, 10),
+    (10_000, 100),
+];
+
+/// Square `index` of a deterministic 100-column grid south-west of the camera.
+fn grid_square(index: u64) -> Vec<[f64; 2]> {
+    let west = (index % 100) as f64 * 0.02 - 1.0;
+    let south = (index / 100) as f64 * 0.0005 - 1.0;
+    vec![
+        [west, south],
+        [west + 0.01, south],
+        [west + 0.01, south + 0.01],
+        [west, south + 0.01],
+    ]
+}
+
+/// The arrays `setRetainedPolygons` takes for `shapes`, lowered as it lowers them, and their
+/// argument bytes.
+fn lower_shapes(shapes: &[Shape]) -> (RetainedPolygons, u64) {
+    let ring_counts = vec![1; shapes.len()];
+    let point_counts: Vec<u32> = shapes.iter().map(|(ring, _)| ring.len() as u32).collect();
+    let lon_lat: Vec<f64> = shapes
+        .iter()
+        .flat_map(|(ring, _)| ring.as_flattened())
+        .copied()
+        .collect();
+    let paint: Vec<f32> = shapes.iter().flat_map(|(_, paint)| *paint).collect();
+    let dash_counts = vec![0_u32; shapes.len()];
+    let bridge_bytes = (ring_counts.len() + point_counts.len() + dash_counts.len()) as u64 * 4
+        + lon_lat.len() as u64 * 8
+        + paint.len() as u64 * 4;
+    let polygons = RetainedPolygons::lower(&ring_counts, &point_counts, &lon_lat, &paint)
         .expect("valid shapes");
-    let mut state = RetainedPolygonState::new(shapes);
-    let atlas = ImageAtlas::default();
-    let mut camera = runtime(0.0, 0.0, 5.0);
-    let (view, _) = camera_view(&mut camera);
-    let (geometry, rebased) = state.prepare(&view, &atlas).expect("initial geometry");
+    (polygons, bridge_bytes)
+}
+
+/// A drawn retained shape group: the backend's refresh state with its GPU buffers mirrored
+/// byte for byte, built on the first camera frame outside any measured phase.
+fn drawn_polygons(
+    shapes: &[Shape],
+    camera: &mut FlatRasterRuntime,
+) -> (RetainedPolygonState, GeometryMirror) {
+    let mut state = RetainedPolygonState::new(lower_shapes(shapes).0);
+    let (view, _) = camera_view(camera);
+    let (geometry, rebased) = state
+        .prepare(&view, &ImageAtlas::default())
+        .expect("initial geometry");
     assert!(rebased, "first draw establishes a local frame");
-    assert_eq!(geometry.draws.len(), count as usize);
+    assert_eq!(geometry.draws.len(), shapes.len());
     assert!(
         !geometry.fill.is_empty(),
         "the first draw must contain fill geometry"
     );
+    let mut mirror = GeometryMirror::default();
+    mirror.replace(&geometry);
+    (state, mirror)
+}
 
-    let mut rebuilds = 0;
-    let mut upload_bytes = 0;
-    let mut frame_uniforms = 0;
-    for _ in 0..JOURNEY_FRAMES {
-        camera.pan_by_pixels(37.0, -23.0).expect("pan");
-        let (view, _) = camera_view(&mut camera);
-        if let Some((geometry, _)) = state.prepare(&view, &atlas) {
-            rebuilds += 1;
-            upload_bytes += (geometry.fill.len()
-                + geometry.stroke.len()
-                + geometry.pattern_covers.len()
-                + geometry.pattern_outlines.len()) as u64;
+/// Retained-shape work of one measured phase, counted at the resource boundary: refresh
+/// decisions of [`RetainedPolygonState`] and the uploads executed on the mirror.
+#[derive(Default)]
+struct PolygonPhase {
+    rebuilds: u64,
+    upload_bytes: u64,
+    write_calls: u64,
+    frame_uniforms: u64,
+}
+
+impl PolygonPhase {
+    /// Executes `upload` on the mirror and counts it.
+    fn upload(&mut self, mirror: &mut GeometryMirror, upload: &RetainedPolygonUpload) {
+        self.rebuilds += u64::from(matches!(upload, RetainedPolygonUpload::Replace(_)));
+        let (bytes, calls) = mirror.apply(upload);
+        self.upload_bytes += bytes;
+        self.write_calls += calls;
+    }
+
+    /// One camera frame: the group's refresh decision, then its frame uniforms. Returns the
+    /// frame's view.
+    fn frame(
+        &mut self,
+        state: &mut RetainedPolygonState,
+        mirror: &mut GeometryMirror,
+        camera: &mut FlatRasterRuntime,
+    ) -> RetainedView {
+        let (view, _) = camera_view(camera);
+        if let Some((geometry, _)) = state.prepare(&view, &ImageAtlas::default()) {
+            self.upload(mirror, &RetainedPolygonUpload::Replace(geometry));
         }
         let anchor = state.anchor().expect("retained anchor");
         let copies = view.anchor_frames(anchor).count() as u64;
         assert!(copies > 0, "camera must still draw the retained group");
-        frame_uniforms += copies;
+        self.frame_uniforms += copies;
+        view
     }
+
+    /// Oracle: the mirrored buffers draw exactly what a fresh build of `shapes` around the
+    /// group's anchor draws.
+    fn check(
+        state: &RetainedPolygonState,
+        mirror: &GeometryMirror,
+        shapes: &[Shape],
+        view: &RetainedView,
+    ) {
+        let anchor = state.anchor().expect("retained anchor");
+        let fresh =
+            lower_shapes(shapes)
+                .0
+                .geometry(anchor, view.tile_zoom(), &ImageAtlas::default());
+        mirror.assert_draws(state.draws(), &fresh);
+    }
+}
+
+/// Uses the same retained-shape refresh state as the WebGPU backend. The first
+/// geometry build is outside the measured camera phase; every subsequent build
+/// would create real geometry bytes and be recorded as a regression.
+fn retained_polygon_camera_journey(
+    count: u64,
+    mut camera: FlatRasterRuntime,
+    step: impl Fn(&mut FlatRasterRuntime, u64),
+) -> WorkSample {
+    let shapes: Vec<Shape> = (0..count)
+        .map(|index| (grid_square(index), FILLED))
+        .collect();
+    let (mut state, mut mirror) = drawn_polygons(&shapes, &mut camera);
+    let mut phase = PolygonPhase::default();
+    let mut view = None;
+    for frame in 1..=JOURNEY_FRAMES {
+        step(&mut camera, frame);
+        view = Some(phase.frame(&mut state, &mut mirror, &mut camera));
+    }
+    PolygonPhase::check(&state, &mirror, &shapes, &view.expect("camera frames"));
     (
         vec![("staticShapes", count)],
         vec![
-            ("geometry-rebuilds", rebuilds),
-            ("geometry-upload-bytes", upload_bytes),
-            ("frame-uniform-writes", frame_uniforms),
+            ("geometry-rebuilds", phase.rebuilds),
+            ("geometry-upload-bytes", phase.upload_bytes),
+            ("frame-uniform-writes", phase.frame_uniforms),
         ],
     )
+}
+
+fn assert_polygon_camera_bounds(sample: &WorkSample) {
+    assert_metric(sample, "geometry-rebuilds", 0);
+    assert_metric(sample, "geometry-upload-bytes", 0);
+    assert_metric(sample, "frame-uniform-writes", JOURNEY_FRAMES);
 }
 
 #[test]
 fn retained_polygons_camera_pan_does_no_per_shape_work() {
     let samples: Vec<WorkSample> = STATIC_SHAPES
         .iter()
-        .map(|&count| retained_polygon_camera_journey(count))
+        .map(|&count| {
+            retained_polygon_camera_journey(count, runtime(0.0, 0.0, 5.0), |camera, _| {
+                camera.pan_by_pixels(37.0, -23.0).expect("pan");
+            })
+        })
         .collect();
-    report("retained-polygons-camera-pan", &samples, |sample| {
+    report(
+        "retained-polygons-camera-pan",
+        &samples,
+        assert_polygon_camera_bounds,
+    );
+}
+
+/// Pitch is not part of this journey: the runtime returns shape groups to the projected
+/// path under a pitched camera, so the projected picking scene and Canvas oracle agree.
+#[test]
+fn retained_polygons_camera_zoom_rotate_does_no_per_shape_work() {
+    let samples: Vec<WorkSample> = STATIC_SHAPES
+        .iter()
+        .map(|&count| {
+            retained_polygon_camera_journey(count, runtime(0.0, 0.0, 5.0), |camera, frame| {
+                let k = frame as f64;
+                camera
+                    .set_camera_state(0.0, 0.0, 5.0 + k * 0.1, k * 4.0, 0.0)
+                    .expect("camera");
+            })
+        })
+        .collect();
+    report(
+        "retained-polygons-camera-zoom-rotate",
+        &samples,
+        assert_polygon_camera_bounds,
+    );
+}
+
+#[test]
+fn retained_polygons_update_rewrites_only_the_changed_shapes() {
+    let mut samples = Vec::new();
+    for (count, changed) in CHANGED_SHAPES {
+        let mut shapes: Vec<Shape> = (0..count)
+            .map(|index| (grid_square(index), STROKED))
+            .collect();
+        let mut camera = runtime(0.0, 0.0, 5.0);
+        let (mut state, mut mirror) = drawn_polygons(&shapes, &mut camera);
+        let before = state.draws().to_vec();
+
+        // Spread over the group; each changed square becomes a moved, recoloured pentagon,
+        // so its geometry grows and moves into its buffers' free tails.
+        let stride = count / changed;
+        let indices: Vec<u32> = (0..changed)
+            .map(|k| (k * stride + stride / 2) as u32)
+            .collect();
+        let mut recoloured = STROKED;
+        recoloured[0] = 0.9;
+        let mut updates = Vec::new();
+        for &index in &indices {
+            let [west, south] = grid_square(u64::from(index))[0];
+            let pentagon = vec![
+                [west + 0.3, south + 0.2],
+                [west + 0.31, south + 0.2],
+                [west + 0.315, south + 0.207],
+                [west + 0.305, south + 0.212],
+                [west + 0.295, south + 0.207],
+            ];
+            shapes[index as usize] = (pentagon.clone(), recoloured);
+            updates.push((pentagon, recoloured));
+        }
+        let (lowered, bridge_bytes) = lower_shapes(&updates);
+        let prepared = lowered.len() as u64;
+
+        let mut phase = PolygonPhase::default();
+        let upload = state
+            .update(&indices, lowered, &ImageAtlas::default())
+            .expect("valid update")
+            .expect("a drawn group uploads its update");
+        // Bytes the update writes over geometry that unchanged shapes draw.
+        let mut unrelated = 0;
+        if let RetainedPolygonUpload::Patch(writes) = &upload {
+            for (shape, draw) in before.iter().enumerate() {
+                if indices.binary_search(&(shape as u32)).is_ok() {
+                    continue;
+                }
+                for (buffer, range) in GeometryMirror::draw_ranges(draw) {
+                    for write in writes.iter().filter(|write| write.buffer == buffer) {
+                        let end = write.offset + write.bytes.len() as u64;
+                        unrelated += end
+                            .min(range.end)
+                            .saturating_sub(write.offset.max(range.start));
+                    }
+                }
+            }
+        }
+        phase.upload(&mut mirror, &upload);
+        // The next camera frame draws the changed shapes with every other shape intact.
+        camera.pan_by_pixels(5.0, 3.0).expect("pan");
+        let view = phase.frame(&mut state, &mut mirror, &mut camera);
+        PolygonPhase::check(&state, &mirror, &shapes, &view);
+        samples.push((
+            vec![("changedShapes", changed), ("totalShapes", count)],
+            vec![
+                ("prepared-shapes", prepared),
+                ("geometry-rebuilds", phase.rebuilds),
+                ("geometry-upload-bytes", phase.upload_bytes),
+                ("geometry-write-calls", phase.write_calls),
+                ("unrelated-bytes-written", unrelated),
+                ("bridge-bytes", bridge_bytes + changed * 4),
+                ("frame-uniform-writes", phase.frame_uniforms),
+            ],
+        ));
+    }
+    report("retained-polygons-update-features", &samples, |sample| {
+        let changed = dimension(sample, "changedShapes");
+        assert_metric(sample, "prepared-shapes", changed);
         assert_metric(sample, "geometry-rebuilds", 0);
-        assert_metric(sample, "geometry-upload-bytes", 0);
-        assert_metric(sample, "frame-uniform-writes", JOURNEY_FRAMES);
+        assert_metric(
+            sample,
+            "geometry-upload-bytes",
+            changed * stroked_shape_bytes(5),
+        );
+        assert_metric(sample, "geometry-write-calls", changed * 2);
+        assert_metric(sample, "unrelated-bytes-written", 0);
+        assert_metric(
+            sample,
+            "bridge-bytes",
+            changed * (polygon_bridge_bytes(5) + 4),
+        );
+        assert_metric(sample, "frame-uniform-writes", 1);
+    });
+}
+
+#[test]
+fn retained_polygons_dataset_replacement_is_declared_linear_work() {
+    let samples: Vec<WorkSample> = STATIC_SHAPES
+        .iter()
+        .map(|&count| {
+            let shapes: Vec<Shape> = (0..count)
+                .map(|index| (grid_square(index), STROKED))
+                .collect();
+            let mut camera = runtime(0.0, 0.0, 5.0);
+            let (_, mut mirror) = drawn_polygons(&shapes, &mut camera);
+            // `setRetainedPolygons` replaces the group's state with the new dataset.
+            let replacement: Vec<Shape> = shapes
+                .iter()
+                .map(|(ring, paint)| {
+                    let moved = ring.iter().map(|&[x, y]| [x + 0.5, y + 0.25]).collect();
+                    (moved, *paint)
+                })
+                .collect();
+            let (lowered, bridge_bytes) = lower_shapes(&replacement);
+            let prepared = lowered.len() as u64;
+            let mut state = RetainedPolygonState::new(lowered);
+            let mut phase = PolygonPhase::default();
+            let view = phase.frame(&mut state, &mut mirror, &mut camera);
+            PolygonPhase::check(&state, &mirror, &replacement, &view);
+            (
+                vec![("shapes", count)],
+                vec![
+                    ("prepared-shapes", prepared),
+                    ("geometry-rebuilds", phase.rebuilds),
+                    ("geometry-upload-bytes", phase.upload_bytes),
+                    ("geometry-write-calls", phase.write_calls),
+                    ("bridge-bytes", bridge_bytes),
+                    ("frame-uniform-writes", phase.frame_uniforms),
+                ],
+            )
+        })
+        .collect();
+    report("retained-polygons-replace-dataset", &samples, |sample| {
+        let count = dimension(sample, "shapes");
+        assert_metric(sample, "prepared-shapes", count);
+        assert_metric(sample, "geometry-rebuilds", 1);
+        assert_metric(
+            sample,
+            "geometry-upload-bytes",
+            count * stroked_shape_bytes(4),
+        );
+        assert_metric(sample, "geometry-write-calls", 2);
+        assert_metric(sample, "bridge-bytes", count * polygon_bridge_bytes(4));
+        assert_metric(sample, "frame-uniform-writes", 1);
     });
 }
 

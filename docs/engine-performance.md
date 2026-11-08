@@ -262,7 +262,7 @@ the slowest here. Those times measure the software rasterizer, not retained
 work, and they say nothing about hardware-GPU presentation. `--gpu` switches
 to hardware-GPU flags for a local comparison on a real adapter.
 
-## Retained-point work contracts (#189)
+## Retained-point and retained-shape work contracts (#189)
 
 The O(1) camera contract of #155 is also a deterministic gate. `.performance/contract.json`
 (schemaVersion 2) declares `operations` in coding-tooling's shared vocabulary, and
@@ -283,15 +283,34 @@ point must be drawn within 0.05 px of its `maps-core` projection, with its curre
 | `retained-points-update-features` | Lowering, encoding, upload, write calls and call payload linear in changed points and constant in total points; no rebuilds and no unrelated instances written |
 | `retained-points-replace-dataset` | Declared linear: one lowering, encode and upload of every point |
 | `projected-points-camera-pan` | Comparison role: the screen-projected path projects, sends and uploads every point on every camera frame (linear) |
+| `retained-polygons-camera-pan`, `retained-polygons-camera-zoom-rotate` | No geometry rebuilds or uploads; one frame uniform per camera frame, constant in shapes (100, 1k, 10k) |
+| `retained-polygons-update-features` | Lowering, geometry upload, write calls and call payload linear in changed shapes and constant in total shapes; no rebuilds and no bytes written over unchanged shapes' geometry |
+| `retained-polygons-replace-dataset` | Declared linear: one lowering, build and upload of every shape |
+
+Retained shape groups follow the same pattern. `RetainedPolygonState` in
+`crates/maps-wasm/src/retained_polygons.rs` decides every geometry build and write, and the
+backend executes them. The tests mirror the four geometry buffers by executing the returned
+uploads. Their oracle compares the draws over the mirror with a fresh build of the whole
+group around the same anchor, byte for byte. A shape update builds only the changed shapes'
+geometry around the current anchor. A shape whose geometry keeps its size is written in
+place. Otherwise it moves into the free tail that every build reserves (a quarter of each
+buffer's vertices). The group is repacked only when a tail is full or a shape's draw count
+changes. Camera frames read cached counts of zoom-dependent and patterned shapes rather than
+visiting every shape. Pitch is outside the shape camera contract: the runtime returns shape
+groups to the projected path under a pitched camera. Groups with lines or patterns rebuild
+once per floored-zoom change, as MapLibre's GeoJSON tiles do; the polygon contracts measure
+polygon-only groups.
 
 Without `MAPS_WORK_EVIDENCE_DIR`, plain `cargo test` asserts the same bounds as exact
-formulas. A camera frame that re-encodes or re-uploads the points therefore fails the normal
-Rust gate as well as `performance work`. On WebGPU, `updateRetainedPoints` carries a data or
-hover/selection change of some points of a group to the renderer. The runtime compares the
-group's previous transport arrays with the new ones and sends only the changed points.
-Unchanged shape groups are not re-sent. Line, flow and polygon groups have no operation
-contracts yet. The JS side still rebuilds and compares the transport arrays of a changed
-frame, so JS-side materialization is linear in the group size.
+formulas. A camera frame that re-encodes or re-uploads the points or shapes therefore fails
+the normal Rust gate as well as `performance work`. On WebGPU, `updateRetainedPoints` and
+`updateRetainedPolygons` carry a data or hover/selection change of some features of a group
+to the renderer. The runtime compares the group's previous transport arrays with the new
+ones and sends only the changed points or shapes; unchanged groups are not re-sent, and a
+group that changes size or in more than half of its features is replaced. Line and flow
+groups use the same update path but have no operation contracts of their own yet. The JS
+side still rebuilds and compares the transport arrays of a changed frame, so JS-side
+materialization is linear in the group size.
 
 ## Evidence tooling repair — September 30
 

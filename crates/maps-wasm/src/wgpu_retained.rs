@@ -38,14 +38,30 @@ pub(crate) fn upload_retained_buffer(
     usage: wgpu::BufferUsages,
     bytes: &[u8],
 ) -> Option<wgpu::Buffer> {
-    (!bytes.is_empty()).then(|| {
+    upload_retained_buffer_with_capacity(device, queue, label, usage, bytes, bytes.len() as u64)
+}
+
+/// Uploads `bytes` into a new GPU buffer of `capacity` bytes (at least `bytes`), whose
+/// free tail later in-place writes may fill; zero capacity retains nothing.
+pub(crate) fn upload_retained_buffer_with_capacity(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    usage: wgpu::BufferUsages,
+    bytes: &[u8],
+    capacity: u64,
+) -> Option<wgpu::Buffer> {
+    let size = capacity.max(bytes.len() as u64);
+    (size > 0).then(|| {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            size: bytes.len() as u64,
+            size,
             usage: usage | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buffer, 0, bytes);
+        if !bytes.is_empty() {
+            queue.write_buffer(&buffer, 0, bytes);
+        }
         buffer
     })
 }

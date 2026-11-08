@@ -105,24 +105,94 @@ pub(crate) struct RetainedPolygons {
     polygons: Vec<RetainedPolygon>,
 }
 
+/// Vertex size of each geometry buffer, in [`RetainedPolygonGeometry::lengths`] order:
+/// fill, stroke, pattern covers, pattern outlines.
+const BUFFER_VERTEX_SIZES: [u64; 4] = [
+    RETAINED_POLYGON_FILL_VERTEX_SIZE,
+    RETAINED_POLYGON_STROKE_VERTEX_SIZE,
+    FILL_VERTEX_SIZE,
+    FILL_OUTLINE_VERTEX_SIZE,
+];
+
+/// One shape's bytes in each geometry buffer and its draws, from [`RetainedPolygons::geometry`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ShapeSlot {
+    start: [u64; 4],
+    len: [u64; 4],
+    first_draw: u32,
+    draw_count: u32,
+}
+
+/// Geometry-buffer work of one retained shape group decided by [`RetainedPolygonState`].
+#[derive(Debug)]
+pub(crate) enum RetainedPolygonUpload {
+    /// Every buffer replaced: each holds the geometry's bytes from offset 0 within its
+    /// [`RetainedPolygonGeometry::capacity`].
+    Replace(RetainedPolygonGeometry),
+    /// In-place writes of changed shapes; the draws are the state's.
+    Patch(Vec<GeometryWrite>),
+}
+
+/// Bytes written at a byte offset of one geometry buffer (fill, stroke, pattern covers or
+/// pattern outlines, as [`RetainedPolygonGeometry::lengths`] orders them).
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct GeometryWrite {
+    pub(crate) buffer: usize,
+    pub(crate) offset: u64,
+    pub(crate) bytes: Vec<u8>,
+}
+
 /// The renderer-independent refresh state for one retained shape group. Camera-only
 /// frames must not rebuild geometry, including when an invisible group has no GPU
-/// buffers to upload. The WebGPU backend consumes only the returned changes.
+/// buffers to upload, and an update of some shapes rewrites only theirs (#189). The WebGPU
+/// backend consumes only the returned changes and draws [`Self::draws`].
 #[derive(Debug)]
 pub(crate) struct RetainedPolygonState {
     polygons: RetainedPolygons,
     anchor: Option<[f64; 2]>,
     tile_zoom: Option<u8>,
     atlas_revision: Option<u64>,
+    /// Shapes whose geometry depends on the tile zoom (lines and patterns), and the
+    /// patterned ones whose geometry also depends on the image atlas: counted, so a camera
+    /// frame decides without visiting every shape.
+    zoom_dependent: usize,
+    patterned: usize,
+    slots: Vec<ShapeSlot>,
+    draws: Vec<RetainedPolygonDraw>,
+    /// Bytes in use and allocated per geometry buffer. Shapes whose geometry changes size
+    /// move into the free tail; the group is repacked when it is full.
+    used: [u64; 4],
+    capacity: [u64; 4],
+}
+
+impl RetainedPolygon {
+    /// Whether the geometry depends on the tile zoom passed to
+    /// [`RetainedPolygons::geometry`]: lines follow MapLibre's GeoJSON tiles, patterns
+    /// repeat in pixels of the tile zoom.
+    fn zoom_dependent(&self) -> bool {
+        self.simplified.is_some() || self.pattern.is_some()
+    }
 }
 
 impl RetainedPolygonState {
     pub(crate) fn new(polygons: RetainedPolygons) -> Self {
+        let zoom_dependent = polygons
+            .polygons
+            .iter()
+            .filter(|polygon| polygon.zoom_dependent())
+            .count();
+        let patterned = polygons.patterns().count();
         Self {
             polygons,
             anchor: None,
             tile_zoom: None,
             atlas_revision: None,
+            zoom_dependent,
+            patterned,
+            slots: Vec::new(),
+            draws: Vec::new(),
+            used: [0; 4],
+            capacity: [0; 4],
         }
     }
 
@@ -134,6 +204,15 @@ impl RetainedPolygonState {
         self.anchor
     }
 
+    /// The draws of the geometry the backend holds, shape by shape in source order.
+    pub(crate) fn draws(&self) -> &[RetainedPolygonDraw] {
+        &self.draws
+    }
+
+    fn atlas_stale(&self, atlas: &ImageAtlas) -> bool {
+        self.patterned > 0 && self.atlas_revision != Some(atlas.revision)
+    }
+
     /// Returns geometry only on first use, a local-frame rebase, or a zoom/atlas
     /// change that affects line/pattern geometry. The boolean distinguishes rebases
     /// from zoom-only rebuilds for the backend's existing work counters.
@@ -143,20 +222,137 @@ impl RetainedPolygonState {
         atlas: &ImageAtlas,
     ) -> Option<(RetainedPolygonGeometry, bool)> {
         let tile_zoom = view.tile_zoom();
-        let rezoomed = self.polygons.has_lines()
-            && (self.tile_zoom != Some(tile_zoom)
-                || (self.polygons.patterns().next().is_some()
-                    && self.atlas_revision != Some(atlas.revision)));
+        let rezoomed = self.zoom_dependent > 0
+            && (self.tile_zoom != Some(tile_zoom) || self.atlas_stale(atlas));
         let rebase = view.needs_rebase(self.anchor);
         if !rezoomed && !rebase {
             return None;
         }
+        Some((self.rebuild(view.center, tile_zoom, atlas), rebase))
+    }
 
-        let geometry = self.polygons.geometry(view.center, tile_zoom, atlas);
-        self.anchor = Some(view.center);
+    /// Builds the whole group around `anchor` with free space for moved shapes.
+    fn rebuild(
+        &mut self,
+        anchor: [f64; 2],
+        tile_zoom: u8,
+        atlas: &ImageAtlas,
+    ) -> RetainedPolygonGeometry {
+        let mut geometry = self.polygons.geometry(anchor, tile_zoom, atlas);
+        self.anchor = Some(anchor);
         self.tile_zoom = Some(tile_zoom);
         self.atlas_revision = Some(atlas.revision);
-        Some((geometry, rebase))
+        self.slots = std::mem::take(&mut geometry.slots);
+        self.draws.clone_from(&geometry.draws);
+        self.used = geometry.lengths();
+        // A quarter more vertices, so updates repack after changing about that many.
+        geometry.capacity = std::array::from_fn(|buffer| {
+            let size = BUFFER_VERTEX_SIZES[buffer];
+            let vertices = self.used[buffer] / size;
+            (vertices + vertices / 4) * size
+        });
+        self.capacity = geometry.capacity;
+        geometry
+    }
+
+    /// Replaces the shapes at the strictly increasing `indices` with `shapes`, lowered by
+    /// [`RetainedPolygons::lower`]. Only their geometry is built, around the current anchor:
+    /// written in place when its size is unchanged, otherwise into the free tail of its
+    /// buffer. The group is rebuilt only when a tail is full or a shape's draw count changes
+    /// (a circle's visible parts, or another kind). `None` when the next frame rebuilds the
+    /// group anyway (not yet drawn, or a pattern atlas change).
+    pub(crate) fn update(
+        &mut self,
+        indices: &[u32],
+        shapes: RetainedPolygons,
+        atlas: &ImageAtlas,
+    ) -> Result<Option<RetainedPolygonUpload>, &'static str> {
+        if indices.len() != shapes.len()
+            || !indices.windows(2).all(|pair| pair[0] < pair[1])
+            || indices
+                .last()
+                .is_some_and(|&index| index as usize >= self.len())
+        {
+            return Err("retained polygon update indices must be increasing and in range");
+        }
+        for (&index, shape) in indices.iter().zip(shapes.polygons) {
+            let previous = std::mem::replace(&mut self.polygons.polygons[index as usize], shape);
+            let current = &self.polygons.polygons[index as usize];
+            self.zoom_dependent = self.zoom_dependent + usize::from(current.zoom_dependent())
+                - usize::from(previous.zoom_dependent());
+            self.patterned = self.patterned + usize::from(current.pattern.is_some())
+                - usize::from(previous.pattern.is_some());
+        }
+        let (Some(anchor), Some(tile_zoom)) = (self.anchor, self.tile_zoom) else {
+            return Ok(None);
+        };
+        if self.atlas_stale(atlas) {
+            return Ok(None);
+        }
+
+        let mut used = self.used;
+        let mut placed = Vec::with_capacity(indices.len());
+        for &index in indices {
+            let mut geometry = RetainedPolygonGeometry::default();
+            let fresh = self.polygons.polygons[index as usize].append_geometry(
+                anchor,
+                tile_zoom,
+                atlas,
+                &mut geometry,
+            );
+            let slot = self.slots[index as usize];
+            if fresh.draw_count != slot.draw_count {
+                return Ok(Some(RetainedPolygonUpload::Replace(
+                    self.rebuild(anchor, tile_zoom, atlas),
+                )));
+            }
+            let mut start = slot.start;
+            for buffer in 0..4 {
+                if fresh.len[buffer] == slot.len[buffer] {
+                    continue;
+                }
+                if used[buffer] + fresh.len[buffer] > self.capacity[buffer] {
+                    return Ok(Some(RetainedPolygonUpload::Replace(
+                        self.rebuild(anchor, tile_zoom, atlas),
+                    )));
+                }
+                start[buffer] = used[buffer];
+                used[buffer] += fresh.len[buffer];
+            }
+            placed.push((index as usize, start, geometry));
+        }
+
+        let mut writes = Vec::new();
+        for (index, start, geometry) in placed {
+            let slot = &mut self.slots[index];
+            slot.start = start;
+            slot.len = geometry.lengths();
+            let base: [u32; 4] =
+                std::array::from_fn(|buffer| (start[buffer] / BUFFER_VERTEX_SIZES[buffer]) as u32);
+            for (target, draw) in self.draws[slot.first_draw as usize..]
+                .iter_mut()
+                .zip(&geometry.draws)
+            {
+                *target = draw.relocated(base);
+            }
+            let buffers = [
+                geometry.fill,
+                geometry.stroke,
+                geometry.pattern_covers,
+                geometry.pattern_outlines,
+            ];
+            for (buffer, bytes) in buffers.into_iter().enumerate() {
+                if !bytes.is_empty() {
+                    writes.push(GeometryWrite {
+                        buffer,
+                        offset: start[buffer],
+                        bytes,
+                    });
+                }
+            }
+        }
+        self.used = used;
+        Ok(Some(RetainedPolygonUpload::Patch(writes)))
     }
 }
 
@@ -184,6 +380,20 @@ pub(crate) struct RetainedPatternDraw {
     pub(crate) outline_count: u32,
 }
 
+impl RetainedPolygonDraw {
+    /// This draw with its vertex indices moved by `base` vertices of each buffer.
+    fn relocated(mut self, base: [u32; 4]) -> Self {
+        self.fan_first += base[0];
+        self.cover_first += base[0];
+        self.stroke_first += base[1];
+        if let Some(pattern) = &mut self.pattern {
+            pattern.cover_first += base[2];
+            pattern.outline_first += base[3];
+        }
+        self
+    }
+}
+
 /// GPU geometry of a polygon group around one anchor.
 #[derive(Debug, Default)]
 pub(crate) struct RetainedPolygonGeometry {
@@ -194,6 +404,30 @@ pub(crate) struct RetainedPolygonGeometry {
     /// Pattern outlines (`FILL_OUTLINE_VERTEX_SIZE` vertices).
     pub(crate) pattern_outlines: Vec<u8>,
     pub(crate) draws: Vec<RetainedPolygonDraw>,
+    /// Bytes to allocate per buffer, in [`Self::lengths`] order; at least the lengths.
+    pub(crate) capacity: [u64; 4],
+    slots: Vec<ShapeSlot>,
+}
+
+impl RetainedPolygonGeometry {
+    /// Byte lengths of the fill, stroke, pattern cover and pattern outline buffers.
+    pub(crate) fn lengths(&self) -> [u64; 4] {
+        [
+            self.fill.len() as u64,
+            self.stroke.len() as u64,
+            self.pattern_covers.len() as u64,
+            self.pattern_outlines.len() as u64,
+        ]
+    }
+
+    pub(crate) fn buffers(&self) -> [&[u8]; 4] {
+        [
+            &self.fill,
+            &self.stroke,
+            &self.pattern_covers,
+            &self.pattern_outlines,
+        ]
+    }
 }
 
 impl RetainedPolygons {
@@ -362,14 +596,6 @@ impl RetainedPolygons {
             .filter_map(|polygon| polygon.pattern.as_deref())
     }
 
-    /// Whether the geometry depends on the tile zoom passed to [`Self::geometry`]: lines
-    /// follow MapLibre's GeoJSON tiles, patterns repeat in pixels of the tile zoom.
-    pub(crate) fn has_lines(&self) -> bool {
-        self.polygons
-            .iter()
-            .any(|polygon| polygon.simplified.is_some() || polygon.pattern.is_some())
-    }
-
     /// GPU geometry around `anchor`, with lines as MapLibre's zoom-`tile_zoom` GeoJSON tiles
     /// hold them and patterns from `images`.
     pub(crate) fn geometry(
@@ -378,6 +604,46 @@ impl RetainedPolygons {
         tile_zoom: u8,
         images: &ImageAtlas,
     ) -> RetainedPolygonGeometry {
+        let mut geometry = RetainedPolygonGeometry::default();
+        for polygon in &self.polygons {
+            let slot = polygon.append_geometry(anchor, tile_zoom, images, &mut geometry);
+            geometry.slots.push(slot);
+        }
+        geometry.capacity = geometry.lengths();
+        geometry
+    }
+}
+
+impl RetainedPolygon {
+    /// Appends this shape's GPU geometry around `anchor`, and its draws with vertex indices
+    /// into the buffers as `geometry` holds them. Returns the shape's slot there.
+    fn append_geometry(
+        &self,
+        anchor: [f64; 2],
+        tile_zoom: u8,
+        images: &ImageAtlas,
+        geometry: &mut RetainedPolygonGeometry,
+    ) -> ShapeSlot {
+        let start = geometry.lengths();
+        let first_draw = geometry.draws.len() as u32;
+        self.push_geometry(anchor, tile_zoom, images, geometry);
+        let end = geometry.lengths();
+        ShapeSlot {
+            start,
+            len: std::array::from_fn(|buffer| end[buffer] - start[buffer]),
+            first_draw,
+            draw_count: geometry.draws.len() as u32 - first_draw,
+        }
+    }
+
+    fn push_geometry(
+        &self,
+        anchor: [f64; 2],
+        tile_zoom: u8,
+        images: &ImageAtlas,
+        geometry: &mut RetainedPolygonGeometry,
+    ) {
+        let polygon = self;
         let offset = |[x, y]: [f64; 2]| -> [f32; 2] {
             [
                 wrap_world_delta(x - anchor[0]) as f32,
@@ -388,8 +654,7 @@ impl RetainedPolygons {
         // source), and the anchor's pixel whose whole pattern periods drop out.
         let pattern_scale = 512.0 * f64::from(tile_zoom).exp2();
         let pattern_origin = [anchor[0] * pattern_scale, anchor[1] * pattern_scale];
-        let mut geometry = RetainedPolygonGeometry::default();
-        for polygon in &self.polygons {
+        {
             let fill_index =
                 |bytes: &Vec<u8>| (bytes.len() as u64 / RETAINED_POLYGON_FILL_VERTEX_SIZE) as u32;
             let stroke_index =
@@ -532,7 +797,7 @@ impl RetainedPolygons {
                 if stroked {
                     disc(polygon.stroke, 1.0);
                 }
-                continue;
+                return;
             }
 
             if polygon.shape == Shape::DirectionMarker {
@@ -554,7 +819,7 @@ impl RetainedPolygons {
                     draw.stroke_count = stroke_index(&geometry.stroke) - draw.stroke_first;
                 }
                 geometry.draws.push(draw);
-                continue;
+                return;
             }
 
             if polygon.shape == Shape::Line
@@ -646,7 +911,7 @@ impl RetainedPolygons {
                 draw.stroke_count = stroke_index(&geometry.stroke) - draw.stroke_first;
                 draw.line = true;
                 geometry.draws.push(draw);
-                continue;
+                return;
             }
 
             if polygon.stroke_width > 0.0 && polygon.stroke[3] > 0.0 && !polygon.rings.is_empty() {
@@ -695,7 +960,6 @@ impl RetainedPolygons {
             }
             geometry.draws.push(draw);
         }
-        geometry
     }
 }
 
@@ -847,6 +1111,126 @@ fn push_vertex(
         .chain(clip)
     {
         bytes.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// A byte-for-byte mirror of one shape group's four GPU geometry buffers, kept by executing
+/// the [`RetainedPolygonUpload`]s as the backend does, so tests check applied uploads.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct GeometryMirror {
+    buffers: [Vec<u8>; 4],
+}
+
+#[cfg(test)]
+impl GeometryMirror {
+    /// Executes `upload`; returns its bytes written and write calls.
+    pub(crate) fn apply(&mut self, upload: &RetainedPolygonUpload) -> (u64, u64) {
+        match upload {
+            RetainedPolygonUpload::Replace(geometry) => self.replace(geometry),
+            RetainedPolygonUpload::Patch(writes) => {
+                for write in writes {
+                    let buffer = &mut self.buffers[write.buffer];
+                    let range = write.offset as usize..write.offset as usize + write.bytes.len();
+                    assert!(range.end <= buffer.len(), "a write must fit its buffer");
+                    buffer[range].copy_from_slice(&write.bytes);
+                }
+                (
+                    writes.iter().map(|write| write.bytes.len() as u64).sum(),
+                    writes.len() as u64,
+                )
+            }
+        }
+    }
+
+    /// New buffers of the geometry's capacity, as the backend allocates them.
+    pub(crate) fn replace(&mut self, geometry: &RetainedPolygonGeometry) -> (u64, u64) {
+        let mut calls = 0;
+        for (buffer, bytes) in geometry.buffers().into_iter().enumerate() {
+            let mut contents = bytes.to_vec();
+            contents.resize(
+                geometry.capacity[buffer].max(bytes.len() as u64) as usize,
+                0,
+            );
+            self.buffers[buffer] = contents;
+            calls += u64::from(!bytes.is_empty());
+        }
+        (geometry.lengths().iter().sum(), calls)
+    }
+
+    /// The bytes `draw` reads from each buffer, part by part.
+    pub(crate) fn draw_bytes(&self, draw: &RetainedPolygonDraw) -> [&[u8]; 5] {
+        Self::parts(&self.buffers.each_ref().map(Vec::as_slice), draw)
+    }
+
+    /// Byte ranges `draw` reads, as `(buffer, range)`.
+    pub(crate) fn draw_ranges(draw: &RetainedPolygonDraw) -> Vec<(usize, std::ops::Range<u64>)> {
+        let range = |buffer: usize, first: u32, count: u32| {
+            let size = BUFFER_VERTEX_SIZES[buffer];
+            (
+                buffer,
+                u64::from(first) * size..u64::from(first + count) * size,
+            )
+        };
+        let mut ranges = vec![range(1, draw.stroke_first, draw.stroke_count)];
+        if draw.fan_count > 0 {
+            ranges.push(range(0, draw.fan_first, draw.fan_count));
+            match draw.pattern {
+                Some(pattern) => {
+                    ranges.push(range(
+                        2,
+                        pattern.cover_first,
+                        RETAINED_POLYGON_COVER_VERTEX_COUNT,
+                    ));
+                    ranges.push(range(3, pattern.outline_first, pattern.outline_count));
+                }
+                None => ranges.push(range(
+                    0,
+                    draw.cover_first,
+                    RETAINED_POLYGON_COVER_VERTEX_COUNT,
+                )),
+            }
+        }
+        ranges
+    }
+
+    fn parts<'a>(buffers: &[&'a [u8]; 4], draw: &RetainedPolygonDraw) -> [&'a [u8]; 5] {
+        let mut parts: [&[u8]; 5] = [&[]; 5];
+        for (part, (buffer, range)) in Self::draw_ranges(draw).into_iter().enumerate() {
+            parts[part] = &buffers[buffer][range.start as usize..range.end as usize];
+        }
+        parts
+    }
+
+    /// Asserts that `draws` over this mirror draw exactly what `expected` (a fresh build of
+    /// the whole group around the same anchor) draws: the same draws, reading the same bytes.
+    pub(crate) fn assert_draws(
+        &self,
+        draws: &[RetainedPolygonDraw],
+        expected: &RetainedPolygonGeometry,
+    ) {
+        assert_eq!(draws.len(), expected.draws.len(), "draw count");
+        for (index, (draw, fresh)) in draws.iter().zip(&expected.draws).enumerate() {
+            assert_eq!(
+                (
+                    draw.fan_count,
+                    draw.stroke_count,
+                    draw.line,
+                    draw.pattern.is_some()
+                ),
+                (
+                    fresh.fan_count,
+                    fresh.stroke_count,
+                    fresh.line,
+                    fresh.pattern.is_some()
+                ),
+                "draw {index} shape"
+            );
+            assert!(
+                self.draw_bytes(draw) == Self::parts(&expected.buffers(), fresh),
+                "draw {index} reads other bytes than a fresh build"
+            );
+        }
     }
 }
 
@@ -1239,5 +1623,167 @@ mod tests {
             1
         );
         assert!(RetainedPolygons::lower(&[1], &[2], &[0.0; 4], &CIRCLE).is_err());
+    }
+
+    // In-place shape updates (#189).
+
+    fn squares(count: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>, Vec<f32>) {
+        let mut lon_lat = Vec::new();
+        for index in 0..count {
+            lon_lat.extend(square(index as f64 * 0.01, 0.0, 0.005));
+        }
+        (vec![1; count], vec![5; count], lon_lat, PAINT.repeat(count))
+    }
+
+    /// A drawn group of `count` stroked squares and its mirrored buffers.
+    fn drawn(count: usize) -> (RetainedPolygonState, GeometryMirror, RetainedView) {
+        let (rings, points, lon_lat, paint) = squares(count);
+        let polygons = RetainedPolygons::lower(&rings, &points, &lon_lat, &paint).unwrap();
+        let mut state = RetainedPolygonState::new(polygons);
+        let view = retained_test_view(5);
+        let (geometry, _) = state.prepare(&view, &ImageAtlas::default()).unwrap();
+        let mut mirror = GeometryMirror::default();
+        mirror.replace(&geometry);
+        (state, mirror, view)
+    }
+
+    /// The whole group as it now is, built fresh around the state's anchor.
+    fn fresh(
+        rings: &[u32],
+        points: &[u32],
+        lon_lat: &[f64],
+        paint: &[f32],
+        anchor: [f64; 2],
+    ) -> RetainedPolygonGeometry {
+        RetainedPolygons::lower(rings, points, lon_lat, paint)
+            .unwrap()
+            .geometry(anchor, 5, &ImageAtlas::default())
+    }
+
+    #[test]
+    fn same_size_update_writes_only_the_changed_shape_in_place() {
+        let (mut state, mut mirror, view) = drawn(8);
+        let (rings, points, mut lon_lat, mut paint) = squares(8);
+        let moved = square(1.0, 1.0, 0.005);
+        let mut recolored = PAINT;
+        recolored[0] = 0.9;
+        lon_lat[30..40].copy_from_slice(&moved);
+        paint[3 * RETAINED_POLYGON_PAINT_LENGTH..][..RETAINED_POLYGON_PAINT_LENGTH]
+            .copy_from_slice(&recolored);
+
+        let shape = RetainedPolygons::lower(&[1], &[5], &moved, &recolored).unwrap();
+        let upload = state.update(&[3], shape, &ImageAtlas::default()).unwrap();
+        let Some(RetainedPolygonUpload::Patch(writes)) = &upload else {
+            panic!("expected an in-place patch, got {upload:?}");
+        };
+        let shape_bytes = (4 * 3 + 6) * RETAINED_POLYGON_FILL_VERTEX_SIZE
+            + 4 * 12 * RETAINED_POLYGON_STROKE_VERTEX_SIZE;
+        assert_eq!(writes.len(), 2);
+        assert_eq!(mirror.apply(upload.as_ref().unwrap()).0, shape_bytes);
+        // Same sizes: written over the shape's own slot, not the free tail.
+        assert_eq!(
+            writes[0].offset,
+            3 * (4 * 3 + 6) * RETAINED_POLYGON_FILL_VERTEX_SIZE
+        );
+        assert!(state.prepare(&view, &ImageAtlas::default()).is_none());
+        mirror.assert_draws(
+            state.draws(),
+            &fresh(&rings, &points, &lon_lat, &paint, state.anchor().unwrap()),
+        );
+    }
+
+    #[test]
+    fn resized_shapes_move_into_the_free_tail_until_it_is_full() {
+        let (mut state, mut mirror, _) = drawn(8);
+        let (mut rings, mut points, lon_lat, paint) = squares(8);
+        // A square with a hole: twice the fan and stroke vertices.
+        let mut holed = square(0.5, 0.5, 0.01);
+        holed.extend(square(0.502, 0.502, 0.002));
+        let replace = |index: usize, rings: &mut Vec<u32>, points: &mut Vec<u32>| {
+            rings[index] = 2;
+            let ring = rings[..index].iter().sum::<u32>() as usize;
+            points.splice(ring..ring + 1, [5, 5]);
+        };
+
+        // Eight squares leave room for two more square-sized pieces of each buffer.
+        let shape = || RetainedPolygons::lower(&[2], &[5, 5], &holed, &PAINT).unwrap();
+        let upload = state.update(&[2], shape(), &ImageAtlas::default()).unwrap();
+        assert!(matches!(upload, Some(RetainedPolygonUpload::Patch(_))));
+        mirror.apply(upload.as_ref().unwrap());
+        replace(2, &mut rings, &mut points);
+        let mut expected_lon_lat = lon_lat.clone();
+        expected_lon_lat.splice(20..30, holed.iter().copied());
+        mirror.assert_draws(
+            state.draws(),
+            &fresh(
+                &rings,
+                &points,
+                &expected_lon_lat,
+                &paint,
+                state.anchor().unwrap(),
+            ),
+        );
+
+        // The second resized shape no longer fits: the group is repacked once.
+        let upload = state.update(&[5], shape(), &ImageAtlas::default()).unwrap();
+        let Some(RetainedPolygonUpload::Replace(geometry)) = &upload else {
+            panic!("expected a repack, got {upload:?}");
+        };
+        assert!(geometry.capacity[0] > geometry.fill.len() as u64);
+        mirror.apply(upload.as_ref().unwrap());
+        replace(5, &mut rings, &mut points);
+        let at = 5 * 10 + 10;
+        expected_lon_lat.splice(at..at + 10, holed.iter().copied());
+        mirror.assert_draws(
+            state.draws(),
+            &fresh(
+                &rings,
+                &points,
+                &expected_lon_lat,
+                &paint,
+                state.anchor().unwrap(),
+            ),
+        );
+    }
+
+    #[test]
+    fn updates_before_the_first_draw_only_replace_the_shapes() {
+        let (rings, points, lon_lat, paint) = squares(3);
+        let polygons = RetainedPolygons::lower(&rings, &points, &lon_lat, &paint).unwrap();
+        let mut state = RetainedPolygonState::new(polygons);
+        let shape =
+            RetainedPolygons::lower(&[1], &[3], &[0.0, 0.0, 1.0, 0.0, 2.0, 1.0], &LINE).unwrap();
+        assert!(
+            state
+                .update(&[1], shape, &ImageAtlas::default())
+                .unwrap()
+                .is_none()
+        );
+        // The line makes the group zoom dependent.
+        let view = retained_test_view(5);
+        assert!(state.prepare(&view, &ImageAtlas::default()).is_some());
+        assert!(
+            state
+                .prepare(&retained_test_view(6), &ImageAtlas::default())
+                .is_some()
+        );
+
+        let empty = RetainedPolygons::lower(&[], &[], &[], &[]).unwrap();
+        assert!(
+            state
+                .update(
+                    &[3],
+                    RetainedPolygons::lower(
+                        &rings[..1],
+                        &points[..1],
+                        &lon_lat[..10],
+                        &paint[..RETAINED_POLYGON_PAINT_LENGTH]
+                    )
+                    .unwrap(),
+                    &ImageAtlas::default()
+                )
+                .is_err()
+        );
+        assert!(state.update(&[0], empty, &ImageAtlas::default()).is_err());
     }
 }
