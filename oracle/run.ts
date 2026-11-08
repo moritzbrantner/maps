@@ -28,7 +28,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { arch, platform, release } from "node:os";
+import { arch, loadavg, platform, release } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -333,11 +333,18 @@ type StepResult = {
  */
 type PickPoints = Map<number, { x: number; y: number }>;
 
-async function openFixture(browser: Browser, scenario: Scenario, runtime: Runtime) {
+async function openFixture(
+  browser: Browser,
+  scenario: Scenario,
+  runtime: Runtime,
+  { attributeFrames = false } = {},
+) {
   const page = await browser.newPage({
     deviceScaleFactor: 1,
     viewport: { height: scenario.size.height, width: scenario.size.width },
   });
+  // Before any page script, so both runtimes' frame callbacks are wrapped identically.
+  if (attributeFrames) await page.addInitScript(installFrameAttribution);
   const errors: string[] = [];
   /** Console errors only explain a readiness timeout; page errors fail the capture. */
   const consoleErrors: string[] = [];
@@ -700,7 +707,7 @@ async function measureFrameTime(
   };
   let page: Page | null = null;
   try {
-    const fixture = await openFixture(browser, scenario, runtime);
+    const fixture = await openFixture(browser, scenario, runtime, { attributeFrames: true });
     page = fixture.page;
     attempt.fingerprint = await page.evaluate((): TimingFingerprint => ({
       devicePixelRatio: window.devicePixelRatio,
@@ -710,10 +717,14 @@ async function measureFrameTime(
       visibility: document.visibilityState,
     }));
     attempt.rendererBefore = await timingRenderer(page, runtime);
-    attempt.batchMeansMs = await page.evaluate(
+    const loadBefore = loadavg()[0]!;
+    const measured = await page.evaluate(
       (config) => window.__oracle.frameTimes(config),
       FRAME_TIMING,
     );
+    attempt.hostLoad = { after: loadavg()[0]!, before: loadBefore };
+    attempt.batchMeansMs = measured.batchMeansMs;
+    attempt.attribution = measured.attribution;
     attempt.rendererAfter = await timingRenderer(page, runtime);
     if (fixture.errors.length) {
       attempt.error = `page error: ${fixture.errors.join(" | ")}`;
@@ -727,6 +738,39 @@ async function measureFrameTime(
     await page?.close();
   }
   return attempt;
+}
+
+/**
+ * Page init script for timing pages (advisory #343 attribution, see `FrameAttribution`):
+ * sums main-thread time in requestAnimationFrame callbacks and, within it, time blocked in
+ * WebGPU `getCurrentTexture`. Serialized by Playwright, so it must be self-contained.
+ */
+function installFrameAttribution() {
+  const totals = { activeMs: 0, presentWaitMs: 0 };
+  (window as unknown as { __frameAttribution: typeof totals }).__frameAttribution = totals;
+  const request = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (callback) =>
+    request((time) => {
+      const start = performance.now();
+      try {
+        callback(time);
+      } finally {
+        totals.activeMs += performance.now() - start;
+      }
+    });
+  const context = (globalThis as { GPUCanvasContext?: { prototype: { getCurrentTexture(): unknown } } })
+    .GPUCanvasContext?.prototype;
+  if (context) {
+    const getCurrentTexture = context.getCurrentTexture;
+    context.getCurrentTexture = function (this: unknown) {
+      const start = performance.now();
+      try {
+        return getCurrentTexture.call(this);
+      } finally {
+        totals.presentWaitMs += performance.now() - start;
+      }
+    };
+  }
 }
 
 async function timingRenderer(page: Page, runtime: Runtime): Promise<string | null> {

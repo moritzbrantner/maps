@@ -148,6 +148,36 @@ describe("oracle timing evidence and known performance gaps", () => {
     expect(result.verdict).not.toContain("known gap");
   });
 
+  test("attributes the reported round's frame advisorily, without changing the verdict", () => {
+    const attributed = (base: TimingAttempt, activeMs: number[], presentWaitMs: number[]) => ({
+      ...base,
+      attribution: { activeMs, presentWaitMs },
+    });
+    const attempts = [
+      attempt(0, "maplibre", 0.4),
+      attributed(attempt(0, "maps", 1.1), [0.9, 0.95], [0.6, 0.65]),
+      // Round 1 gives Maps' reported (fastest) frame time, so its breakdown is reported.
+      attributed(attempt(1, "maps", 1.0), [0.4, 0.42], [0.1, 0.12]),
+      { ...attempt(1, "maplibre", 0.45), hostLoad: { after: 3.5, before: 0.2 } },
+    ];
+    const time = summarize(attempts);
+    expect(time.attribution.maps).toEqual({ activeMs: 0.42, presentWaitMs: 0.12, round: 1 });
+    expect(time.maxHostLoad).toBe(3.5);
+    expect(summarize(validAttempts()).maxHostLoad).toBeNull();
+    expect(time.attribution.maplibre).toBeNull();
+    expect(judgeOracleGates([gap], true, true, time, true)).toEqual(
+      judgeOracleGates([gap], true, true, summarize(validAttempts()), true),
+    );
+
+    // Incomplete attribution is unavailable, not zero, and still advisory.
+    const partial = summarize([
+      ...attempts.slice(0, 3),
+      attributed(attempt(1, "maplibre", 0.45), [0.3], [0]),
+    ]);
+    expect(partial.attribution.maplibre).toBeNull();
+    expect(partial.validity).toBe("valid");
+  });
+
   test.each([
     { imageOk: false, interactionOk: true },
     { imageOk: true, interactionOk: false },

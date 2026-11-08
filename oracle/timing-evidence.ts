@@ -12,9 +12,32 @@ export type TimingFingerprint = {
   visibility: string;
 };
 
+/**
+ * Advisory per-batch attribution of a timed frame (#343), as per-frame means in ms:
+ * `activeMs` is main-thread work in requestAnimationFrame callbacks plus the harness camera
+ * update; `presentWaitMs` is the part of it blocked in WebGPU `getCurrentTexture` (always 0
+ * for MapLibre's WebGL canvas). The rest of a frame is browser work outside page script.
+ * Never part of the time gate's validity or verdict.
+ */
+export type FrameAttribution = {
+  activeMs: number[];
+  presentWaitMs: number[];
+};
+
+/** Median attribution of the round that gave a runtime's reported (fastest) frame time. */
+export type FrameAttributionSummary = {
+  round: number;
+  activeMs: number;
+  presentWaitMs: number;
+};
+
 export type TimingAttempt = {
   /** Raw per-batch means, retained even when another round is invalid. */
   batchMeansMs: number[] | null;
+  /** Advisory; null when the page could not collect it. */
+  attribution?: FrameAttribution | null;
+  /** Advisory host fingerprint: the runner host's 1-minute load average around the round. */
+  hostLoad?: { before: number; after: number } | null;
   error: string | null;
   fingerprint: TimingFingerprint | null;
   rendererAfter: string | null;
@@ -24,6 +47,10 @@ export type TimingAttempt = {
 };
 
 export type TimingSummary = {
+  /** Advisory breakdown of each runtime's reported round; see `FrameAttribution`. */
+  attribution: Record<TimingRuntime, FrameAttributionSummary | null>;
+  /** Highest recorded 1-minute host load average of any round (advisory), if recorded. */
+  maxHostLoad: number | null;
   maplibreMs: number | null;
   mapsMs: number | null;
   ratio: number | null;
@@ -45,9 +72,15 @@ export function summarizeTiming(
   requirements: TimingRequirements,
 ): TimingSummary {
   const rounds: TimingSummary["rounds"] = { maplibre: [], maps: [] };
+  const fastest: Record<TimingRuntime, { median: number; attempt: TimingAttempt } | null> = {
+    maplibre: null,
+    maps: null,
+  };
   if (attempts.length === 0) {
     return {
       attempts,
+      attribution: { maplibre: null, maps: null },
+      maxHostLoad: null,
       invalidReasons: [],
       maplibreMs: null,
       mapsMs: null,
@@ -85,7 +118,10 @@ export function summarizeTiming(
     } else if (!attempt.error) {
       const sorted = [...values].sort((left, right) => left - right);
       // Preserve the runner's existing median (upper middle for an even batch count).
-      rounds[attempt.runtime].push(sorted[Math.floor(sorted.length / 2)]!);
+      const median = sorted[Math.floor(sorted.length / 2)]!;
+      rounds[attempt.runtime].push(median);
+      const best = fastest[attempt.runtime];
+      if (!best || median < best.median) fastest[attempt.runtime] = { attempt, median };
     }
 
     if (!attempt.rendererBefore || !attempt.rendererAfter) {
@@ -145,13 +181,47 @@ export function summarizeTiming(
   const valid = invalidReasons.length === 0;
   return {
     attempts,
+    attribution: {
+      maplibre: summarizeAttribution(fastest.maplibre?.attempt, requirements.expectedBatches),
+      maps: summarizeAttribution(fastest.maps?.attempt, requirements.expectedBatches),
+    },
     invalidReasons,
+    maxHostLoad: maxHostLoad(attempts),
     maplibreMs,
     mapsMs,
     ratio: valid && maplibreMs !== null && mapsMs !== null ? mapsMs / maplibreMs : null,
     rounds,
     validity: valid ? "valid" : "invalid",
   };
+}
+
+function maxHostLoad(attempts: TimingAttempt[]): number | null {
+  const loads = attempts
+    .flatMap((attempt) => (attempt.hostLoad ? [attempt.hostLoad.before, attempt.hostLoad.after] : []))
+    .filter(Number.isFinite);
+  return loads.length ? Math.max(...loads) : null;
+}
+
+function summarizeAttribution(
+  attempt: TimingAttempt | undefined,
+  expectedBatches: number,
+): FrameAttributionSummary | null {
+  const attribution = attempt?.attribution;
+  if (!attempt || !attribution) return null;
+  const median = (values: number[]) => {
+    if (
+      values.length !== expectedBatches ||
+      !values.every((value) => Number.isFinite(value) && value >= 0)
+    ) {
+      return null;
+    }
+    const sorted = [...values].sort((left, right) => left - right);
+    return sorted[Math.floor(sorted.length / 2)]!;
+  };
+  const activeMs = median(attribution.activeMs);
+  const presentWaitMs = median(attribution.presentWaitMs);
+  if (activeMs === null || presentWaitMs === null) return null;
+  return { activeMs, presentWaitMs, round: attempt.round };
 }
 
 /** Only a valid hardware performance shortfall is eligible for a known time gap. */
