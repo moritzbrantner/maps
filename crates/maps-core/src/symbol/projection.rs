@@ -31,6 +31,33 @@ fn unit(a: Point) -> Point {
     scale(a, 1.0 / mag(a))
 }
 
+/// How a symbol's quads meet the map: MapLibre's `rotateWithMap` and `pitchWithMap`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SymbolAlignment {
+    /// `*-rotation-alignment: map`.
+    pub rotate_with_map: bool,
+    /// `*-pitch-alignment: map`.
+    pub pitch_with_map: bool,
+}
+
+/// The directions a symbol's x and y offsets take in its label plane, as unit vectors.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LabelAxes {
+    pub east: [f64; 2],
+    pub south: [f64; 2],
+}
+
+impl LabelAxes {
+    /// An offset along these axes.
+    #[must_use]
+    pub fn apply(&self, offset: [f64; 2]) -> [f64; 2] {
+        [
+            self.east[0] * offset[0] + self.south[0] * offset[1],
+            self.east[1] * offset[0] + self.south[1] * offset[1],
+        ]
+    }
+}
+
 /// How one tile's points reach the viewport this frame.
 pub struct TileProjection<'a> {
     /// Tile-normalized point (`0..1`) to viewport CSS px and clip `w`, the signed distance
@@ -64,6 +91,57 @@ impl<'a> TileProjection<'a> {
     #[must_use]
     pub fn perspective_ratio(&self, w: f64) -> f64 {
         0.5 + 0.5 * self.center_w / w
+    }
+
+    /// The shader's `perspective_ratio` of a symbol at clip `w`: on the map plane it grows
+    /// with the distance, as the plane shrinks; in the viewport it shrinks.
+    #[must_use]
+    pub fn size_ratio(&self, w: f64, pitch_with_map: bool) -> f64 {
+        let distance_ratio = if pitch_with_map {
+            w / self.center_w
+        } else {
+            self.center_w / w
+        };
+        (0.5 + 0.5 * distance_ratio).clamp(0.0, 4.0)
+    }
+
+    /// A point symbol's axes at the tile-normalized `anchor` under the camera `bearing`
+    /// (clockwise, radians), shared by `_projectCollisionBox` and the symbol shaders.
+    /// Viewport-plane symbols keep the screen's axes unless they turn with the map, when x
+    /// follows the map's east on screen (`u_rotate_symbol`). Map-plane symbols use the
+    /// tile's axes when they turn with the map; otherwise their x stays along the viewport's
+    /// (`getTileSkewVectors`, Maps has no camera roll).
+    #[must_use]
+    pub fn label_axes(
+        &self,
+        anchor: [f64; 2],
+        alignment: SymbolAlignment,
+        bearing: f64,
+    ) -> LabelAxes {
+        let turned = |sin: f64, cos: f64| LabelAxes {
+            east: [cos, sin],
+            south: [-sin, cos],
+        };
+        match (alignment.rotate_with_map, alignment.pitch_with_map) {
+            (true, false) => {
+                let point = (self.project)(anchor).0;
+                let east = (self.project)([anchor[0] + 1.0 / EXTENT, anchor[1]]).0;
+                let (to_east_x, to_east_y) = (east[0] - point[0], east[1] - point[1]);
+                let angle = (to_east_y / to_east_x).atan()
+                    + if to_east_x < 0.0 {
+                        std::f64::consts::PI
+                    } else {
+                        0.0
+                    };
+                let (sin, cos) = angle.sin_cos();
+                turned(sin, cos)
+            }
+            (false, true) => {
+                let (sin, cos) = bearing.sin_cos();
+                turned(sin, cos)
+            }
+            _ => turned(0.0, 1.0),
+        }
     }
 
     /// A tile-normalized anchor in viewport px with its perspective ratio; `None` behind the

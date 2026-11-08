@@ -14,6 +14,7 @@ use super::glyphs::{GLYPH_PBF_BORDER, GlyphStore};
 use super::images::{IMAGE_PADDING, ImageStore, StyleImage, TextFit};
 use super::line_anchors::{LabelExtent, center_anchor, clip_line, line_anchors, merge_lines};
 use super::polylabel::{classify_rings, pole_of_inaccessibility};
+use super::projection::SymbolAlignment;
 use super::shaping::{ONE_EM, ShapeOptions, Shaping, SymbolAnchor, shape_text};
 use super::style::{StyleLayer, StyleLayerKind};
 use super::variable_anchors::{self, AnchorOffset};
@@ -241,15 +242,20 @@ pub struct SymbolBucket {
     pub text_size: SizeData,
     pub icon_size: SizeData,
     pub placement: SymbolPlacement,
-    /// Text follows its line (`text-rotation-alignment: map` off point placement).
+    /// Text follows its line (`text-rotation-alignment` other than `viewport` off point
+    /// placement).
     pub text_along_line: bool,
-    /// Line labels lie on the map plane (`text-pitch-alignment: map`).
+    /// Text turns with the map (`text-rotation-alignment: map`).
+    pub rotate_with_map: bool,
+    /// Text lies on the map plane (`text-pitch-alignment: map`).
     pub pitch_with_map: bool,
     /// `text-keep-upright`.
     pub keep_upright: bool,
     /// Icons follow their line (`icon-rotation-alignment: map` off point placement).
     pub icon_along_line: bool,
-    /// Icons along lines lie on the map plane (`icon-pitch-alignment: map`).
+    /// Icons turn with the map (`icon-rotation-alignment: map`).
+    pub icon_rotate_with_map: bool,
+    /// Icons lie on the map plane (`icon-pitch-alignment: map`).
     pub icon_pitch_with_map: bool,
     /// `icon-keep-upright`.
     pub icon_keep_upright: bool,
@@ -270,6 +276,24 @@ pub struct SymbolBucket {
 }
 
 impl SymbolBucket {
+    /// How this layer's text meets the map; placement reads it for icon boxes too.
+    #[must_use]
+    pub fn text_alignment(&self) -> SymbolAlignment {
+        SymbolAlignment {
+            rotate_with_map: self.rotate_with_map,
+            pitch_with_map: self.pitch_with_map,
+        }
+    }
+
+    /// How this layer's icons meet the map when drawn.
+    #[must_use]
+    pub fn icon_alignment(&self) -> SymbolAlignment {
+        SymbolAlignment {
+            rotate_with_map: self.icon_rotate_with_map,
+            pitch_with_map: self.icon_pitch_with_map,
+        }
+    }
+
     #[must_use]
     pub fn has_text(&self) -> bool {
         self.instances
@@ -426,11 +450,12 @@ pub fn layout_tile(
                     "line-center" => SymbolPlacement::LineCenter,
                     _ => SymbolPlacement::Point,
                 };
-                let alignment = |key: &str| layer.string(false, key, "auto", &constant);
-                let text_along_line = placement != SymbolPlacement::Point
-                    && alignment("text-rotation-alignment")? != "viewport";
-                let icon_along_line = placement != SymbolPlacement::Point
-                    && alignment("icon-rotation-alignment")? != "viewport";
+                let (text_rotation, text_pitch) = layer.symbol_alignment("text");
+                let (icon_rotation, icon_pitch) = layer.symbol_alignment("icon");
+                let text_along_line =
+                    placement != SymbolPlacement::Point && text_rotation != "viewport";
+                let icon_along_line =
+                    placement != SymbolPlacement::Point && icon_rotation != "viewport";
                 let options = SymbolOptions {
                     placement,
                     text_along_line,
@@ -468,12 +493,12 @@ pub fn layout_tile(
                     icon_size,
                     placement,
                     text_along_line,
-                    pitch_with_map: text_along_line
-                        && alignment("text-pitch-alignment")? != "viewport",
+                    rotate_with_map: text_rotation == "map",
+                    pitch_with_map: text_pitch == "map",
                     keep_upright: layer.boolean("text-keep-upright", true, &constant)?,
                     icon_along_line,
-                    icon_pitch_with_map: icon_along_line
-                        && alignment("icon-pitch-alignment")? != "viewport",
+                    icon_rotate_with_map: icon_rotation == "map",
+                    icon_pitch_with_map: icon_pitch == "map",
                     icon_keep_upright: layer.boolean("icon-keep-upright", false, &constant)?,
                     // `constantOr(1) !== 0`: data-driven rotations count as rotated.
                     icons_rotated: !PropertyKind::of(layer.raw_layout("icon-rotate"))?

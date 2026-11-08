@@ -10,11 +10,11 @@ use std::collections::{BTreeSet, HashMap};
 use maps_core::symbol::layout::EXTENT;
 use maps_core::symbol::variable_anchors::render_shift;
 use maps_core::symbol::{
-    AtlasRect, GlyphStore, IconQuad, ImageAtlas, ImageStore, LayerBucket, LineGlyphs,
+    AtlasRect, GlyphStore, IconQuad, ImageAtlas, ImageStore, LabelAxes, LayerBucket, LineGlyphs,
     LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile, StyleLayer,
-    StyleLayerKind, SymbolBucket, SymbolDrawState, SymbolGlyph, SymbolPaint, SymbolText,
-    TileProjection, TileStyleBuckets, VariableAnchorMemory, layout_tile, line_label_glyphs,
-    parse_glyph_pbf, place_symbols, symbol_tile_order,
+    StyleLayerKind, SymbolAlignment, SymbolBucket, SymbolDrawState, SymbolGlyph, SymbolPaint,
+    SymbolText, TileProjection, TileStyleBuckets, VariableAnchorMemory, layout_tile,
+    line_label_glyphs, parse_glyph_pbf, place_symbols, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
@@ -762,7 +762,7 @@ impl StyleSymbols {
                                             instance.anchor[1] * EXTENT,
                                         ],
                                         segment: line.segment,
-                                        rotate_to_line: bucket.text_along_line,
+                                        rotate_to_line: bucket.rotate_with_map,
                                     };
                                     // Every patch of an icon sits at the anchor's point on
                                     // the line (glyph offset 0).
@@ -782,14 +782,11 @@ impl StyleSymbols {
                                         continue;
                                     };
                                     let anchor_w = (projection.project)(instance.anchor).1;
-                                    let ratio = if bucket.icon_pitch_with_map {
-                                        0.5 + 0.5 * anchor_w / center_depth
-                                    } else {
-                                        0.5 + 0.5 * center_depth / anchor_w
-                                    };
+                                    let ratio =
+                                        projection.size_ratio(anchor_w, bucket.icon_pitch_with_map);
                                     let mut size = feature_size;
                                     if !bucket.icon_offset {
-                                        size *= ratio.clamp(0.0, 4.0);
+                                        size *= ratio;
                                     }
                                     for (quad, (point, angle)) in
                                         icon.quads.iter().zip(&placed_quads)
@@ -819,38 +816,54 @@ impl StyleSymbols {
                                     }
                                     continue;
                                 }
+                                let Some(plane) = SymbolPlane::new(
+                                    quad_context,
+                                    tile_projection,
+                                    [instance.anchor[0] + shift[0], instance.anchor[1] + shift[1]],
+                                    bucket.icon_alignment(),
+                                    bearing,
+                                ) else {
+                                    continue;
+                                };
                                 let mut size = feature_size;
                                 if !bucket.icon_offset {
-                                    size *= symbol.icon_perspective_ratio.clamp(0.0, 4.0);
+                                    size *= plane.ratio;
                                 }
+                                let mut origin = plane.origin;
                                 // `updateVariableAnchors`: an icon fitted to variable text sits
                                 // at the text's shifted anchor, and is hidden without one.
-                                let mut icon_anchor = symbol.icon_anchor;
                                 if bucket.variable_anchors && bucket.icon_text_fit {
-                                    let Some((_, shift)) =
-                                        instance.text.as_ref().and_then(|text| {
-                                            variable_label(
-                                                text,
-                                                symbol,
-                                                bucket
-                                                    .text_size
-                                                    .for_feature(icon_text_size, text.sizes),
-                                            )
-                                        })
+                                    let text_shift =
+                                        bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                                    let text_plane = SymbolPlane::new(
+                                        quad_context,
+                                        tile_projection,
+                                        [
+                                            instance.anchor[0] + text_shift[0],
+                                            instance.anchor[1] + text_shift[1],
+                                        ],
+                                        bucket.text_alignment(),
+                                        bearing,
+                                    );
+                                    let label = instance.text.as_ref().and_then(|text| {
+                                        variable_label(
+                                            text,
+                                            symbol,
+                                            bucket
+                                                .text_size
+                                                .for_feature(icon_text_size, text.sizes),
+                                        )
+                                    });
+                                    let (Some((_, shift)), Some(text_plane)) = (label, text_plane)
                                     else {
                                         continue;
                                     };
-                                    icon_anchor =
-                                        [symbol.anchor[0] + shift[0], symbol.anchor[1] + shift[1]];
+                                    origin = text_plane.point(shift);
                                 }
                                 for quad in &icon.quads {
                                     quads.push(SymbolQuad {
-                                        corners: offsets(quad, size).map(|[x, y]| {
-                                            quad_context.viewport_vertex([
-                                                icon_anchor[0] + x,
-                                                icon_anchor[1] + y,
-                                            ])
-                                        }),
+                                        corners: offsets(quad, size)
+                                            .map(|offset| plane.vertex(origin, offset)),
                                         uv: uv(quad.tex),
                                         size: size as f32,
                                         paint: paint.clone(),
@@ -919,15 +932,27 @@ impl StyleSymbols {
                                 };
                                 let (Some(line), Some(symbol_line)) = (&text.line, &instance.line)
                                 else {
+                                    let Some(plane) = SymbolPlane::new(
+                                        quad_context,
+                                        tile_projection,
+                                        [
+                                            instance.anchor[0] + shift[0],
+                                            instance.anchor[1] + shift[1],
+                                        ],
+                                        bucket.text_alignment(),
+                                        bearing,
+                                    ) else {
+                                        continue;
+                                    };
                                     let mut size = font_size;
                                     if !bucket.icon_offset {
-                                        size *= symbol.perspective_ratio.clamp(0.0, 4.0);
+                                        size *= plane.ratio;
                                     }
                                     let font_scale = size / 24.0;
-                                    let (glyphs, shift) = variable_label(text, symbol, font_size)
-                                        .unwrap_or((text.glyphs.as_slice(), [0.0, 0.0]));
-                                    let origin =
-                                        [symbol.anchor[0] + shift[0], symbol.anchor[1] + shift[1]];
+                                    let (glyphs, variable_shift) =
+                                        variable_label(text, symbol, font_size)
+                                            .unwrap_or((text.glyphs.as_slice(), [0.0, 0.0]));
+                                    let origin = plane.point(variable_shift);
                                     for glyph in glyphs {
                                         let Some(rect) = atlas.rect(&text.stack, glyph.codepoint)
                                         else {
@@ -935,10 +960,13 @@ impl StyleSymbols {
                                         };
                                         quads.push(SymbolQuad {
                                             corners: glyph.corners.map(|[x, y]| {
-                                                quad_context.viewport_vertex([
-                                                    origin[0] + f64::from(x) * font_scale,
-                                                    origin[1] + f64::from(y) * font_scale,
-                                                ])
+                                                plane.vertex(
+                                                    origin,
+                                                    [
+                                                        f64::from(x) * font_scale,
+                                                        f64::from(y) * font_scale,
+                                                    ],
+                                                )
                                             }),
                                             uv: uv(rect),
                                             size: size as f32,
@@ -956,7 +984,7 @@ impl StyleSymbols {
                                         instance.anchor[1] * EXTENT,
                                     ],
                                     segment: symbol_line.segment,
-                                    rotate_to_line: true,
+                                    rotate_to_line: bucket.rotate_with_map,
                                 };
                                 let glyphs = LineGlyphs {
                                     offsets: &line.offsets,
@@ -975,14 +1003,10 @@ impl StyleSymbols {
                                 // The shader's perspective ratio: on the map plane it grows
                                 // with the distance, as the plane shrinks.
                                 let anchor_w = (projection.project)(instance.anchor).1;
-                                let ratio = if bucket.pitch_with_map {
-                                    0.5 + 0.5 * anchor_w / center_depth
-                                } else {
-                                    0.5 + 0.5 * center_depth / anchor_w
-                                };
+                                let ratio = projection.size_ratio(anchor_w, bucket.pitch_with_map);
                                 let mut size = font_size;
                                 if !bucket.icon_offset {
-                                    size *= ratio.clamp(0.0, 4.0);
+                                    size *= ratio;
                                 }
                                 let font_scale = size / 24.0;
                                 for (glyph, (point, angle)) in
@@ -1152,6 +1176,69 @@ impl QuadContext {
             (w / (self.cos_pitch * self.center_w)) as f32,
             w as f32,
         ]
+    }
+}
+
+/// A point symbol's label plane this frame, as MapLibre's symbol shaders build it
+/// (`u_label_plane_matrix`, `u_coord_matrix`, `u_rotate_symbol`): quads and variable shifts
+/// take its [`LabelAxes`] from an origin that is in viewport CSS px, or on the pitched map
+/// plane in CSS px at the drawn zoom.
+struct SymbolPlane<'a> {
+    context: QuadContext,
+    projection: &'a TileProjection<'a>,
+    pitch_with_map: bool,
+    origin: [f64; 2],
+    axes: LabelAxes,
+    /// The shader's perspective ratio at the anchor.
+    ratio: f64,
+}
+
+impl<'a> SymbolPlane<'a> {
+    /// `anchor` is tile-normalized and already translated; `None` behind the camera.
+    fn new(
+        context: QuadContext,
+        projection: &'a TileProjection<'a>,
+        anchor: [f64; 2],
+        alignment: SymbolAlignment,
+        bearing: f64,
+    ) -> Option<Self> {
+        let (point, w) = (projection.project)(anchor);
+        (w > 0.0).then(|| Self {
+            context,
+            projection,
+            pitch_with_map: alignment.pitch_with_map,
+            origin: if alignment.pitch_with_map {
+                [
+                    anchor[0] * projection.tile_px,
+                    anchor[1] * projection.tile_px,
+                ]
+            } else {
+                point
+            },
+            axes: projection.label_axes(anchor, alignment, bearing),
+            ratio: projection.size_ratio(w, alignment.pitch_with_map),
+        })
+    }
+
+    /// The origin moved by an offset along the plane's axes.
+    fn point(&self, offset: [f64; 2]) -> [f64; 2] {
+        let [x, y] = self.axes.apply(offset);
+        [self.origin[0] + x, self.origin[1] + y]
+    }
+
+    /// The vertex at `offset` from a point of this plane.
+    fn vertex(&self, origin: [f64; 2], offset: [f64; 2]) -> [f32; 4] {
+        let [x, y] = self.axes.apply(offset);
+        let point = [origin[0] + x, origin[1] + y];
+        if self.pitch_with_map {
+            let (viewport_point, w) = (self.projection.project)([
+                point[0] / self.projection.tile_px,
+                point[1] / self.projection.tile_px,
+            ]);
+            self.context.map_vertex(viewport_point, w)
+        } else {
+            self.context.viewport_vertex(point)
+        }
     }
 }
 
@@ -1625,6 +1712,101 @@ mod tests {
             &mut LineAtlas::new(),
             images,
         )
+    }
+
+    /// The first glyph of one Zürich label under a local-to-clip matrix, as
+    /// `(tl, tr, w of its vertices)` in clip space.
+    fn label_quad(layout: &str, view_projection: [f32; 16]) -> ([f32; 2], [f32; 2], Vec<f32>) {
+        let mut images = ImageStore::default();
+        let mut symbols = StyleSymbols::default();
+        symbols
+            .set_layers(
+                &format!(
+                    r##"[{{"id":"p","type":"symbol","source":"v","source-layer":"places",
+                     "layout":{{"text-field":["get","name"],"text-font":["NotoSans-Regular"],
+                               "text-allow-overlap":true,{layout}}}}}]"##
+                ),
+                &mut images,
+            )
+            .unwrap();
+        symbols
+            .upload("s", (7, 66, 45), &places_tile(), &mut images)
+            .unwrap();
+        add_glyphs(&mut symbols, &mut images);
+        let tile = TileId::new(7, 66, 45).unwrap();
+        let local = LocalFrame {
+            west: -256.0,
+            north: 256.0,
+            size: 512.0,
+        };
+        let frame = symbols.frame(
+            "s",
+            &[(tile, local)],
+            view_projection,
+            StyleSurface {
+                width: 720.0,
+                height: 480.0,
+                margin: 0.0,
+                pixel_ratio: 1.0,
+            },
+            &mut LineAtlas::new(),
+            &mut images,
+        );
+        assert_eq!(frame.placed_labels, 1);
+        let vertex = |index: usize| {
+            let v = &frame.glyphs[index * GLYPH_VERTEX_FLOATS..];
+            ([v[0] / v[3], v[1] / v[3]], v[3])
+        };
+        (
+            vertex(0).0,
+            vertex(1).0,
+            (0..6).map(|index| vertex(index).1).collect(),
+        )
+    }
+
+    /// Screen-up map east (the camera turned 90 degrees clockwise) in a 720 x 480 surface.
+    fn east_up_view() -> [f32; 16] {
+        let mut view_projection = [0.0_f32; 16];
+        view_projection[1] = 2.0 / 480.0;
+        view_projection[4] = -2.0 / 720.0;
+        view_projection[10] = 1.0;
+        view_projection[15] = 1.0;
+        view_projection
+    }
+
+    #[test]
+    fn point_labels_turn_with_the_map_only_when_aligned_to_it() {
+        // Viewport-aligned text stays level on the turned map.
+        let (tl, tr, _) = label_quad(r#""text-rotation-alignment":"viewport""#, east_up_view());
+        assert!(
+            tr[0] > tl[0] && (tr[1] - tl[1]).abs() < 1e-5,
+            "{tl:?} {tr:?}"
+        );
+        // Map-aligned text reads along the map's east, up the screen, at either pitch plane.
+        for pitch in ["viewport", "map"] {
+            let layout =
+                format!(r#""text-rotation-alignment":"map","text-pitch-alignment":"{pitch}""#);
+            let (tl, tr, _) = label_quad(&layout, east_up_view());
+            assert!(
+                tr[1] > tl[1] && (tr[0] - tl[0]).abs() < 1e-5,
+                "{tl:?} {tr:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn point_labels_lie_on_the_map_plane_when_pitched_with_it() {
+        // Depth grows up the screen; the anchor is at the centre (w 1).
+        let mut pitched = [0.0_f32; 16];
+        pitched[0] = 2.0 / 720.0;
+        pitched[5] = 2.0 / 480.0;
+        pitched[10] = 1.0;
+        pitched[7] = 0.001;
+        pitched[15] = 1.0;
+        let (_, _, level) = label_quad(r#""text-pitch-alignment":"viewport""#, pitched);
+        assert!(level.iter().all(|w| (w - 1.0).abs() < 1e-6), "{level:?}");
+        let (_, _, on_map) = label_quad(r#""text-pitch-alignment":"map""#, pitched);
+        assert!(on_map.iter().any(|w| (w - 1.0).abs() > 1e-4), "{on_map:?}");
     }
 
     #[test]
