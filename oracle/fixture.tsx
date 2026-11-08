@@ -305,6 +305,34 @@ const FILL_PATTERN_LAYERS: Array<Record<string, unknown>> = [
   },
 ];
 /**
+ * The `line-pattern` style layers (#349): the sprite's `track` along primary roads, and borders
+ * whose data-driven pattern picks the `hatch` for national borders and the `track` otherwise,
+ * the same objects on both runtimes; both read the sprite from the style's `sprite`.
+ */
+const LINE_PATTERN_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "primary"],
+    id: "primary-track",
+    layout: { "line-cap": "butt", "line-join": "miter" },
+    paint: { "line-pattern": "track", "line-width": 6 },
+    source: "oracle-vector",
+    "source-layer": "streets",
+    type: "line",
+  },
+  {
+    id: "border-patterns",
+    layout: { "line-join": "round" },
+    paint: {
+      "line-opacity": 0.8,
+      "line-pattern": ["match", ["get", "admin_level"], 2, "hatch", "track"],
+      "line-width": 5,
+    },
+    source: "oracle-vector",
+    "source-layer": "boundaries",
+    type: "line",
+  },
+];
+/**
  * The `symbol-icons` style layers (#346): sprite icons with and without text. Towns pair a
  * crisp `NEAREST`-sampled square with an optional label below it; capitals an SDF star
  * (`icon-color`, halo, data-driven `icon-size`) with a label to its right; lakes a pixel
@@ -571,7 +599,9 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
               ? { layers: LINE_LAYERS }
               : name === "fill-pattern"
                 ? { layers: FILL_PATTERN_LAYERS }
-                : null;
+                : name === "line-pattern"
+                  ? { layers: LINE_PATTERN_LAYERS }
+                  : null;
 
 /**
  * The relief style (#324): the raster basemap, a hillshade layer on one Terrarium
@@ -605,7 +635,7 @@ function reliefStyle(terrain: boolean) {
   };
 }
 
-/** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines`, `fill-pattern`, relief (#324). */
+/** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines`, `fill-pattern`, `line-pattern`, relief (#324). */
 function referenceStyle(name: string) {
   switch (name) {
     case "hillshade":
@@ -625,6 +655,11 @@ function referenceStyle(name: string) {
     case "fill-pattern": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...FILL_PATTERN_LAYERS);
+      return style;
+    }
+    case "line-pattern": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...LINE_PATTERN_LAYERS);
       return style;
     }
     case "symbol-icons": {
@@ -860,6 +895,22 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
           }}
           layerId="alpine-lines"
         />
+      );
+    case "line-pattern":
+      // GeoJSON lines with the sprite's patterns over the patterned tileset lines (#349):
+      // `track` motorways and `hatch` rivers, widened by hover and selection.
+      return (context) => (
+        <>
+          {PATTERNED_LINE_CLASSES.map(({ filter, layer, style }) => (
+            <GeoJsonLayer
+              {...interactive(layer, context)}
+              featureCollection={dashedLines(layer, filter)}
+              key={layer}
+              layerId={`patterned-${layer}`}
+              {...style}
+            />
+          ))}
+        </>
       );
     case "line-dash-caps-joins":
       // One layer per class, in MapLibre paint order: square-capped bevelled motorways, then
@@ -1280,6 +1331,20 @@ const DASHED_LINE_CLASSES: Array<{
     filter: (properties) => properties.admin_level === 2,
     layer: "boundary",
     style: { lineCap: "butt", lineColor: "#7e22ce", lineDasharray: [4, 2, 1, 2], lineJoin: "miter", lineOpacity: 1, lineWidth: 2.5 },
+  },
+];
+
+/** `line-pattern` GeoJSON lines (#349): the sprite's `track` and `hatch` along them. */
+const PATTERNED_LINE_CLASSES: typeof DASHED_LINE_CLASSES = [
+  {
+    filter: (properties) => properties.kind === "motorway",
+    layer: "motorway",
+    style: { lineCap: "butt", lineJoin: "miter", lineOpacity: 1, linePattern: "track", lineWidth: 8 },
+  },
+  {
+    filter: (properties) => properties.kind === "river",
+    layer: "river",
+    style: { lineCap: "round", lineJoin: "round", lineOpacity: 0.9, linePattern: "hatch", lineWidth: 5 },
   },
 ];
 

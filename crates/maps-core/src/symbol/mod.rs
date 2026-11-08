@@ -21,8 +21,8 @@ pub mod zoom;
 pub use collision::{PlacedSymbol, PlacementTile, place_symbols, symbol_tile_order};
 pub use glyphs::{AtlasRect, GlyphAtlas, GlyphStore, parse_glyph_pbf};
 pub use images::{
-    CrossfadeParameters, FADE_DURATION_MS, ImageAtlas, ImagePosition, ImageStore, PatternVertex,
-    StyleImage, ZoomHistory,
+    CrossfadeParameters, FADE_DURATION_MS, ImageAtlas, ImagePosition, ImageStore, LinePattern,
+    PatternVertex, StyleImage, ZoomHistory,
 };
 pub use layout::{
     IconQuad, LayerBucket, LineText, SymbolBucket, SymbolIcon, SymbolInstance, SymbolLine,

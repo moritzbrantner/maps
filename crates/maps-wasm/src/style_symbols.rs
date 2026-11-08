@@ -10,9 +10,9 @@ use std::collections::{BTreeSet, HashMap};
 use maps_core::symbol::layout::EXTENT;
 use maps_core::symbol::{
     AtlasRect, GlyphStore, IconQuad, ImageAtlas, ImageStore, LayerBucket, LineGlyphs,
-    LineLabelContext, PatternVertex, PlacedSymbol, PlacementTile, StyleLayer, StyleLayerKind,
-    SymbolBucket, SymbolDrawState, SymbolPaint, TileProjection, TileStyleBuckets, layout_tile,
-    line_label_glyphs, parse_glyph_pbf, place_symbols, symbol_tile_order,
+    LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile, StyleLayer,
+    StyleLayerKind, SymbolBucket, SymbolDrawState, SymbolPaint, TileProjection, TileStyleBuckets,
+    layout_tile, line_label_glyphs, parse_glyph_pbf, place_symbols, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
@@ -20,7 +20,8 @@ use crate::retained_frame::LocalFrame;
 use crate::retained_polygons::{
     FILL_FLAG_CLIP_TO_TILE, FILL_FLAG_PATTERN, FILL_FLAG_SDF, FILL_OUTLINE_VERTEX_SIZE,
     FILL_VERTEX_SIZE, FillPaint, NO_DASH, RETAINED_POLYGON_STROKE_VERTEX_SIZE, pattern_attributes,
-    push_line_strip_vertex, push_pattern_fill_vertex, push_pattern_outline_segment,
+    push_line_pattern_vertex, push_line_strip_vertex, push_pattern_fill_vertex,
+    push_pattern_outline_segment,
 };
 
 /// Glyph vertex: (clip x w, clip y w, gamma scale, w), atlas uv, (size, opacity, halo width,
@@ -56,10 +57,12 @@ struct StyleTileFills {
 
 struct StyleTileLines {
     tile_zoom: u8,
+    /// The image atlas the `line-pattern` strips were built over; `None` without them.
+    atlas_revision: Option<u64>,
     generation: u64,
     bytes: Vec<u8>,
-    /// (layer index, first vertex, vertex count).
-    ranges: Vec<(usize, u32, u32)>,
+    /// (layer index, first vertex, vertex count, `line_pattern.wgsl` vertices?).
+    ranges: Vec<(usize, u32, u32, bool)>,
 }
 
 /// Draw runs in painter order.
@@ -80,11 +83,13 @@ pub(crate) enum StyleDraw {
         count: u32,
         linear: bool,
     },
-    /// Line strip vertices of one tile, drawn in the frame of `tile_frames[frame]`.
+    /// Line strip vertices of one tile, drawn in the frame of `tile_frames[frame]`; with
+    /// `pattern`, MapLibre's `line_pattern` program over the image atlas (#349).
     Lines {
         frame: u32,
         first: u32,
         count: u32,
+        pattern: bool,
     },
     /// Fill triangle vertices of one tile, in the frame of `tile_frames[frame]`.
     Fills {
@@ -287,33 +292,15 @@ impl StyleSymbols {
         let zoom = f64::from(first_tile.z) + (first_frame.size / 512.0).log2();
         // MapLibre's `transform.tileZoom`: dashes keep their px length at the floored zoom.
         let tile_zoom = (zoom + 1.0e-9).floor().clamp(0.0, f64::from(u8::MAX)) as u8;
-        if self
+        let has_lines = self
             .layers
             .iter()
-            .any(|layer| layer.kind == StyleLayerKind::Line)
-        {
-            for (tile, _) in placements {
-                if let Some(style_tile) = self
-                    .tiles
-                    .get_mut(&(source.to_owned(), (tile.z, tile.x, tile.y)))
-                    && style_tile.lines.as_ref().map(|lines| lines.tile_zoom) != Some(tile_zoom)
-                {
-                    self.line_generation += 1;
-                    style_tile.lines = Some(build_tile_lines(
-                        &style_tile.buckets,
-                        tile.z,
-                        tile_zoom,
-                        self.line_generation,
-                        line_atlas,
-                    ));
-                }
-            }
-        }
-        if self
+            .any(|layer| layer.kind == StyleLayerKind::Line);
+        let has_fills = self
             .layers
             .iter()
-            .any(|layer| layer.kind == StyleLayerKind::Fill)
-        {
+            .any(|layer| layer.kind == StyleLayerKind::Fill);
+        if has_lines || has_fills {
             // MapLibre packs the patterns a tile's features reference; Maps packs them all.
             for (tile, _) in placements {
                 let Some(style_tile) = self
@@ -323,13 +310,49 @@ impl StyleSymbols {
                     continue;
                 };
                 for bucket in &style_tile.buckets.layers {
-                    if let LayerBucket::Fills { fills, .. } = bucket {
-                        for id in fills.iter().filter_map(|fill| fill.pattern.as_deref()) {
-                            images.request_pattern(id);
-                        }
+                    let ids: Vec<&str> = match bucket {
+                        LayerBucket::Fills { fills, .. } => fills
+                            .iter()
+                            .filter_map(|fill| fill.pattern.as_deref())
+                            .collect(),
+                        LayerBucket::Lines(lines) => lines
+                            .iter()
+                            .filter_map(|line| line.pattern.as_deref())
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    for id in ids {
+                        images.request_pattern(id);
                     }
                 }
             }
+        }
+        if has_lines {
+            let atlas = images.atlas();
+            for (tile, _) in placements {
+                if let Some(style_tile) = self
+                    .tiles
+                    .get_mut(&(source.to_owned(), (tile.z, tile.x, tile.y)))
+                    && style_tile.lines.as_ref().is_none_or(|lines| {
+                        lines.tile_zoom != tile_zoom
+                            || lines
+                                .atlas_revision
+                                .is_some_and(|revision| revision != atlas.revision)
+                    })
+                {
+                    self.line_generation += 1;
+                    style_tile.lines = Some(build_tile_lines(
+                        &style_tile.buckets,
+                        tile.z,
+                        tile_zoom,
+                        self.line_generation,
+                        line_atlas,
+                        atlas,
+                    ));
+                }
+            }
+        }
+        if has_fills {
             let atlas = images.atlas();
             for (tile, _) in placements {
                 if let Some(style_tile) = self
@@ -571,12 +594,13 @@ impl StyleSymbols {
                         else {
                             continue;
                         };
-                        for &(layer, first, count) in &lines.ranges {
+                        for &(layer, first, count, pattern) in &lines.ranges {
                             if layer == layer_index && count > 0 {
                                 frame.draws.push(StyleDraw::Lines {
                                     frame: base.frame,
                                     first: base.line + first,
                                     count,
+                                    pattern,
                                 });
                             }
                         }
@@ -1236,18 +1260,23 @@ fn build_tile_fills(
 }
 
 /// One tile's line strips in tile-normalized coordinates, clipped to the tile, with MapLibre's
-/// dash coordinates for the camera's tile zoom (`u_tileratio`).
+/// dash coordinates for the camera's tile zoom (`u_tileratio`). `line-pattern` strips (#349)
+/// carry their image from `images` and their distance along the line in px at that zoom
+/// (`u_scale.x`); features whose image is not in the atlas are skipped, as MapLibre skips
+/// pattern tiles until their images arrive.
 fn build_tile_lines(
     buckets: &TileStyleBuckets,
     z: u8,
     tile_zoom: u8,
     generation: u64,
     atlas: &mut LineAtlas,
+    images: &ImageAtlas,
 ) -> StyleTileLines {
     let atlas_height = LINE_ATLAS_HEIGHT as f32;
     let tile_ratio = (f64::from(tile_zoom) - f64::from(z)).exp2() / 16.0;
     let mut bytes = Vec::new();
     let mut ranges = Vec::new();
+    let mut patterned = false;
     let vertex_count =
         |bytes: &Vec<u8>| (bytes.len() as u64 / RETAINED_POLYGON_STROKE_VERTEX_SIZE) as u32;
     for (layer_index, bucket) in buckets.layers.iter().enumerate() {
@@ -1255,7 +1284,30 @@ fn build_tile_lines(
             continue;
         };
         let first = vertex_count(&bytes);
+        let layer_pattern = lines.iter().any(|line| line.pattern.is_some());
+        patterned |= layer_pattern;
         for line in lines {
+            if let Some(id) = &line.pattern {
+                let Some(position) = images.pattern(id) else {
+                    continue;
+                };
+                let pattern = LinePattern::new(&position, images);
+                for &index in &line.mesh.indices {
+                    let vertex = line.mesh.vertices[index as usize];
+                    push_line_pattern_vertex(
+                        &mut bytes,
+                        vertex.point.map(|value| (value / 8192.0) as f32),
+                        vertex.extrude.map(|value| value as f32),
+                        vertex.normal,
+                        line.width,
+                        &pattern,
+                        (f64::from(vertex.linesofar) * tile_ratio) as f32,
+                        line.opacity,
+                        [0.0, 0.0, 1.0, 1.0],
+                    );
+                }
+                continue;
+            }
             let dash = line.dash.as_ref().and_then(|dash| {
                 let entry = atlas.dash(&dash.dasharray, dash.round)?;
                 let period = if dash.integer_period {
@@ -1289,10 +1341,16 @@ fn build_tile_lines(
                 );
             }
         }
-        ranges.push((layer_index, first, vertex_count(&bytes) - first));
+        ranges.push((
+            layer_index,
+            first,
+            vertex_count(&bytes) - first,
+            layer_pattern,
+        ));
     }
     StyleTileLines {
         tile_zoom,
+        atlas_revision: patterned.then_some(images.revision),
         generation,
         bytes,
         ranges,
@@ -1351,6 +1409,88 @@ mod tests {
         let mut tile = Vec::new();
         field(3, &layer, &mut tile);
         tile
+    }
+
+    /// One `streets` layer with a line across the tile, (1024, 2048) to (3072, 2048).
+    fn streets_tile() -> Vec<u8> {
+        let mut feature = Vec::new();
+        varint(3 << 3, &mut feature);
+        varint(2, &mut feature);
+        let mut geometry = Vec::new();
+        // MoveTo once (zigzag 1024, 2048), LineTo once (zigzag +2048, 0).
+        for value in [9_u64, 2048, 4096, 10, 4096, 0] {
+            varint(value, &mut geometry);
+        }
+        field(4, &geometry, &mut feature);
+        let mut layer = Vec::new();
+        field(1, b"streets", &mut layer);
+        field(2, &feature, &mut layer);
+        let mut tile = Vec::new();
+        field(3, &layer, &mut tile);
+        tile
+    }
+
+    #[test]
+    fn line_pattern_strips_draw_with_their_program_once_their_sprite_arrives() {
+        let mut images = ImageStore::default();
+        let mut symbols = StyleSymbols::default();
+        symbols
+            .set_layers(
+                r#"[{"id":"rail","type":"line","source":"v","source-layer":"streets",
+                     "paint":{"line-pattern":"track","line-width":6,"line-opacity":0.5}}]"#,
+                &mut images,
+            )
+            .unwrap();
+        symbols
+            .upload("s", (7, 66, 45), &streets_tile(), &mut images)
+            .unwrap();
+        // Without its image the strip is left out, as MapLibre skips the tile.
+        let frame = centred_frame(&mut symbols, &mut images);
+        assert!(frame.draws.is_empty(), "{:?}", frame.draws);
+
+        let sheet = vec![255_u8; 16 * 8 * 4];
+        images
+            .add_sprite(
+                r#"{"track":{"x":0,"y":0,"width":16,"height":8,"pixelRatio":1}}"#,
+                &sheet,
+                16,
+                8,
+            )
+            .unwrap();
+        // The atlas revision rebuilds the strip without a relayout.
+        let frame = centred_frame(&mut symbols, &mut images);
+        let [
+            StyleDraw::Lines {
+                first: 0,
+                count,
+                pattern: true,
+                ..
+            },
+        ] = frame.draws[..]
+        else {
+            panic!("{:?}", frame.draws)
+        };
+        let bytes = frame.line_bytes.expect("new line bytes");
+        let vertices = bytes
+            .as_chunks::<{ RETAINED_POLYGON_STROKE_VERTEX_SIZE as usize }>()
+            .0;
+        assert_eq!(vertices.len(), count as usize);
+        let float = |vertex: &[u8], at: usize| {
+            f32::from_le_bytes(vertex[at * 4..at * 4 + 4].try_into().unwrap())
+        };
+        // (px along at tile zoom 7, display width, display height, opacity): the line spans
+        // half the 512 px tile.
+        let along = vertices
+            .iter()
+            .map(|vertex| float(vertex, 12))
+            .fold(0.0_f32, f32::max);
+        assert!((along - 256.0).abs() < 1.0, "{along}");
+        for vertex in vertices {
+            assert_eq!(
+                [float(vertex, 13), float(vertex, 14), float(vertex, 15)],
+                [16.0, 8.0, 0.5]
+            );
+        }
     }
 
     #[test]

@@ -17,6 +17,18 @@
 
 ### Minor Changes
 
+- Lines take MapLibre 6.16's `line-pattern` from the map style's `sprite` (#349).
+  `tilesetLayers` accepts `line-pattern` on style-spec `line` layers (constant or data-driven,
+  not zoom-dependent), and `GeoJsonLayer` styles gain `linePattern` (default `null`). The
+  strips draw with a port of MapLibre's `line_pattern` program: the image spans the line's
+  width, its height scaled to `line-width`, repeats along the line by the distance measured at
+  the floored zoom (restarting at every tile, also for GeoJSON lines), samples one texel into
+  the atlas padding, and cross-fades between neighbouring integer zooms like `fill-pattern`.
+  A pattern replaces `line-color` and `line-dasharray` and keeps `line-opacity`; features
+  whose image is missing draw nothing. Patterned GeoJSON lines draw on the retained WebGPU
+  path; under a pitched camera and on the Canvas fallback they are left out for now, like
+  patterned fills (#350). The MapLibre runtime batches patterned GeoJSON lines per image.
+  The oracle `line-pattern` scenario is gated.
 - Rotated and pitched cameras cover tiles with MapLibre 6.16's `coveringTiles` (#332): tiles
   are culled against the camera frustum, and above `maxConstantZoomPitch` (60°) far tiles
   come from lower zooms, so frame placements and requests hold mixed zooms. Cameras whose

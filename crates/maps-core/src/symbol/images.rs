@@ -515,6 +515,32 @@ impl PatternVertex {
     }
 }
 
+/// A pattern as MapLibre's `line_pattern` program (#349) reads it from `pattern_from`/`pattern_to`
+/// and `pixel_ratio_*`: the image spans the line's width (its height scaled to `line-width`)
+/// and repeats along the line every `display_size.x * scale * width / display_size.y` px.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinePattern {
+    /// Atlas-normalized corners the program samples between: one texel outside the image on
+    /// every side (`pattern_tl * texel_size - texel_size`, `pattern_br * texel_size +
+    /// texel_size`), so the wrapped padding takes part, as in MapLibre.
+    pub uv_tl: [f64; 2],
+    pub uv_br: [f64; 2],
+    pub display_size: [f64; 2],
+}
+
+impl LinePattern {
+    #[must_use]
+    pub fn new(position: &ImagePosition, atlas: &ImageAtlas) -> Self {
+        let (tl, br) = (position.tl(), position.br());
+        let (width, height) = (f64::from(atlas.width), f64::from(atlas.height));
+        Self {
+            uv_tl: [(tl[0] - 1.0) / width, (tl[1] - 1.0) / height],
+            uv_br: [(br[0] + 1.0) / width, (br[1] + 1.0) / height],
+            display_size: position.display_size(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +594,15 @@ mod tests {
         assert_eq!(position.tl(), [1.0, 1.0]);
         assert_eq!(position.br(), [3.0, 3.0]);
         assert_eq!(position.display_size(), [1.0, 1.0]);
+        // `line_pattern` samples one texel into the wrapped padding on every side.
+        assert_eq!(
+            LinePattern::new(&position, &atlas),
+            LinePattern {
+                uv_tl: [0.0, 0.0],
+                uv_br: [1.0, 1.0],
+                display_size: [1.0, 1.0],
+            }
+        );
         assert!(atlas.pattern("missing").is_none());
         let pixel = |x: usize, y: usize| &atlas.image[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
         // The image itself, white premultiplied by its 128 alpha.

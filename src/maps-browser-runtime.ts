@@ -230,7 +230,7 @@ export type MapsBrowserRuntimeOptions = {
   tilesetLayers?: MapsTilesetLayers;
   /**
    * The map style's `sprite` (#323): a URL whose `[@2x].json` index and `.png` sheet hold
-   * the images `fill-pattern` names, for tileset fill layers and GeoJSON fills alike.
+   * the images `fill-pattern` and `line-pattern` name, for tileset layers and GeoJSON shapes alike.
    */
   sprite?: string;
   /**

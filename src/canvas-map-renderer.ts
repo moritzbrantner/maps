@@ -450,6 +450,9 @@ function drawLine<TFeature>(
   selected: boolean,
   hovered: boolean,
 ) {
+  // `line-pattern` draws on the retained WebGPU path only (#349): Canvas has no sprite and
+  // leaves the line out, as MapLibre does until a pattern's image loads.
+  if (primitive.linePattern) return;
   traceLine(context, scene.points, false);
   const width = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
   context.globalAlpha = primitive.strokeOpacity;

@@ -1,13 +1,17 @@
 //! wgpu resources of MapLibre's fill programs (#323): the image atlas texture (premultiplied
 //! RGBA, `LINEAR` / `CLAMP_TO_EDGE` as MapLibre binds `imageAtlasTexture`), the cross-fade
-//! uniform, and the fill, outline and retained pattern-cover pipelines of `fill_pattern.wgsl`.
+//! uniform, the fill, outline and retained pattern-cover pipelines of `fill_pattern.wgsl`, and
+//! the `line_pattern.wgsl` pipeline of `line-pattern` strips (#349).
 //! Symbol icons (#346) can bind the same atlas.
 
 use maps_core::symbol::{CrossfadeParameters, ImageAtlas};
 
-use crate::retained_polygons::{FILL_OUTLINE_VERTEX_SIZE, FILL_VERTEX_SIZE};
+use crate::retained_polygons::{
+    FILL_OUTLINE_VERTEX_SIZE, FILL_VERTEX_SIZE, RETAINED_POLYGON_STROKE_VERTEX_SIZE,
+};
 
 const SHADER: &str = include_str!("shaders/fill_pattern.wgsl");
+const LINE_SHADER: &str = include_str!("shaders/line_pattern.wgsl");
 
 pub(crate) struct PatternGpu {
     layout: wgpu::BindGroupLayout,
@@ -22,6 +26,9 @@ pub(crate) struct PatternGpu {
     pub(crate) retained_cover: wgpu::RenderPipeline,
     /// Its `fill-antialias` pattern outline, over the cover.
     pub(crate) retained_outline: wgpu::RenderPipeline,
+    /// MapLibre's `line_pattern` program (#349) over line strip vertices, for tileset line
+    /// layers and retained GeoJSON lines alike (their frame layouts are the same).
+    pub(crate) line: wgpu::RenderPipeline,
 }
 
 /// What the pipelines share with the rest of the renderer.
@@ -188,6 +195,58 @@ impl PatternGpu {
             true,
             targets.ignored_stencil.clone(),
         );
+        // The line strip vertex layout of `retained_polygons.wgsl`, read as `line_pattern.wgsl`
+        // reads it; like MapLibre's line layers it draws without the coverage stencil.
+        let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Maps line pattern shader"),
+            source: wgpu::ShaderSource::Wgsl(LINE_SHADER.into()),
+        });
+        let line_attributes = [
+            attribute(Float32x2, 0, 0),
+            attribute(Float32x2, 8, 1),
+            attribute(Float32x2, 16, 2),
+            attribute(wgpu::VertexFormat::Float32, 24, 3),
+            attribute(Float32x4, 32, 5),
+            attribute(Float32x4, 48, 6),
+            attribute(Float32x4, 64, 7),
+        ];
+        let line_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Maps line pattern pipeline layout"),
+            bind_group_layouts: &[Some(targets.retained_frames), Some(&layout)],
+            immediate_size: 0,
+        });
+        let line = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Maps line pattern pipeline"),
+            layout: Some(&line_layout),
+            vertex: wgpu::VertexState {
+                module: &line_shader,
+                entry_point: Some("vs_line"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: RETAINED_POLYGON_STROKE_VERTEX_SIZE,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &line_attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: targets.ignored_stencil.clone(),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &line_shader,
+                entry_point: Some("fs_line"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: targets.format,
+                    blend: Some(targets.blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         // A blank 1 x 1 atlas until the first sprite arrives.
         let bind_group = Self::bind_atlas(
             device,
@@ -207,6 +266,7 @@ impl PatternGpu {
             style_outline,
             retained_cover,
             retained_outline,
+            line,
         }
     }
 

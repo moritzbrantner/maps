@@ -50,6 +50,13 @@ export type GeoJsonLayerStyle = {
   /** MapLibre's `line-miter-limit`: longer miter joins become bevels. Default 2. */
   lineMiterLimit?: number;
   lineOpacity?: number;
+  /**
+   * A style image (from the map style's `sprite`) repeated along the line, as MapLibre's
+   * `line-pattern` (#349): it replaces `lineColor` and `lineDasharray`, keeps `lineOpacity`,
+   * spans the line's width (its height scaled to `lineWidth`) and restarts at every tile of
+   * the floored zoom. Default `null` (a solid line).
+   */
+  linePattern?: string | null;
   /** MapLibre's `line-round-limit`: shorter round joins become miters. Default 1.05. */
   lineRoundLimit?: number;
   lineWidth?: number;
@@ -102,6 +109,7 @@ export function GeoJsonLayer<
   lineJoin,
   lineMiterLimit,
   lineOpacity,
+  linePattern,
   lineRoundLimit,
   lineWidth,
   pointColor,
@@ -133,6 +141,7 @@ export function GeoJsonLayer<
         lineJoin,
         lineMiterLimit,
         lineOpacity,
+        linePattern,
         lineRoundLimit,
         lineWidth,
         pointColor,
@@ -150,6 +159,7 @@ export function GeoJsonLayer<
       lineJoin,
       lineMiterLimit,
       lineOpacity,
+      linePattern,
       lineRoundLimit,
       lineWidth,
       pointColor,

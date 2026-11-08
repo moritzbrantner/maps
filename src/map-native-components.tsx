@@ -358,6 +358,7 @@ export function EngineGeoJsonLayer(props: EngineGeoJsonLayerProps) {
       lineJoin={props.lineJoin}
       lineMiterLimit={props.lineMiterLimit}
       lineOpacity={props.lineOpacity}
+      linePattern={props.linePattern}
       lineRoundLimit={props.lineRoundLimit}
       lineWidth={props.lineWidth}
       onFeatureContextMenu={mapGeoJsonCallback(props.onFeatureContextMenu)}

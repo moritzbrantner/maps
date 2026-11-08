@@ -269,6 +269,10 @@ pub struct TileLine {
     /// `line-width` in CSS px.
     pub width: f32,
     pub dash: Option<TileDash>,
+    /// `line-opacity`, which MapLibre's `line_pattern` program applies to the image.
+    pub opacity: f32,
+    /// The `line-pattern` image id (#349): the strip then samples it instead of its color.
+    pub pattern: Option<String>,
 }
 
 /// One feature of a fill layer: earcut triangles and the `fill-antialias` outline segments
@@ -1557,15 +1561,30 @@ pub fn layout_lines(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<
                         .iter()
                         .all(|value| value.is_finite() && *value >= 0.0)
             });
-        let dash = dasharray.map(|dasharray| TileDash {
-            dasharray,
-            round: if dash_data_driven {
-                cap == LineCap::Round
-            } else {
-                constant_round_cap
+        // `line-pattern` (#349), evaluated per feature like `fill-pattern`: a layer with it
+        // draws with MapLibre's `line_pattern` program, only the features whose image resolves.
+        let pattern = match layer.raw_paint("line-pattern") {
+            None => None,
+            Some(_) => match layer
+                .paint_value("line-pattern", &context)?
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .filter(|id| !id.is_empty())
+            {
+                Some(id) => Some(id),
+                None => continue,
             },
-            integer_period: dash_data_driven,
-        });
+        };
+        let dash = dasharray
+            .filter(|_| pattern.is_none())
+            .map(|dasharray| TileDash {
+                dasharray,
+                round: if dash_data_driven {
+                    cap == LineCap::Round
+                } else {
+                    constant_round_cap
+                },
+                integer_period: dash_data_driven,
+            });
         let closed = feature.geometry_type == MvtGeometryType::Polygon;
         let mut mesh = LineMesh::new();
         for path in &feature.geometry {
@@ -1580,7 +1599,9 @@ pub fn layout_lines(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<
                 .collect();
             mesh.add_line(&points, &line_layout, closed);
         }
-        if mesh.indices.is_empty() || width <= 0.0 || color.a < 0.01 {
+        // `line_pattern` ignores `line-color` and culls below 0.01 `line-opacity`.
+        let alpha = if pattern.is_some() { opacity } else { color.a };
+        if mesh.indices.is_empty() || width <= 0.0 || alpha < 0.01 {
             continue;
         }
         lines.push(TileLine {
@@ -1588,6 +1609,8 @@ pub fn layout_lines(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<
             color: color.straight(),
             width: width as f32,
             dash,
+            opacity: opacity as f32,
+            pattern,
         });
     }
     Ok(lines)
@@ -1845,6 +1868,33 @@ mod tests {
             .map(|vertex| vertex.point[0])
             .fold(f64::MIN, f64::max);
         assert_eq!(max_x, 4096.0);
+    }
+
+    #[test]
+    fn line_pattern_layers_keep_the_image_and_opacity_of_the_features_that_resolve_one() {
+        let layer = line_layer(
+            r##"{"id":"p","type":"line","source-layer":"streets",
+                 "paint":{"line-pattern":["match",["get","kind"],"primary","track",""],
+                          "line-opacity":0.5,"line-width":6,"line-dasharray":[3,1.5]}}"##,
+        );
+        let lines = layout_lines(&layer, &source(), 8).unwrap();
+        // The track resolves to no image and is left out, as MapLibre leaves it undrawn.
+        let [line] = &lines[..] else {
+            panic!("{lines:?}")
+        };
+        assert_eq!(line.pattern.as_deref(), Some("track"));
+        assert_eq!(line.opacity, 0.5);
+        assert_eq!(line.width, 6.0);
+        // `line-pattern` selects MapLibre's `line_pattern` program: no dashes.
+        assert_eq!(line.dash, None);
+
+        let plain = line_layer(r#"{"id":"s","type":"line","source-layer":"streets"}"#);
+        let lines = layout_lines(&plain, &source(), 8).unwrap();
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.pattern.is_none() && line.opacity == 1.0)
+        );
     }
 
     #[test]
