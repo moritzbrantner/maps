@@ -59,6 +59,8 @@ export type MapSurfaceContextValue = {
         context: MapFeatureInteractionChange<TFeature>,
       ) => void;
       onFeatureSelect?: (feature: TFeature | null) => void;
+      /** Identifies the rendered Map Feature an opened overlay belongs to (Maps runtime). */
+      overlayKey?: string;
       renderFeaturePopup?: (feature: TFeature) => ReactNode;
       suppress?: boolean;
     },
@@ -75,6 +77,8 @@ export type MapSurfaceContextValue = {
         context: MapFeatureInteractionChange<TFeature>,
       ) => void;
       onFeatureSelect?: (feature: TFeature | null) => void;
+      /** Identifies the rendered Map Feature an opened overlay belongs to (Maps runtime). */
+      overlayKey?: string;
       renderFeatureContextMenu?: (
         feature: TFeature,
         context: MapFeatureContextMenuContext<TFeature>,

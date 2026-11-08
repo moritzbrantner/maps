@@ -64,6 +64,10 @@ async function bootstrap() {
     content = <MapsRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-constrained") {
     content = <MapsRuntimeAcceptance maxZoom={8} />;
+  } else if (acceptanceMode === "maps-runtime-sequences") {
+    content = <MapsRuntimeAcceptance sequences />;
+  } else if (acceptanceMode === "maps-runtime-sequences-uncontrolled") {
+    content = <MapsRuntimeAcceptance cameraOwner="uncontrolled" sequences />;
   } else if (acceptanceMode === "maps-runtime-wgpu-strokes") {
     content = <MapsRuntimeAcceptance includePolygon={false} />;
   } else if (acceptanceMode === "maps-runtime-raster-fetch") {

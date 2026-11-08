@@ -53,7 +53,7 @@ import {
   isMapFeatureHovered,
   type MapSurfaceContextValue,
 } from "./map-surface-context";
-import { useControllableMapViewState } from "./map-view-state";
+import { areMapViewStatesEqual, useControllableMapViewState } from "./map-view-state";
 import { getFeatureCoordinate, isBlockedHoverPosition } from "./map-view-utils";
 import type { MapsTileImageLoader } from "./maps-browser-runtime";
 import type { MapViewProps as LegacyMapViewProps } from "./map-view-maplibre";
@@ -134,7 +134,24 @@ export function MapsMapView({
     onViewStateChange,
     viewState,
   });
+  // A saved controller outlives its Map View; once unmounted its commands are inert, not
+  // camera changes delivered to an application that already released the map.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
   const resolvedMaxZoom = normalizeMapMaxZoom(maxZoom);
+
+  // React constrains the controlled prop before it reaches the runtime, so the runtime's
+  // own correction never fires: the owner hears here that a limit changed its camera.
+  useEffect(() => {
+    if (viewState && !areMapViewStatesEqual(viewState, currentViewState)) {
+      setViewState(currentViewState, "prop-change");
+    }
+  }, [currentViewState, setViewState, viewState]);
   const currentViewStateRef = useRef(currentViewState);
   useLayoutEffect(() => {
     currentViewStateRef.current = currentViewState;
@@ -213,6 +230,14 @@ export function MapsMapView({
     setPopup(null);
   }, []);
 
+  /** Closes feature overlays whose Map Feature is no longer rendered. */
+  const retireFeatureOverlays = useCallback((isRendered: (overlayKey: string) => boolean) => {
+    const keep = <TOverlay extends { overlayKey?: string } | null>(overlay: TOverlay) =>
+      overlay?.overlayKey === undefined || isRendered(overlay.overlayKey) ? overlay : null;
+    setPopup(keep);
+    setContextMenu(keep);
+  }, []);
+
   const handleBackgroundClick = useCallback(() => {
     blockedHoverPositionRef.current = null;
     setHovered(null);
@@ -254,7 +279,7 @@ export function MapsMapView({
         return;
       }
 
-      setViewState(next, "fly-to");
+      if (!unmountedRef.current) setViewState(next, "fly-to");
     },
     [setViewState],
   );
@@ -280,7 +305,7 @@ export function MapsMapView({
         return;
       }
 
-      setViewState(resolvedNext, reason);
+      if (!unmountedRef.current) setViewState(resolvedNext, reason);
     },
     [setViewState],
   );
@@ -473,6 +498,7 @@ export function MapsMapView({
           setPopup({
             feature,
             position,
+            overlayKey: options?.overlayKey,
             render: options.renderFeaturePopup as (feature: unknown) => ReactNode,
           });
         }
@@ -510,6 +536,7 @@ export function MapsMapView({
           setContextMenu({
             context: featureContext,
             position,
+            overlayKey: options?.overlayKey,
             render: (value) =>
               options.renderFeatureContextMenu!(
                 (value as MapFeatureContextMenuContext<typeof feature>).feature,
@@ -525,6 +552,7 @@ export function MapsMapView({
           setPopup({
             feature,
             position,
+            overlayKey: options?.overlayKey,
             render: options.renderFeaturePopup as (feature: unknown) => ReactNode,
           });
         }
@@ -751,6 +779,7 @@ export function MapsMapView({
           renderApplicationFrame={renderApplicationFrame}
           canvasPatternImages={canvasPatternImages}
           retainedPoints={retainedPoints}
+          retireFeatureOverlays={retireFeatureOverlays}
           surface={surface}
           unproject={unprojectCoordinate}
         >

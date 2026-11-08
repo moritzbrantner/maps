@@ -12,12 +12,16 @@ export type FeatureOverlayPosition = {
 export type FeatureOverlayState = {
   feature: unknown;
   position: FeatureOverlayPosition;
+  /** The rendered Map Feature this overlay belongs to, when the runtime tracks it. */
+  overlayKey?: string;
   render: (feature: unknown) => ReactNode;
 };
 
 export type ContextMenuOverlayState = {
   context: unknown;
   position: FeatureOverlayPosition;
+  /** The rendered Map Feature this overlay belongs to, when the runtime tracks it. */
+  overlayKey?: string;
   render: (context: unknown) => ReactNode;
 };
 

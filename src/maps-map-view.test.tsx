@@ -493,6 +493,97 @@ describe("Maps-owned MapView runtime", () => {
     });
   });
 
+  test("retires hover, tooltip and popup when their Map Feature leaves the composition", async () => {
+    const onHoveredFeatureIdChange = vi.fn();
+    const berlin = { id: "berlin", label: "Berlin", latitude: 52.52, longitude: 13.405 };
+    const composition = (points: (typeof berlin)[]) => (
+      <MapView flatRuntime="maps" fitToData={false} mapLabel="Sequence map" mapStyle={{ tiles: false }}>
+        <PointLayer
+          onHoveredFeatureIdChange={onHoveredFeatureIdChange}
+          points={points}
+          renderFeaturePopup={(feature) => <span>Popup {feature.point.label}</span>}
+          renderFeatureTooltip={(feature) => <span>Tooltip {feature.point.label}</span>}
+        />
+      </MapView>
+    );
+    const { rerender } = render(composition([berlin]));
+    const map = screen.getByLabelText("Sequence map");
+    const baseCanvas = getBaseCanvas(map);
+    await waitFor(() => expect(map.getAttribute("data-map-ready")).toBe("true"));
+
+    fireEvent.pointerMove(baseCanvas, { clientX: 534.05, clientY: 37.4, pointerId: 1 });
+    await waitFor(() => expect(screen.getByText("Tooltip Berlin")).toBeTruthy());
+    clickSurface(baseCanvas, 534.05, 37.4);
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+
+    // The same Map Feature in a replaced source keeps its open popup.
+    rerender(composition([{ ...berlin, label: "Berlin renamed" }]));
+    expect(screen.getByText("Popup Berlin")).toBeTruthy();
+
+    rerender(composition([]));
+    await waitFor(() => {
+      expect(screen.queryByText("Popup Berlin")).toBeNull();
+      expect(screen.queryByText("Tooltip Berlin")).toBeNull();
+      expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({ source: "clear" }),
+      );
+    });
+  });
+
+  test("tells a controlled owner when a limit corrects its camera", async () => {
+    const onViewStateChange = vi.fn();
+    const composition = (maxZoom: number) => (
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="Limited map"
+        mapStyle={{ tiles: false }}
+        maxZoom={maxZoom}
+        onViewStateChange={onViewStateChange}
+        viewState={{ center: [13, 52], zoom: 8 }}
+      />
+    );
+    const { rerender } = render(composition(10));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Limited map").getAttribute("data-map-ready")).toBe("true"),
+    );
+    expect(onViewStateChange).not.toHaveBeenCalled();
+
+    rerender(composition(5));
+    await waitFor(() => expect(onViewStateChange).toHaveBeenCalledTimes(1));
+    expect(onViewStateChange.mock.calls[0]).toEqual([
+      expect.objectContaining({ zoom: 5 }),
+      expect.objectContaining({ reason: "prop-change" }),
+    ]);
+  });
+
+  test("keeps a saved controller inert after the Map View unmounts", async () => {
+    const onViewStateChange = vi.fn();
+    let controller: MapSurfaceController | null = null;
+    const { unmount } = render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="Released map"
+        mapStyle={{ tiles: false }}
+        onMapControllerReady={(next) => {
+          controller = next;
+        }}
+        onViewStateChange={onViewStateChange}
+        viewState={{ center: [13, 52], zoom: 5 }}
+      />,
+    );
+    await waitFor(() => expect(controller).not.toBeNull());
+    onViewStateChange.mockClear();
+
+    unmount();
+    controller!.setViewState({ center: [1, 2], zoom: 3 });
+    controller!.flyTo({ center: [1, 2], zoom: 3 });
+    expect(onViewStateChange).not.toHaveBeenCalled();
+    expect(controller!.getViewState()).toEqual(expect.objectContaining({ zoom: 5 }));
+  });
+
   test("routes map context menus through the shared MapView contract when no feature is hit", async () => {
     const onMapContextMenu = vi.fn();
 
