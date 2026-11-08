@@ -299,6 +299,11 @@ export function MapsMapView({
     [isReady],
   );
 
+  const canvasPatternImages = useCallback(
+    () => runtimeControllerRef.current?.getCanvasPatternImages?.() ?? null,
+    [],
+  );
+
   const renderApplicationFrame = useCallback(
     (frame: MapScreenRenderFrame<unknown>, interaction: MapScreenInteractionState) =>
       runtimeControllerRef.current?.renderApplicationFrame?.(frame, interaction) ?? false,
@@ -742,6 +747,7 @@ export function MapsMapView({
           getViewport={getViewportAggregationQuery}
           project={projectCoordinate}
           renderApplicationFrame={renderApplicationFrame}
+          canvasPatternImages={canvasPatternImages}
           retainedPoints={retainedPoints}
           surface={surface}
           unproject={unprojectCoordinate}

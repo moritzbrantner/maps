@@ -9,6 +9,7 @@ use maps_core::symbol::{CrossfadeParameters, ImageAtlas};
 use crate::retained_polygons::{
     FILL_OUTLINE_VERTEX_SIZE, FILL_VERTEX_SIZE, RETAINED_POLYGON_STROKE_VERTEX_SIZE,
 };
+use crate::wgpu_geometry::APPLICATION_PATTERN_VERTEX_SIZE;
 
 const SHADER: &str = include_str!("shaders/fill_pattern.wgsl");
 const LINE_SHADER: &str = include_str!("shaders/line_pattern.wgsl");
@@ -26,6 +27,10 @@ pub(crate) struct PatternGpu {
     pub(crate) retained_cover: wgpu::RenderPipeline,
     /// Its `fill-antialias` pattern outline, over the cover.
     pub(crate) retained_outline: wgpu::RenderPipeline,
+    /// The cover of a patterned application polygon (#350), under its even-odd stencil, and
+    /// its pattern outline: clip-space vertices (`vs_clip`), for the projected path.
+    pub(crate) application_cover: wgpu::RenderPipeline,
+    pub(crate) application_outline: wgpu::RenderPipeline,
     /// MapLibre's `line_pattern` program (#349) over line strip vertices, for tileset line
     /// layers and retained GeoJSON lines alike (their frame layouts are the same).
     pub(crate) line: wgpu::RenderPipeline,
@@ -195,6 +200,67 @@ impl PatternGpu {
             true,
             targets.ignored_stencil.clone(),
         );
+        let clip_attributes = [
+            attribute(wgpu::VertexFormat::Float32x3, 0, 0),
+            attribute(Float32x2, 12, 1),
+            attribute(Float32x2, 20, 2),
+            attribute(Float32x2, 28, 3),
+            attribute(Float32x2, 36, 4),
+            attribute(Float32x2, 44, 5),
+            attribute(Float32x4, 52, 6),
+            attribute(Float32x2, 68, 7),
+        ];
+        let clip_pipeline = |label: &str,
+                             fragment: &str,
+                             stencil: Option<wgpu::DepthStencilState>| {
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: &[Some(targets.retained_frames), Some(&layout)],
+                immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_clip"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: APPLICATION_PATTERN_VERTEX_SIZE,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &clip_attributes,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: stencil,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: targets.format,
+                        blend: Some(targets.blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let application_cover = clip_pipeline(
+            "Maps application polygon pattern cover pipeline",
+            "fs_fill",
+            targets.cover_stencil.clone(),
+        );
+        let application_outline = clip_pipeline(
+            "Maps application polygon pattern outline pipeline",
+            "fs_outline",
+            targets.ignored_stencil.clone(),
+        );
         // The line strip vertex layout of `retained_polygons.wgsl`, read as `line_pattern.wgsl`
         // reads it; like MapLibre's line layers it draws without the coverage stencil.
         let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -266,6 +332,8 @@ impl PatternGpu {
             style_outline,
             retained_cover,
             retained_outline,
+            application_cover,
+            application_outline,
             line,
         }
     }

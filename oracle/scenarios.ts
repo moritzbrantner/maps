@@ -430,6 +430,47 @@ export const scenarios: Scenario[] = [
     ],
   },
   {
+    basemap: "vector",
+    camera: { bearing: -25, center: [8.4, 46.75], pitch: 50, zoom: 8.4 },
+    capability:
+      "fill-pattern under a pitched camera: tileset fill layer and GeoJSON fills on the projected path, perspective-correct",
+    knownGaps: [],
+    name: "fill-pattern-pitch",
+    origin: "Patterned fills under a pitched camera (#350), follow-up of sprites and patterns (#323)",
+    size: MAP_SIZE,
+    steps: [
+      { at: [8.85, 46.94], kind: "hover", label: "hover the hatched hexagon" },
+      { at: [7.87, 46.76], kind: "click", label: "select the hatched frame" },
+      { by: [-120, 60], kind: "pan", label: "drag pan" },
+    ],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -25, center: [9.0, 47.4], pitch: 50, zoom: 8 },
+    capability:
+      "line-pattern under a pitched camera: tileset line layers and GeoJSON lines on the projected path, on the map plane",
+    knownGaps: [
+      {
+        gate: "time",
+        issue: 387,
+        reason: "the projected path re-emits every patterned strip per frame; retained lines do not",
+      },
+      {
+        gate: "interaction",
+        issue: 386,
+        reason: "pitched GeoJSON line picks use the screen-space width, wider than MapLibre far from the camera",
+      },
+    ],
+    name: "line-pattern-pitch",
+    origin: "Patterned lines under a pitched camera (#350), follow-up of line patterns (#349)",
+    size: MAP_SIZE,
+    steps: [
+      { at: MOTORWAY_VERTEX, kind: "hover", label: "hover a track-patterned motorway" },
+      { at: RHINE_POINT, kind: "click", label: "select the hatched Rhine" },
+      { by: [-120, 60], kind: "pan", label: "drag pan" },
+    ],
+  },
+  {
     basemap: "style",
     camera: { bearing: 20, center: [9.0, 47.2], zoom: 8 },
     capability: "raster-dem hillshade over a raster basemap, light anchored to the rotated viewport",

@@ -1,12 +1,30 @@
 //! Maps-specific pixel geometry preparation, shared by the browser backend and native tests.
 
-use maps_core::{LineCap, LineJoin, LineLayout, LineMesh};
+use maps_core::symbol::{ImageAtlas, ImagePosition, LinePattern, PatternVertex};
+use maps_core::{
+    GEOJSON_VT_EXTENT, GEOJSON_VT_MAX_ZOOM, LineCap, LineJoin, LineLayout, LineMesh,
+    SimplifiedLine, project_web_mercator,
+};
 use serde::Deserialize;
 use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::Entry;
+use std::hash::{Hash, Hasher};
+
+use crate::retained_polygons::{
+    FILL_FLAG_PATTERN, FILL_FLAG_SDF, FillPaint, RETAINED_POLYGON_STROKE_VERTEX_SIZE,
+    pattern_attributes, push_line_pattern_vertex,
+};
 
 /// Homogeneous clip position `(x, y, w)` (3 x f32), RGBA (4 x f32), edge (3 x f32): see
 /// `shaders/application.wgsl`.
 pub(super) const APPLICATION_VERTEX_SIZE: u64 = 40;
+/// A pattern vertex of the projected path (#350), read by `vs_clip` of `fill_pattern.wgsl`:
+/// homogeneous clip position (3 x f32), the outline's `v_pos` window position (2 x f32), the
+/// pattern attributes (8 x f32), RGBA (4 x f32), (opacity, flags) (2 x f32).
+pub(super) const APPLICATION_PATTERN_VERTEX_SIZE: u64 = 76;
 /// The edge of fills and markers: never faded.
 const FILL_EDGE: [f32; 3] = [0.0, 0.0, 1.0e6];
 /// Fill outline vertices carry their endpoint's window position (physical px) in `edge.xy`;
@@ -330,6 +348,12 @@ pub(super) struct WgpuApplicationLine {
     /// `line-miter-limit`, `line-round-limit`, as the retained paint record holds them.
     #[serde(default = "round_line_layout")]
     pub(super) line_layout: [f64; 4],
+    /// MapLibre's `line-pattern` image (#350): `color` is white at the line's `line-opacity`.
+    #[serde(default)]
+    pub(super) line_pattern: Option<String>,
+    /// The whole line's `[longitude, latitude]` pairs: `points` holds only its visible part.
+    #[serde(default)]
+    pub(super) line_pattern_path: Vec<[f64; 2]>,
 }
 
 fn round_line_layout() -> [f64; 4] {
@@ -364,6 +388,9 @@ pub(super) struct WgpuApplicationPolygon {
     pub(super) rings: Vec<Vec<WgpuApplicationPoint>>,
     pub(super) stroke_color: [f32; 4],
     pub(super) stroke_width: f64,
+    /// MapLibre's `fill-pattern` image (#350): `fill_color` is white at its `fill-opacity`.
+    #[serde(default)]
+    pub(super) fill_pattern: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -385,6 +412,12 @@ pub(super) enum ApplicationDraw {
         group: u32,
     },
     Polygon(PolygonDraw),
+    /// A `line-pattern` line of the projected path (#350), in
+    /// [`ApplicationGeometry::line_pattern_vertices`].
+    LinePattern {
+        first_vertex: u32,
+        vertex_count: u32,
+    },
 }
 
 /// One polygon's ranges in the application triangle buffer. The fill is even-odd, like
@@ -401,6 +434,16 @@ pub(super) struct PolygonDraw {
     pub(super) outline_count: u32,
     pub(super) stroke_first: u32,
     pub(super) stroke_count: u32,
+    /// A patterned fill (#350): its cover and pattern outline replace the color ones.
+    pub(super) pattern: Option<ApplicationPatternDraw>,
+}
+
+/// One patterned fill's ranges in [`ApplicationGeometry::pattern_vertices`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct ApplicationPatternDraw {
+    pub(super) cover_first: u32,
+    pub(super) outline_first: u32,
+    pub(super) outline_count: u32,
 }
 
 pub(super) const POLYGON_COVER_VERTEX_COUNT: u32 = 6;
@@ -409,7 +452,86 @@ pub(super) const POLYGON_COVER_VERTEX_COUNT: u32 = 6;
 pub(super) struct ApplicationGeometry {
     pub(super) circle_instances: Vec<u8>,
     pub(super) triangle_vertices: Vec<u8>,
+    /// Patterned fill covers and outlines ([`APPLICATION_PATTERN_VERTEX_SIZE`] vertices).
+    pub(super) pattern_vertices: Vec<u8>,
+    /// `line-pattern` strips (`RETAINED_POLYGON_STROKE_VERTEX_SIZE` vertices) on the flat plane.
+    pub(super) line_pattern_vertices: Vec<u8>,
     pub(super) draws: Vec<ApplicationDraw>,
+}
+
+/// A `line-pattern` line's GeoJSON tile pieces and meshes on the projected path (#350): they
+/// depend only on the line and the tile zoom, so camera frames reuse them. Entries a frame
+/// did not draw are dropped at its end.
+#[derive(Debug, Default)]
+pub(super) struct LinePatternMeshCache {
+    entries: RefCell<HashMap<u64, CachedLinePatternMesh>>,
+    generation: Cell<u64>,
+}
+
+#[derive(Debug)]
+struct CachedLinePatternMesh {
+    generation: u64,
+    /// The line in world units.
+    path: Vec<[f64; 2]>,
+    /// Tile column, tile row and mesh in tile units of each piece.
+    pieces: Vec<(u32, u32, LineMesh)>,
+}
+
+impl LinePatternMeshCache {
+    /// Ends a frame: entries it did not draw are dropped, the rest stay for the next.
+    pub(super) fn end_frame(&self) {
+        let generation = self.generation.get();
+        self.entries
+            .borrow_mut()
+            .retain(|_, entry| entry.generation == generation);
+        self.generation.set(generation.wrapping_add(1));
+    }
+}
+
+fn line_pattern_mesh_key(line: &WgpuApplicationLine, tile_zoom: u8) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    tile_zoom.hash(&mut hasher);
+    for value in line.line_layout {
+        value.to_bits().hash(&mut hasher);
+    }
+    for &[longitude, latitude] in &line.line_pattern_path {
+        longitude.to_bits().hash(&mut hasher);
+        latitude.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// What the projected path needs to draw `fill-pattern` and `line-pattern` (#350): the image
+/// atlas, the camera's map plane and MapLibre's GeoJSON tile grid on it, whose floored zoom
+/// the pattern pixels and line distances are measured at.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ApplicationPatterns<'a> {
+    pub(super) meshes: &'a LinePatternMeshCache,
+    pub(super) atlas: &'a ImageAtlas,
+    pub(super) plane: GroundPerspective,
+    pub(super) grid: GeoJsonTileGrid,
+}
+
+impl ApplicationPatterns<'_> {
+    /// A point of the application space on the flat map plane: `space` already is that plane
+    /// under a pitched camera, and it is the screen otherwise.
+    fn flat(&self, space: ApplicationSpace, x: f64, y: f64) -> Option<(f64, f64)> {
+        if space.ground.is_some() {
+            Some((x, y))
+        } else {
+            self.plane.flat(x, y)
+        }
+    }
+
+    /// A flat-plane point in pattern pixels at the tile zoom (512 px tiles), measured from
+    /// the world's north-west corner as MapLibre's `u_pixel_coord_*` and `a_pos` are.
+    fn pixel(&self, (x, y): (f64, f64)) -> [f64; 2] {
+        let scale = 512.0 / self.grid.size;
+        [
+            (x - self.grid.origin[0]) * scale,
+            (y - self.grid.origin[1]) * scale,
+        ]
+    }
 }
 
 /// Local-plane offset (CSS px, +x east, +y north) added to raster tile quads only.
@@ -493,6 +615,17 @@ impl GroundPerspective {
         if m(0, 3) == 0.0 && m(1, 3) == 0.0 {
             return None;
         }
+        Self::plane(view_projection, width, height)
+    }
+
+    /// The map plane of any camera, pitched or not: for an unpitched one `clip w` is constant
+    /// and the homography affine, so surface points map to the plane patterns are measured on.
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", feature = "wgpu-base-map")),
+        allow(dead_code)
+    )]
+    pub(super) fn plane(view_projection: [f32; 16], width: f64, height: f64) -> Option<Self> {
+        let m = |column: usize, row: usize| f64::from(view_projection[column * 4 + row]);
         let forward = [
             [m(0, 0), -m(1, 0), m(3, 0)],
             [m(0, 1), -m(1, 1), m(3, 1)],
@@ -579,6 +712,8 @@ pub(super) struct GeoJsonTileGrid {
     origin: [f64; 2],
     /// One tile's flat-plane size (CSS px).
     size: f64,
+    /// The floored camera zoom, the zoom of these tiles.
+    tile_zoom: u8,
 }
 
 /// geojson-vt's `buffer` over MapLibre's 512 px GeoJSON tile.
@@ -608,6 +743,7 @@ impl GeoJsonTileGrid {
                 -placement.local_north - f64::from(y) * size,
             ],
             size: size * (f64::from(z) - tile_zoom).exp2(),
+            tile_zoom: tile_zoom as u8,
         };
         (grid.origin.iter().all(|value| value.is_finite()) && grid.size.is_finite()).then_some(grid)
     }
@@ -701,6 +837,7 @@ pub(super) fn prepare_application_geometry(
     frame: &WgpuApplicationFrame,
     pixel_ratio: f64,
     ground: Option<GroundPerspective>,
+    patterns: Option<&ApplicationPatterns<'_>>,
 ) -> Result<ApplicationGeometry, &'static str> {
     if !frame.width.is_finite()
         || !frame.height.is_finite()
@@ -748,17 +885,35 @@ pub(super) fn prepare_application_geometry(
                 );
             }
             APPLICATION_LINE => {
+                let line = frame
+                    .lines
+                    .get(index)
+                    .ok_or("invalid wgpu line order index")?;
+                if line.line_pattern.is_some() {
+                    let first_vertex = (geometry.line_pattern_vertices.len() as u64
+                        / RETAINED_POLYGON_STROKE_VERTEX_SIZE)
+                        as u32;
+                    append_application_line_pattern(
+                        &mut geometry.line_pattern_vertices,
+                        space,
+                        line,
+                        patterns,
+                    )?;
+                    let vertex_count = (geometry.line_pattern_vertices.len() as u64
+                        / RETAINED_POLYGON_STROKE_VERTEX_SIZE)
+                        as u32
+                        - first_vertex;
+                    if vertex_count > 0 {
+                        geometry.draws.push(ApplicationDraw::LinePattern {
+                            first_vertex,
+                            vertex_count,
+                        });
+                    }
+                    continue;
+                }
                 let first_vertex =
                     (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
-                append_application_line(
-                    &mut geometry.triangle_vertices,
-                    space,
-                    pixel_ratio,
-                    frame
-                        .lines
-                        .get(index)
-                        .ok_or("invalid wgpu line order index")?,
-                )?;
+                append_application_line(&mut geometry.triangle_vertices, space, pixel_ratio, line)?;
                 let vertex_count = (geometry.triangle_vertices.len() as u64
                     / APPLICATION_VERTEX_SIZE) as u32
                     - first_vertex;
@@ -798,12 +953,14 @@ pub(super) fn prepare_application_geometry(
             APPLICATION_POLYGON => {
                 let draw = append_application_polygon(
                     &mut geometry.triangle_vertices,
+                    &mut geometry.pattern_vertices,
                     space,
                     pixel_ratio,
                     frame
                         .polygons
                         .get(index)
                         .ok_or("invalid wgpu polygon order index")?,
+                    patterns,
                 )?;
                 if draw.fan_count > 0 || draw.stroke_count > 0 {
                     geometry.draws.push(ApplicationDraw::Polygon(draw));
@@ -989,9 +1146,11 @@ fn stroke_edges(half_width: f64, pixel_ratio: f64) -> StrokeEdges {
 
 fn append_application_polygon(
     output: &mut Vec<u8>,
+    pattern_output: &mut Vec<u8>,
     space: ApplicationSpace,
     pixel_ratio: f64,
     polygon: &WgpuApplicationPolygon,
+    patterns: Option<&ApplicationPatterns<'_>>,
 ) -> Result<PolygonDraw, &'static str> {
     if polygon.rings.is_empty()
         || polygon
@@ -1018,7 +1177,12 @@ fn append_application_polygon(
     let mut draw = PolygonDraw::default();
 
     let fill_rings = || rings.iter().filter(|ring| ring.len() >= 3);
+    // MapLibre's `fill-pattern` program, or no fill at all while its image is missing.
+    let fill_pattern = polygon.fill_pattern.as_deref().map(|id| {
+        patterns.and_then(|patterns| patterns.atlas.pattern(id).map(|image| (patterns, image)))
+    });
     if polygon.fill_color[3] > 0.0
+        && !matches!(fill_pattern, Some(None))
         && let Some(anchor) = fill_rings().next().map(|ring| ring[0])
     {
         draw.fan_first = vertex_index(output);
@@ -1045,32 +1209,48 @@ fn append_application_polygon(
         }
         draw.cover_first = vertex_index(output);
         draw.fan_count = draw.cover_first - draw.fan_first;
-        for (x, y) in [
+        let cover = [
             (min_x, min_y),
             (max_x, min_y),
             (max_x, max_y),
             (min_x, min_y),
             (max_x, max_y),
             (min_x, max_y),
-        ] {
-            append_application_vertex(output, space, x, y, polygon.fill_color, FILL_EDGE)?;
-        }
-
-        draw.outline_first = vertex_index(output);
-        for ring in fill_rings() {
-            for (index, &start) in ring.iter().enumerate() {
-                let end = ring[(index + 1) % ring.len()];
-                append_fill_outline_segment(
-                    output,
-                    space,
-                    pixel_ratio,
-                    start,
-                    end,
-                    polygon.fill_color,
-                )?;
+        ];
+        if let Some(Some((patterns, image))) = fill_pattern {
+            // The stencil fan above is shared; the cover and outline sample the image atlas.
+            draw.pattern = Some(append_application_fill_pattern(
+                pattern_output,
+                space,
+                pixel_ratio,
+                patterns,
+                &image,
+                polygon.fill_color[3],
+                anchor,
+                &cover,
+                fill_rings(),
+            )?);
+        } else {
+            for (x, y) in cover {
+                append_application_vertex(output, space, x, y, polygon.fill_color, FILL_EDGE)?;
             }
+
+            draw.outline_first = vertex_index(output);
+            for ring in fill_rings() {
+                for (index, &start) in ring.iter().enumerate() {
+                    let end = ring[(index + 1) % ring.len()];
+                    append_fill_outline_segment(
+                        output,
+                        space,
+                        pixel_ratio,
+                        start,
+                        end,
+                        polygon.fill_color,
+                    )?;
+                }
+            }
+            draw.outline_count = vertex_index(output) - draw.outline_first;
         }
-        draw.outline_count = vertex_index(output) - draw.outline_first;
     }
 
     if polygon.stroke_width > 0.0 && polygon.stroke_color[3] > 0.0 && !rings.is_empty() {
@@ -1311,6 +1491,27 @@ fn append_fill_outline_segment(
     end: WgpuApplicationPoint,
     color: [f32; 4],
 ) -> Result<(), &'static str> {
+    for_each_fill_outline_vertex(space, pixel_ratio, start, end, |_, clip, v_pos| {
+        let edge = [v_pos[0], v_pos[1], OUTLINE_EDGE];
+        if edge.iter().any(|value| !value.is_finite()) {
+            return Err("wgpu application position is not representable as f32");
+        }
+        for value in clip.into_iter().chain(color).chain(edge) {
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+        Ok(())
+    })
+}
+
+/// The outline's vertices: `emit` receives each corner's parameter along `start -> end`, its
+/// clip position and MapLibre's `v_pos`. See [`append_fill_outline_segment`].
+fn for_each_fill_outline_vertex(
+    space: ApplicationSpace,
+    pixel_ratio: f64,
+    start: WgpuApplicationPoint,
+    end: WgpuApplicationPoint,
+    mut emit: impl FnMut(f64, [f32; 3], [f32; 2]) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
     let (width, height) = (space.width * pixel_ratio, space.height * pixel_ratio);
     let at = |t: f64| WgpuApplicationPoint {
         x: start.x + (end.x - start.x) * t,
@@ -1379,12 +1580,234 @@ fn append_fill_outline_segment(
                 ((1.0 - corner[1] / height * 2.0) * w) as f32,
                 w as f32,
             ];
-            let edge = [v_pos[0] as f32, v_pos[1] as f32, OUTLINE_EDGE];
-            if clip.iter().chain(&edge).any(|value| !value.is_finite()) {
+            if clip.iter().any(|value| !value.is_finite()) {
                 return Err("wgpu application position is not representable as f32");
             }
-            for value in clip.into_iter().chain(color).chain(edge) {
-                output.extend_from_slice(&value.to_le_bytes());
+            emit(drawn[end_index], clip, [v_pos[0] as f32, v_pos[1] as f32])?;
+        }
+    }
+    Ok(())
+}
+
+/// MapLibre's `fill_pattern` cover and `fill_outline_pattern` outline of one polygon (#350):
+/// pattern pixels at the tile zoom per vertex, interpolated perspective-correct under `w`.
+/// Returns the ranges in `output`, which holds [`APPLICATION_PATTERN_VERTEX_SIZE`] vertices.
+#[allow(clippy::too_many_arguments)]
+fn append_application_fill_pattern<'a>(
+    output: &mut Vec<u8>,
+    space: ApplicationSpace,
+    pixel_ratio: f64,
+    patterns: &ApplicationPatterns<'_>,
+    image: &ImagePosition,
+    opacity: f32,
+    anchor: WgpuApplicationPoint,
+    cover: &[(f64, f64); POLYGON_COVER_VERTEX_COUNT as usize],
+    rings: impl Iterator<Item = &'a Cow<'a, [WgpuApplicationPoint]>>,
+) -> Result<ApplicationPatternDraw, &'static str> {
+    let paint = FillPaint {
+        color: [0.0; 4],
+        opacity,
+        flags: FILL_FLAG_PATTERN | if image.sdf { FILL_FLAG_SDF } else { 0 },
+    };
+    let origin = patterns.pixel(
+        patterns
+            .flat(space, anchor.x, anchor.y)
+            .ok_or("wgpu application point lies beyond the horizon")?,
+    );
+    let attributes = |x: f64, y: f64| -> Result<[f32; 8], &'static str> {
+        let flat = patterns
+            .flat(space, x, y)
+            .ok_or("wgpu application point lies beyond the horizon")?;
+        Ok(pattern_attributes(Some(&PatternVertex::new(
+            image,
+            patterns.atlas,
+            patterns.pixel(flat),
+            origin,
+        ))))
+    };
+    let vertex_index =
+        |output: &Vec<u8>| (output.len() as u64 / APPLICATION_PATTERN_VERTEX_SIZE) as u32;
+
+    let cover_first = vertex_index(output);
+    for &(x, y) in cover {
+        let clip = clip_position(space, x, y).map(|value| value as f32);
+        if clip.iter().any(|value| !value.is_finite()) {
+            return Err("wgpu application position is not representable as f32");
+        }
+        push_application_pattern_vertex(output, clip, [0.0; 2], attributes(x, y)?, paint);
+    }
+
+    let outline_first = vertex_index(output);
+    for ring in rings {
+        for (index, &start) in ring.iter().enumerate() {
+            let end = ring[(index + 1) % ring.len()];
+            for_each_fill_outline_vertex(space, pixel_ratio, start, end, |t, clip, v_pos| {
+                let pattern = attributes(
+                    start.x + (end.x - start.x) * t,
+                    start.y + (end.y - start.y) * t,
+                )?;
+                push_application_pattern_vertex(output, clip, v_pos, pattern, paint);
+                Ok(())
+            })?;
+        }
+    }
+    Ok(ApplicationPatternDraw {
+        cover_first,
+        outline_first,
+        outline_count: vertex_index(output) - outline_first,
+    })
+}
+
+fn push_application_pattern_vertex(
+    output: &mut Vec<u8>,
+    clip: [f32; 3],
+    window: [f32; 2],
+    pattern: [f32; 8],
+    paint: FillPaint,
+) {
+    for value in clip
+        .into_iter()
+        .chain(window)
+        .chain(pattern)
+        .chain(paint.color)
+        .chain([paint.opacity, paint.flags as f32])
+    {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// A `line-pattern` line of the projected path (#350): the strip of its retained form, cut
+/// into the zoom-floored GeoJSON tiles and tessellated on the flat plane in CSS px. A missing
+/// image draws nothing, as in MapLibre.
+fn append_application_line_pattern(
+    output: &mut Vec<u8>,
+    space: ApplicationSpace,
+    line: &WgpuApplicationLine,
+    patterns: Option<&ApplicationPatterns<'_>>,
+) -> Result<(), &'static str> {
+    if !line.stroke_width.is_finite()
+        || line.stroke_width < 0.0
+        || !valid_color(line.color)
+        || line
+            .points
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+    {
+        return Err("invalid wgpu application line");
+    }
+    let Some(patterns) = patterns else {
+        return Ok(());
+    };
+    let Some(image) = line
+        .line_pattern
+        .as_deref()
+        .and_then(|id| patterns.atlas.pattern(id))
+    else {
+        return Ok(());
+    };
+    if line.stroke_width == 0.0 || line.color[3] <= 0.0 {
+        return Ok(());
+    }
+    let pattern = LinePattern::new(&image, patterns.atlas);
+    let layout = decode_line_layout(line.line_layout)?;
+    let grid = patterns.grid;
+    // MapLibre's GeoJSON source keeps `maxzoom` 18 and overscales above it (#334).
+    let source_zoom = grid.tile_zoom.min(GEOJSON_VT_MAX_ZOOM);
+    let overscale = f64::from(grid.tile_zoom - source_zoom).exp2();
+    let tiles = f64::from(source_zoom).exp2();
+    let world = grid.size * f64::from(grid.tile_zoom).exp2();
+
+    let key = line_pattern_mesh_key(line, grid.tile_zoom);
+    let mut meshes = patterns.meshes.entries.borrow_mut();
+    let generation = patterns.meshes.generation.get();
+    let cached = match meshes.entry(key) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => {
+            // The whole line, in world units: `points` holds only the part in front of a
+            // pitched camera. Pieces and meshes depend only on it, so camera frames reuse them.
+            let mut path = Vec::with_capacity(line.line_pattern_path.len());
+            for &[longitude, latitude] in &line.line_pattern_path {
+                let point = project_web_mercator(longitude, latitude)
+                    .ok_or("invalid wgpu application line pattern path")?;
+                path.push([point.x, point.y]);
+            }
+            let pieces = SimplifiedLine::new(path.clone())
+                .tile_pieces(source_zoom)
+                .into_iter()
+                .map(|piece| {
+                    let mut mesh = LineMesh::with_units(1.0, overscale);
+                    mesh.add_line(&piece.points, &layout, false);
+                    (piece.x, piece.y, mesh)
+                })
+                .collect();
+            entry.insert(CachedLinePatternMesh {
+                generation,
+                path,
+                pieces,
+            })
+        }
+    };
+    cached.generation = generation;
+    // The world copy the visible part is on: cut the line in world 0, place it back there.
+    let Some(first) = line.points.first() else {
+        return Ok(());
+    };
+    let (first_x, first_y) = patterns
+        .flat(space, first.x, first.y)
+        .ok_or("wgpu application point lies beyond the horizon")?;
+    let (first_x, first_y) = (
+        (first_x - grid.origin[0]) / world,
+        (first_y - grid.origin[1]) / world,
+    );
+    let nearest = cached.path.iter().copied().min_by(|a, b| {
+        let distance = |p: &[f64; 2]| {
+            let dx = (p[0] - first_x + 0.5).rem_euclid(1.0) - 0.5;
+            dx * dx + (p[1] - first_y) * (p[1] - first_y)
+        };
+        distance(a).total_cmp(&distance(b))
+    });
+    let copy = nearest.map_or(0.0, |point| (first_x - point[0]).round());
+
+    let source_tile = world / tiles;
+    for &(tile_x, tile_y, ref mesh) in &cached.pieces {
+        let west = grid.origin[0] + (copy + f64::from(tile_x) / tiles) * world;
+        let north = grid.origin[1] + f64::from(tile_y) / tiles * world;
+        let unit = source_tile / GEOJSON_VT_EXTENT;
+        let clip = [
+            west as f32,
+            north as f32,
+            (west + source_tile) as f32,
+            (north + source_tile) as f32,
+        ];
+        let flat = |vertex: &maps_core::LineMeshVertex| {
+            (
+                west + vertex.point[0] * unit,
+                north + vertex.point[1] * unit,
+            )
+        };
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            let vertices = [0, 1, 2].map(|corner| mesh.vertices[triangle[corner] as usize]);
+            // The near plane clips a segment behind the camera; `vs_line` culls by vertex and
+            // a triangle stretched across it would smear over the map.
+            if vertices.iter().any(|vertex| {
+                let (x, y) = flat(vertex);
+                patterns.plane.clip(x, y)[2] <= 0.0
+            }) {
+                continue;
+            }
+            for vertex in &vertices {
+                let (x, y) = flat(vertex);
+                push_line_pattern_vertex(
+                    output,
+                    [x as f32, y as f32],
+                    vertex.extrude.map(|value| value as f32),
+                    vertex.normal,
+                    line.stroke_width as f32,
+                    &pattern,
+                    vertex.linesofar * (overscale / 16.0) as f32,
+                    line.color[3],
+                    clip,
+                );
             }
         }
     }
@@ -1570,6 +1993,8 @@ mod application_geometry_tests {
             ],
             stroke_width: 2.0,
             line_layout: round_line_layout(),
+            line_pattern: None,
+            line_pattern_path: Vec::new(),
         }
     }
 
@@ -1584,6 +2009,7 @@ mod application_geometry_tests {
             ]],
             stroke_color: [1.0, 1.0, 1.0, 1.0],
             stroke_width: 2.0,
+            fill_pattern: None,
         }
     }
 
@@ -1650,7 +2076,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None, None).unwrap();
 
         assert!(geometry.triangle_vertices.is_empty());
         assert_eq!(
@@ -1676,7 +2102,7 @@ mod application_geometry_tests {
             vec![polygon],
             100.0,
         );
-        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None, None).unwrap();
         let [ApplicationDraw::Polygon(draw)] = geometry.draws[..] else {
             panic!("expected one polygon draw, got {:?}", geometry.draws);
         };
@@ -1757,6 +2183,7 @@ mod application_geometry_tests {
         let tiles = GeoJsonTileGrid {
             origin: [0.0, 0.0],
             size: 100.0,
+            tile_zoom: 5,
         };
         let point = |x: f64, y: f64| WgpuApplicationPoint { x, y };
         let pieces = tiles.pieces(point(50.0, 50.0), point(250.0, 50.0));
@@ -1780,8 +2207,288 @@ mod application_geometry_tests {
         let tiles = GeoJsonTileGrid {
             origin: [-3.0, 0.0],
             size: GEOJSON_TILE_EXTENT,
+            tile_zoom: 5,
         };
         assert_eq!(tiles.snap(-1.5, 2.49), (-1.0, 2.0));
+    }
+
+    fn pattern_atlas() -> maps_core::symbol::ImageAtlas {
+        let mut images = maps_core::symbol::ImageStore::default();
+        images
+            .add_sprite(
+                r#"{"hatch":{"x":0,"y":0,"width":16,"height":16,"pixelRatio":2}}"#,
+                &[255_u8; 16 * 16 * 4],
+                16,
+                16,
+            )
+            .unwrap();
+        images.request_pattern("hatch");
+        images.atlas().clone()
+    }
+
+    /// The pitched camera's plane and GeoJSON grid: world corner `(-my, -mx)` from the center.
+    fn pitched_ground() -> (GroundPerspective, GeoJsonTileGrid) {
+        let frame = camera(50.0).local_render_frame().unwrap();
+        let world = 512.0 * 5.55_f64.exp2();
+        let center = project_web_mercator(10.4, 51.2).unwrap();
+        let grid = GeoJsonTileGrid {
+            origin: [-center.x * world, -center.y * world],
+            size: world / 32.0,
+            tile_zoom: 5,
+        };
+        let ground = GroundPerspective::new(frame.view_projection_elements(), 720.0, 480.0)
+            .unwrap()
+            .with_geojson_tiles(Some(grid));
+        (ground, grid)
+    }
+
+    fn pattern_vertices(geometry: &ApplicationGeometry) -> Vec<&[u8; 76]> {
+        geometry
+            .pattern_vertices
+            .as_chunks::<76>()
+            .0
+            .iter()
+            .collect()
+    }
+
+    fn floats(vertex: &[u8], range: std::ops::Range<usize>) -> Vec<f32> {
+        vertex[range]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect()
+    }
+
+    #[test]
+    fn projected_fill_pattern_is_measured_on_the_tile_grid_under_a_pitched_camera() {
+        let atlas = pattern_atlas();
+        let (ground, grid) = pitched_ground();
+        let patterned = WgpuApplicationPolygon {
+            fill_color: [1.0, 1.0, 1.0, 0.8],
+            fill_pattern: Some("hatch".to_owned()),
+            rings: vec![vec![
+                WgpuApplicationPoint {
+                    x: -100.0,
+                    y: -40.0,
+                },
+                WgpuApplicationPoint { x: 60.0, y: -40.0 },
+                WgpuApplicationPoint { x: 60.0, y: 90.0 },
+                WgpuApplicationPoint { x: -100.0, y: 90.0 },
+            ]],
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            stroke_width: 0.0,
+        };
+        let frame = packed_frame(
+            vec![],
+            vec![],
+            480.0,
+            vec![],
+            vec![[APPLICATION_POLYGON, 0]],
+            vec![patterned],
+            720.0,
+        );
+        let patterns = ApplicationPatterns {
+            atlas: &atlas,
+            meshes: &LinePatternMeshCache::default(),
+            plane: ground,
+            grid,
+        };
+        let geometry =
+            prepare_application_geometry(&frame, 1.0, Some(ground), Some(&patterns)).unwrap();
+        let [ApplicationDraw::Polygon(draw)] = geometry.draws[..] else {
+            panic!("expected one polygon draw")
+        };
+        assert!(draw.fan_count > 0);
+        let pattern = draw.pattern.expect("patterned fill");
+        let vertices = pattern_vertices(&geometry);
+        // The cover carries pixels at the tile zoom (zoom 5 of 5.55) and clip coordinates.
+        let scale = 512.0 / grid.size;
+        let first = pattern.cover_first as usize;
+        let pixel = |index: usize| floats(vertices[first + index], 20..28);
+        let (a, b) = (pixel(0), pixel(2));
+        assert!(((b[0] - a[0]) as f64 - 160.0 * scale).abs() < 1.0e-3);
+        assert!(((b[1] - a[1]) as f64 - 130.0 * scale).abs() < 1.0e-3);
+        let clip = floats(vertices[first], 0..12);
+        let expected = ground.clip(-100.0, -40.0);
+        assert!((clip[2] as f64 - expected[2]).abs() < 1.0e-3);
+        // Display size is the 2x image's 8 px, opacity 0.8 and the pattern flag follow.
+        assert_eq!(floats(vertices[first], 44..52), vec![8.0, 8.0]);
+        assert_eq!(
+            floats(vertices[first], 68..76),
+            vec![0.8, FILL_FLAG_PATTERN as f32]
+        );
+        assert!(pattern.outline_count > 0);
+    }
+
+    #[test]
+    fn projected_fill_pattern_without_its_image_draws_no_fill_but_its_stroke() {
+        let atlas = ImageAtlas::default();
+        let (ground, grid) = pitched_ground();
+        let polygon = WgpuApplicationPolygon {
+            fill_color: [1.0, 1.0, 1.0, 1.0],
+            fill_pattern: Some("missing".to_owned()),
+            rings: vec![vec![
+                WgpuApplicationPoint { x: -10.0, y: -10.0 },
+                WgpuApplicationPoint { x: 10.0, y: -10.0 },
+                WgpuApplicationPoint { x: 10.0, y: 10.0 },
+            ]],
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            stroke_width: 2.0,
+        };
+        let frame = packed_frame(
+            vec![],
+            vec![],
+            480.0,
+            vec![],
+            vec![[APPLICATION_POLYGON, 0]],
+            vec![polygon],
+            720.0,
+        );
+        let patterns = ApplicationPatterns {
+            atlas: &atlas,
+            meshes: &LinePatternMeshCache::default(),
+            plane: ground,
+            grid,
+        };
+        let geometry =
+            prepare_application_geometry(&frame, 1.0, Some(ground), Some(&patterns)).unwrap();
+        let [ApplicationDraw::Polygon(draw)] = geometry.draws[..] else {
+            panic!("expected the stroke's draw")
+        };
+        assert_eq!((draw.fan_count, draw.pattern), (0, None));
+        assert!(draw.stroke_count > 0);
+    }
+
+    #[test]
+    fn projected_fill_pattern_works_on_the_unpitched_screen_path() {
+        let atlas = pattern_atlas();
+        let view = camera(0.0)
+            .local_render_frame()
+            .unwrap()
+            .view_projection_elements();
+        let plane = GroundPerspective::plane(view, 720.0, 480.0).unwrap();
+        let world = 512.0 * 5.55_f64.exp2();
+        let center = project_web_mercator(10.4, 51.2).unwrap();
+        let grid = GeoJsonTileGrid {
+            origin: [-center.x * world, -center.y * world],
+            size: world / 32.0,
+            tile_zoom: 5,
+        };
+        let patterned = WgpuApplicationPolygon {
+            fill_color: [1.0, 1.0, 1.0, 1.0],
+            fill_pattern: Some("hatch".to_owned()),
+            rings: vec![vec![
+                WgpuApplicationPoint { x: 100.0, y: 100.0 },
+                WgpuApplicationPoint { x: 200.0, y: 100.0 },
+                WgpuApplicationPoint { x: 200.0, y: 200.0 },
+            ]],
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
+        };
+        let frame = packed_frame(
+            vec![],
+            vec![],
+            480.0,
+            vec![],
+            vec![[APPLICATION_POLYGON, 0]],
+            vec![patterned],
+            720.0,
+        );
+        let patterns = ApplicationPatterns {
+            atlas: &atlas,
+            meshes: &LinePatternMeshCache::default(),
+            plane,
+            grid,
+        };
+        let geometry = prepare_application_geometry(&frame, 1.0, None, Some(&patterns)).unwrap();
+        let [ApplicationDraw::Polygon(draw)] = geometry.draws[..] else {
+            panic!("expected one polygon draw")
+        };
+        let first = draw.pattern.expect("patterned fill").cover_first as usize;
+        let vertices = pattern_vertices(&geometry);
+        // Screen px map to tile-zoom pixels by the fractional zoom, rotated by the bearing.
+        let (a, b) = (
+            floats(vertices[first], 20..28),
+            floats(vertices[first + 2], 20..28),
+        );
+        let scale = 512.0 / grid.size;
+        let measured = f64::from(b[0] - a[0]).hypot(f64::from(b[1] - a[1]));
+        assert!(
+            (measured - 100.0_f64.hypot(100.0) * scale).abs() < 1.0e-2,
+            "{measured}"
+        );
+    }
+
+    #[test]
+    fn projected_line_pattern_is_cut_at_tiles_and_clips_what_lies_behind_the_camera() {
+        let atlas = pattern_atlas();
+        let (ground, grid) = pitched_ground();
+        // Far enough south that the end of the line is behind the camera plane (#350).
+        let path = vec![[10.4, 51.8], [10.4, 51.2], [10.4, 44.0]];
+        let line = WgpuApplicationLine {
+            color: [1.0, 1.0, 1.0, 0.6],
+            line_layout: [0.0, 1.0, 2.0, 1.05],
+            line_pattern: Some("hatch".to_owned()),
+            line_pattern_path: path,
+            points: vec![
+                WgpuApplicationPoint { x: 0.0, y: -80.0 },
+                WgpuApplicationPoint { x: 0.0, y: 0.0 },
+            ],
+            stroke_width: 6.0,
+        };
+        let frame = packed_frame(
+            vec![],
+            vec![],
+            480.0,
+            vec![line],
+            vec![[APPLICATION_LINE, 0]],
+            vec![],
+            720.0,
+        );
+        let patterns = ApplicationPatterns {
+            atlas: &atlas,
+            meshes: &LinePatternMeshCache::default(),
+            plane: ground,
+            grid,
+        };
+        let geometry =
+            prepare_application_geometry(&frame, 1.0, Some(ground), Some(&patterns)).unwrap();
+        let [ApplicationDraw::LinePattern { vertex_count, .. }] = geometry.draws[..] else {
+            panic!("expected one line pattern draw")
+        };
+        assert_eq!(
+            vertex_count as usize,
+            geometry.line_pattern_vertices.len() / RETAINED_POLYGON_STROKE_VERTEX_SIZE as usize
+        );
+        let vertices = geometry.line_pattern_vertices.as_chunks::<80>().0;
+        assert!(!vertices.is_empty());
+        let mut clips = std::collections::HashSet::new();
+        for vertex in vertices {
+            let position = floats(vertex, 0..8);
+            // Every kept vertex is in front of the camera.
+            assert!(ground.clip(f64::from(position[0]), f64::from(position[1]))[2] > 0.0);
+            let opacity = floats(vertex, 60..64)[0];
+            assert!((opacity - 0.6).abs() < 1.0e-6, "opacity {opacity}");
+            let rect = floats(vertex, 64..80);
+            clips.insert(rect.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+            // Strips are clipped to their tile square, which contains them up to the buffer.
+            assert!(position[0] >= rect[0] - grid.size as f32 * 0.25);
+            assert!(position[0] <= rect[2] + grid.size as f32 * 0.25);
+        }
+        // The line crosses tile rows, each piece clipped to its own square.
+        assert!(clips.len() >= 2, "{} tile clips", clips.len());
+
+        // A camera frame reuses the cached pieces; a frame without the line drops them.
+        let first_bytes = geometry.line_pattern_vertices.clone();
+        patterns.meshes.end_frame();
+        let again =
+            prepare_application_geometry(&frame, 1.0, Some(ground), Some(&patterns)).unwrap();
+        assert_eq!(again.line_pattern_vertices, first_bytes);
+        assert_eq!(patterns.meshes.entries.borrow().len(), 1);
+        patterns.meshes.end_frame();
+        patterns.meshes.end_frame();
+        assert_eq!(patterns.meshes.entries.borrow().len(), 0);
     }
 
     #[test]
@@ -1845,7 +2552,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        assert!(prepare_application_geometry(&frame, 1.0, None).is_err());
+        assert!(prepare_application_geometry(&frame, 1.0, None, None).is_err());
     }
 
     #[test]
@@ -1864,7 +2571,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None, None).unwrap();
 
         assert!(matches!(
             geometry.draws[..],
@@ -1899,7 +2606,7 @@ mod application_geometry_tests {
             100.0,
         );
 
-        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None, None).unwrap();
         let line_vertices =
             (geometry.triangle_vertices.len() as u64 / APPLICATION_VERTEX_SIZE) as u32;
 
@@ -1936,7 +2643,7 @@ mod application_geometry_tests {
         );
         frame.order = vec![APPLICATION_CIRCLE, 0, count];
 
-        let geometry = prepare_application_geometry(&frame, 1.0, None).unwrap();
+        let geometry = prepare_application_geometry(&frame, 1.0, None, None).unwrap();
 
         assert_eq!(
             geometry.draws,
@@ -1964,7 +2671,7 @@ mod application_geometry_tests {
         frame
             .attach_packed(&[0.0; 12], &[APPLICATION_CIRCLE, 0, 2])
             .unwrap();
-        assert!(prepare_application_geometry(&frame, 1.0, None).is_err());
+        assert!(prepare_application_geometry(&frame, 1.0, None, None).is_err());
     }
 }
 

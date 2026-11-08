@@ -9,6 +9,11 @@ import { decodeShortbreadTilePixels } from "./vector-tile-wasm";
 import { paintShortbreadTile } from "./shortbread-tile-paint";
 import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
+import {
+  createCanvasSpriteImages,
+  type CanvasMapPatternImages,
+  type CanvasSpriteSheet,
+} from "./canvas-sprite-images";
 import { createMapsScrollZoom } from "./maps-scroll-zoom";
 import {
   advanceMapsKineticPan,
@@ -198,6 +203,8 @@ export type MapsCanvasFlatRuntimeController = {
   ): boolean;
   /** Whether retained points are drawn by the live renderer; camera frames then need no layer work. */
   isRetainedApplicationPointsActive(): boolean;
+  /** The style sprite's images for Canvas patterns (#350), `null` until decoded. */
+  getCanvasPatternImages(): CanvasMapPatternImages | null;
   setViewState(viewState: MapViewState, reason?: MapViewStateChangeReason): void;
   /** Called when the base renderer changes, e.g. WebGPU device loss falls back to Canvas. */
   subscribeBaseRenderer(listener: (renderer: MapsBaseRenderer) => void): () => void;
@@ -746,6 +753,9 @@ export function createMapsBrowserRuntime(
         if (cancelled) return false;
         return frameSynchronizer.setRetainedApplicationPoints(frame, interaction, viewport);
       },
+      getCanvasPatternImages() {
+        return cancelled ? null : frameSynchronizer.canvasPatternImages();
+      },
       isRetainedApplicationPointsActive() {
         return !cancelled && frameSynchronizer.retainedApplicationPointsActive();
       },
@@ -1264,29 +1274,62 @@ function createFrameSynchronizer({
     return Promise.all(pending).then(() => undefined);
   }
 
-  // The style sprite per renderer and URL (#323): a replaced renderer starts without images.
+  // The style sprite's sheet per URL (#323, #350), decoded once for the renderer's image
+  // atlas and the Canvas fallback's patterns. Like MapLibre, a failed sprite leaves the
+  // patterns out instead of failing tiles.
+  const spriteSheets = new Map<string, Promise<CanvasSpriteSheet | null>>();
+  const canvasSpriteImages = new Map<string, CanvasMapPatternImages>();
+  function loadSpriteSheet(url: string) {
+    let request = spriteSheets.get(url);
+    if (!request) {
+      request = fetchMapsSprite(url).then(
+        (sheet) => {
+          if (disposed) return null;
+          canvasSpriteImages.set(url, createCanvasSpriteImages(sheet));
+          // Canvas layers drawn before the sprite arrived left their patterns out.
+          onCameraFrame();
+          return sheet;
+        },
+        (error) => {
+          onError(error);
+          return null;
+        },
+      );
+      spriteSheets.set(url, request);
+    }
+    return request;
+  }
+
+  // The sprite per renderer and URL (#323): a replaced renderer starts without images.
   const spriteRequests = new WeakMap<MapsWgpuBaseMapRenderer, Map<string, Promise<void>>>();
   /** Loads the style's sprite into the renderer's image atlas (MapLibre's `loadSprite`). */
   function loadSprite(): Promise<void> {
-    const current = renderer();
     const url = sprite();
-    if (!current?.addSprite || !url) return Promise.resolve();
+    if (!url) return Promise.resolve();
+    const sheet = loadSpriteSheet(url);
+    const current = renderer();
+    if (!current?.addSprite) return sheet.then(() => undefined);
     let requests = spriteRequests.get(current);
     if (!requests) spriteRequests.set(current, (requests = new Map()));
     let request = requests.get(url);
     if (!request) {
-      request = fetchMapsSprite(url)
-        .then(({ json, rgba, width, height }) => {
-          if (disposed || renderer() !== current) return;
-          current.addSprite!(json, rgba, width, height);
+      request = sheet
+        .then((loaded) => {
+          if (!loaded || disposed || renderer() !== current) return;
+          current.addSprite!(loaded.json, loaded.rgba, loaded.width, loaded.height);
           invalidateRendered();
           requestRender();
         })
-        // Like MapLibre, a failed sprite leaves the patterns out instead of failing tiles.
         .catch((error) => onError(error));
       requests.set(url, request);
     }
     return request;
+  }
+
+  /** The style sprite's images for Canvas patterns, once decoded (#350). */
+  function canvasPatternImages() {
+    const url = sprite();
+    return (url ? canvasSpriteImages.get(url) : undefined) ?? null;
   }
 
   // Relief tiles (#324): the renderer plans which raster-dem (and, under terrain, raster)
@@ -2189,6 +2232,7 @@ function createFrameSynchronizer({
     requestRender,
     setApplicationFrame,
     setRetainedApplicationPoints,
+    canvasPatternImages,
     retainedApplicationPointsActive: () =>
       retainedPoints !== null &&
       retainedPoints.renderer === renderer() &&
