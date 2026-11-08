@@ -18,7 +18,7 @@ const VERIFY = "Execute identical Rust and WASM verification";
 const INSTALL = "Install identical package dependencies";
 const RESTORE = /^(Restore persisted caches|Import persisted Nix store paths)$/;
 const PROVISION =
-  /^(Initialize containers|Conventional .*|Install Nix|Activate locked Nix CLI environment)$/;
+  /^(Conventional .*|Install Nix|Activate locked Nix CLI environment|Download prebuilt agent image|Load digest-verified agent image)$/;
 
 /** Classifies one hosted job of the comparison into a timed sample. */
 export function summarizeJob(job) {

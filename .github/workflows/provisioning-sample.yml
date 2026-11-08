@@ -17,27 +17,22 @@ on:
         required: true
         type: string
       image:
-        description: Digest-pinned agent image reference, only for the container variant
+        description: Content-addressed agent image id (sha256:...), only for the container variant
         required: false
         default: ""
         type: string
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   sample:
     name: "${{ inputs.variant }} ${{ inputs.cache_mode }} ${{ inputs.sample }}"
     runs-on: ubuntu-26.04
     timeout-minutes: 40
-    # Hosted runners execute non-container variants directly when image is empty.
-    container:
-      image: ${{ inputs.variant == 'container' && inputs.image || '' }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     env:
+      VARIANT: ${{ inputs.variant }}
+      AGENT_IMAGE: ${{ inputs.image }}
       CACHE_KEY: maps-provisioning-${{ inputs.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check out the identical source revision
@@ -71,6 +66,20 @@ jobs:
           installer-version: 2.35.2
           enable-kvm: false
 
+      - name: Download prebuilt agent image
+        if: inputs.variant == 'container'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: maps-agent-image
+          path: ${{ runner.temp }}/agent-image
+      - name: Load digest-verified agent image
+        if: inputs.variant == 'container'
+        run: |
+          set -euo pipefail
+          zstd --decompress --stdout "$RUNNER_TEMP/agent-image/agent-image.tar.zst" | docker load
+          actual="$(docker image inspect --format '{{.Id}}' "$AGENT_IMAGE")"
+          test "$actual" = "$AGENT_IMAGE"
+
       - name: Restore persisted caches
         if: inputs.cache_mode == 'warm'
         id: restore
@@ -79,8 +88,8 @@ jobs:
           fail-on-cache-miss: true
           key: ${{ env.CACHE_KEY }}
           path: |
-            ${{ inputs.variant == 'container' && '/usr/local/cargo' || '~/.cargo' }}/registry
-            ${{ inputs.variant == 'container' && '/usr/local/cargo' || '~/.cargo' }}/git
+            ~/.cargo/registry
+            ~/.cargo/git
             ~/.bun/install/cache
             ~/.maps-nix-store-cache
             target
@@ -100,30 +109,30 @@ jobs:
 
       - name: Record toolchain identity
         run: |
-          set -euo pipefail
           echo "Commit: $(git rev-parse HEAD)"
-          echo "Runner image: ${ImageOS:-container}-${ImageVersion:-n/a}"
+          echo "Runner image: ${ImageOS:-unknown}-${ImageVersion:-unknown}"
           echo "Flake lock digest: $(sha256sum flake.lock)"
           echo "Cargo lock digest: $(sha256sum Cargo.lock)"
           echo "Bun lock digest: $(sha256sum bun.lock)"
           echo "Agent image: ${AGENT_IMAGE:-n/a}"
-          rustc --version
-          cargo --version
-          bun --version
-          node --version
-          wasm-bindgen --version
-        env:
-          AGENT_IMAGE: ${{ inputs.image }}
+          .github/provisioning/run-in-variant.sh '
+            rustc --version
+            cargo --version
+            bun --version
+            node --version
+            wasm-bindgen --version
+          '
 
       - name: Install identical package dependencies
-        run: bun install --frozen-lockfile
+        run: .github/provisioning/run-in-variant.sh 'bun install --frozen-lockfile'
 
       - name: Execute identical Rust and WASM verification
         run: |
-          set -euo pipefail
-          bun run verify:rust
-          bun run build:wasm
-          test -s dist/wasm/maps_wasm_bg.wasm
+          .github/provisioning/run-in-variant.sh '
+            bun run verify:rust
+            bun run build:wasm
+            test -s dist/wasm/maps_wasm_bg.wasm
+          '
 
       - name: Export Nix store paths for warm samples
         if: inputs.variant == 'nix' && inputs.cache_mode == 'prime'
@@ -144,8 +153,8 @@ jobs:
         with:
           key: ${{ env.CACHE_KEY }}
           path: |
-            ${{ inputs.variant == 'container' && '/usr/local/cargo' || '~/.cargo' }}/registry
-            ${{ inputs.variant == 'container' && '/usr/local/cargo' || '~/.cargo' }}/git
+            ~/.cargo/registry
+            ~/.cargo/git
             ~/.bun/install/cache
             ~/.maps-nix-store-cache
             target
@@ -153,7 +162,6 @@ jobs:
       - name: Record independent experimental sample
         if: always()
         env:
-          VARIANT: ${{ inputs.variant }}
           CACHE_MODE: ${{ inputs.cache_mode }}
           SAMPLE: ${{ inputs.sample }}
           CACHE_HIT: ${{ steps.restore.outputs.cache-hit || 'n/a' }}
