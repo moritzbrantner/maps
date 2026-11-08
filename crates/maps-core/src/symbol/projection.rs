@@ -42,7 +42,24 @@ pub struct TileProjection<'a> {
     pub tile_px: f64,
 }
 
-impl TileProjection<'_> {
+impl<'a> TileProjection<'a> {
+    /// The projection of points moved by `shift` (tile-normalized): `text-translate` /
+    /// `icon-translate`. Wrap it with [`TileProjection::with`].
+    pub fn shifted(&self, shift: [f64; 2]) -> impl Fn([f64; 2]) -> ([f64; 2], f64) + 'a {
+        let project = self.project;
+        move |uv| project([uv[0] + shift[0], uv[1] + shift[1]])
+    }
+
+    /// This tile's projection through another point projection (see [`Self::shifted`]).
+    #[must_use]
+    pub fn with<'b>(&self, project: &'b dyn Fn([f64; 2]) -> ([f64; 2], f64)) -> TileProjection<'b> {
+        TileProjection {
+            project,
+            center_w: self.center_w,
+            tile_px: self.tile_px,
+        }
+    }
+
     /// `getPerspectiveRatio`.
     #[must_use]
     pub fn perspective_ratio(&self, w: f64) -> f64 {
@@ -66,6 +83,9 @@ pub struct LineLabelContext<'a> {
     pub anchor: [f64; 2],
     /// The anchor lies between `line[segment]` and `line[segment + 1]`.
     pub segment: usize,
+    /// Glyphs turn with the line (`rotateToLine`: `text-rotation-alignment` is `map`, which
+    /// MapLibre reads for icons along lines too).
+    pub rotate_to_line: bool,
 }
 
 impl LineLabelContext<'_> {
@@ -399,7 +419,7 @@ fn place_glyphs(
             glyphs,
             line_offset,
             flip,
-            true,
+            context.rotate_to_line,
             context,
             &mut cache,
         ) else {
@@ -417,7 +437,7 @@ fn place_glyphs(
                 flip,
                 context,
                 &mut cache,
-                true,
+                context.rotate_to_line,
             ) else {
                 return GlyphsOnLine::NotEnoughRoom;
             };
@@ -448,7 +468,7 @@ fn place_glyphs(
             flip,
             context,
             &mut cache,
-            true,
+            context.rotate_to_line,
         ) else {
             return GlyphsOnLine::NotEnoughRoom;
         };
@@ -602,6 +622,7 @@ mod tests {
             line: &line,
             anchor: [2400.0, 1600.0],
             segment: 0,
+            rotate_to_line: true,
         };
         let glyphs = LineGlyphs {
             offsets: &[-20.0, 0.0, 20.0],

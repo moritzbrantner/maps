@@ -333,6 +333,27 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { bearing: -25, center: [8.9, 47.55], zoom: 8.3 },
+    capability:
+      "icons along lines (map-aligned boxes, icon-offset), icon-text-fit over stretchX/stretchY/content, icon-rotate, text-rotate, icon/text-translate",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-icon-lines",
+    origin: "Milestone E cartography (#80): river arrows, road shields and turned place markers; icon extras (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -40, center: [8.9, 47.55], pitch: 45, zoom: 8.3 },
+    capability: "icons along lines on the pitched map plane: projected collision boxes, perspective sizes",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-icon-lines-pitch",
+    origin: "Milestone E cartography (#80): river arrows and road shields under a pitched camera (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],

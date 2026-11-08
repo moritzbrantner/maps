@@ -25,6 +25,18 @@
   covers keep the north-up policy of filling at the source's minimum zoom. The MapLibre
   runtime now accepts the Maps camera's pitch range (`maxPitch` 85°). The oracle
   `steep-pitch` scenario (65°) is gated.
+- Tileset `symbol` icons follow lines, fit their text and turn, ported from MapLibre 6.16
+  (#346). `icon-image` works on `symbol-placement: line` and `line-center`: icons along
+  the line (`icon-rotation-alignment` `map`/`auto`) walk the projected line like glyphs, on
+  the viewport or the pitched map plane (`icon-pitch-alignment`), with
+  `icon-keep-upright` and `icon-offset`; icon-only lines get anchors; their collision boxes
+  turn (and pitch) with the map. `icon-text-fit` (`width`, `height`, `both`) and
+  `icon-text-fit-padding` stretch icons over their text through the sprite's `stretchX`,
+  `stretchY`, `content`, `textFitWidth` and `textFitHeight` (validated as MapLibre's image
+  manager does). `icon-rotate` and `text-rotate` turn quads and bound the turned collision
+  boxes; rotated icons sample `LINEAR`. `text-translate`, `icon-translate` and their
+  `*-translate-anchor` move anchors for placement and drawing (constant values only). The
+  oracle `symbol-icon-lines` and `symbol-icon-lines-pitch` scenarios are gated.
 - Tileset `symbol` layers follow the camera zoom and their lines, ported from MapLibre 6.15
   (#346). `text-size` and `icon-size` take camera and composite functions (interpolated
   at the drawn zoom between the tile's covering stops, camera sizes capped at the tile's

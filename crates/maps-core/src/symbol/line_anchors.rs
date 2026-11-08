@@ -143,18 +143,24 @@ pub fn check_max_angle(
     true
 }
 
-/// The text extent a line label needs (`shapedText.right - left`, glyph units) and the scale
-/// to tile units.
+/// The extent a line label needs (`getShapedLabelLength`: the longer of its text and icon,
+/// `right - left`) and the scale to tile units.
 #[derive(Clone, Copy, Debug)]
 pub struct LabelExtent {
     pub length: f64,
     pub glyph_size: f64,
     pub box_scale: f64,
+    /// Icon-only labels skip the `text-max-angle` check (`getAngleWindowSize` is 0).
+    pub has_text: bool,
 }
 
 impl LabelExtent {
     fn angle_window(&self) -> f64 {
-        3.0 / 5.0 * self.glyph_size * self.box_scale
+        if self.has_text {
+            3.0 / 5.0 * self.glyph_size * self.box_scale
+        } else {
+            0.0
+        }
     }
 }
 
@@ -394,6 +400,7 @@ mod tests {
             length: 60.0,
             glyph_size: 24.0,
             box_scale: 16.0 * 16.0 / 24.0,
+            has_text: true,
         };
         let anchors = line_anchors(&line, 4000.0, 45f64.to_radians(), &extent, 1.0, 8192.0);
         assert_eq!(anchors.len(), 2);

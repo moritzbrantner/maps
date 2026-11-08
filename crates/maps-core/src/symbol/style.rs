@@ -79,6 +79,7 @@ const SYMBOL_LAYOUT: &[&str] = &[
     "text-pitch-alignment",
     "text-max-angle",
     "text-keep-upright",
+    "text-rotate",
     "icon-image",
     "icon-size",
     "icon-anchor",
@@ -90,6 +91,9 @@ const SYMBOL_LAYOUT: &[&str] = &[
     "icon-keep-upright",
     "icon-rotation-alignment",
     "icon-pitch-alignment",
+    "icon-rotate",
+    "icon-text-fit",
+    "icon-text-fit-padding",
 ];
 const SYMBOL_PAINT: &[&str] = &[
     "text-color",
@@ -97,11 +101,15 @@ const SYMBOL_PAINT: &[&str] = &[
     "text-halo-color",
     "text-halo-width",
     "text-halo-blur",
+    "text-translate",
+    "text-translate-anchor",
     "icon-opacity",
     "icon-color",
     "icon-halo-color",
     "icon-halo-width",
     "icon-halo-blur",
+    "icon-translate",
+    "icon-translate-anchor",
 ];
 /// Properties whose value must be the same at every zoom: Maps evaluates them per tile, and
 /// MapLibre re-evaluates these each frame. Symbol sizes and paint follow the camera zoom
@@ -133,6 +141,14 @@ const LAYER_CONSTANT: &[&str] = &[
     "icon-rotation-alignment",
     "icon-pitch-alignment",
     "text-keep-upright",
+    "icon-keep-upright",
+    "icon-text-fit",
+    "icon-text-fit-padding",
+    // Translations are not data-driven; Maps takes them constant.
+    "text-translate",
+    "text-translate-anchor",
+    "icon-translate",
+    "icon-translate-anchor",
 ];
 
 impl StyleLayer {
@@ -227,13 +243,31 @@ impl StyleLayer {
         } else {
             only("text-pitch-alignment", &["auto", "viewport"])?;
         }
-        if !point && layout.contains_key("icon-image") {
-            return Err(format!(
-                "layer {id}: icon-image off point placement is not supported"
-            ));
+        // Icons follow their line as text does (`auto` is `map` along lines).
+        let icon_along_line = !point
+            && layout
+                .get("icon-rotation-alignment")
+                .and_then(Value::as_str)
+                != Some("viewport");
+        if point {
+            only("icon-rotation-alignment", &["auto", "viewport"])?;
+        } else {
+            only("icon-rotation-alignment", &["auto", "viewport", "map"])?;
         }
-        only("icon-rotation-alignment", &["auto", "viewport"])?;
-        only("icon-pitch-alignment", &["auto", "viewport"])?;
+        if icon_along_line {
+            only("icon-pitch-alignment", &["auto", "viewport", "map"])?;
+        } else {
+            only("icon-pitch-alignment", &["auto", "viewport"])?;
+        }
+        only("icon-text-fit", &["none", "width", "height", "both"])?;
+        for key in ["text-translate-anchor", "icon-translate-anchor"] {
+            if let Some(anchor) = paint.get(key).and_then(Value::as_str)
+                && anchor != "map"
+                && anchor != "viewport"
+            {
+                return Err(format!("layer {id}: {key} {anchor} is not supported"));
+            }
+        }
         let zoom =
             |key: &str, default: f64| object.get(key).and_then(Value::as_f64).unwrap_or(default);
         Ok(Self {
@@ -402,11 +436,18 @@ mod tests {
             ),
             Ok(1)
         );
+        assert_eq!(
+            parse(
+                r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","icon-image":"x","icon-rotate":["get","r"],"icon-text-fit":"both","icon-text-fit-padding":[1,2,1,2],"text-rotate":15},"paint":{"icon-translate":[2,-1],"icon-translate-anchor":"viewport","text-translate":[0,3]}}]"#
+            ),
+            Ok(1)
+        );
         for rejected in [
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-text-fit":"both"}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-rotate":45}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-text-fit":["step",["zoom"],"none",8,"both"]}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-rotation-alignment":"map"}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","icon-image":"x","icon-rotation-alignment":"viewport","icon-pitch-alignment":"map"}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"icon-translate":["literal",[1,2]]}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-size":["+",["zoom"],1]}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","icon-image":"x"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"text-rotation-alignment":"map"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","text-rotation-alignment":"viewport-glyph"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":["step",["zoom"],"point",8,"line"]}}]"#,
