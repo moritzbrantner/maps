@@ -469,6 +469,92 @@ const LINE_LABEL_LAYERS: Array<Record<string, unknown>> = [
     type: "symbol",
   },
 ];
+/**
+ * The `symbol-icon-lines` style layers (#346): icons along lines and icon extras. Arrows
+ * follow the rivers on the map plane (icons along lines, their boxes turning with the map,
+ * `icon-offset` off the line); road shields stretch over their text, viewport-aligned on
+ * the roads (`icon-text-fit` with `stretchX` / `stretchY` / `content`); lakes sit on a badge
+ * fitted to their width (`content` with `textFitWidth` / `textFitHeight`); places turn
+ * their star and name (`icon-rotate`, `text-rotate`) and move them (`icon-translate` on the
+ * map, `text-translate` on the viewport).
+ */
+const ICON_LINE_LAYERS: Array<Record<string, unknown>> = [
+  {
+    id: "river-arrows",
+    layout: {
+      "icon-image": "arrow",
+      "icon-offset": [0, -4],
+      "symbol-placement": "line",
+      "symbol-spacing": 140,
+    },
+    source: "oracle-vector",
+    "source-layer": "water_lines",
+    type: "symbol",
+  },
+  {
+    filter: ["in", ["get", "kind"], ["literal", ["motorway", "primary"]]],
+    id: "road-shields",
+    layout: {
+      "icon-image": "shield",
+      "icon-rotation-alignment": "viewport",
+      "icon-text-fit": "both",
+      "icon-text-fit-padding": [1, 3, 1, 3],
+      "symbol-placement": "line",
+      "symbol-spacing": 220,
+      "text-field": ["concat", ["match", ["get", "kind"], "motorway", "A", "B"], ["to-string", ["get", "rank"]]],
+      "text-font": ["NotoSans-Regular"],
+      "text-rotation-alignment": "viewport",
+      "text-size": 11,
+    },
+    paint: { "text-color": "#1f2937" },
+    source: "oracle-vector",
+    "source-layer": "streets",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-badges",
+    layout: {
+      "icon-image": "badge",
+      "icon-text-fit": "width",
+      "icon-text-fit-padding": [0, 4, 0, 4],
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": 12,
+    },
+    paint: { "text-color": "#1e3a8a" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    id: "rotated-places",
+    layout: {
+      "icon-image": "capital",
+      "icon-rotate": ["*", ["get", "rank"], 9],
+      "text-anchor": "top",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0, 0.9],
+      "text-rotate": -12,
+      "text-size": 14,
+    },
+    paint: {
+      "icon-color": "#b91c1c",
+      "icon-halo-color": "#fef3c7",
+      "icon-halo-width": 1,
+      "icon-translate": [0, -4],
+      "text-color": "#111827",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1,
+      "text-translate": [6, 0],
+      "text-translate-anchor": "viewport",
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
@@ -479,11 +565,13 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
         ? { glyphs: GLYPHS_URL, layers: ZOOM_LAYERS }
         : name === "symbol-lines" || name === "symbol-lines-pitch"
           ? { glyphs: GLYPHS_URL, layers: LINE_LABEL_LAYERS }
-          : name === "tileset-lines"
-            ? { layers: LINE_LAYERS }
-            : name === "fill-pattern"
-              ? { layers: FILL_PATTERN_LAYERS }
-              : null;
+          : name === "symbol-icon-lines" || name === "symbol-icon-lines-pitch"
+            ? { glyphs: GLYPHS_URL, layers: ICON_LINE_LAYERS }
+            : name === "tileset-lines"
+              ? { layers: LINE_LAYERS }
+              : name === "fill-pattern"
+                ? { layers: FILL_PATTERN_LAYERS }
+                : null;
 
 /**
  * The relief style (#324): the raster basemap, a hillshade layer on one Terrarium
@@ -553,6 +641,12 @@ function referenceStyle(name: string) {
     case "symbol-lines-pitch": {
       const style = vectorStyle();
       style.layers.push(...LINE_LABEL_LAYERS);
+      return style;
+    }
+    case "symbol-icon-lines":
+    case "symbol-icon-lines-pitch": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...ICON_LINE_LAYERS);
       return style;
     }
     default:
@@ -746,6 +840,8 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-zoom":
     case "symbol-lines":
     case "symbol-lines-pitch":
+    case "symbol-icon-lines":
+    case "symbol-icon-lines-pitch":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

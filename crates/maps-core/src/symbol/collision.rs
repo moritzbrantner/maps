@@ -235,6 +235,95 @@ impl CollisionIndex {
         Some(b)
     }
 
+    /// `placeCollisionBox` for a box that turns with the map (`_projectCollisionBox` with
+    /// `rotateWithMap`), as icons of line labels collide: `collision_box` in CSS px around
+    /// the tile-normalized `anchor`. Turned with the map's east axis on screen, or, with
+    /// `pitch_with_map`, laid on the map plane, its corners and edge midpoints are projected
+    /// and the grid box is around them.
+    #[must_use]
+    pub fn place_map_box(
+        &self,
+        projection: &TileProjection<'_>,
+        anchor: [f64; 2],
+        collision_box: [f64; 4],
+        pitch_with_map: bool,
+        allow_overlap: bool,
+    ) -> Option<[f64; 4]> {
+        let (point, w) = (projection.project)(anchor);
+        if w <= 0.0 {
+            return None;
+        }
+        let ratio = projection.perspective_ratio(w);
+        let [x1, y1, x2, y2] = collision_box;
+        let offsets = [
+            [x1, y1],
+            [(x1 + x2) / 2.0, y1],
+            [x2, y1],
+            [x2, (y1 + y2) / 2.0],
+            [x2, y2],
+            [(x1 + x2) / 2.0, y2],
+            [x1, y2],
+            [x1, (y1 + y2) / 2.0],
+        ];
+        let mut points = Vec::with_capacity(offsets.len());
+        if pitch_with_map {
+            // Tile-space offsets: CSS px at the drawn zoom, grown with the distance as the
+            // shader's perspective ratio grows them.
+            let distance = (0.5 + 0.5 * w / projection.center_w).clamp(0.0, 4.0);
+            let scale = distance / projection.tile_px;
+            let mut visible = false;
+            for [dx, dy] in offsets {
+                let (projected, w) =
+                    (projection.project)([anchor[0] + dx * scale, anchor[1] + dy * scale]);
+                visible |= w > 0.0;
+                points.push(projected);
+            }
+            if !visible {
+                return None;
+            }
+        } else {
+            // East on screen: the angle of the projected tile x axis at the anchor.
+            let (east, _) = (projection.project)([anchor[0] + 1.0 / EXTENT, anchor[1]]);
+            let (to_east_x, to_east_y) = (east[0] - point[0], east[1] - point[1]);
+            let angle = (to_east_y / to_east_x).atan()
+                + if to_east_x < 0.0 {
+                    std::f64::consts::PI
+                } else {
+                    0.0
+                };
+            let (sin, cos) = angle.sin_cos();
+            for [dx, dy] in offsets {
+                let (dx, dy) = (dx * ratio, dy * ratio);
+                points.push([
+                    point[0] + cos * dx - sin * dy,
+                    point[1] + sin * dx + cos * dy,
+                ]);
+            }
+        }
+        let mut b = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for [x, y] in points {
+            b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+        }
+        let b = [
+            b[0] + VIEWPORT_PADDING,
+            b[1] + VIEWPORT_PADDING,
+            b[2] + VIEWPORT_PADDING,
+            b[3] + VIEWPORT_PADDING,
+        ];
+        if ratio < PERSPECTIVE_RATIO_CUTOFF || !self.inside_grid(b) {
+            return None;
+        }
+        if !allow_overlap && self.grid.hit_test(b) {
+            return None;
+        }
+        Some(b)
+    }
+
     /// `placeCollisionCircles`: circles along the label's projected path, in grid px; `None`
     /// when the label does not fit its line, collides, is outside the grid or too far away.
     #[must_use]
@@ -349,8 +438,12 @@ pub struct PlacedSymbol {
     pub tile: usize,
     pub layer: usize,
     pub instance: usize,
+    /// The anchor in viewport px, moved by `text-translate`, and its perspective ratio.
     pub anchor: [f64; 2],
     pub perspective_ratio: f64,
+    /// The anchor moved by `icon-translate`.
+    pub icon_anchor: [f64; 2],
+    pub icon_perspective_ratio: f64,
     pub text: bool,
     pub icon: bool,
 }
@@ -376,9 +469,10 @@ pub fn symbol_tile_order(tiles: &[TileId], bearing_radians: f64) -> Vec<usize> {
     order
 }
 
-/// Places every symbol layer, top layer first, at the camera `zoom`, tiles in MapLibre's
-/// placement order (`Style._updatePlacement`: zoom descending, then `isLessThan`: x, then y
-/// ascending). Returns placed symbols per layer in placement order, `tile` indexing `tiles`.
+/// Places every symbol layer, top layer first, at the camera `zoom` and `bearing` (clockwise,
+/// radians), tiles in MapLibre's placement order (`Style._updatePlacement`: zoom descending,
+/// then `isLessThan`: x, then y ascending). Returns placed symbols per layer in placement
+/// order, `tile` indexing `tiles`.
 #[must_use]
 pub fn place_symbols(
     tiles: &[PlacementTile<'_>],
@@ -386,6 +480,7 @@ pub fn place_symbols(
     width: f64,
     height: f64,
     zoom: f64,
+    bearing: f64,
 ) -> Vec<Vec<PlacedSymbol>> {
     let mut index = CollisionIndex::new(width, height);
     let mut placed = vec![Vec::new(); layer_count];
@@ -406,20 +501,31 @@ pub fn place_symbols(
             let always_icon = bucket.icon_allow_overlap
                 && (bucket.text_allow_overlap || !bucket.has_text() || bucket.text_optional);
             let text_size = bucket.text_size.at_zoom(zoom);
+            // `text-translate` and `icon-translate` move the anchors in the tile.
+            let text_shift = bucket.text_translate.uv(bearing, tile.projection.tile_px);
+            let icon_shift = bucket.icon_translate.uv(bearing, tile.projection.tile_px);
+            let text_project = tile.projection.shifted(text_shift);
+            let icon_project = tile.projection.shifted(icon_shift);
+            let text_projection = tile.projection.with(&text_project);
+            let icon_projection = tile.projection.with(&icon_project);
             for (instance_index, instance) in bucket.instances.iter().enumerate() {
-                let Some((anchor, ratio)) = tile.projection.anchor(instance.anchor) else {
+                let (Some((anchor, ratio)), Some((icon_anchor, icon_ratio))) = (
+                    text_projection.anchor(instance.anchor),
+                    icon_projection.anchor(instance.anchor),
+                ) else {
                     continue;
                 };
                 let mut text_circles = None;
-                let text_box = match &instance.text {
-                    Some(text) if text.line.is_some() => {
+                let text_box = match (&instance.text, &instance.line) {
+                    (Some(text), Some(symbol_line)) if text.line.is_some() => {
                         let line = text.line.as_ref().expect("line label");
                         let context = LineLabelContext {
-                            projection: &tile.projection,
+                            projection: &text_projection,
                             pitch_with_map: bucket.pitch_with_map,
-                            line: &line.line,
+                            line: &symbol_line.points,
                             anchor: [instance.anchor[0] * EXTENT, instance.anchor[1] * EXTENT],
-                            segment: line.segment,
+                            segment: symbol_line.segment,
+                            rotate_to_line: true,
                         };
                         let glyphs = LineGlyphs {
                             offsets: &line.offsets,
@@ -437,16 +543,33 @@ pub fn place_symbols(
                         });
                         None
                     }
-                    Some(text) => index.place_box(
+                    (Some(text), _) => index.place_box(
                         anchor,
                         ratio,
                         text.collision_box,
                         bucket.text_allow_overlap,
                     ),
-                    None => None,
+                    (None, _) => None,
                 };
+                // Placement reads the text alignments for icons too: icons of labels along
+                // lines collide with boxes that turn (and pitch) with the map.
                 let icon_box = instance.icon.as_ref().and_then(|icon| {
-                    index.place_box(anchor, ratio, icon.collision_box, bucket.icon_allow_overlap)
+                    if bucket.text_along_line {
+                        index.place_map_box(
+                            &icon_projection,
+                            instance.anchor,
+                            icon.collision_box,
+                            bucket.pitch_with_map,
+                            bucket.icon_allow_overlap,
+                        )
+                    } else {
+                        index.place_box(
+                            icon_anchor,
+                            icon_ratio,
+                            icon.collision_box,
+                            bucket.icon_allow_overlap,
+                        )
+                    }
                 });
                 let (mut place_text, mut place_icon) = (
                     text_box.is_some()
@@ -486,6 +609,8 @@ pub fn place_symbols(
                         instance: instance_index,
                         anchor,
                         perspective_ratio: ratio,
+                        icon_anchor,
+                        icon_perspective_ratio: icon_ratio,
                         text,
                         icon,
                     });
@@ -511,6 +636,63 @@ mod tests {
         assert!(index.place_box([150.0, 50.0], 1.0, label, false).is_some());
         // Outside the padded grid.
         assert!(index.place_box([-400.0, 50.0], 1.0, label, false).is_none());
+    }
+
+    #[test]
+    fn map_aligned_boxes_turn_with_the_map_and_lie_on_its_plane() {
+        let index = CollisionIndex::new(512.0, 512.0);
+        let icon = [-10.0, -5.0, 10.0, 5.0];
+        // North up: the box keeps its shape on and off the map plane.
+        let flat = |uv: [f64; 2]| ([uv[0] * 512.0, uv[1] * 512.0], 1.0);
+        let north_up = TileProjection {
+            project: &flat,
+            center_w: 1.0,
+            tile_px: 512.0,
+        };
+        let expected = [346.0, 351.0, 366.0, 361.0];
+        for pitch_with_map in [false, true] {
+            let b = index
+                .place_map_box(&north_up, [0.5, 0.5], icon, pitch_with_map, false)
+                .unwrap();
+            for (actual, expected) in b.iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-9, "{b:?}");
+            }
+        }
+        // Map east pointing down the screen (bearing 90°): the box stands upright.
+        let turned = |uv: [f64; 2]| ([512.0 - uv[1] * 512.0, uv[0] * 512.0], 1.0);
+        let east_down = TileProjection {
+            project: &turned,
+            center_w: 1.0,
+            tile_px: 512.0,
+        };
+        for pitch_with_map in [false, true] {
+            let b = index
+                .place_map_box(&east_down, [0.5, 0.5], icon, pitch_with_map, false)
+                .unwrap();
+            for (actual, expected) in b.iter().zip([351.0, 346.0, 361.0, 366.0]) {
+                assert!((actual - expected).abs() < 1e-9, "{b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn translations_move_anchors_along_the_tile_or_the_turned_viewport() {
+        use crate::symbol::layout::SymbolTranslate;
+        let map = SymbolTranslate {
+            offset: [10.0, 0.0],
+            viewport: false,
+        };
+        assert_eq!(
+            map.uv(std::f64::consts::FRAC_PI_2, 512.0),
+            [10.0 / 512.0, 0.0]
+        );
+        // Viewport right under a 90° bearing is the tile's south.
+        let viewport = SymbolTranslate {
+            viewport: true,
+            ..map
+        };
+        let [x, y] = viewport.uv(std::f64::consts::FRAC_PI_2, 512.0);
+        assert!(x.abs() < 1e-12 && (y - 10.0 / 512.0).abs() < 1e-12);
     }
 
     #[test]
@@ -542,6 +724,7 @@ mod tests {
         // far right) does not.
         let symbol = |icon_box: [f64; 4]| SymbolInstance {
             anchor: [0.5, 0.5],
+            line: None,
             text: Some(SymbolText {
                 collision_box: [-10.0, -5.0, 10.0, 5.0],
                 glyphs: Vec::new(),
@@ -552,9 +735,9 @@ mod tests {
             }),
             icon: Some(SymbolIcon {
                 image: "dot".to_owned(),
-                tl: [0.0; 2],
-                br: [0.0; 2],
+                quads: Vec::new(),
                 collision_box: icon_box,
+                line_offset: [0.0; 2],
                 sizes: [1.0; 2],
                 pixel_ratio: 1.0,
                 paint: [paint.clone(), paint.clone()],
@@ -563,14 +746,14 @@ mod tests {
         };
         let place = |text_optional: bool| {
             let buckets = TileStyleBuckets {
-                layers: vec![LayerBucket::Symbols(SymbolBucket {
+                layers: vec![LayerBucket::Symbols(Box::new(SymbolBucket {
                     instances: vec![
                         symbol([-4.0, -4.0, 4.0, 4.0]),
                         symbol([40.0, -4.0, 48.0, 4.0]),
                     ],
                     text_optional,
                     ..SymbolBucket::default()
-                })],
+                }))],
                 ..TileStyleBuckets::default()
             };
             let project = |uv: [f64; 2]| ([uv[0] * 200.0, uv[1] * 100.0], 1.0);
@@ -583,7 +766,7 @@ mod tests {
                     tile_px: 200.0,
                 },
             }];
-            place_symbols(&tiles, 1, 200.0, 100.0, 0.0)[0]
+            place_symbols(&tiles, 1, 200.0, 100.0, 0.0, 0.0)[0]
                 .iter()
                 .map(|symbol| (symbol.instance, symbol.text, symbol.icon))
                 .collect::<Vec<_>>()

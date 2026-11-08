@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::color::Rgba;
 use super::expression::{EvaluationContext, js_round, to_string};
 use super::glyphs::{GLYPH_PBF_BORDER, GlyphStore};
-use super::images::ImageStore;
+use super::images::{IMAGE_PADDING, ImageStore, StyleImage, TextFit};
 use super::line_anchors::{LabelExtent, center_anchor, clip_line, line_anchors, merge_lines};
 use super::polylabel::{classify_rings, pole_of_inaccessibility};
 use super::shaping::{ONE_EM, ShapeOptions, Shaping, SymbolAnchor, shape_text};
@@ -35,12 +35,38 @@ pub struct TileCircle {
     pub stroke_width: f32,
 }
 
-/// One glyph quad relative to its anchor, in 1/32-quantized glyph units (`ONE_EM` = 24).
+/// One glyph quad relative to its anchor, in 1/32-quantized glyph units (`ONE_EM` = 24):
+/// corners tl, tr, bl, br, `text-rotate` applied.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SymbolGlyph {
     pub codepoint: u32,
-    pub tl: [f32; 2],
-    pub br: [f32; 2],
+    pub corners: [[f32; 2]; 4],
+}
+
+/// One icon quad (`getIconQuads`): the whole image, or one of the patches `icon-text-fit`
+/// stretches. A corner sits at `corners * max(min_font_scale, size) + pixel_offsets` CSS px
+/// from the anchor, `size` being `icon-size` (with the perspective ratio).
+#[derive(Clone, Debug, PartialEq)]
+pub struct IconQuad {
+    /// tl, tr, bl, br in 1/32-quantized CSS px at `icon-size` 1, `icon-rotate` applied.
+    pub corners: [[f32; 2]; 4],
+    /// Fixed (unstretched) offsets of the tl and br corners in 1/16 CSS px; the tr and bl
+    /// corners mix them as MapLibre's vertices do. Not rotated, as in MapLibre.
+    pub pixel_offsets: [[f32; 2]; 2],
+    /// The smallest scale keeping the fixed parts at their size (`minFontScaleX/Y`).
+    pub min_font_scale: [f32; 2],
+    /// The sampled rect relative to the image's padded atlas bin: x, y, width, height.
+    pub tex: [f64; 4],
+}
+
+/// Where a line-placed symbol sits on its line: MapLibre's `lineVertexArray` slice and the
+/// anchor's segment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SymbolLine {
+    /// The line in 8192-unit tile space (MapLibre's `Int16` vertices).
+    pub points: Vec<[f64; 2]>,
+    /// The anchor lies between `points[segment]` and `points[segment + 1]`.
+    pub segment: usize,
 }
 
 /// Evaluated `text-*` or `icon-*` paint; colors premultiplied.
@@ -54,14 +80,10 @@ pub struct SymbolPaint {
 }
 
 /// What a line label (`symbol-placement: line` or `line-center` along the line) keeps for
-/// projecting its glyphs each frame: MapLibre's `lineVertexArray`, `glyphOffsetArray` and
-/// the placed symbol's line fields.
+/// projecting its glyphs along [`SymbolInstance::line`] each frame: MapLibre's
+/// `glyphOffsetArray` and the placed symbol's line fields.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineText {
-    /// The line the label follows, in 8192-unit tile space (MapLibre's `Int16` vertices).
-    pub line: Vec<[f64; 2]>,
-    /// The anchor lies between `line[segment]` and `line[segment + 1]`.
-    pub segment: usize,
     /// Each glyph's centre along the text in glyph units, one per quad.
     pub offsets: Vec<f32>,
     /// `text-offset` in glyph units: along the line and away from it.
@@ -87,22 +109,68 @@ pub struct SymbolText {
     pub line: Option<LineText>,
 }
 
-/// The icon part of a symbol: MapLibre's `shapeIcon` and `getIconQuads` without
-/// `icon-text-fit`, one quad over the image and its one-pixel padding.
+/// The icon part of a symbol: MapLibre's `shapeIcon`, `fitIconToText` and `getIconQuads`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SymbolIcon {
-    /// The style image id; its texture rect is the image's padded bin in the atlas.
+    /// The style image id; quads sample rects of its padded bin in the atlas.
     pub image: String,
-    /// Quad corners relative to the anchor in 1/32-quantized CSS px at `icon-size` 1.
-    pub tl: [f32; 2],
-    pub br: [f32; 2],
-    /// Collision box around the anchor in CSS px at perspective ratio 1 (`icon-padding`).
+    /// One quad over the image and its one-pixel padding, or the stretched patches.
+    pub quads: Vec<IconQuad>,
+    /// Collision box around the anchor in CSS px at perspective ratio 1 (`icon-padding`),
+    /// around the rotated box under `icon-rotate`.
     pub collision_box: [f64; 4],
+    /// `icon-offset`: an icon along its line also moves along and off the line by it, in
+    /// `icon-size` / 24 units (MapLibre's line offset).
+    pub line_offset: [f64; 2],
     /// `icon-size` at the bucket's two size zooms, as [`SymbolText::sizes`].
     pub sizes: [f32; 2],
     /// The image's pixel ratio: one unlike the device's makes MapLibre sample linearly.
     pub pixel_ratio: f64,
     pub paint: [SymbolPaint; 2],
+}
+
+/// `text-translate` or `icon-translate` (CSS px) and whether its anchor is the viewport.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SymbolTranslate {
+    pub offset: [f64; 2],
+    pub viewport: bool,
+}
+
+impl SymbolTranslate {
+    /// MapLibre's `translatePosition` in tile-normalized units, for a tile `tile_px` CSS px
+    /// wide under the camera `bearing` (clockwise, radians): a viewport-anchored offset
+    /// turns with the bearing into the tile's axes.
+    #[must_use]
+    pub fn uv(&self, bearing: f64, tile_px: f64) -> [f64; 2] {
+        let [mut x, mut y] = self.offset;
+        if x == 0.0 && y == 0.0 {
+            return [0.0, 0.0];
+        }
+        if self.viewport && bearing != 0.0 {
+            let (sin, cos) = bearing.sin_cos();
+            (x, y) = (x * cos - y * sin, x * sin + y * cos);
+        }
+        [x / tile_px, y / tile_px]
+    }
+
+    fn of(
+        layer: &StyleLayer,
+        prefix: &str,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Self, String> {
+        let offset = match layer.paint_value(&format!("{prefix}-translate"), context)? {
+            Some(Value::Array(values)) if values.len() == 2 => [
+                values[0].as_f64().unwrap_or(0.0),
+                values[1].as_f64().unwrap_or(0.0),
+            ],
+            _ => [0.0, 0.0],
+        };
+        Ok(Self {
+            offset,
+            viewport: layer.string(true, &format!("{prefix}-translate-anchor"), "map", context)?
+                == "viewport",
+        })
+    }
 }
 
 /// `symbol-placement`.
@@ -118,6 +186,8 @@ pub enum SymbolPlacement {
 pub struct SymbolInstance {
     /// Tile-normalized anchor, truncated to MapLibre's integer 8192-unit grid.
     pub anchor: [f64; 2],
+    /// The line of a line-placed symbol; text and icons along it follow it.
+    pub line: Option<SymbolLine>,
     pub text: Option<SymbolText>,
     pub icon: Option<SymbolIcon>,
     pub feature_index: usize,
@@ -145,6 +215,17 @@ pub struct SymbolBucket {
     pub pitch_with_map: bool,
     /// `text-keep-upright`.
     pub keep_upright: bool,
+    /// Icons follow their line (`icon-rotation-alignment: map` off point placement).
+    pub icon_along_line: bool,
+    /// Icons along lines lie on the map plane (`icon-pitch-alignment: map`).
+    pub icon_pitch_with_map: bool,
+    /// `icon-keep-upright`.
+    pub icon_keep_upright: bool,
+    /// `iconsNeedLinear` from the layout: a rotated icon (`icon-rotate` not the constant 0).
+    pub icons_rotated: bool,
+    /// `text-translate` and `icon-translate` with their anchors.
+    pub text_translate: SymbolTranslate,
+    pub icon_translate: SymbolTranslate,
     /// `text-padding` in CSS px: line labels pad their collision circles with it.
     pub text_padding: f64,
     /// The layer sets `icon-offset`: MapLibre's `u_is_offset` then keeps symbol sizes off
@@ -220,7 +301,7 @@ pub enum LayerBucket {
     },
     Lines(Vec<TileLine>),
     Circles(Vec<TileCircle>),
-    Symbols(SymbolBucket),
+    Symbols(Box<SymbolBucket>),
 }
 
 /// Buckets of one tile, one per style layer (in style order).
@@ -308,11 +389,20 @@ pub fn layout_tile(
                 let alignment = |key: &str| layer.string(false, key, "auto", &constant);
                 let text_along_line = placement != SymbolPlacement::Point
                     && alignment("text-rotation-alignment")? != "viewport";
+                let icon_along_line = placement != SymbolPlacement::Point
+                    && alignment("icon-rotation-alignment")? != "viewport";
                 let options = SymbolOptions {
                     placement,
                     text_along_line,
                     text_size: &text_size,
                     icon_size: &icon_size,
+                    icon_text_fit: layer.string(false, "icon-text-fit", "none", &constant)?,
+                    icon_text_fit_padding: match layer.value("icon-text-fit-padding", &constant)? {
+                        Some(Value::Array(values)) if values.len() == 4 => {
+                            std::array::from_fn(|index| values[index].as_f64().unwrap_or(0.0))
+                        }
+                        _ => [0.0; 4],
+                    },
                 };
                 let instances = match features {
                     Some(source) => layout_symbols(
@@ -331,7 +421,7 @@ pub fn layout_tile(
                     .find_map(|instance| instance.icon.as_ref())
                     .and_then(|icon| images.image(&icon.image))
                     .is_some_and(|image| image.sdf);
-                LayerBucket::Symbols(SymbolBucket {
+                LayerBucket::Symbols(Box::new(SymbolBucket {
                     instances,
                     text_size,
                     icon_size,
@@ -340,6 +430,16 @@ pub fn layout_tile(
                     pitch_with_map: text_along_line
                         && alignment("text-pitch-alignment")? != "viewport",
                     keep_upright: layer.boolean("text-keep-upright", true, &constant)?,
+                    icon_along_line,
+                    icon_pitch_with_map: icon_along_line
+                        && alignment("icon-pitch-alignment")? != "viewport",
+                    icon_keep_upright: layer.boolean("icon-keep-upright", false, &constant)?,
+                    // `constantOr(1) !== 0`: data-driven rotations count as rotated.
+                    icons_rotated: !PropertyKind::of(layer.raw_layout("icon-rotate"))?
+                        .is_feature_constant()
+                        || layer.number(false, "icon-rotate", 0.0, &constant)? != 0.0,
+                    text_translate: SymbolTranslate::of(layer, "text", &constant)?,
+                    icon_translate: SymbolTranslate::of(layer, "icon", &constant)?,
                     text_padding: layer.number(false, "text-padding", 2.0, &constant)?,
                     icon_offset: layer.raw_layout("icon-offset").is_some(),
                     text_allow_overlap: layer.boolean("text-allow-overlap", false, &constant)?,
@@ -357,7 +457,7 @@ pub fn layout_tile(
                     )?,
                     icon_optional: layer.boolean("icon-optional", false, &constant)?,
                     sdf_icons,
-                })
+                }))
             }
         };
         buckets.layers.push(bucket);
@@ -561,14 +661,35 @@ struct SymbolOptions<'a> {
     text_along_line: bool,
     text_size: &'a SizeData,
     icon_size: &'a SizeData,
+    /// `icon-text-fit` (`none`, `width`, `height`, `both`) and its padding (top, right,
+    /// bottom, left).
+    icon_text_fit: String,
+    icon_text_fit_padding: [f64; 4],
 }
 
 /// One feature's symbol parts before anchors: its shaped text, icon and geometry.
 struct SymbolFeature {
     index: usize,
     text: Option<FeatureText>,
-    icon: Option<SymbolIcon>,
+    icon: Option<FeatureIcon>,
     geometry: Vec<Vec<[f64; 2]>>,
+}
+
+/// MapLibre's `PositionedIcon`: the icon's box around the anchor in CSS px at `icon-size` 1,
+/// and the padding `fitIconToText` leaves outside an image's `content` box.
+#[derive(Clone, Debug, PartialEq)]
+struct PositionedIcon {
+    top: f64,
+    bottom: f64,
+    left: f64,
+    right: f64,
+    collision_padding: Option<[f64; 4]>,
+}
+
+/// One feature's icon, before it is placed at its anchors.
+struct FeatureIcon {
+    icon: SymbolIcon,
+    shaped: PositionedIcon,
 }
 
 /// `performSymbolLayout` and `addFeature`: shaped text and icons at each anchor of each
@@ -592,7 +713,7 @@ fn layout_symbols(
             continue;
         }
         let text = feature_text(layer, feature, z, glyphs, missing, options)?;
-        let icon = symbol_icon(layer, feature, z, images, options.icon_size)?;
+        let icon = symbol_icon(layer, feature, z, images, text.as_ref(), options)?;
         if text.is_none() && icon.is_none() {
             continue;
         }
@@ -651,22 +772,22 @@ fn layout_symbols(
             }
             // MapLibre stores anchors and line vertices as `Int16`.
             let anchor = [anchor[0].trunc(), anchor[1].trunc()];
-            let text = symbol.text.as_ref().map(|text| {
-                let line = line
-                    .filter(|_| options.text_along_line)
-                    .map(|(line, segment)| {
-                        let line: Vec<[f64; 2]> = line
-                            .iter()
-                            .map(|point| [point[0].trunc(), point[1].trunc()])
-                            .collect();
-                        (line, segment)
-                    });
-                text.at_anchor(line)
+            let line = line.map(|(line, segment)| SymbolLine {
+                points: line
+                    .iter()
+                    .map(|point| [point[0].trunc(), point[1].trunc()])
+                    .collect(),
+                segment,
             });
+            let text_along_line = line.is_some() && options.text_along_line;
             instances.push(SymbolInstance {
                 anchor: [anchor[0] / EXTENT, anchor[1] / EXTENT],
-                text,
-                icon: symbol.icon.clone(),
+                line,
+                text: symbol
+                    .text
+                    .as_ref()
+                    .map(|text| text.at_anchor(text_along_line)),
+                icon: symbol.icon.as_ref().map(|icon| icon.icon.clone()),
                 feature_index: symbol.index,
             });
         };
@@ -677,30 +798,41 @@ fn layout_symbols(
                 }
             }
             SymbolPlacement::Line | SymbolPlacement::LineCenter => {
-                let Some(text) = &symbol.text else {
-                    continue;
-                };
                 let max_angle = layer
                     .number(false, "text-max-angle", 45.0, &tile_context)?
                     .to_radians();
+                // `textMaxSize`: `text-size` at zoom 18, whether or not there is text.
+                let max_size = layer.number(false, "text-size", 16.0, &context(feature, 18.0))?;
+                let text_length = symbol
+                    .text
+                    .as_ref()
+                    .map_or(0.0, |text| text.shaping.right - text.shaping.left);
+                let icon_length = symbol
+                    .icon
+                    .as_ref()
+                    .map_or(0.0, |icon| icon.shaped.right - icon.shaped.left);
                 let extent = LabelExtent {
-                    length: text.shaping.right - text.shaping.left,
+                    length: text_length.max(icon_length),
                     glyph_size: ONE_EM,
-                    box_scale: TILE_PIXEL_RATIO * text.max_size / ONE_EM,
+                    box_scale: TILE_PIXEL_RATIO * max_size / ONE_EM,
+                    has_text: symbol.text.is_some(),
                 };
                 if options.placement == SymbolPlacement::Line {
                     let repeat_distance = spacing / 2.0;
                     for line in clip_line(&symbol.geometry, 0.0, 0.0, EXTENT, EXTENT) {
                         for anchor in line_anchors(&line, spacing, max_angle, &extent, 1.0, EXTENT)
                         {
-                            let others = compare_text.entry(text.text.clone()).or_default();
-                            if others.iter().rev().any(|other| {
-                                (other[0] - anchor.point[0]).hypot(other[1] - anchor.point[1])
-                                    < repeat_distance
-                            }) {
-                                continue;
+                            // `anchorIsTooClose` compares text only.
+                            if let Some(text) = &symbol.text {
+                                let others = compare_text.entry(text.text.clone()).or_default();
+                                if others.iter().rev().any(|other| {
+                                    (other[0] - anchor.point[0]).hypot(other[1] - anchor.point[1])
+                                        < repeat_distance
+                                }) {
+                                    continue;
+                                }
+                                others.push(anchor.point);
                             }
-                            others.push(anchor.point);
                             add(anchor.point, Some((&line, anchor.segment)));
                         }
                     }
@@ -788,15 +920,305 @@ fn feature_sizes(
     Ok((layout_size, sizes))
 }
 
-/// `shapeIcon`, `getIconQuads` and the icon `CollisionFeature` for one feature. An image the
-/// style lacks leaves the symbol without an icon, as in MapLibre.
+/// MapLibre's `_matMult([cos, -sin, sin, cos])` (and `_rotate`): `point` turned by the angle
+/// whose sine and cosine are given.
+fn rotate_point(point: [f64; 2], (sin, cos): (f64, f64)) -> [f64; 2] {
+    [
+        cos * point[0] - sin * point[1],
+        sin * point[0] + cos * point[1],
+    ]
+}
+
+/// `CollisionFeature` under `text-rotate` / `icon-rotate`: the box around the rotated box.
+fn rotated_box(b: [f64; 4], degrees: f64) -> [f64; 4] {
+    if degrees == 0.0 || degrees.is_nan() {
+        return b;
+    }
+    let angle = degrees.to_radians().sin_cos();
+    let corners = [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]]
+        .map(|corner| rotate_point(corner, angle));
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for [x, y] in corners {
+        lo = [lo[0].min(x), lo[1].min(y)];
+        hi = [hi[0].max(x), hi[1].max(y)];
+    }
+    [lo[0], lo[1], hi[0], hi[1]]
+}
+
+/// A value as MapLibre's `Int16` vertex attributes keep it: truncated, `NaN` 0.
+fn truncated(value: f64) -> f64 {
+    if value.is_finite() {
+        value.trunc()
+    } else {
+        0.0
+    }
+}
+
+/// Glyph and icon corners are quantized to 1/32 units as MapLibre's vertices store them.
+fn quantize(value: f64) -> f32 {
+    (truncated(js_round(value * 32.0)) / 32.0) as f32
+}
+
+/// `fitIconToText`: the icon centred on the text, or stretched over it (plus
+/// `icon-text-fit-padding`: top, right, bottom, left) along the fitted axes; `font_scale` is
+/// the layout `text-size` over 24.
+fn fit_icon_to_text(
+    image: &StyleImage,
+    shaping: &Shaping,
+    fit: &str,
+    padding: [f64; 4],
+    offset: [f64; 2],
+    font_scale: f64,
+) -> PositionedIcon {
+    let display = [
+        f64::from(image.width) / image.pixel_ratio,
+        f64::from(image.height) / image.pixel_ratio,
+    ];
+    let collision_padding = image.fit.content.map(|content| {
+        [
+            content[0] / image.pixel_ratio,
+            content[1] / image.pixel_ratio,
+            display[0] - content[2] / image.pixel_ratio,
+            display[1] - content[3] / image.pixel_ratio,
+        ]
+    });
+    let (text_left, text_right) = (shaping.left * font_scale, shaping.right * font_scale);
+    let (left, right) = if fit == "width" || fit == "both" {
+        (
+            offset[0] + text_left - padding[3],
+            offset[0] + text_right + padding[1],
+        )
+    } else {
+        let left = offset[0] + (text_left + text_right - display[0]) / 2.0;
+        (left, left + display[0])
+    };
+    let (text_top, text_bottom) = (shaping.top * font_scale, shaping.bottom * font_scale);
+    let (top, bottom) = if fit == "height" || fit == "both" {
+        (
+            offset[1] + text_top - padding[0],
+            offset[1] + text_bottom + padding[2],
+        )
+    } else {
+        let top = offset[1] + (text_top + text_bottom - display[1]) / 2.0;
+        (top, top + display[1])
+    };
+    PositionedIcon {
+        top,
+        bottom,
+        left,
+        right,
+        collision_padding,
+    }
+}
+
+/// `applyTextFit`: a fitted icon widened or heightened back to its `content` aspect ratio
+/// along a `proportional` axis. Returns left, top, right, bottom.
+fn apply_text_fit(shaped: &PositionedIcon, image: &StyleImage) -> [f64; 4] {
+    let (mut left, mut top) = (shaped.left, shaped.top);
+    let (mut width, mut height) = (shaped.right - left, shaped.bottom - top);
+    let content = image.fit.content.unwrap_or_default();
+    let aspect = (content[2] - content[0]) / (content[3] - content[1]);
+    let fit_width = image.fit.text_fit_width.unwrap_or_default();
+    let fit_height = image.fit.text_fit_height.unwrap_or_default();
+    if fit_height == TextFit::Proportional {
+        if (fit_width == TextFit::StretchOnly && width / height < aspect)
+            || fit_width == TextFit::Proportional
+        {
+            let new_width = (height * aspect).ceil();
+            left *= new_width / width;
+            width = new_width;
+        }
+    } else if fit_width == TextFit::Proportional
+        && fit_height == TextFit::StretchOnly
+        && aspect != 0.0
+        && width / height > aspect
+    {
+        let new_height = (width / aspect).ceil();
+        top *= new_height / height;
+        height = new_height;
+    }
+    [left, top, left + width, top + height]
+}
+
+/// One edge of an icon patch: image pixels in fixed and in stretched zones before it.
+#[derive(Clone, Copy)]
+struct Cut {
+    fixed: f64,
+    stretch: f64,
+}
+
+/// `stretchZonesToCuts`.
+fn stretch_zones_to_cuts(zones: &[[f64; 2]], fixed_size: f64, stretch_size: f64) -> Vec<Cut> {
+    let border = f64::from(IMAGE_PADDING);
+    let mut cuts = vec![Cut {
+        fixed: -border,
+        stretch: 0.0,
+    }];
+    for [c1, c2] in zones {
+        let last = cuts[cuts.len() - 1];
+        cuts.push(Cut {
+            fixed: c1 - last.stretch,
+            stretch: last.stretch,
+        });
+        cuts.push(Cut {
+            fixed: c1 - last.stretch,
+            stretch: last.stretch + (c2 - c1),
+        });
+    }
+    cuts.push(Cut {
+        fixed: fixed_size + border,
+        stretch: stretch_size,
+    });
+    cuts
+}
+
+/// `sumWithinRange`.
+fn sum_within_range(ranges: &[[f64; 2]], min: f64, max: f64) -> f64 {
+    ranges
+        .iter()
+        .map(|range| range[1].min(max).max(min) - range[0].min(max).max(min))
+        .sum()
+}
+
+/// The stretch and fixed extents `getIconQuads` maps an image's patches through, per axis.
+#[derive(Clone, Copy)]
+struct PatchAxis {
+    /// Stretched image pixels in the whole image, before the content box and inside it.
+    stretch_size: f64,
+    stretch_offset: f64,
+    stretch_content: f64,
+    /// Fixed image pixels before the content box and inside it.
+    fixed_offset: f64,
+    fixed_content: f64,
+    /// The icon's extent on this axis in CSS px.
+    icon_origin: f64,
+    icon_size: f64,
+}
+
+impl PatchAxis {
+    /// `getEmOffset`.
+    fn em(&self, cut: Cut) -> f64 {
+        (cut.stretch - self.stretch_offset) / self.stretch_content * self.icon_size
+            + self.icon_origin
+    }
+
+    /// `getPxOffset`.
+    fn px(&self, cut: Cut) -> f64 {
+        cut.fixed - self.fixed_offset - self.fixed_content * cut.stretch / self.stretch_size
+    }
+}
+
+/// `getIconQuads`: one quad over the image and its one-pixel padding, or, under
+/// `icon-text-fit` with `stretchX` / `stretchY`, a patch per pair of cuts whose stretched
+/// zones scale with the icon and whose fixed zones keep their size.
+fn icon_quads(
+    shaped: &PositionedIcon,
+    image: &StyleImage,
+    rotate_degrees: f64,
+    has_icon_text_fit: bool,
+) -> Vec<IconQuad> {
+    let border = f64::from(IMAGE_PADDING);
+    let pixel_ratio = image.pixel_ratio;
+    let (image_width, image_height) = (f64::from(image.width), f64::from(image.height));
+    let mut icon = [shaped.left, shaped.top, shaped.right, shaped.bottom];
+    let whole_x = [[0.0, image_width]];
+    let whole_y = [[0.0, image_height]];
+    let stretch_x: &[[f64; 2]] = image.fit.stretch_x.as_deref().unwrap_or(&whole_x);
+    let stretch_y: &[[f64; 2]] = image.fit.stretch_y.as_deref().unwrap_or(&whole_y);
+    let total = |ranges: &[[f64; 2]]| ranges.iter().map(|range| range[1] - range[0]).sum::<f64>();
+    let (stretch_width, stretch_height) = (total(stretch_x), total(stretch_y));
+    let (fixed_width, fixed_height) = (image_width - stretch_width, image_height - stretch_height);
+    let axis = |stretch_size: f64, fixed_size: f64| PatchAxis {
+        stretch_size,
+        stretch_offset: 0.0,
+        stretch_content: stretch_size,
+        fixed_offset: 0.0,
+        fixed_content: fixed_size,
+        icon_origin: 0.0,
+        icon_size: 0.0,
+    };
+    let (mut x, mut y) = (
+        axis(stretch_width, fixed_width),
+        axis(stretch_height, fixed_height),
+    );
+    if let (Some(content), true) = (image.fit.content, has_icon_text_fit) {
+        if image.fit.text_fit_width.is_some() || image.fit.text_fit_height.is_some() {
+            icon = apply_text_fit(shaped, image);
+        }
+        x.stretch_offset = sum_within_range(stretch_x, 0.0, content[0]);
+        y.stretch_offset = sum_within_range(stretch_y, 0.0, content[1]);
+        x.stretch_content = sum_within_range(stretch_x, content[0], content[2]);
+        y.stretch_content = sum_within_range(stretch_y, content[1], content[3]);
+        x.fixed_offset = content[0] - x.stretch_offset;
+        y.fixed_offset = content[1] - y.stretch_offset;
+        x.fixed_content = content[2] - content[0] - x.stretch_content;
+        y.fixed_content = content[3] - content[1] - y.stretch_content;
+    }
+    (x.icon_origin, x.icon_size) = (icon[0], icon[2] - icon[0]);
+    (y.icon_origin, y.icon_size) = (icon[1], icon[3] - icon[1]);
+    let angle = (rotate_degrees != 0.0 && !rotate_degrees.is_nan())
+        .then(|| rotate_degrees.to_radians().sin_cos());
+    // `a_pixeloffset` keeps 1/16 px and 1/256 scale steps in `Int16`s.
+    let sixteenth = |value: f64| (truncated(value / pixel_ratio * 16.0) / 16.0) as f32;
+    let scale = |value: f64| (truncated(value * 256.0) / 256.0) as f32;
+    let make_box = |left: Cut, top: Cut, right: Cut, bottom: Cut| {
+        let mut corners = [
+            [x.em(left), y.em(top)],
+            [x.em(right), y.em(top)],
+            [x.em(left), y.em(bottom)],
+            [x.em(right), y.em(bottom)],
+        ];
+        if let Some(angle) = angle {
+            corners = corners.map(|corner| rotate_point(corner, angle));
+        }
+        let (x1, x2) = (left.stretch + left.fixed, right.stretch + right.fixed);
+        let (y1, y2) = (top.stretch + top.fixed, bottom.stretch + bottom.fixed);
+        IconQuad {
+            corners: corners.map(|[cx, cy]| [quantize(cx), quantize(cy)]),
+            pixel_offsets: [
+                [sixteenth(x.px(left)), sixteenth(y.px(top))],
+                [sixteenth(x.px(right)), sixteenth(y.px(bottom))],
+            ],
+            min_font_scale: [
+                scale(x.fixed_content / pixel_ratio / x.icon_size),
+                scale(y.fixed_content / pixel_ratio / y.icon_size),
+            ],
+            tex: [border + x1, border + y1, x2 - x1, y2 - y1],
+        }
+    };
+    if !has_icon_text_fit || (image.fit.stretch_x.is_none() && image.fit.stretch_y.is_none()) {
+        let cut = |stretch: f64| Cut {
+            fixed: 0.0,
+            stretch,
+        };
+        return vec![make_box(
+            cut(-1.0),
+            cut(-1.0),
+            cut(image_width + 1.0),
+            cut(image_height + 1.0),
+        )];
+    }
+    let x_cuts = stretch_zones_to_cuts(stretch_x, fixed_width, stretch_width);
+    let y_cuts = stretch_zones_to_cuts(stretch_y, fixed_height, stretch_height);
+    let mut quads = Vec::new();
+    for xs in x_cuts.windows(2) {
+        for ys in y_cuts.windows(2) {
+            quads.push(make_box(xs[0], ys[0], xs[1], ys[1]));
+        }
+    }
+    quads
+}
+
+/// `shapeIcon`, `fitIconToText`, `getIconQuads` and the icon `CollisionFeature` for one
+/// feature. An image the style lacks leaves the symbol without an icon, as in MapLibre.
 fn symbol_icon(
     layer: &StyleLayer,
     feature: &MvtFeature,
     z: u8,
     images: &ImageStore,
-    size_data: &SizeData,
-) -> Result<Option<SymbolIcon>, String> {
+    text: Option<&FeatureText>,
+    options: &SymbolOptions<'_>,
+) -> Result<Option<FeatureIcon>, String> {
     let tile_context = context(feature, f64::from(z));
     let context = &tile_context;
     let Some(id) = string_property(layer, "icon-image", feature, context)? else {
@@ -821,36 +1243,58 @@ fn symbol_icon(
     ];
     let left = offset[0] - display[0] * horizontal;
     let top = offset[1] - display[1] * vertical;
-    let (right, bottom) = (left + display[0], top + display[1]);
-    // `makeBox` over the whole image: one image pixel of padding on every side.
-    let quantize = |value: f64| (js_round(value * 32.0) / 32.0) as f32;
-    let em = |stretch: f64, image_size: u32, icon_size: f64, origin: f64| {
-        quantize(stretch / f64::from(image_size) * icon_size + origin)
+    let mut shaped = PositionedIcon {
+        top,
+        bottom: top + display[1],
+        left,
+        right: left + display[0],
+        collision_padding: None,
     };
-    let tl = [
-        em(-1.0, image.width, display[0], left),
-        em(-1.0, image.height, display[1], top),
-    ];
-    let br = [
-        em(f64::from(image.width) + 1.0, image.width, display[0], left),
-        em(f64::from(image.height) + 1.0, image.height, display[1], top),
-    ];
+    let has_icon_text_fit = options.icon_text_fit != "none";
+    if let (true, Some(text)) = (has_icon_text_fit, text) {
+        shaped = fit_icon_to_text(
+            image,
+            &text.shaping,
+            &options.icon_text_fit,
+            options.icon_text_fit_padding,
+            offset,
+            text.layout_size / ONE_EM,
+        );
+    }
+    let rotate = layer.number(false, "icon-rotate", 0.0, context)?;
     // Collision boxes take `icon-size` at the tile zoom plus one.
-    let (size, sizes) = feature_sizes(layer, "icon-size", 1.0, feature, z, size_data)?;
+    let (size, sizes) = feature_sizes(layer, "icon-size", 1.0, feature, z, options.icon_size)?;
     let padding = icon_padding(layer.value("icon-padding", context)?);
-    Ok(Some(SymbolIcon {
-        image: id,
-        tl,
-        br,
-        collision_box: [
-            left * size - padding[3],
-            top * size - padding[0],
-            right * size + padding[1],
-            bottom * size + padding[2],
-        ],
-        sizes,
-        pixel_ratio: image.pixel_ratio,
-        paint: feature_paint(layer, "icon", feature, z)?,
+    let fitted = image.fit.content.is_some()
+        && (image.fit.text_fit_width.is_some() || image.fit.text_fit_height.is_some());
+    let [x1, y1, x2, y2] = if fitted {
+        apply_text_fit(&shaped, image)
+    } else {
+        [shaped.left, shaped.top, shaped.right, shaped.bottom]
+    };
+    let mut collision_box = [
+        x1 * size - padding[3],
+        y1 * size - padding[0],
+        x2 * size + padding[1],
+        y2 * size + padding[2],
+    ];
+    if let Some(extra) = shaped.collision_padding {
+        collision_box[0] -= extra[0] * size;
+        collision_box[1] -= extra[1] * size;
+        collision_box[2] += extra[2] * size;
+        collision_box[3] += extra[3] * size;
+    }
+    Ok(Some(FeatureIcon {
+        icon: SymbolIcon {
+            image: id,
+            quads: icon_quads(&shaped, image, rotate, has_icon_text_fit),
+            collision_box: rotated_box(collision_box, rotate),
+            line_offset: offset,
+            sizes,
+            pixel_ratio: image.pixel_ratio,
+            paint: feature_paint(layer, "icon", feature, z)?,
+        },
+        shaped,
     }))
 }
 
@@ -862,28 +1306,24 @@ struct FeatureText {
     stack: String,
     /// `text-size` at the tile zoom plus one, which collision shapes use.
     layout_size: f64,
-    /// `text-size` at zoom 18 (`textMaxSize`), which line anchors space by.
-    max_size: f64,
     sizes: [f32; 2],
     /// `text-offset` in glyph units.
     offset: [f64; 2],
     padding: f64,
+    /// `text-rotate` in degrees.
+    rotate: f64,
     paint: [SymbolPaint; 2],
-}
-
-/// Glyph quads are quantized to 1/32 units as MapLibre's vertices store them.
-fn quantize(value: f64) -> f32 {
-    (js_round(value * 32.0) / 32.0) as f32
 }
 
 impl FeatureText {
     /// The text at one anchor: point quads (offset built in) and a collision box, or, along
     /// its line (`getGlyphQuads` with `alongLine`), quads around each glyph's centre with
     /// those centres and a collision circle.
-    fn at_anchor(&self, line: Option<(Vec<[f64; 2]>, usize)>) -> SymbolText {
+    fn at_anchor(&self, along_line: bool) -> SymbolText {
         let font_scale = self.layout_size / ONE_EM;
-        let along_line = line.is_some();
         let rect_buffer = f64::from(GLYPH_PBF_BORDER + 1);
+        let angle = (self.rotate != 0.0 && !self.rotate.is_nan())
+            .then(|| self.rotate.to_radians().sin_cos());
         let mut quads = Vec::new();
         let mut offsets = Vec::new();
         for glyph in self.shaping.lines.iter().flatten() {
@@ -908,31 +1348,35 @@ impl FeatureText {
             let border = 2 * GLYPH_PBF_BORDER + 2;
             let x2 = x1 + f64::from(metrics.width as i32 + border);
             let y2 = y1 + f64::from(metrics.height as i32 + border);
+            let mut corners = [[x1, y1], [x2, y1], [x1, y2], [x2, y2]];
+            if let Some(angle) = angle {
+                corners = corners.map(|corner| rotate_point(corner, angle));
+            }
             quads.push(SymbolGlyph {
                 codepoint: glyph.codepoint,
-                tl: [quantize(x1), quantize(y1)],
-                br: [quantize(x2), quantize(y2)],
+                corners: corners.map(|[x, y]| [quantize(x), quantize(y)]),
             });
         }
         let shaping = &self.shaping;
         SymbolText {
-            collision_box: [
-                shaping.left * font_scale - self.padding,
-                shaping.top * font_scale - self.padding,
-                shaping.right * font_scale + self.padding,
-                shaping.bottom * font_scale + self.padding,
-            ],
+            collision_box: rotated_box(
+                [
+                    shaping.left * font_scale - self.padding,
+                    shaping.top * font_scale - self.padding,
+                    shaping.right * font_scale + self.padding,
+                    shaping.bottom * font_scale + self.padding,
+                ],
+                self.rotate,
+            ),
             glyphs: quads,
             sizes: self.sizes,
             stack: self.stack.clone(),
             paint: self.paint.clone(),
-            line: line.map(|(line, segment)| {
+            line: along_line.then(|| {
                 // `CollisionFeature` along a line: a circle as tall as the text, at least
                 // 10 glyph units.
                 let height = shaping.bottom - shaping.top;
                 LineText {
-                    line,
-                    segment,
                     offsets,
                     line_offset: self.offset,
                     circle_diameter: (height > 0.0).then(|| height.max(10.0) * font_scale),
@@ -978,7 +1422,6 @@ fn feature_text(
     }
     let (layout_size, sizes) =
         feature_sizes(layer, "text-size", 16.0, feature, z, options.text_size)?;
-    let max_size = layer.number(false, "text-size", 16.0, &context(feature, 18.0))?;
     let anchor =
         SymbolAnchor::parse(&layer.string(false, "text-anchor", "center", tile_context)?)
             .ok_or_else(|| format!("{}: invalid text-anchor", layer.id))?;
@@ -1022,10 +1465,10 @@ fn feature_text(
         shaping,
         stack,
         layout_size,
-        max_size,
         sizes,
         offset,
         padding: layer.number(false, "text-padding", 2.0, tile_context)?,
+        rotate: layer.number(false, "text-rotate", 0.0, tile_context)?,
         paint: feature_paint(layer, "text", feature, z)?,
     }))
 }
@@ -1231,13 +1674,146 @@ mod tests {
             .line
             .as_ref()
             .unwrap();
-        assert_eq!(line.line, vec![[0.0, 4096.0], [8192.0, 4096.0]]);
-        assert_eq!(line.segment, 0);
+        let symbol_line = bucket.instances[0].line.as_ref().unwrap();
+        assert_eq!(symbol_line.points, vec![[0.0, 4096.0], [8192.0, 4096.0]]);
+        assert_eq!(symbol_line.segment, 0);
         // Seven glyphs centred on the anchor, left to right.
         assert_eq!(line.offsets.len(), 7);
         assert!(line.offsets.windows(2).all(|pair| pair[0] < pair[1]));
         assert!((line.offsets[0] + line.offsets[6]).abs() < 2.0);
         assert!(line.circle_diameter.is_some());
+    }
+
+    fn oracle_glyphs() -> GlyphStore {
+        let mut glyphs = GlyphStore::default();
+        let pbf = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../oracle/glyphs/NotoSans-Regular/0-255.pbf"
+        ))
+        .unwrap();
+        glyphs.add_range(
+            "NotoSans-Regular",
+            0,
+            super::super::glyphs::parse_glyph_pbf(&pbf).unwrap(),
+        );
+        glyphs
+    }
+
+    /// A 20x16 stretchable `shield` and a 16x10 `arrow`.
+    fn sprite() -> ImageStore {
+        let mut images = ImageStore::default();
+        images
+            .add_sprite(
+                r#"{"shield":{"x":0,"y":0,"width":20,"height":16,"pixelRatio":1,
+                     "stretchX":[[4,16]],"stretchY":[[4,12]],"content":[3,3,17,13]},
+                    "arrow":{"x":20,"y":0,"width":16,"height":10,"pixelRatio":1}}"#,
+                &[0; 36 * 16 * 4],
+                36,
+                16,
+            )
+            .unwrap();
+        images
+    }
+
+    fn one_street() -> MvtLayer {
+        MvtLayer {
+            name: "streets".to_owned(),
+            extent: 4096,
+            features: vec![MvtFeature {
+                id: None,
+                geometry_type: MvtGeometryType::LineString,
+                geometry: vec![vec![[0, 2048], [4096, 2048]]],
+                properties: BTreeMap::from([("kind".to_owned(), Value::from("primary"))]),
+            }],
+        }
+    }
+
+    fn symbol_bucket(json: &str) -> SymbolBucket {
+        let buckets = layout_tile(
+            &[line_layer(json)],
+            &[one_street()],
+            8,
+            &oracle_glyphs(),
+            &sprite(),
+        )
+        .unwrap();
+        let LayerBucket::Symbols(bucket) = &buckets.layers[0] else {
+            panic!("{buckets:?}")
+        };
+        (**bucket).clone()
+    }
+
+    #[test]
+    fn icons_without_text_anchor_along_their_line_and_follow_it() {
+        let bucket = symbol_bucket(
+            r#"{"id":"a","type":"symbol","source-layer":"streets",
+                "layout":{"symbol-placement":"line","icon-image":"arrow"}}"#,
+        );
+        assert!(bucket.icon_along_line && bucket.icon_pitch_with_map && !bucket.icon_keep_upright);
+        // Icon-only labels space like text: continued lines start half a spacing in.
+        let anchors: Vec<[f64; 2]> = bucket
+            .instances
+            .iter()
+            .map(|instance| [instance.anchor[0] * EXTENT, instance.anchor[1] * EXTENT])
+            .collect();
+        assert_eq!(anchors, vec![[2000.0, 4096.0], [6000.0, 4096.0]]);
+        let instance = &bucket.instances[0];
+        assert!(instance.text.is_none());
+        assert_eq!(instance.line.as_ref().unwrap().segment, 0);
+        let icon = instance.icon.as_ref().unwrap();
+        assert_eq!(icon.quads.len(), 1);
+        assert_eq!(icon.quads[0].corners[0], [-9.0, -6.0]);
+        assert_eq!(icon.quads[0].tex, [0.0, 0.0, 18.0, 12.0]);
+    }
+
+    #[test]
+    fn icon_rotate_turns_the_quad_and_bounds_the_turned_collision_box() {
+        let bucket = symbol_bucket(
+            r#"{"id":"a","type":"symbol","source-layer":"streets",
+                "layout":{"icon-image":"arrow","icon-rotate":90}}"#,
+        );
+        assert!(bucket.icons_rotated);
+        let icon = bucket.instances[0].icon.as_ref().unwrap();
+        // (x, y) turns to (-y, x).
+        assert_eq!(icon.quads[0].corners[0], [6.0, -9.0]);
+        assert_eq!(icon.quads[0].corners[3], [-6.0, 9.0]);
+        let expected = [-7.0, -10.0, 7.0, 10.0];
+        for (actual, expected) in icon.collision_box.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-9, "{:?}", icon.collision_box);
+        }
+    }
+
+    #[test]
+    fn icon_text_fit_stretches_the_middle_and_keeps_the_frame() {
+        let bucket = symbol_bucket(
+            r#"{"id":"a","type":"symbol","source-layer":"streets",
+                "layout":{"icon-image":"shield","icon-text-fit":"both","icon-text-fit-padding":[1,2,1,2],
+                          "text-field":"A1","text-font":["NotoSans-Regular"],"text-size":12}}"#,
+        );
+        let instance = &bucket.instances[0];
+        let icon = instance.icon.as_ref().unwrap();
+        // One stretch zone per axis: three columns of three patches.
+        assert_eq!(icon.quads.len(), 9);
+        let first = &icon.quads[0];
+        // The top-left corner patch: its border pixel and the fixed 4 px before the stretch
+        // zone, measured from the icon's left edge (both em corners there).
+        assert_eq!(first.corners[0][0], first.corners[1][0]);
+        assert_eq!(first.pixel_offsets, [[-4.0, -4.0], [1.0, 1.0]]);
+        assert_eq!(first.tex, [0.0, 0.0, 5.0, 5.0]);
+        let last = &icon.quads[8];
+        assert_eq!(last.pixel_offsets[1], [4.0, 4.0]);
+        // The icon spans the text plus its padding; the content inset frames it.
+        let text = instance.text.as_ref().unwrap();
+        let text_width = text.collision_box[2] - text.collision_box[0] - 4.0;
+        let icon_width = f64::from(last.corners[3][0] - first.corners[0][0]);
+        assert!(
+            (icon_width - (text_width + 4.0)).abs() < 0.1,
+            "{icon_width} {text_width}"
+        );
+        // Two fixed content pixels per axis stay unscaled.
+        assert!((f64::from(first.min_font_scale[0]) - 2.0 / icon_width).abs() < 1.0 / 256.0);
+        // The collision box grows by the padding outside the content box.
+        assert!(icon.collision_box[0] < f64::from(first.corners[0][0]) - 2.0);
     }
 
     #[test]

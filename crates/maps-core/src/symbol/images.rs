@@ -27,6 +27,104 @@ pub struct StyleImage {
     pub sdf: bool,
     /// Straight-alpha RGBA, `width * height * 4` bytes.
     pub data: Vec<u8>,
+    /// `icon-text-fit` metadata of the sprite entry.
+    pub fit: ImageFit,
+}
+
+/// A sprite image's `textFitWidth` / `textFitHeight`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TextFit {
+    #[default]
+    StretchOrShrink,
+    StretchOnly,
+    Proportional,
+}
+
+/// What a sprite entry says about stretching its image under `icon-text-fit`: the
+/// `stretchX` / `stretchY` zones and the `content` box in image pixels, and how each axis
+/// may scale.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ImageFit {
+    pub stretch_x: Option<Vec<[f64; 2]>>,
+    pub stretch_y: Option<Vec<[f64; 2]>>,
+    /// left, top, right, bottom.
+    pub content: Option<[f64; 4]>,
+    pub text_fit_width: Option<TextFit>,
+    pub text_fit_height: Option<TextFit>,
+}
+
+impl ImageFit {
+    /// Parses a sprite entry's fit metadata, validated as MapLibre's `ImageManager` does
+    /// (`_validateStretch`, `_validateContent`).
+    fn parse(id: &str, entry: &Value, width: u32, height: u32) -> Result<Self, String> {
+        let zones = |key: &str, size: u32| -> Result<Option<Vec<[f64; 2]>>, String> {
+            let Some(value) = entry.get(key) else {
+                return Ok(None);
+            };
+            let invalid = || format!("sprite image {id}: invalid {key}");
+            let mut zones = Vec::new();
+            let mut last = 0.0;
+            for zone in value.as_array().ok_or_else(invalid)? {
+                let zone = zone
+                    .as_array()
+                    .filter(|zone| zone.len() == 2)
+                    .ok_or_else(invalid)?;
+                let (a, b) = (
+                    zone[0].as_f64().ok_or_else(invalid)?,
+                    zone[1].as_f64().ok_or_else(invalid)?,
+                );
+                if a < last || b < a || f64::from(size) < b {
+                    return Err(invalid());
+                }
+                last = b;
+                zones.push([a, b]);
+            }
+            Ok(Some(zones))
+        };
+        let content = match entry.get("content") {
+            None => None,
+            Some(value) => {
+                let invalid = || format!("sprite image {id}: invalid content");
+                let values = value
+                    .as_array()
+                    .filter(|values| values.len() == 4)
+                    .ok_or_else(invalid)?;
+                let mut content = [0.0; 4];
+                for (slot, value) in content.iter_mut().zip(values) {
+                    *slot = value.as_f64().ok_or_else(invalid)?;
+                }
+                let [left, top, right, bottom] = content;
+                let (w, h) = (f64::from(width), f64::from(height));
+                let inside = |value: f64, size: f64| (0.0..=size).contains(&value);
+                if !(inside(left, w)
+                    && inside(right, w)
+                    && inside(top, h)
+                    && inside(bottom, h)
+                    && left <= right
+                    && top <= bottom)
+                {
+                    return Err(invalid());
+                }
+                Some(content)
+            }
+        };
+        let fit = |key: &str| -> Result<Option<TextFit>, String> {
+            match entry.get(key).map(Value::as_str) {
+                None => Ok(None),
+                Some(Some("stretchOrShrink")) => Ok(Some(TextFit::StretchOrShrink)),
+                Some(Some("stretchOnly")) => Ok(Some(TextFit::StretchOnly)),
+                Some(Some("proportional")) => Ok(Some(TextFit::Proportional)),
+                Some(_) => Err(format!("sprite image {id}: invalid {key}")),
+            }
+        };
+        Ok(Self {
+            stretch_x: zones("stretchX", width)?,
+            stretch_y: zones("stretchY", height)?,
+            content,
+            text_fit_width: fit("textFitWidth")?,
+            text_fit_height: fit("textFitHeight")?,
+        })
+    }
 }
 
 /// An image's place in the atlas (MapLibre's `ImagePosition`).
@@ -240,6 +338,7 @@ impl ImageStore {
                     height: h,
                     pixel_ratio,
                     sdf: entry.get("sdf").and_then(Value::as_bool).unwrap_or(false),
+                    fit: ImageFit::parse(id, entry, w, h)?,
                     data,
                 },
             );
@@ -426,6 +525,34 @@ mod tests {
             255, 0, 0, 255, 0, 255, 0, 255, //
             0, 0, 255, 255, 255, 255, 255, 128,
         ]
+    }
+
+    #[test]
+    fn sprite_entries_carry_validated_text_fit_metadata() {
+        let mut store = ImageStore::default();
+        let json = r#"{"fit":{"x":0,"y":0,"width":2,"height":2,"stretchX":[[0,1],[1,2]],
+                              "content":[0,0,2,1],"textFitHeight":"proportional"}}"#;
+        assert_eq!(store.add_sprite(json, &sheet(), 2, 2), Ok(1));
+        let fit = &store.image("fit").unwrap().fit;
+        assert_eq!(fit.stretch_x, Some(vec![[0.0, 1.0], [1.0, 2.0]]));
+        assert_eq!(fit.stretch_y, None);
+        assert_eq!(fit.content, Some([0.0, 0.0, 2.0, 1.0]));
+        assert_eq!(
+            (fit.text_fit_width, fit.text_fit_height),
+            (None, Some(TextFit::Proportional))
+        );
+        for invalid in [
+            r#"{"a":{"x":0,"y":0,"width":2,"height":2,"stretchX":[[1,0]]}}"#,
+            r#"{"a":{"x":0,"y":0,"width":2,"height":2,"stretchY":[[0,3]]}}"#,
+            r#"{"a":{"x":0,"y":0,"width":2,"height":2,"stretchX":[[1,2],[0,1]]}}"#,
+            r#"{"a":{"x":0,"y":0,"width":2,"height":2,"content":[2,0,1,1]}}"#,
+            r#"{"a":{"x":0,"y":0,"width":2,"height":2,"textFitWidth":"wide"}}"#,
+        ] {
+            assert!(
+                store.add_sprite(invalid, &sheet(), 2, 2).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

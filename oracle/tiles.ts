@@ -80,15 +80,38 @@ export function demPng(z: number, x: number, y: number): Buffer {
 /**
  * The oracle sprite: the 16 px diagonal `hatch` pattern (`fill-pattern`, #323) and the
  * `symbol-icons` images (#346): a crisp 12 px `town` square, an SDF `capital` star and a
- * `lake` disc at pixel ratio 2.
+ * `lake` disc at pixel ratio 2; for `symbol-icon-lines` an `arrow` pointing east, a `shield`
+ * with `stretchX` / `stretchY` zones and a `content` box, and a `badge` whose content box
+ * keeps its aspect ratio (`textFitWidth` / `textFitHeight`).
  */
 export const SPRITE_JSON = {
+  arrow: { height: 10, pixelRatio: 1, width: 16, x: 68, y: 0 },
+  badge: {
+    content: [1, 3, 13, 7],
+    height: 10,
+    pixelRatio: 1,
+    textFitHeight: "proportional",
+    textFitWidth: "stretchOnly",
+    width: 14,
+    x: 104,
+    y: 0,
+  },
   capital: { height: 24, pixelRatio: 1, sdf: true, width: 24, x: 28, y: 0 },
   hatch: { height: 16, pixelRatio: 1, width: 16, x: 0, y: 0 },
   lake: { height: 16, pixelRatio: 2, width: 16, x: 52, y: 0 },
+  shield: {
+    content: [3, 3, 17, 13],
+    height: 16,
+    pixelRatio: 1,
+    stretchX: [[4, 16]],
+    stretchY: [[4, 12]],
+    width: 20,
+    x: 84,
+    y: 0,
+  },
   town: { height: 12, pixelRatio: 1, width: 12, x: 16, y: 0 },
 };
-const SPRITE_SIZE = { height: 24, width: 68 };
+const SPRITE_SIZE = { height: 24, width: 118 };
 
 type Rgba = [number, number, number, number];
 
@@ -132,6 +155,25 @@ export function spritePng(): Buffer {
     if (distance > 7) return [255, 255, 255, 0];
     const wave = Math.abs(row + 0.5 - 8 - 1.5 * Math.sin(column / 2)) < 1;
     return wave ? [255, 255, 255, 255] : [37, 99, 235, 255];
+  });
+  // An arrow along +x: a two-pixel shaft and a triangular head.
+  image(SPRITE_JSON.arrow, (column, row) => {
+    const y = row + 0.5 - 5;
+    const shaft = column >= 1 && column < 10 && Math.abs(y) < 1;
+    const head = column >= 9 && column < 15 && Math.abs(y) < (15 - column) * 0.75;
+    return shaft || head ? [30, 64, 175, 255] : [255, 255, 255, 0];
+  });
+  // A road shield: a 2 px frame around a white face, its middle stretchable.
+  image(SPRITE_JSON.shield, (column, row) => {
+    const frame = Math.min(column, row, 19 - column, 15 - row) < 2;
+    return frame ? [55, 65, 81, 255] : [254, 243, 199, 255];
+  });
+  // A badge: a 1 px outline around a pale face, rounded off at its corners.
+  image(SPRITE_JSON.badge, (column, row) => {
+    const edge = Math.min(column, row, 13 - column, 9 - row);
+    const corner = Math.min(column, 13 - column) + Math.min(row, 9 - row) < 1;
+    if (corner) return [255, 255, 255, 0];
+    return edge < 1 ? [29, 78, 216, 255] : [219, 234, 254, 230];
   });
   return encodePng(width, height, rows, 6);
 }

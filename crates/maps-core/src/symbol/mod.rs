@@ -1,6 +1,7 @@
 //! Cartography for tileset style layers (Milestone E, #321): MapLibre style-spec `fill`,
-//! `line`, `circle` and `symbol` layers (point and line placement, text and icons,
-//! zoom-dependent sizes and paint, #346) over vector tiles, with SDF glyphs, shaping,
+//! `line`, `circle` and `symbol` layers (point and line placement, text and icons along
+//! lines, `icon-text-fit`, rotation and translation, zoom-dependent sizes and paint, #346)
+//! over vector tiles, with SDF glyphs, shaping,
 //! collision and style images (sprites, patterns, #323) ported from MapLibre GL JS 6.15.
 //! Renderers own the pixels; this module owns the layout.
 
@@ -24,8 +25,9 @@ pub use images::{
     StyleImage, ZoomHistory,
 };
 pub use layout::{
-    LayerBucket, LineText, SymbolBucket, SymbolIcon, SymbolInstance, SymbolPaint, SymbolPlacement,
-    SymbolText, TileCircle, TileDash, TileFill, TileLine, TileStyleBuckets, layout_tile,
+    IconQuad, LayerBucket, LineText, SymbolBucket, SymbolIcon, SymbolInstance, SymbolLine,
+    SymbolPaint, SymbolPlacement, SymbolText, SymbolTranslate, TileCircle, TileDash, TileFill,
+    TileLine, TileStyleBuckets, layout_tile,
 };
 pub use projection::{LineGlyphs, LineLabelContext, TileProjection, line_label_glyphs};
 pub use style::{StyleLayer, StyleLayerKind};

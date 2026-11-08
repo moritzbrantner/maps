@@ -9,10 +9,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use maps_core::symbol::layout::EXTENT;
 use maps_core::symbol::{
-    AtlasRect, GlyphStore, ImageAtlas, ImageStore, LayerBucket, LineGlyphs, LineLabelContext,
-    PatternVertex, PlacedSymbol, PlacementTile, StyleLayer, StyleLayerKind, SymbolBucket,
-    SymbolDrawState, SymbolPaint, TileProjection, TileStyleBuckets, layout_tile, line_label_glyphs,
-    parse_glyph_pbf, place_symbols, symbol_tile_order,
+    AtlasRect, GlyphStore, IconQuad, ImageAtlas, ImageStore, LayerBucket, LineGlyphs,
+    LineLabelContext, PatternVertex, PlacedSymbol, PlacementTile, StyleLayer, StyleLayerKind,
+    SymbolBucket, SymbolDrawState, SymbolPaint, TileProjection, TileStyleBuckets, layout_tile,
+    line_label_glyphs, parse_glyph_pbf, place_symbols, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
@@ -496,6 +496,7 @@ impl StyleSymbols {
             viewport.0,
             viewport.1,
             zoom,
+            bearing,
         );
 
         let to_clip = |viewport_point: [f64; 2]| -> [f32; 2] {
@@ -647,7 +648,7 @@ impl StyleSymbols {
                                         .ok()?;
                                 (!tile_symbols.is_empty()).then_some((
                                     tile_index,
-                                    bucket,
+                                    &**bucket,
                                     state,
                                     tile_symbols,
                                 ))
@@ -662,13 +663,18 @@ impl StyleSymbols {
                     };
                     // `drawSymbols`: a layer's icons over every tile, then its text.
                     if !layer_state.icon_hidden {
-                        for (_, bucket, state, tile_symbols) in &tiles {
+                        for (tile_index, bucket, state, tile_symbols) in &tiles {
                             let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                             let kind = if bucket.sdf_icons { 1.0 } else { 2.0 };
                             let icon_size = bucket.icon_size.at_zoom(zoom);
+                            let tile_projection = &placement_tiles[*tile_index].projection;
+                            let shift = bucket.icon_translate.uv(bearing, tile_projection.tile_px);
+                            let shifted = tile_projection.shifted(shift);
+                            let projection = tile_projection.with(&shifted);
                             let mut quads = Vec::new();
                             for symbol in tile_symbols.iter().filter(|symbol| symbol.icon) {
-                                let Some(icon) = &bucket.instances[symbol.instance].icon else {
+                                let instance = &bucket.instances[symbol.instance];
+                                let Some(icon) = &instance.icon else {
                                     continue;
                                 };
                                 let Some(position) = icon_atlas.icon(&icon.image) else {
@@ -678,33 +684,128 @@ impl StyleSymbols {
                                 if paint.opacity < 0.1 {
                                     continue;
                                 }
-                                let mut size = bucket.icon_size.for_feature(icon_size, icon.sizes);
-                                if !bucket.icon_offset {
-                                    size *= symbol.perspective_ratio.clamp(0.0, 4.0);
-                                }
-                                let corner = |x: f32, y: f32| {
-                                    quad_context.viewport_vertex([
-                                        symbol.anchor[0] + f64::from(x) * size,
-                                        symbol.anchor[1] + f64::from(y) * size,
-                                    ])
-                                };
+                                let feature_size =
+                                    bucket.icon_size.for_feature(icon_size, icon.sizes);
                                 let rect = position.padded;
-                                quads.push(SymbolQuad {
-                                    corners: [
-                                        corner(icon.tl[0], icon.tl[1]),
-                                        corner(icon.br[0], icon.tl[1]),
-                                        corner(icon.tl[0], icon.br[1]),
-                                        corner(icon.br[0], icon.br[1]),
-                                    ],
-                                    uv: [
-                                        (f64::from(rect.x) / icon_atlas_size.0) as f32,
-                                        (f64::from(rect.y) / icon_atlas_size.1) as f32,
-                                        (f64::from(rect.x + rect.w) / icon_atlas_size.0) as f32,
-                                        (f64::from(rect.y + rect.h) / icon_atlas_size.1) as f32,
-                                    ],
-                                    size: size as f32,
-                                    paint,
-                                });
+                                let uv = |tex: [f64; 4]| {
+                                    let (x, y) =
+                                        (f64::from(rect.x) + tex[0], f64::from(rect.y) + tex[1]);
+                                    [
+                                        (x / icon_atlas_size.0) as f32,
+                                        (y / icon_atlas_size.1) as f32,
+                                        ((x + tex[2]) / icon_atlas_size.0) as f32,
+                                        ((y + tex[3]) / icon_atlas_size.1) as f32,
+                                    ]
+                                };
+                                // The shader's corner: `offset * max(minFontScale, size)` plus
+                                // the fixed pixel offset, turned by the line's angle.
+                                let offsets = |quad: &IconQuad, size: f64| {
+                                    let [tl, br] = quad.pixel_offsets;
+                                    let scale = [
+                                        f64::from(quad.min_font_scale[0]).max(size),
+                                        f64::from(quad.min_font_scale[1]).max(size),
+                                    ];
+                                    let pixel = [
+                                        [tl[0], tl[1]],
+                                        [br[0], tl[1]],
+                                        [tl[0], br[1]],
+                                        [br[0], br[1]],
+                                    ];
+                                    std::array::from_fn::<[f64; 2], 4, _>(|index| {
+                                        let corner = quad.corners[index];
+                                        [
+                                            f64::from(corner[0]) * scale[0]
+                                                + f64::from(pixel[index][0]),
+                                            f64::from(corner[1]) * scale[1]
+                                                + f64::from(pixel[index][1]),
+                                        ]
+                                    })
+                                };
+                                if let (true, Some(line)) = (bucket.icon_along_line, &instance.line)
+                                {
+                                    let context = LineLabelContext {
+                                        projection: &projection,
+                                        pitch_with_map: bucket.icon_pitch_with_map,
+                                        line: &line.points,
+                                        anchor: [
+                                            instance.anchor[0] * EXTENT,
+                                            instance.anchor[1] * EXTENT,
+                                        ],
+                                        segment: line.segment,
+                                        rotate_to_line: bucket.text_along_line,
+                                    };
+                                    // Every patch of an icon sits at the anchor's point on
+                                    // the line (glyph offset 0).
+                                    let zeros = vec![0.0; icon.quads.len()];
+                                    let glyphs = LineGlyphs {
+                                        offsets: &zeros,
+                                        line_offset: icon.line_offset,
+                                    };
+                                    let Some(placed_quads) = line_label_glyphs(
+                                        feature_size,
+                                        &glyphs,
+                                        bucket.icon_keep_upright,
+                                        &context,
+                                        [viewport.0, viewport.1],
+                                        256.0 / surface.pixel_ratio,
+                                    ) else {
+                                        continue;
+                                    };
+                                    let anchor_w = (projection.project)(instance.anchor).1;
+                                    let ratio = if bucket.icon_pitch_with_map {
+                                        0.5 + 0.5 * anchor_w / center_depth
+                                    } else {
+                                        0.5 + 0.5 * center_depth / anchor_w
+                                    };
+                                    let mut size = feature_size;
+                                    if !bucket.icon_offset {
+                                        size *= ratio.clamp(0.0, 4.0);
+                                    }
+                                    for (quad, (point, angle)) in
+                                        icon.quads.iter().zip(&placed_quads)
+                                    {
+                                        let (sin, cos) = angle.sin_cos();
+                                        let corners = offsets(quad, size).map(|[x, y]| {
+                                            let label = [
+                                                point[0] + cos * x - sin * y,
+                                                point[1] + sin * x + cos * y,
+                                            ];
+                                            if bucket.icon_pitch_with_map {
+                                                let (viewport_point, w) = (projection.project)([
+                                                    label[0] / projection.tile_px,
+                                                    label[1] / projection.tile_px,
+                                                ]);
+                                                quad_context.map_vertex(viewport_point, w)
+                                            } else {
+                                                quad_context.viewport_vertex(label)
+                                            }
+                                        });
+                                        quads.push(SymbolQuad {
+                                            corners,
+                                            uv: uv(quad.tex),
+                                            size: size as f32,
+                                            paint: paint.clone(),
+                                        });
+                                    }
+                                    continue;
+                                }
+                                let mut size = feature_size;
+                                if !bucket.icon_offset {
+                                    size *= symbol.icon_perspective_ratio.clamp(0.0, 4.0);
+                                }
+                                for quad in &icon.quads {
+                                    quads.push(SymbolQuad {
+                                        corners: offsets(quad, size).map(|[x, y]| {
+                                            quad_context.viewport_vertex([
+                                                symbol.icon_anchor[0] + x,
+                                                symbol.icon_anchor[1] + y,
+                                            ])
+                                        }),
+                                        uv: uv(quad.tex),
+                                        size: size as f32,
+                                        paint: paint.clone(),
+                                    });
+                                }
                             }
                             let halo = bucket.sdf_icons && state.icon_halo;
                             for mode in halo_passes(halo, state.icon_halo_pass) {
@@ -720,14 +821,18 @@ impl StyleSymbols {
                                 continue;
                             }
                             // MapLibre samples plain icons `NEAREST` unless they scale.
-                            let needs_linear = bucket.instances.iter().any(|instance| {
-                                instance
-                                    .icon
-                                    .as_ref()
-                                    .is_some_and(|icon| icon.pixel_ratio != surface.pixel_ratio)
-                            });
-                            let linear =
-                                bucket.sdf_icons || pitched || !state.icon_size_one || needs_linear;
+                            let needs_linear = bucket.icons_rotated
+                                || bucket.instances.iter().any(|instance| {
+                                    instance
+                                        .icon
+                                        .as_ref()
+                                        .is_some_and(|icon| icon.pixel_ratio != surface.pixel_ratio)
+                                });
+                            let transformed = pitched || bucket.icon_pitch_with_map;
+                            let linear = bucket.sdf_icons
+                                || transformed
+                                || !state.icon_size_one
+                                || needs_linear;
                             frame.draws.push(StyleDraw::Icons {
                                 first,
                                 count,
@@ -738,7 +843,10 @@ impl StyleSymbols {
                     if !layer_state.text_hidden {
                         let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                         for (tile_index, bucket, state, tile_symbols) in &tiles {
-                            let projection = &placement_tiles[*tile_index].projection;
+                            let tile_projection = &placement_tiles[*tile_index].projection;
+                            let shift = bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                            let shifted = tile_projection.shifted(shift);
+                            let projection = &tile_projection.with(&shifted);
                             let text_size = bucket.text_size.at_zoom(zoom);
                             let mut quads = Vec::new();
                             for symbol in tile_symbols.iter().filter(|symbol| symbol.text) {
@@ -759,7 +867,8 @@ impl StyleSymbols {
                                         (f64::from(rect.y + rect.h) / atlas_height) as f32,
                                     ]
                                 };
-                                let Some(line) = &text.line else {
+                                let (Some(line), Some(symbol_line)) = (&text.line, &instance.line)
+                                else {
                                     let mut size = font_size;
                                     if !bucket.icon_offset {
                                         size *= symbol.perspective_ratio.clamp(0.0, 4.0);
@@ -770,19 +879,13 @@ impl StyleSymbols {
                                         else {
                                             continue;
                                         };
-                                        let corner = |x: f32, y: f32| {
-                                            quad_context.viewport_vertex([
-                                                symbol.anchor[0] + f64::from(x) * font_scale,
-                                                symbol.anchor[1] + f64::from(y) * font_scale,
-                                            ])
-                                        };
                                         quads.push(SymbolQuad {
-                                            corners: [
-                                                corner(glyph.tl[0], glyph.tl[1]),
-                                                corner(glyph.br[0], glyph.tl[1]),
-                                                corner(glyph.tl[0], glyph.br[1]),
-                                                corner(glyph.br[0], glyph.br[1]),
-                                            ],
+                                            corners: glyph.corners.map(|[x, y]| {
+                                                quad_context.viewport_vertex([
+                                                    symbol.anchor[0] + f64::from(x) * font_scale,
+                                                    symbol.anchor[1] + f64::from(y) * font_scale,
+                                                ])
+                                            }),
                                             uv: uv(rect),
                                             size: size as f32,
                                             paint: paint.clone(),
@@ -793,12 +896,13 @@ impl StyleSymbols {
                                 let context = LineLabelContext {
                                     projection,
                                     pitch_with_map: bucket.pitch_with_map,
-                                    line: &line.line,
+                                    line: &symbol_line.points,
                                     anchor: [
                                         instance.anchor[0] * EXTENT,
                                         instance.anchor[1] * EXTENT,
                                     ],
-                                    segment: line.segment,
+                                    segment: symbol_line.segment,
+                                    rotate_to_line: true,
                                 };
                                 let glyphs = LineGlyphs {
                                     offsets: &line.offsets,
@@ -835,7 +939,7 @@ impl StyleSymbols {
                                         continue;
                                     };
                                     let (sin, cos) = angle.sin_cos();
-                                    let corner = |x: f32, y: f32| {
+                                    let corner = |[x, y]: [f32; 2]| {
                                         let (x, y) =
                                             (f64::from(x) * font_scale, f64::from(y) * font_scale);
                                         let label = [
@@ -853,12 +957,7 @@ impl StyleSymbols {
                                         }
                                     };
                                     quads.push(SymbolQuad {
-                                        corners: [
-                                            corner(glyph.tl[0], glyph.tl[1]),
-                                            corner(glyph.br[0], glyph.tl[1]),
-                                            corner(glyph.tl[0], glyph.br[1]),
-                                            corner(glyph.br[0], glyph.br[1]),
-                                        ],
+                                        corners: glyph.corners.map(corner),
                                         uv: uv(rect),
                                         size: size as f32,
                                         paint: paint.clone(),
