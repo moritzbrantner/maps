@@ -1,6 +1,7 @@
 import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
 import type {
   MapsFlatRasterFrame,
+  MapsFlatRasterSky,
   MapsRasterRenderCamera,
   MapsRasterTileId,
   MapsRasterTilePlacement,
@@ -154,6 +155,8 @@ export type MapsWgpuBaseMapRenderer = {
   setReliefStyle?(style: string): void;
   /** The camera the next frame plans relief tiles for. */
   setReliefCamera?(camera: MapsFlatRasterFrame["camera"]): void;
+  /** The next frame's band above the horizon line, or `null` when none is in view. */
+  setFrameSky?(sky: MapsFlatRasterSky | null): void;
   /** Relief tiles the last frame lacked, as `"source|z|x|y"`. */
   reliefRequests?(): string[];
   /** A decoded `raster-dem` tile: `size × size` straight RGBA. */
@@ -231,6 +234,7 @@ type MapsWgpuBaseMapWasmRenderer = {
   setVectorLayers(layers: string): void;
   addSprite(json: string, rgba: Uint8Array, width: number, height: number): number;
   setFrameTime(now: number): void;
+  setFrameSky(values: Float32Array): void;
   isCrossFading(): boolean;
   setReliefStyle(style: string): void;
   setReliefCamera(
@@ -274,6 +278,7 @@ export async function loadMapsWgpuBaseMapRenderer(
     const renderer = await createRenderer(canvas);
     let disposed = false;
     let tileDraws = new Float64Array(PACKED_TILE_DRAW_HEADER_LENGTH);
+    const skyBand = new Float32Array(10);
     if (rendererOwners.get(canvas) === owner) canvas.style.opacity = "1";
 
     return {
@@ -473,6 +478,15 @@ export async function loadMapsWgpuBaseMapRenderer(
         assertLive(disposed);
         renderer.setReliefStyle(style);
       },
+      setFrameSky(sky) {
+        assertLive(disposed);
+        if (!sky) {
+          renderer.setFrameSky(EMPTY_SKY);
+          return;
+        }
+        skyBand.set([sky.horizonY, sky.horizonBlend, ...sky.skyColor, ...sky.horizonColor]);
+        renderer.setFrameSky(skyBand);
+      },
       setReliefCamera(camera) {
         assertLive(disposed);
         renderer.setReliefCamera(
@@ -550,6 +564,7 @@ type MapsWgpuApplicationObjectFrame = Pick<
 >;
 
 const EMPTY_CIRCLES = new Float32Array(0);
+const EMPTY_SKY = new Float32Array(0);
 const EMPTY_ORDER = new Uint32Array(0);
 // Camera-only frames re-render the same application frame; keep its object part stable.
 const applicationObjectFrames = new WeakMap<

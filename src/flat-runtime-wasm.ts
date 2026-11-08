@@ -51,6 +51,17 @@ export type MapsRasterTilePlacement = {
   visible?: boolean;
 };
 
+/**
+ * The band above the horizon line (#379), in viewport CSS pixels. `horizonY` runs down from
+ * the viewport's top edge; colors are premultiplied. Transparent colors show the page.
+ */
+export type MapsFlatRasterSky = {
+  horizonBlend: number;
+  horizonColor: readonly [r: number, g: number, b: number, a: number];
+  horizonY: number;
+  skyColor: readonly [r: number, g: number, b: number, a: number];
+};
+
 export type MapsFlatRasterFrame = {
   camera: {
     bearing: number;
@@ -66,6 +77,8 @@ export type MapsFlatRasterFrame = {
   /** The render camera maps into the viewport grown by `surface.margin` per side. */
   renderCamera: MapsRasterRenderCamera;
   requests: MapsRasterTileId[];
+  /** The sky band, when the camera has the horizon in view. */
+  sky?: MapsFlatRasterSky | null;
   /**
    * Render-surface geometry. With `overscan`, the margin holds map content, so a pure
    * screen translation of this frame is a valid presentation of a panned camera.
@@ -120,6 +133,8 @@ export type MapsFlatRasterRuntime = {
   resize(width: number, height: number): void;
   /** Rotates by `deltaBearing` degrees keeping the ground point under (x, y) fixed. */
   rotateAbout(deltaBearing: number, x: number, y: number): void;
+  /** The style's `sky` as JSON (`{"sky": ...}`), or an empty string for none. */
+  setSkyStyle(style: string): void;
   setViewState(viewState: MapViewState): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
   /** Current camera zoom, without planning a frame. */
@@ -141,6 +156,7 @@ type MapsFlatRasterWasmRuntime = {
   ): void;
   /** Packed frame; layout documented with `pack_frame_plan` in maps-wasm. */
   framePacked(): Float64Array;
+  setSkyStyle(style: string): void;
   free?: () => void;
   markFailed(z: number, x: number, y: number): void;
   markLoaded(z: number, x: number, y: number): void;
@@ -210,6 +226,10 @@ export async function loadMapsFlatRasterRuntime(
       assertLive(disposed);
       return decodePackedRasterFrame(runtime.framePacked());
     },
+    setSkyStyle(style) {
+      assertLive(disposed);
+      runtime.setSkyStyle(style);
+    },
     markFailed(tile) {
       assertLive(disposed);
       runtime.markFailed(tile.z, tile.x, tile.y);
@@ -269,7 +289,7 @@ export async function loadMapsFlatRasterRuntime(
 
 // Mirrors PACKED_FRAME_HEADER_LENGTH / PACKED_PLACEMENT_STRIDE / PACKED_TILE_STRIDE
 // in crates/maps-wasm/src/engine_scenario.rs.
-const PACKED_FRAME_HEADER_LENGTH = 37;
+const PACKED_FRAME_HEADER_LENGTH = 48;
 const PACKED_PLACEMENT_STRIDE = 12;
 const PACKED_TILE_STRIDE = 3;
 
@@ -339,6 +359,15 @@ export function decodePackedRasterFrame(packed: Float64Array): MapsFlatRasterFra
     },
     placements,
     surface: { margin: packed[33]!, overscan: packed[34] === 1 },
+    sky:
+      packed[37] === 1
+        ? {
+            horizonBlend: packed[39]!,
+            horizonColor: [packed[44]!, packed[45]!, packed[46]!, packed[47]!],
+            horizonY: packed[38]!,
+            skyColor: [packed[40]!, packed[41]!, packed[42]!, packed[43]!],
+          }
+        : null,
     requests: tiles(0, requestCount),
     cancellations: tiles(requestCount, cancellationCount),
     evictions: tiles(requestCount + cancellationCount, evictionCount),

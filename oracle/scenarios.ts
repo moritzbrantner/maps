@@ -17,8 +17,8 @@ export type LngLat = [longitude: number, latitude: number];
 export type Step =
   | { kind: "hover"; at: LngLat; label: string }
   | { kind: "click"; at: LngLat; label: string }
-  /** Drag the map by a screen offset, starting at the map center. */
-  | { kind: "pan"; by: [dx: number, dy: number]; label: string }
+  /** Drag the map by a screen offset, starting at the center or `from` offset of it. */
+  | { kind: "pan"; by: [dx: number, dy: number]; from?: [dx: number, dy: number]; label: string }
   /** Wheel at a screen offset from the center; negative deltaY zooms in. */
   | { kind: "wheel"; at: [dx: number, dy: number]; deltaY: number; ticks: number; label: string }
   /** Right-button drag from the center: horizontal rotates the bearing, vertical the pitch. */
@@ -62,6 +62,8 @@ export type Scenario = {
   steps: Step[];
   knownGaps: KnownGap[];
   unsupported?: Unsupported;
+  /** The MapLibre style's `sky`, for raster basemaps. */
+  sky?: Record<string, unknown>;
 };
 
 /**
@@ -111,6 +113,13 @@ const FRAME_TIME_GAP: KnownGap = {
   issue: 343,
   reason: "WebGPU canvas presentation floor (about 1.0 ms per frame) above MapLibre's WebGL frame",
 };
+
+/** A drag on the ground, a drag and a wheel over the sky, with the horizon in view. */
+const SKY_POINTER_STEPS: Step[] = [
+  { by: [-100, 40], kind: "pan", label: "drag pan on the ground" },
+  { by: [-100, 40], from: [0, -230], kind: "pan", label: "drag pan over the sky" },
+  { at: [0, -230], deltaY: -120, kind: "wheel", label: "wheel zoom over the sky", ticks: 2 },
+];
 
 export const scenarios: Scenario[] = [
   {
@@ -250,6 +259,41 @@ export const scenarios: Scenario[] = [
       { at: [12.4, 49.2], kind: "click", label: "select a diocese territory" },
       { by: [-100, 40], kind: "pan", label: "drag pan" },
     ],
+  },
+  // No hover or click steps: MapLibre's `queryRenderedFeatures` returns nothing for a point
+  // with the horizon in view (`maxPitchScaleFactor` goes negative), so its hover is empty on
+  // the whole map there while Maps hit-tests the ground correctly (#379).
+  {
+    basemap: "zoom-tinted",
+    camera: { bearing: -20, center: [10.4, 51.2], pitch: 75, zoom: 5.55 },
+    capability:
+      "horizon in view: the band above it shows the page; pan and wheel starting over the sky hold no ground point",
+    knownGaps: [],
+    name: "steep-pitch-horizon",
+    origin: "sky above the horizon and pointer input over it (#379)",
+    size: MAP_SIZE,
+    steps: SKY_POINTER_STEPS,
+  },
+  {
+    basemap: "zoom-tinted",
+    camera: { bearing: -20, center: [10.4, 51.2], pitch: 85, zoom: 5.55 },
+    capability: "the steepest pitch: a wide band above the horizon; pointer input over the sky",
+    knownGaps: [],
+    name: "steep-pitch-horizon-85",
+    origin: "sky above the horizon and pointer input over it (#379)",
+    size: MAP_SIZE,
+    steps: SKY_POINTER_STEPS,
+  },
+  {
+    basemap: "zoom-tinted",
+    camera: { bearing: -20, center: [10.4, 51.2], pitch: 78, zoom: 5.55 },
+    capability: "the style's sky above the horizon: sky-color, horizon-color and their blend",
+    knownGaps: [],
+    name: "steep-pitch-sky",
+    origin: "sky above the horizon and pointer input over it (#379)",
+    size: MAP_SIZE,
+    sky: { "horizon-color": "#f6e7c1", "sky-color": "#3a7bd5", "sky-horizon-blend": 0.6 },
+    steps: [],
   },
   {
     basemap: "zoom-tinted",

@@ -1,6 +1,6 @@
 //! Maps-specific pixel geometry preparation, shared by the browser backend and native tests.
 
-use maps_core::{LineCap, LineJoin, LineLayout, LineMesh};
+use maps_core::{LineCap, LineJoin, LineLayout, LineMesh, SkyPass};
 use serde::Deserialize;
 use std::borrow::Cow;
 
@@ -2089,5 +2089,84 @@ mod raster_geometry_tests {
             };
             assert!(append_tile_vertices(&mut Vec::new(), &tile, [0.0, 0.0]).is_err());
         }
+    }
+}
+
+/// Bytes of the `Sky` uniform of `sky.wgsl`.
+pub(super) const SKY_UNIFORM_BYTES: usize = 48;
+
+/// The `Sky` uniform: a frame's band in physical pixels of the render surface.
+pub(super) fn sky_uniform_bytes(
+    sky: &SkyPass,
+    margin: f64,
+    pixel_ratio: f64,
+) -> [u8; SKY_UNIFORM_BYTES] {
+    let values: [f32; 12] = [
+        sky.sky_color[0],
+        sky.sky_color[1],
+        sky.sky_color[2],
+        sky.sky_color[3],
+        sky.horizon_color[0],
+        sky.horizon_color[1],
+        sky.horizon_color[2],
+        sky.horizon_color[3],
+        ((sky.horizon_y + margin) * pixel_ratio) as f32,
+        (sky.horizon_blend * pixel_ratio) as f32,
+        0.0,
+        0.0,
+    ];
+    let mut bytes = [0_u8; SKY_UNIFORM_BYTES];
+    for (target, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+        target.copy_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+/// Reads `[horizon_y, horizon_blend, sky rgba, horizon rgba]` from the host; empty is no band.
+pub(super) fn parse_frame_sky(values: &[f32]) -> Result<Option<SkyPass>, &'static str> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    if values.len() != 10 {
+        return Err("invalid packed sky band");
+    }
+    Ok(Some(SkyPass {
+        horizon_y: f64::from(values[0]),
+        horizon_blend: f64::from(values[1]),
+        sky_color: [values[2], values[3], values[4], values[5]],
+        horizon_color: [values[6], values[7], values[8], values[9]],
+    }))
+}
+
+#[cfg(test)]
+mod sky_uniform_tests {
+    use super::*;
+
+    #[test]
+    fn the_sky_uniform_holds_the_band_in_physical_surface_pixels() {
+        let sky = SkyPass {
+            horizon_y: 76.0,
+            horizon_blend: 192.0,
+            sky_color: [0.1, 0.2, 0.3, 1.0],
+            horizon_color: [1.0; 4],
+        };
+        let bytes = sky_uniform_bytes(&sky, 10.0, 2.0);
+        let value =
+            |index: usize| f32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap());
+        assert_eq!(value(0), 0.1);
+        assert_eq!(value(7), 1.0);
+        assert_eq!(value(8), 172.0);
+        assert_eq!(value(9), 384.0);
+    }
+
+    #[test]
+    fn the_host_band_round_trips_or_is_absent() {
+        assert_eq!(parse_frame_sky(&[]), Ok(None));
+        assert!(parse_frame_sky(&[1.0, 2.0]).is_err());
+        let values = [76.0, 192.0, 0.1, 0.2, 0.3, 1.0, 0.5, 0.5, 0.5, 0.5];
+        let sky = parse_frame_sky(&values).unwrap().unwrap();
+        assert_eq!(sky.horizon_y, 76.0);
+        assert_eq!(sky.sky_color, [0.1, 0.2, 0.3, 1.0]);
+        assert_eq!(sky.horizon_color, [0.5; 4]);
     }
 }

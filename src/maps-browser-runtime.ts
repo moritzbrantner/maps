@@ -9,6 +9,7 @@ import { decodeShortbreadTilePixels } from "./vector-tile-wasm";
 import { paintShortbreadTile } from "./shortbread-tile-paint";
 import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
+import { drawCanvasSky } from "./canvas-sky";
 import { createMapsScrollZoom } from "./maps-scroll-zoom";
 import {
   advanceMapsKineticPan,
@@ -238,6 +239,8 @@ export type MapsBrowserRuntimeOptions = {
    * drawn by the WebGPU renderer.
    */
   relief?: MapsRelief;
+  /** The style's `sky` as JSON (`{"sky": ...}`), or undefined for none. */
+  sky?: string;
   tileLimits?: MapsFlatRasterRuntimeConfig["limits"];
   createTileImageLoader?: () => MapsTileImageLoader;
   maxBounds?: MapBounds;
@@ -567,6 +570,7 @@ export function createMapsBrowserRuntime(
     }
 
     activeRuntime = runtime;
+    applySky(runtime);
     let renderer: MapsWgpuBaseMapRenderer | null = null;
     let packApplicationFrame: MapsWgpuApplicationFrameFactory | null = null;
     let retainedPointTransport: MapsRetainedPointTransport | null = null;
@@ -810,16 +814,26 @@ export function createMapsBrowserRuntime(
     }
     emitContextMenu(client);
   }
+  function applySky(runtime: MapsFlatRasterRuntime) {
+    try {
+      runtime.setSkyStyle(config.sky ?? "");
+    } catch (error) {
+      config.onError?.(error);
+    }
+  }
   function emitContextMenu(client: ScreenPoint) {
     const runtime = activeRuntime;
     if (!runtime) return;
     const position = pointerPosition(client.x, client.y);
+    let coordinates: [longitude: number, latitude: number];
     try {
-      config.onContextMenu?.({
-        client,
-        coordinates: runtime.unproject(position.x, position.y),
-        position,
-      });
+      coordinates = runtime.unproject(position.x, position.y);
+    } catch {
+      // A ray above the horizon meets no ground: nothing to open a menu for.
+      return;
+    }
+    try {
+      config.onContextMenu?.({ client, coordinates, position });
     } catch (error) {
       config.onError?.(error);
     }
@@ -984,11 +998,16 @@ export function createMapsBrowserRuntime(
     const previousLayers = config.tilesetLayers;
     const previousSprite = config.sprite;
     const previousRelief = config.relief;
+    const previousSky = config.sky;
     config = { ...next, viewState: copyViewState(next.viewState) };
     source = runtimeTileSource(config);
     if (previousSprite !== config.sprite) synchronize?.();
     if (previousRelief !== config.relief) {
       configureRelief?.();
+      synchronize?.();
+    }
+    if (previousSky !== config.sky && activeRuntime) {
+      applySky(activeRuntime);
       synchronize?.();
     }
     if (
@@ -1731,6 +1750,7 @@ function createFrameSynchronizer({
       try {
         const started = performance.now();
         if (relief()) currentRenderer.setReliefCamera?.(frame.camera);
+        currentRenderer.setFrameSky?.(frame.sky ?? null);
         const drawnTiles = currentRenderer.render(
           placements,
           frame.renderCamera,
@@ -2348,6 +2368,7 @@ function drawCanvasFrame(
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.fillStyle = MAP_BACKGROUND;
   context.fillRect(0, 0, viewport.width, viewport.height);
+  if (frame.sky) drawCanvasSky(context, frame.sky, viewport.width, margin);
 
   const subdivisions = frame.camera.pitch === 0 ? 1 : CANVAS_PROJECTIVE_SUBDIVISIONS;
   let drawnTiles = 0;

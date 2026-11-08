@@ -548,9 +548,13 @@ async function perform(
     if (step.kind === "click") await page.mouse.click(box.x + point.x, box.y + point.y);
   } else if (step.kind === "pan" || step.kind === "rotate") {
     const button = step.kind === "rotate" ? "right" : "left";
-    await page.mouse.move(center.x, center.y);
+    const start = {
+      x: center.x + (step.kind === "pan" ? (step.from?.[0] ?? 0) : 0),
+      y: center.y + (step.kind === "pan" ? (step.from?.[1] ?? 0) : 0),
+    };
+    await page.mouse.move(start.x, start.y);
     await page.mouse.down({ button });
-    await page.mouse.move(center.x + step.by[0], center.y + step.by[1], { steps: 12 });
+    await page.mouse.move(start.x + step.by[0], start.y + step.by[1], { steps: 12 });
     // Hold still before releasing: the step checks where a drag lands, not release inertia.
     await page.waitForTimeout(300);
     await page.mouse.up({ button });

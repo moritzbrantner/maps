@@ -12,6 +12,8 @@ function packedFrame() {
     ...[2, 1, 0, 1],
     // surface margin, overscan, raster alignment x/y
     ...[128, 1, -0.25, 0.5],
+    // sky band present, horizon y and blend height, sky and horizon RGBA
+    ...[1, 76, 192, 0.1, 0.2, 0.3, 1, 0.5, 0.5, 0.5, 0.5],
     // placements: z, x, y, world copy, local west/north/size, screen x/y/width/height, visible
     ...[7, 127, 77, 0, -10.5, 20.25, 256, 389.5, 279.75, 256, 256, 1],
     ...[7, 0, 77, 1, 245.5, 20.25, 256, 645.5, 279.75, 256, 256, 0],
@@ -34,6 +36,12 @@ describe("decodePackedRasterFrame", () => {
       height: 600,
     });
     expect(frame.renderCamera.rasterAlignment).toEqual([-0.25, 0.5]);
+    expect(frame.sky).toEqual({
+      horizonBlend: 192,
+      horizonColor: [0.5, 0.5, 0.5, 0.5],
+      horizonY: 76,
+      skyColor: [0.1, 0.2, 0.3, 1],
+    });
     expect(frame.renderCamera.viewProjection).toEqual(
       Array.from({ length: 16 }, (_, index) => index + 0.5),
     );

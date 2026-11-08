@@ -67,6 +67,12 @@ mod wgpu_retained;
     target_os = "unknown",
     feature = "wgpu-base-map"
 ))]
+mod wgpu_sky;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "wgpu-base-map"
+))]
 mod wgpu_symbols;
 #[cfg(test)]
 mod work_complexity;
