@@ -375,7 +375,7 @@ export const scenarios: Scenario[] = [
     basemap: "style",
     camera: { bearing: 20, center: [9.0, 47.2], zoom: 8 },
     capability: "raster-dem hillshade over a raster basemap, light anchored to the rotated viewport",
-    knownGaps: [FRAME_TIME_GAP],
+    knownGaps: [],
     name: "hillshade",
     origin: "derived hillshade tilesets (#282); raster-dem and hillshade (#324)",
     size: MAP_SIZE,

@@ -35,6 +35,7 @@ import {
   type LngLat,
   type Scenario,
 } from "./scenarios.ts";
+import type { FrameAttribution } from "./timing-evidence.ts";
 import { LAND_BOUNDS, VECTOR_MAX_ZOOM } from "./vector-constants.ts";
 
 configureMapsWasmPackage("/wasm/maps_wasm.js");
@@ -62,7 +63,10 @@ type OracleApi = {
   } | null;
   runtime: Runtime;
   scenario: Scenario;
-  frameTimes(timing: FrameTiming): Promise<number[]>;
+  frameTimes(timing: FrameTiming): Promise<{
+    batchMeansMs: number[];
+    attribution: FrameAttribution | null;
+  }>;
   viewState(): MapViewState | null;
 };
 
@@ -826,19 +830,25 @@ function clusterFeatureId(feature: AggregatedMapFeature<unknown>) {
  * wait on anything but the next rAF, so the GPU stays busy and in its high power state; a
  * batch's mean also resolves far below the 0.1 ms granularity of a single rAF interval.
  */
-async function frameTimes(timing: FrameTiming): Promise<number[]> {
+async function frameTimes(timing: FrameTiming) {
   const controller = oracle.controller;
   if (!controller) throw new Error("no map controller");
   const start = controller.getViewState();
   const [lon, lat] = start.center;
+  // Installed by the runner's timing pages only (advisory #343 attribution).
+  const totals = (window as { __frameAttribution?: { activeMs: number; presentWaitMs: number } })
+    .__frameAttribution;
   let frame = 0;
   const moveCamera = () => {
+    const begin = performance.now();
     const angle = (frame++ / timing.orbitFrames) * Math.PI * 2;
     controller.setViewState({
       ...start,
       center: [lon + Math.cos(angle) * 0.4, lat + Math.sin(angle) * 0.25],
       zoom: start.zoom + Math.sin(angle * 2) * 0.2,
     });
+    // A synchronous camera update (MapLibre's jumpTo) is frame work too.
+    if (totals) totals.activeMs += performance.now() - begin;
   };
 
   const warmupStart = await nextFrame();
@@ -849,7 +859,10 @@ async function frameTimes(timing: FrameTiming): Promise<number[]> {
   }
 
   const means: number[] = [];
+  const attribution: FrameAttribution = { activeMs: [], presentWaitMs: [] };
   let batchStart = now;
+  let active = totals?.activeMs ?? 0;
+  let presentWait = totals?.presentWaitMs ?? 0;
   for (let batch = 0; batch < timing.batches; batch++) {
     for (let index = 0; index < timing.batchFrames; index++) {
       moveCamera();
@@ -857,9 +870,15 @@ async function frameTimes(timing: FrameTiming): Promise<number[]> {
     }
     means.push((now - batchStart) / timing.batchFrames);
     batchStart = now;
+    if (totals) {
+      attribution.activeMs.push((totals.activeMs - active) / timing.batchFrames);
+      attribution.presentWaitMs.push((totals.presentWaitMs - presentWait) / timing.batchFrames);
+      active = totals.activeMs;
+      presentWait = totals.presentWaitMs;
+    }
   }
   controller.setViewState(start);
-  return means;
+  return { attribution: totals ? attribution : null, batchMeansMs: means };
 }
 
 function nextFrame() {

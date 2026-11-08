@@ -101,6 +101,18 @@ function gateCell(
   return `<td class="${state}">${text}${badge}</td>`;
 }
 
+/** Advisory frame attribution (#343); never a gate. */
+function attributionLine(time: TimingSummary) {
+  const { maps, maplibre } = time.attribution;
+  if (!maps && !maplibre) return "";
+  const side = (label: string, total: number | null, part: TimingSummary["attribution"]["maps"]) =>
+    part
+      ? `${label} ${num(total, 3)} ms per frame: ${num(part.activeMs, 3)} ms in page frame callbacks (${num(part.presentWaitMs, 3)} ms of it waiting in getCurrentTexture), the rest outside page script`
+      : `${label}: unavailable`;
+  const load = time.maxHostLoad === null ? "" : `; host 1-minute load up to ${num(time.maxHostLoad, 2)}`;
+  return `<p class="meta">Frame attribution (advisory): ${escape(side("Maps", time.mapsMs, maps))}; ${escape(side("MapLibre", time.maplibreMs, maplibre))}${escape(load)}.</p>`;
+}
+
 function unsupportedRow(s: Scenario) {
   const { issue, reason } = s.unsupported!;
   return `<tr>
@@ -166,6 +178,7 @@ export function renderReport(report: Report) {
   </table>
   ${s.interaction.steps.some((step) => !step.ok) ? `<details><summary>Failed input steps: event ordering and readiness</summary><pre>${escape(JSON.stringify(s.interaction.steps.filter((step) => !step.ok).map((step) => ({ label: step.label, inputs: step.inputs, pickEvents: step.events, readiness: step.readiness })), null, 2))}</pre></details>` : ""}
   ${s.knownGaps.map((gap) => `<p class="gap">Known gap (${escape(gap.gate)}): ${escape(gap.reason)} — <a href="${ISSUES}${gap.issue}">#${gap.issue}</a></p>`).join("")}
+  ${attributionLine(s.time)}
   ${s.time.validity === "not-run" ? "" : `<details><summary>Raw timing rounds (${escape(s.time.validity)})</summary><pre>${escape(JSON.stringify(s.time, null, 2))}</pre></details>`}
   ${s.errors.maps ? `<p class="gap">Maps page error: ${escape(s.errors.maps)}</p>` : ""}
 </section>`,

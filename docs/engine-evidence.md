@@ -225,6 +225,8 @@ churn checks remain correctness evidence, not camera-churn performance scores.
 - **interaction:** scripted hovers and clicks pick the same feature ids, and drag/wheel steps end in the same bounds (≤ 1 px per edge);
 - **time:** the median rAF interval of a scripted camera loop (vsync and frame-rate cap off) is ≤ 1.10× MapLibre's. It is enforced on a local hardware GPU and advisory on CI's software adapter.
 
+Each timed round also records an advisory frame attribution (#343): per batch, the main-thread time per frame spent in page `requestAnimationFrame` callbacks plus the harness camera update, and the part of it blocked in WebGPU `getCurrentTexture`. The rest of the frame is browser work outside page script. The report shows the breakdown of each runtime's reported round. It never changes timing validity or a verdict.
+
 Rotated and pitched cameras (`bearing`, `pitch`) click at the pixel MapLibre projects for each step. After a move they compare the camera (center, zoom, bearing, pitch, converted to corner displacement in pixels) instead of north-up bounds.
 
 All data is free and served locally through request interception ([#320](https://github.com/moritzbrantner/maps/issues/320)):

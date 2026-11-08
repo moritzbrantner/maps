@@ -34,6 +34,8 @@ describe("oracle interaction evidence", () => {
       origin: "oracle",
       passed: false,
       time: {
+        attribution: { maplibre: null, maps: null },
+        maxHostLoad: null,
         validity: "not-run" as const,
         ratio: null,
         mapsMs: null,
