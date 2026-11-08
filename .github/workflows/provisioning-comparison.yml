@@ -36,18 +36,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          repository="ghcr.io/${GITHUB_REPOSITORY,,}-provisioning-agent"
-          tag="${repository}:run-${GITHUB_RUN_ID}"
+          repository="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/maps-agent-env"
+          # Content tag: rebuild only when an environment input changes.
+          inputs_digest="$(cat .github/provisioning/agent-image.Dockerfile rust-toolchain.toml \
+            scripts/install-wasm-bindgen-ci.sh <(jq -r .packageManager package.json) | sha256sum | cut -c1-16)"
+          tag="${repository}:${inputs_digest}"
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker build --file .github/provisioning/agent-image.Dockerfile --tag "$tag" .
-          docker push "$tag"
-          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$tag")"
-          echo "image=$digest" >> "$GITHUB_OUTPUT"
-          {
-            echo "Agent image: \`$digest\`"
-            echo
-            docker image ls "$repository"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if docker buildx imagetools inspect "$tag" >/dev/null 2>&1; then
+            echo "| Agent image | reused existing $tag |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            start=$(date +%s)
+            docker build --file .github/provisioning/agent-image.Dockerfile --tag "$tag" .
+            docker push "$tag"
+            echo "| Agent image | built and pushed in $(( $(date +%s) - start )) s |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "image=${repository}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "| Agent image ref | ${repository}@${digest} |" >> "$GITHUB_STEP_SUMMARY"
 
   cold:
     name: Cold
