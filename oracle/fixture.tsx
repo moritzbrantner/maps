@@ -583,6 +583,106 @@ const ICON_LINE_LAYERS: Array<Record<string, unknown>> = [
     type: "symbol",
   },
 ];
+/**
+ * The `symbol-variable-anchors` style layers (#346): anchors chosen at placement. Capitals
+ * take a radial offset, wrap and justify towards their anchor; towns take explicit offsets
+ * per anchor, and lakes keep a badge fitted to their name, which moves with the chosen
+ * anchor and must fit there too. Blockers, placed first, take each label's first anchors
+ * so the later ones are chosen and multi-line capitals justify towards theirs.
+ */
+const VARIABLE_ANCHOR_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-badges",
+    layout: {
+      "icon-image": "shield",
+      "icon-text-fit": "both",
+      "icon-text-fit-padding": [1, 3, 1, 3],
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": 12,
+      "text-variable-anchor": ["top", "bottom", "left", "right"],
+    },
+    paint: { "text-color": "#1e3a8a" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "city"],
+    id: "town-offsets",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-padding": 1,
+      "text-size": 12,
+      "text-variable-anchor-offset": [
+        "bottom-left",
+        [0.3, -0.3],
+        "top-right",
+        [-0.3, 0.3],
+        "bottom",
+        [0, -0.6],
+        "left",
+        [0.6, 0],
+      ],
+    },
+    paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-radial",
+    layout: {
+      "text-field": ["concat", ["get", "name"], " ", ["get", "name"]],
+      "text-font": ["NotoSans-Regular"],
+      "text-justify": "auto",
+      "text-max-width": 4,
+      "text-radial-offset": 0.7,
+      "text-size": 16,
+      "text-variable-anchor": ["left", "right", "top", "bottom", "top-left", "bottom-right"],
+    },
+    paint: { "text-color": "#7f1d1d", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    id: "place-blockers",
+    layout: {
+      "text-allow-overlap": true,
+      "text-anchor": "bottom-left",
+      "text-field": "Xxxx",
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0.2, -0.2],
+      "text-padding": 0,
+      "text-size": 13,
+    },
+    paint: { "text-color": "#dc2626" },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-blockers",
+    layout: {
+      "text-allow-overlap": true,
+      "text-anchor": "top",
+      "text-field": "Xx",
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0, 0.6],
+      "text-padding": 0,
+      "text-size": 13,
+    },
+    paint: { "text-color": "#dc2626" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
@@ -595,7 +695,9 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
           ? { glyphs: GLYPHS_URL, layers: LINE_LABEL_LAYERS }
           : name === "symbol-icon-lines" || name === "symbol-icon-lines-pitch"
             ? { glyphs: GLYPHS_URL, layers: ICON_LINE_LAYERS }
-            : name === "tileset-lines"
+            : name === "symbol-variable-anchors" || name === "symbol-variable-anchors-pitch"
+              ? { glyphs: GLYPHS_URL, layers: VARIABLE_ANCHOR_LAYERS }
+              : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
               : name === "fill-pattern"
                 ? { layers: FILL_PATTERN_LAYERS }
@@ -682,6 +784,12 @@ function referenceStyle(name: string) {
     case "symbol-icon-lines-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...ICON_LINE_LAYERS);
+      return style;
+    }
+    case "symbol-variable-anchors":
+    case "symbol-variable-anchors-pitch": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...VARIABLE_ANCHOR_LAYERS);
       return style;
     }
     default:
@@ -877,6 +985,8 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-lines-pitch":
     case "symbol-icon-lines":
     case "symbol-icon-lines-pitch":
+    case "symbol-variable-anchors":
+    case "symbol-variable-anchors-pitch":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":
