@@ -375,6 +375,28 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { bearing: -35, center: [8.75, 47.05], zoom: 7.8 },
+    capability:
+      "point symbols aligned with the map: text-rotation-alignment and icon-rotation-alignment map on point placement, viewport-glyph, variable anchors turning with the map",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-alignment",
+    origin: "Milestone E cartography (#80): names and markers that turn with the map (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -35, center: [8.75, 47.05], pitch: 50, zoom: 8 },
+    capability:
+      "point symbols pitched with the map: text-pitch-alignment and icon-pitch-alignment map, projected collision boxes, map-plane perspective sizes",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-alignment-pitch",
+    origin: "Milestone E cartography (#80): names and markers that lie on the pitched map (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],

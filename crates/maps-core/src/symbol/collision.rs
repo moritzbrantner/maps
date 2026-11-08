@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use super::layout::{EXTENT, LayerBucket, SymbolInstance, TileStyleBuckets, VariableText};
 use super::line_anchors::clip_line;
-use super::projection::{LineGlyphs, LineLabelContext, PathInterpolator, TileProjection};
+use super::projection::{
+    LineGlyphs, LineLabelContext, PathInterpolator, SymbolAlignment, TileProjection,
+};
 use super::shaping::SymbolAnchor;
 use super::variable_anchors::layout_shift;
 use crate::TileId;
@@ -192,6 +194,16 @@ pub struct LineCollision<'a> {
     pub allow_overlap: bool,
 }
 
+/// A label's anchor and how its collision box meets the map (`placeCollisionBox`).
+pub struct AlignedLabel<'a> {
+    pub projection: &'a TileProjection<'a>,
+    /// Tile-normalized.
+    pub anchor: [f64; 2],
+    pub alignment: SymbolAlignment,
+    /// Clockwise, radians.
+    pub bearing: f64,
+}
+
 impl CollisionIndex {
     #[must_use]
     pub fn new(width: f64, height: f64) -> Self {
@@ -239,26 +251,37 @@ impl CollisionIndex {
         Some(b)
     }
 
-    /// `placeCollisionBox` for a box that turns with the map (`_projectCollisionBox` with
-    /// `rotateWithMap`), as icons of line labels collide: `collision_box` in CSS px around
-    /// the tile-normalized `anchor`. Turned with the map's east axis on screen, or, with
-    /// `pitch_with_map`, laid on the map plane, its corners and edge midpoints are projected
-    /// and the grid box is around them.
+    /// `placeCollisionBox` for one label: `collision_box` in CSS px around its anchor, moved
+    /// by a variable anchor's `shift`. Viewport-aligned labels take the fast path. Others
+    /// are `_projectCollisionBox`: along [`TileProjection::label_axes`], on the viewport
+    /// (scaled by the perspective ratio) or laid on the map plane, their corners and edge
+    /// midpoints are projected and the grid box is around them.
     #[must_use]
-    pub fn place_map_box(
+    pub fn place_aligned_box(
         &self,
-        projection: &TileProjection<'_>,
-        anchor: [f64; 2],
+        label: &AlignedLabel<'_>,
         collision_box: [f64; 4],
-        pitch_with_map: bool,
+        shift: Option<[f64; 2]>,
         allow_overlap: bool,
     ) -> Option<[f64; 4]> {
-        let (point, w) = (projection.project)(anchor);
+        let projection = label.projection;
+        let (point, w) = (projection.project)(label.anchor);
         if w <= 0.0 {
             return None;
         }
         let ratio = projection.perspective_ratio(w);
-        let [x1, y1, x2, y2] = collision_box;
+        let [dx, dy] = shift.unwrap_or([0.0, 0.0]);
+        let [x1, y1, x2, y2] = [
+            collision_box[0] + dx,
+            collision_box[1] + dy,
+            collision_box[2] + dx,
+            collision_box[3] + dy,
+        ];
+        let alignment = label.alignment;
+        if !alignment.rotate_with_map && !alignment.pitch_with_map {
+            return self.place_box(point, ratio, [x1, y1, x2, y2], allow_overlap);
+        }
+        let axes = projection.label_axes(label.anchor, alignment, label.bearing);
         let offsets = [
             [x1, y1],
             [(x1 + x2) / 2.0, y1],
@@ -270,15 +293,22 @@ impl CollisionIndex {
             [x1, (y1 + y2) / 2.0],
         ];
         let mut points = Vec::with_capacity(offsets.len());
-        if pitch_with_map {
+        if alignment.pitch_with_map {
             // Tile-space offsets: CSS px at the drawn zoom, grown with the distance as the
-            // shader's perspective ratio grows them.
-            let distance = (0.5 + 0.5 * w / projection.center_w).clamp(0.0, 4.0);
+            // shader's perspective ratio grows them, which variable anchors do without.
+            let distance = if shift.is_some() {
+                1.0
+            } else {
+                projection.size_ratio(w, true)
+            };
             let scale = distance / projection.tile_px;
             let mut visible = false;
-            for [dx, dy] in offsets {
-                let (projected, w) =
-                    (projection.project)([anchor[0] + dx * scale, anchor[1] + dy * scale]);
+            for offset in offsets {
+                let [x, y] = axes.apply(offset);
+                let (projected, w) = (projection.project)([
+                    label.anchor[0] + x * scale,
+                    label.anchor[1] + y * scale,
+                ]);
                 visible |= w > 0.0;
                 points.push(projected);
             }
@@ -286,22 +316,9 @@ impl CollisionIndex {
                 return None;
             }
         } else {
-            // East on screen: the angle of the projected tile x axis at the anchor.
-            let (east, _) = (projection.project)([anchor[0] + 1.0 / EXTENT, anchor[1]]);
-            let (to_east_x, to_east_y) = (east[0] - point[0], east[1] - point[1]);
-            let angle = (to_east_y / to_east_x).atan()
-                + if to_east_x < 0.0 {
-                    std::f64::consts::PI
-                } else {
-                    0.0
-                };
-            let (sin, cos) = angle.sin_cos();
-            for [dx, dy] in offsets {
-                let (dx, dy) = (dx * ratio, dy * ratio);
-                points.push([
-                    point[0] + cos * dx - sin * dy,
-                    point[1] + sin * dx + cos * dy,
-                ]);
+            for [x, y] in offsets {
+                let [x, y] = axes.apply([x * ratio, y * ratio]);
+                points.push([point[0] + x, point[1] + y]);
             }
         }
         let mut b = [
@@ -442,12 +459,8 @@ pub struct PlacedSymbol {
     pub tile: usize,
     pub layer: usize,
     pub instance: usize,
-    /// The anchor in viewport px, moved by `text-translate`, and its perspective ratio.
-    pub anchor: [f64; 2],
+    /// The perspective ratio of the anchor moved by `text-translate`.
     pub perspective_ratio: f64,
-    /// The anchor moved by `icon-translate`.
-    pub icon_anchor: [f64; 2],
-    pub icon_perspective_ratio: f64,
     pub text: bool,
     pub icon: bool,
     /// The chosen entry of the text's [`VariableText::anchors`].
@@ -467,13 +480,11 @@ fn place_variable_text(
     index: &CollisionIndex,
     variable: &VariableText,
     previous: Option<SymbolAnchor>,
-    anchor: [f64; 2],
-    ratio: f64,
+    label: &AlignedLabel<'_>,
     collision_box: [f64; 4],
     allow_overlap: bool,
-    icon_box: Option<([f64; 2], f64, [f64; 4])>,
+    icon_box: Option<(&AlignedLabel<'_>, [f64; 4])>,
 ) -> Option<(usize, [f64; 2], [f64; 4])> {
-    let moved = |b: [f64; 4], [x, y]: [f64; 2]| [b[0] + x, b[1] + y, b[2] + x, b[3] + y];
     let (width, height) = (
         collision_box[2] - collision_box[0],
         collision_box[3] - collision_box[1],
@@ -487,13 +498,13 @@ fn place_variable_text(
                 continue;
             }
             let shift = layout_shift(candidate, width, height, offset, variable.box_scale);
-            let Some(b) = index.place_box(anchor, ratio, moved(collision_box, shift), overlap)
+            let Some(b) = index.place_aligned_box(label, collision_box, Some(shift), overlap)
             else {
                 continue;
             };
-            if let Some((icon_anchor, icon_ratio, icon_box)) = icon_box
+            if let Some((icon_label, icon_box)) = icon_box
                 && index
-                    .place_box(icon_anchor, icon_ratio, moved(icon_box, shift), overlap)
+                    .place_aligned_box(icon_label, icon_box, Some(shift), overlap)
                     .is_none()
             {
                 continue;
@@ -574,11 +585,24 @@ pub fn place_symbols(
             let icon_projection = tile.projection.with(&icon_project);
             for (instance_index, instance) in bucket.instances.iter().enumerate() {
                 let memory_key = (tile.tile, layer, instance_index);
-                let (Some((anchor, ratio)), Some((icon_anchor, icon_ratio))) = (
+                let (Some((_, ratio)), Some(_)) = (
                     text_projection.anchor(instance.anchor),
                     icon_projection.anchor(instance.anchor),
                 ) else {
                     continue;
+                };
+                let text_label = AlignedLabel {
+                    projection: &text_projection,
+                    anchor: instance.anchor,
+                    alignment: bucket.text_alignment(),
+                    bearing,
+                };
+                // Placement reads the text alignments for icons too.
+                let icon_label = AlignedLabel {
+                    projection: &icon_projection,
+                    anchor: instance.anchor,
+                    alignment: bucket.text_alignment(),
+                    bearing,
                 };
                 let mut text_circles = None;
                 let mut variable_choice = None;
@@ -588,7 +612,7 @@ pub fn place_symbols(
                     (bucket.icon_text_fit && !bucket.icon_allow_overlap)
                         .then_some(instance.icon.as_ref())
                         .flatten()
-                        .map(|icon| (icon_anchor, icon_ratio, icon.collision_box))
+                        .map(|icon| (&icon_label, icon.collision_box))
                 };
                 let text_box = match (&instance.text, &instance.line) {
                     (Some(text), Some(symbol_line)) if text.line.is_some() => {
@@ -624,8 +648,7 @@ pub fn place_symbols(
                             &index,
                             variable,
                             prior,
-                            anchor,
-                            ratio,
+                            &text_label,
                             text.collision_box,
                             bucket.text_allow_overlap,
                             fitted_icon_box(instance),
@@ -645,44 +668,23 @@ pub fn place_symbols(
                             }
                         }
                     }
-                    (Some(text), _) => index.place_box(
-                        anchor,
-                        ratio,
+                    (Some(text), _) => index.place_aligned_box(
+                        &text_label,
                         text.collision_box,
+                        None,
                         bucket.text_allow_overlap,
                     ),
                     (None, _) => None,
                 };
-                // Placement reads the text alignments for icons too: icons of labels along
-                // lines collide with boxes that turn (and pitch) with the map.
+                // An icon fitted to its text moves with the chosen anchor.
+                let icon_shift = variable_shift.filter(|_| bucket.icon_text_fit);
                 let icon_box = instance.icon.as_ref().and_then(|icon| {
-                    if bucket.text_along_line {
-                        index.place_map_box(
-                            &icon_projection,
-                            instance.anchor,
-                            icon.collision_box,
-                            bucket.pitch_with_map,
-                            bucket.icon_allow_overlap,
-                        )
-                    } else {
-                        // An icon fitted to its text moves with the chosen anchor.
-                        let shift = match (bucket.icon_text_fit, variable_shift) {
-                            (true, Some(shift)) => shift,
-                            _ => [0.0, 0.0],
-                        };
-                        let b = icon.collision_box;
-                        index.place_box(
-                            icon_anchor,
-                            icon_ratio,
-                            [
-                                b[0] + shift[0],
-                                b[1] + shift[1],
-                                b[2] + shift[0],
-                                b[3] + shift[1],
-                            ],
-                            bucket.icon_allow_overlap,
-                        )
-                    }
+                    index.place_aligned_box(
+                        &icon_label,
+                        icon.collision_box,
+                        icon_shift,
+                        bucket.icon_allow_overlap,
+                    )
                 });
                 let (mut place_text, mut place_icon) = (
                     text_box.is_some()
@@ -727,10 +729,7 @@ pub fn place_symbols(
                         tile: tile_index,
                         layer,
                         instance: instance_index,
-                        anchor,
                         perspective_ratio: ratio,
-                        icon_anchor,
-                        icon_perspective_ratio: icon_ratio,
                         text,
                         icon,
                         variable_anchor: if text { variable_choice } else { None },
@@ -764,6 +763,15 @@ mod tests {
     fn map_aligned_boxes_turn_with_the_map_and_lie_on_its_plane() {
         let index = CollisionIndex::new(512.0, 512.0);
         let icon = [-10.0, -5.0, 10.0, 5.0];
+        let aligned = |projection, pitch_with_map| AlignedLabel {
+            projection,
+            anchor: [0.5, 0.5],
+            alignment: SymbolAlignment {
+                rotate_with_map: true,
+                pitch_with_map,
+            },
+            bearing: 0.0,
+        };
         // North up: the box keeps its shape on and off the map plane.
         let flat = |uv: [f64; 2]| ([uv[0] * 512.0, uv[1] * 512.0], 1.0);
         let north_up = TileProjection {
@@ -774,7 +782,7 @@ mod tests {
         let expected = [346.0, 351.0, 366.0, 361.0];
         for pitch_with_map in [false, true] {
             let b = index
-                .place_map_box(&north_up, [0.5, 0.5], icon, pitch_with_map, false)
+                .place_aligned_box(&aligned(&north_up, pitch_with_map), icon, None, false)
                 .unwrap();
             for (actual, expected) in b.iter().zip(expected) {
                 assert!((actual - expected).abs() < 1e-9, "{b:?}");
@@ -789,12 +797,66 @@ mod tests {
         };
         for pitch_with_map in [false, true] {
             let b = index
-                .place_map_box(&east_down, [0.5, 0.5], icon, pitch_with_map, false)
+                .place_aligned_box(&aligned(&east_down, pitch_with_map), icon, None, false)
                 .unwrap();
             for (actual, expected) in b.iter().zip([351.0, 346.0, 361.0, 366.0]) {
                 assert!((actual - expected).abs() < 1e-9, "{b:?}");
             }
         }
+    }
+
+    #[test]
+    fn map_plane_boxes_stay_along_the_viewport_without_map_rotation() {
+        let index = CollisionIndex::new(512.0, 512.0);
+        let icon = [-10.0, -5.0, 10.0, 5.0];
+        // Map east pointing down the screen: the camera faces west of north.
+        let turned = |uv: [f64; 2]| ([512.0 - uv[1] * 512.0, uv[0] * 512.0], 1.0);
+        let east_down = TileProjection {
+            project: &turned,
+            center_w: 1.0,
+            tile_px: 512.0,
+        };
+        let label = AlignedLabel {
+            projection: &east_down,
+            anchor: [0.5, 0.5],
+            alignment: SymbolAlignment {
+                rotate_with_map: false,
+                pitch_with_map: true,
+            },
+            bearing: -std::f64::consts::FRAC_PI_2,
+        };
+        let b = index.place_aligned_box(&label, icon, None, false).unwrap();
+        for (actual, expected) in b.iter().zip([346.0, 351.0, 366.0, 361.0]) {
+            assert!((actual - expected).abs() < 1e-9, "{b:?}");
+        }
+    }
+
+    #[test]
+    fn map_plane_boxes_scale_with_distance_unless_a_variable_anchor_shifts_them() {
+        let index = CollisionIndex::new(512.0, 512.0);
+        let icon = [-10.0, -5.0, 10.0, 5.0];
+        // Three times the centre distance: the shader's map-plane ratio is 2.
+        let far = |uv: [f64; 2]| ([uv[0] * 512.0, uv[1] * 512.0], 3.0);
+        let projection = TileProjection {
+            project: &far,
+            center_w: 1.0,
+            tile_px: 512.0,
+        };
+        let label = AlignedLabel {
+            projection: &projection,
+            anchor: [0.5, 0.5],
+            alignment: SymbolAlignment {
+                rotate_with_map: true,
+                pitch_with_map: true,
+            },
+            bearing: 0.0,
+        };
+        let plain = index.place_aligned_box(&label, icon, None, false).unwrap();
+        assert!((plain[2] - plain[0] - 40.0).abs() < 1e-9, "{plain:?}");
+        let shifted = index
+            .place_aligned_box(&label, icon, Some([0.0, 0.0]), false)
+            .unwrap();
+        assert!((shifted[2] - shifted[0] - 20.0).abs() < 1e-9, "{shifted:?}");
     }
 
     #[test]

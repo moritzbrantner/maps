@@ -683,6 +683,96 @@ const VARIABLE_ANCHOR_LAYERS: Array<Record<string, unknown>> = [
     type: "symbol",
   },
 ];
+/**
+ * The `symbol-alignment` style layers (#346): point symbols meeting the map. Capitals lie on
+ * the map plane and turn with it (`rotation-alignment: map`, pitch following); cities turn
+ * with the map but stay on the viewport plane (`pitch-alignment: viewport`), and take
+ * variable anchors there; lakes lie on the map plane without turning (rotation viewport,
+ * pitch map, the skewed axes) on a badge fitted to their name; river names keep each glyph
+ * level along their line (`viewport-glyph`).
+ */
+const ALIGNMENT_LAYERS: Array<Record<string, unknown>> = [
+  {
+    id: "river-names",
+    layout: {
+      "symbol-placement": "line",
+      "symbol-spacing": 220,
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-rotation-alignment": "viewport-glyph",
+      "text-size": 12,
+    },
+    paint: { "text-color": "#1d4ed8", "text-halo-color": "#eff6ff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "water_lines",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-badges",
+    layout: {
+      "icon-image": "shield",
+      "icon-pitch-alignment": "map",
+      "icon-text-fit": "both",
+      "icon-text-fit-padding": [1, 3, 1, 3],
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-pitch-alignment": "map",
+      "text-size": 12,
+    },
+    paint: { "text-color": "#1e3a8a" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "city"],
+    id: "city-turned",
+    layout: {
+      "icon-image": "town",
+      "icon-pitch-alignment": "viewport",
+      "icon-rotation-alignment": "map",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-padding": 1,
+      "text-pitch-alignment": "viewport",
+      "text-radial-offset": 0.8,
+      "text-rotation-alignment": "map",
+      "text-size": 12,
+      "text-variable-anchor": ["top", "left", "right", "bottom"],
+    },
+    paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-on-map",
+    layout: {
+      "icon-image": "capital",
+      "icon-rotation-alignment": "map",
+      "text-anchor": "top",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0, 0.9],
+      "text-rotation-alignment": "map",
+      "text-size": 15,
+    },
+    paint: {
+      "icon-color": "#b91c1c",
+      "icon-halo-color": "#fef3c7",
+      "icon-halo-width": 1,
+      "text-color": "#7f1d1d",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1.5,
+      "text-translate": [0, 2],
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
@@ -697,6 +787,8 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
             ? { glyphs: GLYPHS_URL, layers: ICON_LINE_LAYERS }
             : name === "symbol-variable-anchors" || name === "symbol-variable-anchors-pitch"
               ? { glyphs: GLYPHS_URL, layers: VARIABLE_ANCHOR_LAYERS }
+              : name === "symbol-alignment" || name === "symbol-alignment-pitch"
+                ? { glyphs: GLYPHS_URL, layers: ALIGNMENT_LAYERS }
               : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
               : name === "fill-pattern" || name === "fill-pattern-pitch"
@@ -792,6 +884,12 @@ function referenceStyle(name: string) {
     case "symbol-variable-anchors-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...VARIABLE_ANCHOR_LAYERS);
+      return style;
+    }
+    case "symbol-alignment":
+    case "symbol-alignment-pitch": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...ALIGNMENT_LAYERS);
       return style;
     }
     default:
@@ -990,6 +1088,8 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-icon-lines-pitch":
     case "symbol-variable-anchors":
     case "symbol-variable-anchors-pitch":
+    case "symbol-alignment":
+    case "symbol-alignment-pitch":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

@@ -165,6 +165,28 @@ const LAYER_CONSTANT: &[&str] = &[
     "icon-translate-anchor",
 ];
 
+/// A symbol layer's `{prefix}-rotation-alignment` and `{prefix}-pitch-alignment` as MapLibre
+/// resolves `auto` (`SymbolStyleLayer.recalculate`): rotation follows the placement, pitch
+/// follows the rotation.
+fn resolved_alignment(layout: &Map<String, Value>, prefix: &str) -> (String, String) {
+    let value = |key: String| layout.get(&key).and_then(Value::as_str).unwrap_or("auto");
+    let along_line = layout
+        .get("symbol-placement")
+        .and_then(Value::as_str)
+        .is_some_and(|placement| placement != "point");
+    let rotation = match value(format!("{prefix}-rotation-alignment")) {
+        "auto" if along_line => "map",
+        "auto" => "viewport",
+        other => other,
+    };
+    let pitch = match value(format!("{prefix}-pitch-alignment")) {
+        "auto" if rotation == "map" => "map",
+        "auto" => "viewport",
+        other => other,
+    };
+    (rotation.to_owned(), pitch.to_owned())
+}
+
 impl StyleLayer {
     /// Parses one style layer object.
     pub fn parse(value: &Value) -> Result<Self, String> {
@@ -240,43 +262,17 @@ impl StyleLayer {
             }
         };
         only("symbol-placement", &["point", "line", "line-center"])?;
-        // Line placement aligns text to its line (`auto` is `map` there); map-aligned or
-        // map-pitched point labels are not ported.
+        only(
+            "text-rotation-alignment",
+            &["auto", "viewport", "map", "viewport-glyph"],
+        )?;
+        only("text-pitch-alignment", &["auto", "viewport", "map"])?;
+        only("icon-rotation-alignment", &["auto", "viewport", "map"])?;
+        only("icon-pitch-alignment", &["auto", "viewport", "map"])?;
         let point = layout
             .get("symbol-placement")
             .and_then(Value::as_str)
             .is_none_or(|placement| placement == "point");
-        let along_line = !point
-            && layout
-                .get("text-rotation-alignment")
-                .and_then(Value::as_str)
-                != Some("viewport");
-        if point {
-            only("text-rotation-alignment", &["auto", "viewport"])?;
-        } else {
-            only("text-rotation-alignment", &["auto", "viewport", "map"])?;
-        }
-        if along_line {
-            only("text-pitch-alignment", &["auto", "viewport", "map"])?;
-        } else {
-            only("text-pitch-alignment", &["auto", "viewport"])?;
-        }
-        // Icons follow their line as text does (`auto` is `map` along lines).
-        let icon_along_line = !point
-            && layout
-                .get("icon-rotation-alignment")
-                .and_then(Value::as_str)
-                != Some("viewport");
-        if point {
-            only("icon-rotation-alignment", &["auto", "viewport"])?;
-        } else {
-            only("icon-rotation-alignment", &["auto", "viewport", "map"])?;
-        }
-        if icon_along_line {
-            only("icon-pitch-alignment", &["auto", "viewport", "map"])?;
-        } else {
-            only("icon-pitch-alignment", &["auto", "viewport"])?;
-        }
         only("icon-text-fit", &["none", "width", "height", "both"])?;
         for (key, parsed) in [
             (
@@ -299,6 +295,20 @@ impl StyleLayer {
                     return Err(format!("layer {id}: {key} needs symbol-placement point"));
                 }
             }
+        }
+        // A fitted icon draws at its text's shifted anchor in the text's label plane, so it
+        // must share that plane: MapLibre feeds it the other plane's coordinates otherwise.
+        if (layout.contains_key("text-variable-anchor")
+            || layout.contains_key("text-variable-anchor-offset"))
+            && layout
+                .get("icon-text-fit")
+                .and_then(Value::as_str)
+                .is_some_and(|fit| fit != "none")
+            && resolved_alignment(&layout, "text").1 != resolved_alignment(&layout, "icon").1
+        {
+            return Err(format!(
+                "layer {id}: icon-text-fit under variable anchors needs icons and text on the same plane"
+            ));
         }
         for key in ["text-translate-anchor", "icon-translate-anchor"] {
             if let Some(anchor) = paint.get(key).and_then(Value::as_str)
@@ -428,6 +438,12 @@ impl StyleLayer {
         self.property(true, key, context)
     }
 
+    /// `{prefix}-rotation-alignment` and `{prefix}-pitch-alignment` with `auto` resolved.
+    #[must_use]
+    pub fn symbol_alignment(&self, prefix: &str) -> (String, String) {
+        resolved_alignment(&self.layout, prefix)
+    }
+
     /// The unevaluated layout value, e.g. to tell `{token}` strings from expressions.
     #[must_use]
     pub fn raw_layout(&self, key: &str) -> Option<&Value> {
@@ -466,6 +482,66 @@ fn validate_operators(value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symbol_alignments_resolve_auto_from_placement_and_rotation() {
+        let layer = |layout: &str| {
+            StyleLayer::parse_all(&format!(
+                r#"[{{"id":"a","type":"symbol","source-layer":"p","layout":{layout}}}]"#
+            ))
+            .map(|mut layers| layers.remove(0))
+        };
+        let alignment = |layout: &str, prefix: &str| {
+            let (rotation, pitch) = layer(layout).unwrap().symbol_alignment(prefix);
+            (rotation, pitch)
+        };
+        let expect = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+        assert_eq!(alignment("{}", "text"), expect("viewport", "viewport"));
+        assert_eq!(
+            alignment(r#"{"symbol-placement":"line"}"#, "text"),
+            expect("map", "map")
+        );
+        assert_eq!(
+            alignment(r#"{"text-rotation-alignment":"map"}"#, "text"),
+            expect("map", "map")
+        );
+        assert_eq!(
+            alignment(
+                r#"{"text-rotation-alignment":"map","text-pitch-alignment":"viewport"}"#,
+                "text"
+            ),
+            expect("map", "viewport")
+        );
+        assert_eq!(
+            alignment(r#"{"text-pitch-alignment":"map"}"#, "text"),
+            expect("viewport", "map")
+        );
+        assert_eq!(
+            alignment(
+                r#"{"symbol-placement":"line","text-rotation-alignment":"viewport-glyph"}"#,
+                "text"
+            ),
+            expect("viewport-glyph", "viewport")
+        );
+        assert_eq!(
+            alignment(r#"{"icon-rotation-alignment":"map"}"#, "icon"),
+            expect("map", "map")
+        );
+        // `viewport-glyph` is for text only, and a fitted icon cannot leave its text's plane.
+        assert!(layer(r#"{"icon-rotation-alignment":"viewport-glyph"}"#).is_err());
+        assert!(
+            layer(
+                r#"{"icon-image":"x","icon-text-fit":"both","text-variable-anchor":["top"],"text-pitch-alignment":"map"}"#
+            )
+            .is_err()
+        );
+        assert!(
+            layer(
+                r#"{"icon-image":"x","icon-text-fit":"both","text-variable-anchor":["top"],"text-pitch-alignment":"map","icon-pitch-alignment":"map"}"#
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn rejects_what_maps_does_not_draw() {
@@ -520,12 +596,8 @@ mod tests {
         );
         for rejected in [
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-text-fit":["step",["zoom"],"none",8,"both"]}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-rotation-alignment":"map"}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","icon-image":"x","icon-rotation-alignment":"viewport","icon-pitch-alignment":"map"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"icon-translate":["literal",[1,2]]}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-size":["+",["zoom"],1]}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"text-rotation-alignment":"map"}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","text-rotation-alignment":"viewport-glyph"}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":["step",["zoom"],"point",8,"line"]}}]"#,
             r#"[{"id":"a","type":"circle","source-layer":"p","paint":{"circle-radius":["sqrt",["get","n"]]}}]"#,
             r#"[{"id":"a","type":"fill","source-layer":"p","paint":{"fill-translate":[1,1]}}]"#,
