@@ -103,6 +103,11 @@ impl BoundedFlatRasterRuntime {
         self.inner.set_render_margin(margin)
     }
 
+    /// The style's sky; see [`FlatRasterRuntime::set_sky_style`].
+    pub fn set_sky_style(&mut self, json: &str) -> Result<(), String> {
+        self.inner.set_sky_style(json)
+    }
+
     pub fn resize(&mut self, width: f64, height: f64) -> Result<(), FlatRasterRuntimeError> {
         self.inner.resize(width, height)?;
         self.apply_camera_constraint()

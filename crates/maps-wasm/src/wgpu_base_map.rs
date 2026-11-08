@@ -3,7 +3,7 @@ use super::wgpu_geometry::{
     ApplicationPatterns, GeoJsonTileGrid, GroundPerspective, LinePatternMeshCache,
     POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey, SurfaceClip,
     WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
-    prepare_application_geometry, unpack_tile_draws,
+    parse_frame_sky, prepare_application_geometry, unpack_tile_draws,
 };
 use super::wgpu_mipmaps::{MipmapGenerator, mip_level_count};
 
@@ -14,7 +14,7 @@ use std::sync::{
 };
 
 use maps_core::{
-    TileId, VECTOR_FILL_PAINT_ORDER, VECTOR_LINE_GROUP_COUNT, build_shortbread_buckets,
+    SkyPass, TileId, VECTOR_FILL_PAINT_ORDER, VECTOR_LINE_GROUP_COUNT, build_shortbread_buckets,
     vector_tile_placements,
 };
 use wasm_bindgen::prelude::*;
@@ -42,6 +42,7 @@ use crate::wgpu_retained::{
     FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
     upload_retained_buffer_with_capacity,
 };
+use crate::wgpu_sky::SkyGpu;
 use crate::wgpu_symbols::{StyleLines, SymbolGpu};
 use maps_core::LineAtlas;
 use maps_core::symbol::{FADE_DURATION_MS, ImageStore, ZoomHistory};
@@ -238,6 +239,9 @@ pub struct MapsWgpuBaseMapRenderer {
     config: wgpu::SurfaceConfiguration,
     surface_view_format: wgpu::TextureFormat,
     surface_clear_alpha: f64,
+    sky: SkyGpu,
+    /// The band above the horizon of the next frame; see `setFrameSky`.
+    frame_sky: Option<SkyPass>,
     device_lost: Arc<AtomicBool>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -335,7 +339,6 @@ impl MapsWgpuBaseMapRenderer {
             })
             .await
             .map_err(|error| js_error("could not acquire wgpu adapter", error))?;
-        let capabilities = surface.get_capabilities(&adapter);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
@@ -350,20 +353,13 @@ impl MapsWgpuBaseMapRenderer {
         let mut config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| JsValue::from_str("wgpu surface has no compatible configuration"))?;
-        if capabilities
-            .alpha_modes
-            .contains(&wgpu::CompositeAlphaMode::Opaque)
-        {
-            config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
-        } else if capabilities
-            .alpha_modes
-            .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-        {
-            config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
-        }
-        // The base-map surface owns its cartographic background. Keep it opaque even when
-        // the browser only offers a compositing-capable alpha mode so vector-only frames do
-        // not expose an implementation-defined black canvas behind application geometry.
+        // Premultiplied so a band above the horizon can stay transparent and show the page
+        // behind the map, as MapLibre's canvas does (#379). WebGPU canvases always support it;
+        // wgpu's web backend only reports `Opaque` in its capabilities.
+        config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
+        // The base-map surface owns its cartographic background everywhere the ground is
+        // drawn: clear it opaque so vector-only frames do not expose an implementation-defined
+        // black canvas behind application geometry.
         let surface_clear_alpha = 1.0;
         config.present_mode = wgpu::PresentMode::AutoVsync;
         // Blend in encoded sRGB like Canvas and the browser compositor, so translucent
@@ -1121,6 +1117,7 @@ impl MapsWgpuBaseMapRenderer {
             premultiplied_blend_state(),
             ignored_stencil(),
         );
+        let sky = SkyGpu::new(&device, surface_view_format);
 
         Ok(Self {
             surface,
@@ -1129,6 +1126,8 @@ impl MapsWgpuBaseMapRenderer {
             config,
             surface_view_format,
             surface_clear_alpha,
+            sky,
+            frame_sky: None,
             device_lost,
             camera_buffer,
             camera_bind_group,
@@ -1218,6 +1217,14 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = setFrameTime)]
     pub fn set_frame_time(&mut self, now: f64) {
         self.frame_time = now;
+    }
+
+    /// The next frame's band above the horizon line, from the frame plan: horizon y and blend
+    /// height in CSS px, then premultiplied sky and horizon colors; empty for no band.
+    #[wasm_bindgen(js_name = setFrameSky)]
+    pub fn set_frame_sky(&mut self, values: &[f32]) -> Result<(), JsValue> {
+        self.frame_sky = parse_frame_sky(values).map_err(JsValue::from_str)?;
+        Ok(())
     }
 
     /// Whether the last frame drew patterns mid cross-fade, or left terrain tile targets stale
@@ -2029,12 +2036,29 @@ impl MapsWgpuBaseMapRenderer {
         let scissor = clip.scissor(self.config.width, self.config.height);
         let mut drawn_tiles = 0;
         let mut draw_calls = 0;
+        // The sky band goes first, under terrain and every layer, as MapLibre's `drawSky`.
+        let surface_load = if let Some(sky) = self.frame_sky {
+            self.sky.draw(
+                &self.queue,
+                &mut encoder,
+                &view,
+                background,
+                &sky,
+                clip.margin,
+                clip.pixel_ratio,
+                scissor,
+            );
+            draw_calls += 1;
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(background)
+        };
         // Terrain replaces the flat raster: its tiles carry the raster and hillshade layers.
         let terrain = relief.has_terrain();
         if terrain {
-            let drawn = self
-                .relief
-                .draw_terrain(&mut encoder, &view, background, &relief, scissor);
+            let drawn =
+                self.relief
+                    .draw_terrain(&mut encoder, &view, surface_load, &relief, scissor);
             drawn_tiles += drawn as usize;
             draw_calls += drawn;
         }
@@ -2046,7 +2070,7 @@ impl MapsWgpuBaseMapRenderer {
                 load: if terrain {
                     wgpu::LoadOp::Load
                 } else {
-                    wgpu::LoadOp::Clear(background)
+                    surface_load
                 },
                 store: wgpu::StoreOp::Store,
             },

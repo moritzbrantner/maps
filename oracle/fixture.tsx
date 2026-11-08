@@ -905,7 +905,7 @@ function styleFor(): RasterMapStyle {
       scenario.unsupported || tilesetLayers(scenario.name) ? referenceStyle(scenario.name) : vectorStyle();
     return style as unknown as RasterMapStyle;
   }
-  return rasterStyle(scenario.basemap) as unknown as RasterMapStyle;
+  return { ...rasterStyle(scenario.basemap), ...(scenario.sky ? { sky: scenario.sky } : {}) } as unknown as RasterMapStyle;
 }
 const style = styleFor();
 const styleLayers = tilesetLayers(scenario.name);
@@ -1041,6 +1041,9 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
       );
     case "zoom-crossfade":
     case "steep-pitch":
+    case "steep-pitch-sky":
+    case "steep-pitch-horizon":
+    case "steep-pitch-horizon-85":
       return () => null;
     case "labels":
       return (context) => (

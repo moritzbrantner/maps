@@ -46,6 +46,13 @@
   covers keep the north-up policy of filling at the source's minimum zoom. The MapLibre
   runtime now accepts the Maps camera's pitch range (`maxPitch` 85°). The oracle
   `steep-pitch` scenario (65°) is gated.
+- With the horizon in view (#379), `flatRuntime="maps"` draws the band above it as MapLibre
+  does: transparent for a style without `sky`, so the page behind the map shows, and the
+  style's `sky-color`, `horizon-color` and `sky-horizon-blend` otherwise. The WebGPU surface
+  is now premultiplied to allow it. A pan, wheel zoom or rotation at a pointer over the sky
+  no longer holds a ground point: pans move the center by the pixel delta and zoom and
+  rotation keep the center, as in MapLibre. A right-click over the sky opens no context
+  menu. The oracle gates `steep-pitch-horizon` (75°, 85°) and `steep-pitch-sky`.
 - Tileset `symbol` layers meet the map on point placement, ported from MapLibre 6.16 (#346).
   `text-rotation-alignment` and `icon-rotation-alignment: map`, `text-pitch-alignment` and
   `icon-pitch-alignment: map` work in any combination: symbols turn with the map (on the

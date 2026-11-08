@@ -1184,7 +1184,7 @@ impl ReliefGpu {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        clear: wgpu::Color,
+        load: wgpu::LoadOp<wgpu::Color>,
         draws: &ReliefDraws,
         scissor: Option<(u32, u32, u32, u32)>,
     ) -> u32 {
@@ -1198,7 +1198,7 @@ impl ReliefGpu {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],

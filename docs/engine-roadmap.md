@@ -178,7 +178,7 @@ Build advanced capabilities only after the flat-map foundation is strong.
 
 Candidates:
 
-- terrain and DEM processing (raster-dem hillshade and 3D terrain follow MapLibre since #324; fog, sky and draped layers: #352);
+- terrain and DEM processing (raster-dem hillshade and 3D terrain follow MapLibre since #324; sky above the horizon since #379; fog and draped layers: #352);
 - globe projection;
 - 3D extrusion and advanced map-native 3D;
 - offline packages;

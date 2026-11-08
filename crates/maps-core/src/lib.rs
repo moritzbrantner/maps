@@ -14,6 +14,7 @@ mod line_mesh;
 mod matrix_camera;
 mod mvt_features;
 mod scenario;
+mod sky;
 pub mod symbol;
 pub mod terrain;
 mod tileset;
@@ -51,6 +52,7 @@ pub use scenario::{
     EngineScenarioObservation, ProjectionObservation, ViewportObservation,
     VisibleBoundsObservation, execute_engine_scenario, execute_engine_scenario_json,
 };
+pub use sky::{SkyPaint, SkyPass, SkyStyle, sky_pass};
 pub use vector_bucket::{
     VECTOR_FILL_PAINT_ORDER, VECTOR_LINE_GROUP_COUNT, VectorBasemapStyleClass, VectorFillVertex,
     VectorLineVertex, VectorTileBuckets, VectorTilePlacement, build_shortbread_buckets,

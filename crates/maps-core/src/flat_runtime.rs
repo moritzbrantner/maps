@@ -8,9 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+use crate::matrix_camera::screen_horizon_y;
+
 use crate::{
-    GeographicCoordinate, MapCamera, MapViewportBounds, MapsTileset, ScreenCoordinate, TileId,
-    ViewportSize, WorldCoordinate, project_web_mercator,
+    GeographicCoordinate, MapCamera, MapViewportBounds, MapsTileset, ScreenCoordinate, SkyPaint,
+    SkyPass, SkyStyle, TileId, ViewportSize, WorldCoordinate, project_web_mercator, sky_pass,
     terrain::{
         CoveringBudget, CoveringOptions, TerrainCamera, TerrainTransform, covering_tiles_within,
     },
@@ -146,6 +148,8 @@ pub struct RasterFramePlan {
     pub visible_bounds: MapViewportBounds,
     pub surface_margin: f64,
     pub overscan: bool,
+    /// The band above the horizon line, when the camera has one in view.
+    pub sky: Option<SkyPass>,
     /// Loaded fallback tiles precede the requested cover so replacements draw on top.
     pub placements: Vec<RasterTilePlacement>,
     pub requests: Vec<TileId>,
@@ -204,6 +208,7 @@ pub struct FlatRasterRuntime {
     ready: BTreeSet<TileId>,
     ready_lru: VecDeque<TileId>,
     render_margin: f64,
+    sky: SkyStyle,
     last_request_camera: MapCamera,
     prefetch_offset: Option<(i64, i64)>,
     tileset: Option<MapsTileset>,
@@ -237,6 +242,7 @@ impl FlatRasterRuntime {
             ready: BTreeSet::new(),
             ready_lru: VecDeque::new(),
             render_margin: 0.0,
+            sky: SkyStyle::default(),
             last_request_camera: camera,
             prefetch_offset: None,
             tileset: None,
@@ -320,6 +326,51 @@ impl FlatRasterRuntime {
         }
         self.render_margin = margin;
         Ok(())
+    }
+
+    /// Replaces the style's sky; an empty string or a style without `sky` is no sky.
+    pub fn set_sky_style(&mut self, json: &str) -> Result<(), String> {
+        self.sky = SkyStyle::parse(json)?;
+        Ok(())
+    }
+
+    /// The band above the horizon of the current camera. A sky that stops evaluating at some
+    /// zoom draws as no sky.
+    fn sky_band(&self) -> Option<SkyPass> {
+        let paint = self
+            .sky
+            .paint(self.camera.zoom)
+            .unwrap_or(SkyPaint::TRANSPARENT);
+        sky_pass(&paint, self.camera.viewport.height, self.camera.pitch)
+    }
+
+    /// `isPointOnMapSurface` of MapLibre's Mercator transform: below the horizon line.
+    fn is_on_ground(&self, screen: ScreenCoordinate) -> bool {
+        screen.y > screen_horizon_y(self.camera.viewport.height, self.camera.pitch)
+    }
+
+    /// Pans by a pixel delta at the viewport center: a gesture with a point over the sky,
+    /// as MapLibre's `_handleMapControls`. It has no ground point to hold, and the ray through
+    /// a point over the sky does not meet the map plane where the eye sees it.
+    fn pan_center_by_pixels(
+        &mut self,
+        delta_x: f64,
+        delta_y: f64,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        let viewport = self.camera.viewport;
+        let Some(target) = self.camera.unproject_screen_matrix(ScreenCoordinate {
+            x: viewport.width / 2.0 - delta_x,
+            y: viewport.height / 2.0 - delta_y,
+        }) else {
+            return Ok(());
+        };
+        self.set_camera_state(
+            target.longitude,
+            target.latitude,
+            self.camera.zoom,
+            self.camera.bearing,
+            self.camera.pitch,
+        )
     }
 
     #[must_use]
@@ -432,6 +483,9 @@ impl FlatRasterRuntime {
         if is_flat_camera(self.camera) {
             return self.pan_by_pixels(current.x - previous.x, current.y - previous.y);
         }
+        if !self.is_on_ground(previous) || !self.is_on_ground(current) {
+            return self.pan_center_by_pixels(current.x - previous.x, current.y - previous.y);
+        }
 
         let previous_ground = self
             .camera
@@ -505,11 +559,21 @@ impl FlatRasterRuntime {
             return self.set_view_state(center.longitude, center.latitude, zoom);
         }
 
+        let zoom = (self.camera.zoom + delta_zoom).clamp(min_zoom, max_zoom);
+        if !self.is_on_ground(screen) {
+            // Over the sky there is no ground point to hold: MapLibre zooms about the center.
+            return self.set_camera_state(
+                self.camera.longitude,
+                self.camera.latitude,
+                zoom,
+                self.camera.bearing,
+                self.camera.pitch,
+            );
+        }
         let anchor = self
             .camera
             .unproject_screen_matrix(screen)
             .ok_or(FlatRasterRuntimeError::UnsupportedCamera)?;
-        let zoom = (self.camera.zoom + delta_zoom).clamp(min_zoom, max_zoom);
         let provisional = MapCamera::new(
             self.camera.longitude,
             self.camera.latitude,
@@ -560,6 +624,15 @@ impl FlatRasterRuntime {
         validate_camera(self.camera)?;
         if delta_bearing == 0.0 {
             return Ok(());
+        }
+        if !self.is_on_ground(screen) {
+            return self.set_camera_state(
+                self.camera.longitude,
+                self.camera.latitude,
+                self.camera.zoom,
+                self.camera.bearing + delta_bearing,
+                self.camera.pitch,
+            );
         }
 
         let anchor = self.unproject_screen(screen)?;
@@ -919,6 +992,7 @@ impl FlatRasterRuntime {
             visible_bounds,
             surface_margin: margin,
             overscan,
+            sky: self.sky_band(),
             placements: fallback,
             requests: request_candidates,
             cancellations,
@@ -2376,6 +2450,112 @@ mod tests {
         assert!((before.latitude - after.latitude).abs() < 1.0e-5);
         assert_eq!(runtime.camera().bearing, 45.0);
         assert_eq!(runtime.camera().pitch, 35.0);
+    }
+
+    /// A 75° camera: the horizon line is at about y = 76 of a 480 px viewport.
+    fn steep_runtime() -> FlatRasterRuntime {
+        runtime_with_camera([10.4, 51.2], 5.55, -20.0, 75.0, 720.0, 480.0)
+    }
+
+    #[test]
+    fn panning_over_the_sky_moves_the_center_by_the_pixel_delta() {
+        let mut runtime = steep_runtime();
+        let previous = ScreenCoordinate { x: 360.0, y: 10.0 };
+        let current = ScreenCoordinate { x: 260.0, y: 50.0 };
+        // MapLibre: `setCenter(screenPointToLocation(centerPoint - panDelta))`.
+        let expected = runtime
+            .unproject_screen(ScreenCoordinate {
+                x: 360.0 + 100.0,
+                y: 240.0 - 40.0,
+            })
+            .unwrap();
+
+        runtime
+            .pan_between_screen_points(previous, current)
+            .unwrap();
+
+        assert!((runtime.camera().longitude - expected.longitude).abs() < 1.0e-9);
+        assert!((runtime.camera().latitude - expected.latitude).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_gesture_crossing_the_horizon_keeps_panning_by_the_pixel_delta() {
+        let mut runtime = steep_runtime();
+        // The ground point under a pointer in the sky is not one the eye sees.
+        let previous = ScreenCoordinate { x: 360.0, y: 40.0 };
+        let current = ScreenCoordinate { x: 360.0, y: 140.0 };
+        let expected = runtime
+            .unproject_screen(ScreenCoordinate { x: 360.0, y: 140.0 })
+            .unwrap();
+
+        runtime
+            .pan_between_screen_points(previous, current)
+            .unwrap();
+
+        assert!((runtime.camera().longitude - expected.longitude).abs() < 1.0e-9);
+        assert!((runtime.camera().latitude - expected.latitude).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn zooming_over_the_sky_keeps_the_center() {
+        let mut runtime = steep_runtime();
+        let before = runtime.camera();
+
+        runtime
+            .zoom_about(0.5, ScreenCoordinate { x: 360.0, y: 20.0 }, 0.0, 22.0)
+            .unwrap();
+
+        assert_eq!(runtime.camera().zoom, 6.05);
+        assert_eq!(runtime.camera().longitude, before.longitude);
+        assert_eq!(runtime.camera().latitude, before.latitude);
+    }
+
+    #[test]
+    fn rotating_over_the_sky_keeps_the_center() {
+        let mut runtime = steep_runtime();
+        let before = runtime.camera();
+
+        runtime
+            .rotate_about(10.0, ScreenCoordinate { x: 360.0, y: 20.0 })
+            .unwrap();
+
+        assert_eq!(runtime.camera().bearing, -10.0);
+        assert_eq!(runtime.camera().longitude, before.longitude);
+        assert_eq!(runtime.camera().latitude, before.latitude);
+    }
+
+    #[test]
+    fn the_ground_below_the_horizon_keeps_its_anchors() {
+        let mut runtime = steep_runtime();
+        let previous = ScreenCoordinate { x: 300.0, y: 300.0 };
+        let current = ScreenCoordinate { x: 340.0, y: 360.0 };
+        let before = runtime.unproject_screen(previous).unwrap();
+
+        runtime
+            .pan_between_screen_points(previous, current)
+            .unwrap();
+        let after = runtime.unproject_screen(current).unwrap();
+
+        assert!((before.longitude - after.longitude).abs() < 1.0e-5);
+        assert!((before.latitude - after.latitude).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn a_frame_carries_the_sky_band_only_with_the_horizon_in_view() {
+        let mut flat = runtime_with_camera([10.4, 51.2], 5.55, -20.0, 50.0, 720.0, 480.0);
+        assert_eq!(flat.frame_plan().unwrap().sky, None);
+
+        let mut steep = steep_runtime();
+        steep
+            .set_sky_style(r##"{"sky":{"sky-color":"#102030"}}"##)
+            .unwrap();
+        let band = steep.frame_plan().unwrap().sky.unwrap();
+        assert!((band.horizon_y - 76.0).abs() < 1.0);
+        assert!(band.is_visible());
+
+        // Removing the style's sky leaves a transparent band, the page behind the map.
+        steep.set_sky_style("").unwrap();
+        assert!(!steep.frame_plan().unwrap().sky.unwrap().is_visible());
     }
 
     #[test]

@@ -184,7 +184,7 @@ impl MapLocalRenderFrame {
     pub fn viewport_ground_bounds(self) -> Option<MapLocalViewportBounds> {
         let width = self.flat_camera.viewport.width;
         let height = self.flat_camera.viewport.height;
-        let top = (height / 2.0 - mercator_horizon(height, self.pitch_degrees)).max(0.0);
+        let top = screen_horizon_y(height, self.pitch_degrees).max(0.0);
         let corners = [
             ScreenCoordinate { x: 0.0, y: top },
             ScreenCoordinate { x: width, y: top },
@@ -266,6 +266,13 @@ impl MapLocalRenderFrame {
 #[must_use]
 pub fn camera_to_center_distance(viewport_height: f64) -> f64 {
     0.5 / (FIELD_OF_VIEW_Y_RADIANS * 0.5).tan() * viewport_height
+}
+
+/// The Mercator horizon line, in CSS pixels down from the viewport's top edge; not positive
+/// when the viewport does not reach it.
+#[must_use]
+pub fn screen_horizon_y(viewport_height: f64, pitch_degrees: f64) -> f64 {
+    viewport_height / 2.0 - mercator_horizon(viewport_height, pitch_degrees)
 }
 
 /// MapLibre's `getMercatorHorizon`: the horizon line's height above the viewport center in CSS
