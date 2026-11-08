@@ -956,7 +956,7 @@
     },
     {
       "id": "retained-polygons-camera-pan",
-      "description": "Pan the unchanged first-party polygon group through 32 real maps-core camera frames after its first geometry build. RetainedPolygonState::prepare is the same refresh decision used by the WebGPU backend; each rebuild produces real fill/stroke/pattern bytes and is counted. A frame still places the retained anchor and submits one uniform, with no per-shape geometry rebuild or upload. Correctness of the built shape geometry is covered by the retained-polygons unit tests and the independent visual oracle.",
+      "description": "Pan the unchanged first-party polygon group through 32 real maps-core camera frames after its first geometry build. RetainedPolygonState::prepare is the same refresh decision used by the WebGPU backend; each rebuild produces real fill/stroke/pattern bytes and is counted. A frame still places the retained anchor and submits one uniform, with no per-shape geometry rebuild or upload. Oracle: after the journey, the GPU buffers (mirrored by executing every upload) draw exactly the bytes of a fresh build of the group around its anchor.",
       "publicContract": "maps-wasm RetainedPolygonState::prepare behind MapsWgpuBaseMapRenderer.renderPacked",
       "dimensions": {
         "staticShapes": {
@@ -992,6 +992,214 @@
           "budget": { "max": 32 },
           "growth": [{ "dimension": "staticShapes", "bound": "constant" }],
           "notes": "One retained-anchor frame per camera frame at zoom 5, independent of polygon count."
+        }
+      ]
+    },
+    {
+      "id": "retained-polygons-camera-zoom-rotate",
+      "description": "Zoom (5 to 8.2) and rotate (bearing 0 to 128 degrees) about a fixed centre over the unchanged polygon group of retained-polygons-camera-pan, through 32 real maps-core camera frames, with the same refresh state, mirror and oracle. Pitch is excluded by design: the runtime returns shape groups to the projected path under a pitched camera, so the projected picking scene and the Canvas oracle agree. Polygon-only groups have no tile-zoom-dependent geometry; groups with lines or patterns are rebuilt once per floored zoom change, as MapLibre's GeoJSON tiles are.",
+      "publicContract": "maps-wasm RetainedPolygonState::prepare behind MapsWgpuBaseMapRenderer.renderPacked",
+      "dimensions": {
+        "staticShapes": {
+          "description": "Unchanged filled four-vertex polygons retained in a group"
+        }
+      },
+      "scalePoints": [
+        { "staticShapes": 100 },
+        { "staticShapes": 1000 },
+        { "staticShapes": 10000 }
+      ],
+      "metrics": [
+        {
+          "name": "geometry-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": { "max": 0 },
+          "growth": [{ "dimension": "staticShapes", "bound": "constant" }],
+          "notes": "Initial geometry build is outside the measured camera phase. No zoom or bearing frame may rebuild it, and a fixed centre needs no rebase."
+        },
+        {
+          "name": "geometry-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": { "max": 0 },
+          "growth": [{ "dimension": "staticShapes", "bound": "constant" }],
+          "notes": "Counts all four geometry buffer payloads emitted by any refresh during the camera phase."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": { "max": 32 },
+          "growth": [{ "dimension": "staticShapes", "bound": "constant" }],
+          "notes": "One retained-anchor frame per camera frame (one world copy at these zooms), independent of polygon count."
+        }
+      ]
+    },
+    {
+      "id": "retained-polygons-update-features",
+      "description": "Update changed shapes of a drawn retained shape group in place (RetainedPolygonState.update behind updateRetainedPolygons), spread across the group: each stroked square becomes a moved, recoloured stroked pentagon, so its geometry grows and moves into the free tail of the fill and stroke buffers. Then draw one camera frame. Oracle: the mirrored GPU buffers, kept by executing every upload, draw exactly the bytes of a fresh build of the whole updated group around the same anchor.",
+      "publicContract": "maps-wasm RetainedPolygonState.update behind MapsWgpuBaseMapRenderer.updateRetainedPolygons",
+      "dimensions": {
+        "totalShapes": {
+          "description": "stroked four-vertex polygons retained in the group"
+        },
+        "changedShapes": {
+          "description": "shapes updated in place"
+        }
+      },
+      "scalePoints": [
+        { "totalShapes": 100, "changedShapes": 1 },
+        { "totalShapes": 100, "changedShapes": 10 },
+        { "totalShapes": 1000, "changedShapes": 1 },
+        { "totalShapes": 1000, "changedShapes": 10 },
+        { "totalShapes": 1000, "changedShapes": 100 },
+        { "totalShapes": 10000, "changedShapes": 1 },
+        { "totalShapes": 10000, "changedShapes": 10 },
+        { "totalShapes": 10000, "changedShapes": 100 }
+      ],
+      "metrics": [
+        {
+          "name": "prepared-shapes",
+          "unit": "shapes",
+          "signal": "operation-count",
+          "budget": { "max": 100 },
+          "growth": [
+            { "dimension": "totalShapes", "bound": "constant" },
+            { "dimension": "changedShapes", "bound": "linear" }
+          ],
+          "notes": "Only the changed shapes are lowered (exactly changedShapes)."
+        },
+        {
+          "name": "geometry-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": { "max": 0 },
+          "growth": [
+            { "dimension": "totalShapes", "bound": "constant" },
+            { "dimension": "changedShapes", "bound": "constant" }
+          ],
+          "notes": "Neither the update nor the following camera frame rebuilds the group. A group is repacked only when moved shapes fill a buffer's free tail (a quarter of its vertices at the last build) or a shape's draw count changes."
+        },
+        {
+          "name": "geometry-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": { "max": 530400 },
+          "growth": [
+            { "dimension": "totalShapes", "bound": "constant" },
+            { "dimension": "changedShapes", "bound": "linear" }
+          ],
+          "notes": "Exactly changedShapes x 5,304 bytes: a pentagon's 21 fill vertices (24 bytes) and 60 stroke vertices (80 bytes)."
+        },
+        {
+          "name": "geometry-write-calls",
+          "unit": "calls",
+          "signal": "operation-count",
+          "budget": { "max": 200 },
+          "growth": [
+            { "dimension": "totalShapes", "bound": "constant" },
+            { "dimension": "changedShapes", "bound": "linear" }
+          ],
+          "notes": "One fill and one stroke write per changed shape."
+        },
+        {
+          "name": "unrelated-bytes-written",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": { "max": 0 },
+          "growth": [
+            { "dimension": "totalShapes", "bound": "constant" },
+            { "dimension": "changedShapes", "bound": "constant" }
+          ],
+          "notes": "Bytes written over geometry that unchanged shapes draw."
+        },
+        {
+          "name": "bridge-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": { "max": 15600 },
+          "growth": [
+            { "dimension": "totalShapes", "bound": "constant" },
+            { "dimension": "changedShapes", "bound": "linear" }
+          ],
+          "notes": "Argument bytes of the updateRetainedPolygons call per changed pentagon: u32 index, ring, point and dash counts, five f64 longitude/latitude pairs and 15 f32 paint values = 156 bytes; no dashes or patterns."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": { "max": 1 },
+          "growth": [
+            { "dimension": "totalShapes", "bound": "constant" },
+            { "dimension": "changedShapes", "bound": "constant" }
+          ],
+          "notes": "One retained-anchor frame for the camera frame after the update."
+        }
+      ]
+    },
+    {
+      "id": "retained-polygons-replace-dataset",
+      "description": "Replace a drawn retained shape group with a moved dataset of the same size (a new RetainedPolygonState behind setRetainedPolygons), then draw one camera frame. Legitimate O(N) work, declared linear, in contrast to the constant camera operations and the update linear in changed shapes only. Same mirror and fresh-build oracle.",
+      "publicContract": "maps-wasm RetainedPolygonState::new and prepare behind MapsWgpuBaseMapRenderer.setRetainedPolygons",
+      "dimensions": {
+        "shapes": {
+          "description": "stroked four-vertex polygons in the replacement dataset"
+        }
+      },
+      "scalePoints": [
+        { "shapes": 100 },
+        { "shapes": 1000 },
+        { "shapes": 10000 }
+      ],
+      "metrics": [
+        {
+          "name": "prepared-shapes",
+          "unit": "shapes",
+          "signal": "operation-count",
+          "budget": { "max": 10000 },
+          "growth": [{ "dimension": "shapes", "bound": "linear" }],
+          "notes": "Every shape of the new dataset is lowered once."
+        },
+        {
+          "name": "geometry-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": { "max": 1 },
+          "growth": [{ "dimension": "shapes", "bound": "constant" }],
+          "notes": "One full build on the new group's first draw."
+        },
+        {
+          "name": "geometry-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": { "max": 42720000 },
+          "growth": [{ "dimension": "shapes", "bound": "linear" }],
+          "notes": "Exactly shapes x 4,272 bytes: a square's 18 fill vertices (24 bytes) and 48 stroke vertices (80 bytes)."
+        },
+        {
+          "name": "geometry-write-calls",
+          "unit": "calls",
+          "signal": "operation-count",
+          "budget": { "max": 2 },
+          "growth": [{ "dimension": "shapes", "bound": "constant" }],
+          "notes": "One fill and one stroke buffer upload."
+        },
+        {
+          "name": "bridge-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": { "max": 1360000 },
+          "growth": [{ "dimension": "shapes", "bound": "linear" }],
+          "notes": "Argument bytes of the setRetainedPolygons call per square: ring, point and dash counts, four f64 longitude/latitude pairs and 15 f32 paint values = 136 bytes."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": { "max": 1 },
+          "growth": [{ "dimension": "shapes", "bound": "constant" }],
+          "notes": "One retained-anchor frame for the camera frame."
         }
       ]
     }

@@ -11,6 +11,7 @@ import {
   createMapsRetainedApplicationRuns,
   createMapsWgpuApplicationFrame,
   createMapsWgpuApplicationFramePacker,
+  diffMapsRetainedPolygons,
   MAPS_WGPU_APPLICATION_CIRCLE,
   MAPS_RETAINED_APPLICATION_MAX_RUNS,
   MAPS_RETAINED_POINT_RUN_MIN,
@@ -20,6 +21,7 @@ import {
   MAPS_RETAINED_SHAPE_LINE,
   MAPS_WGPU_APPLICATION_POLYGON,
   readMapsWgpuApplicationCircles,
+  type MapsRetainedApplicationPolygons,
   type MapsWgpuApplicationFrame,
 } from "./wgpu-application-frame";
 
@@ -700,3 +702,87 @@ describe("retained application runs (#195)", () => {
   });
 });
 
+
+describe("retained shape group updates (#189)", () => {
+  const stride = MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+  /** Shapes as [rings, paint value, dash array, pattern]. */
+  function group(
+    shapes: Array<[number[][][], number, number[], string]>,
+  ): MapsRetainedApplicationPolygons {
+    const rings = shapes.flatMap(([shapeRings]) => shapeRings);
+    return {
+      count: shapes.length,
+      ringCounts: Uint32Array.from(shapes.map(([shapeRings]) => shapeRings.length)),
+      pointCounts: Uint32Array.from(rings.map((ring) => ring.length)),
+      lonLat: Float64Array.from(rings.flat(2)),
+      paint: Float32Array.from(shapes.flatMap(([, value]) => Array(stride).fill(value))),
+      dashCounts: Uint32Array.from(shapes.map(([, , dashes]) => dashes.length)),
+      dashes: Float32Array.from(shapes.flatMap(([, , dashes]) => dashes)),
+      patterns: shapes.some(([, , , pattern]) => pattern) ? shapes.map(([, , , p]) => p) : [],
+    };
+  }
+  const square = (x: number) => [
+    [x, 0],
+    [x + 1, 0],
+    [x + 1, 1],
+    [x, 1],
+  ];
+  const holed = (x: number) => [square(x), square(x + 0.25).map(([a, b]) => [a! / 2, b! / 2])];
+
+  test("sends only the changed shapes, slicing multi-ring shapes, dashes and patterns", () => {
+    const previous = group([
+      [holed(0), 1, [], ""],
+      [[square(2)], 2, [2, 1], ""],
+      [holed(4), 3, [], "dots"],
+      [[square(6)], 4, [], ""],
+      [[square(8)], 5, [], ""],
+    ]);
+    const next = group([
+      [holed(0), 1, [], ""],
+      [[square(2)], 2, [3, 1, 1], ""],
+      [holed(4), 3, [], "dots"],
+      [[square(6), square(6.5)], 4, [], ""],
+      [[square(8)], 5, [], ""],
+    ]);
+
+    const changes = diffMapsRetainedPolygons(previous, next)!;
+    expect(Array.from(changes.indices)).toEqual([1, 3]);
+    const shapes = changes.polygons;
+    expect(shapes.count).toBe(2);
+    expect(Array.from(shapes.ringCounts)).toEqual([1, 2]);
+    expect(Array.from(shapes.pointCounts)).toEqual([4, 4, 4]);
+    expect(Array.from(shapes.lonLat)).toEqual([square(2), square(6), square(6.5)].flat(2));
+    expect(Array.from(shapes.paint)).toEqual([...Array(stride).fill(2), ...Array(stride).fill(4)]);
+    expect(Array.from(shapes.dashCounts)).toEqual([3, 0]);
+    expect(Array.from(shapes.dashes)).toEqual([3, 1, 1]);
+    expect(shapes.patterns).toEqual([]);
+
+    // A pattern change alone is a change, and keeps the changed shapes' patterns.
+    const repatterned = group([
+      [holed(0), 1, [], ""],
+      [[square(2)], 2, [2, 1], ""],
+      [holed(4), 3, [], "stripes"],
+      [[square(6)], 4, [], ""],
+      [[square(8)], 5, [], ""],
+    ]);
+    const patternChange = diffMapsRetainedPolygons(previous, repatterned)!;
+    expect(Array.from(patternChange.indices)).toEqual([2]);
+    expect(patternChange.polygons.patterns).toEqual(["stripes"]);
+    expect(Array.from(patternChange.polygons.pointCounts)).toEqual([4, 4]);
+  });
+
+  test("reports identical groups as unchanged and replaces resized or mostly changed ones", () => {
+    const shapes: Array<[number[][][], number, number[], string]> = [0, 1, 2, 3].map((x) => [
+      [square(x * 2)],
+      x,
+      [],
+      "",
+    ]);
+    expect(diffMapsRetainedPolygons(group(shapes), group(shapes))?.indices).toHaveLength(0);
+    expect(diffMapsRetainedPolygons(group(shapes), group(shapes.slice(1)))).toBeNull();
+    const mostly = shapes.map(([rings, value, dashes, pattern], index) =>
+      index < 3 ? ([rings, value + 10, dashes, pattern] as const) : [rings, value, dashes, pattern],
+    ) as typeof shapes;
+    expect(diffMapsRetainedPolygons(group(shapes), group(mostly))).toBeNull();
+  });
+});

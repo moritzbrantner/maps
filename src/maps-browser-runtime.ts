@@ -46,6 +46,7 @@ import type {
   MapsRetainedApplicationPolygons,
   MapsRetainedApplicationRun,
   MapsRetainedPointChanges,
+  MapsRetainedPolygonChanges,
   MapsWgpuApplicationFrame,
 } from "./wgpu-application-frame";
 import {
@@ -115,11 +116,11 @@ type MapsRetainedPointTransport = {
     previous: MapsRetainedApplicationPoints,
     next: MapsRetainedApplicationPoints,
   ) => MapsRetainedPointChanges | null;
-  /** Whether a retained shape group is unchanged. */
-  samePolygons: (
+  /** Changed shapes of a retained shape group, or `null` when it must be replaced. */
+  polygonChanges: (
     previous: MapsRetainedApplicationPolygons,
     next: MapsRetainedApplicationPolygons,
-  ) => boolean;
+  ) => MapsRetainedPolygonChanges | null;
 };
 
 export type MapsBaseRenderer = "pending" | "wgpu" | "canvas2d";
@@ -579,7 +580,7 @@ export function createMapsBrowserRuntime(
         frame: transport.createMapsWgpuRetainedFrame,
         pointChanges: transport.diffMapsRetainedPoints,
         runs: transport.createMapsRetainedApplicationRuns,
-        samePolygons: transport.sameMapsRetainedPolygons,
+        polygonChanges: transport.diffMapsRetainedPolygons,
       };
       delete canvas.dataset.mapBaseRendererError;
     } catch (error) {
@@ -1853,8 +1854,8 @@ function createFrameSynchronizer({
       const transport = retainedPointTransport;
       const runs = transport.runs(frame, interaction, { shapes: !cameraPitched() });
       // Groups still retained on this renderer from the previous runs. A group of the same
-      // kind is kept: unchanged groups are not touched and point groups of the same size
-      // are updated in place, so one changed feature uploads one point (#189).
+      // kind is kept: unchanged groups are not touched and groups of the same size are
+      // updated in place, so one changed feature uploads one point or shape (#189).
       const previousRuns = current?.renderer === currentRenderer ? current.runs : [];
       const uploads = runs?.map((run, index): (() => unknown) | undefined => {
         const previous = previousRuns[index];
@@ -1879,11 +1880,25 @@ function createFrameSynchronizer({
               currentRenderer.setRetainedPoints!(index + 1, run.points.lonLat, run.points.paint))
           );
         }
-        if (
-          previous?.kind === "polygons" &&
-          transport.samePolygons(previous.polygons, run.polygons)
-        ) {
-          return retainedGroupUnchanged;
+        const shapeChanges =
+          previous?.kind === "polygons"
+            ? transport.polygonChanges(previous.polygons, run.polygons)
+            : null;
+        if (shapeChanges?.indices.length === 0) return retainedGroupUnchanged;
+        if (shapeChanges && currentRenderer.updateRetainedPolygons) {
+          const shapes = shapeChanges.polygons;
+          return () =>
+            currentRenderer.updateRetainedPolygons!(
+              index + 1,
+              shapeChanges.indices,
+              shapes.ringCounts,
+              shapes.pointCounts,
+              shapes.lonLat,
+              shapes.paint,
+              shapes.dashCounts,
+              shapes.dashes,
+              shapes.patterns,
+            );
         }
         return (
           currentRenderer.setRetainedPolygons &&

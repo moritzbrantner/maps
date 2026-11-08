@@ -601,29 +601,113 @@ export function diffMapsRetainedPoints(
   return { indices, lonLat, paint };
 }
 
-/** Whether two retained shape groups hold identical shapes and paint. */
-export function sameMapsRetainedPolygons(
+/** Shapes of a retained shape group replaced in place (`updateRetainedPolygons`, #189). */
+export type MapsRetainedPolygonChanges = {
+  /** Strictly increasing indices of the changed shapes. */
+  indices: Uint32Array;
+  /** The changed shapes, as `setRetainedPolygons` takes a group. */
+  polygons: MapsRetainedApplicationPolygons;
+};
+
+/** Where each shape's rings, points and dashes start in a shape group's arrays. */
+function retainedShapeOffsets(group: MapsRetainedApplicationPolygons) {
+  const rings = new Uint32Array(group.count + 1);
+  const points = new Uint32Array(group.count + 1);
+  const dashes = new Uint32Array(group.count + 1);
+  let ring = 0;
+  for (let shape = 0; shape < group.count; shape += 1) {
+    let shapePoints = 0;
+    for (let end = ring + group.ringCounts[shape]!; ring < end; ring += 1) {
+      shapePoints += group.pointCounts[ring]!;
+    }
+    rings[shape + 1] = ring;
+    points[shape + 1] = points[shape]! + shapePoints;
+    dashes[shape + 1] = dashes[shape]! + (group.dashCounts[shape] ?? 0);
+  }
+  return { dashes, points, rings };
+}
+
+function sameRange(
+  left: ArrayLike<number>,
+  leftStart: number,
+  right: ArrayLike<number>,
+  rightStart: number,
+  length: number,
+) {
+  for (let index = 0; index < length; index += 1) {
+    if (left[leftStart + index] !== right[rightStart + index]) return false;
+  }
+  return true;
+}
+
+/**
+ * The shapes of `next` that differ from `previous` in rings, paint, dashes or pattern, for an
+ * in-place update of the retained group built from `previous`. `null` when the groups differ
+ * in size, or when more than half of the shapes changed, where replacing the group is no
+ * more work than updating it.
+ */
+export function diffMapsRetainedPolygons(
   previous: MapsRetainedApplicationPolygons,
   next: MapsRetainedApplicationPolygons,
-): boolean {
-  const same = (left: ArrayLike<number>, right: ArrayLike<number>) => {
-    if (left.length !== right.length) return false;
-    for (let index = 0; index < left.length; index += 1) {
-      if (left[index] !== right[index]) return false;
+): MapsRetainedPolygonChanges | null {
+  if (previous.count !== next.count) return null;
+  const stride = MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+  const before = retainedShapeOffsets(previous);
+  const after = retainedShapeOffsets(next);
+  const pattern = (group: MapsRetainedApplicationPolygons, shape: number) =>
+    group.patterns[shape] ?? "";
+  const changed: number[] = [];
+  for (let shape = 0; shape < next.count; shape += 1) {
+    const rings = next.ringCounts[shape]!;
+    const points = after.points[shape + 1]! - after.points[shape]!;
+    const dashes = next.dashCounts[shape] ?? 0;
+    const same =
+      previous.ringCounts[shape] === rings &&
+      before.points[shape + 1]! - before.points[shape]! === points &&
+      (previous.dashCounts[shape] ?? 0) === dashes &&
+      pattern(previous, shape) === pattern(next, shape) &&
+      sameRange(previous.pointCounts, before.rings[shape]!, next.pointCounts, after.rings[shape]!, rings) &&
+      sameRange(previous.lonLat, before.points[shape]! * 2, next.lonLat, after.points[shape]! * 2, points * 2) &&
+      sameRange(previous.paint, shape * stride, next.paint, shape * stride, stride) &&
+      sameRange(previous.dashes, before.dashes[shape]!, next.dashes, after.dashes[shape]!, dashes);
+    if (!same) {
+      changed.push(shape);
+      if (changed.length * 2 > next.count) return null;
     }
-    return true;
+  }
+
+  const sum = (offsets: Uint32Array) =>
+    changed.reduce((total, shape) => total + offsets[shape + 1]! - offsets[shape]!, 0);
+  const polygons: MapsRetainedApplicationPolygons = {
+    count: changed.length,
+    ringCounts: new Uint32Array(changed.length),
+    pointCounts: new Uint32Array(sum(after.rings)),
+    lonLat: new Float64Array(sum(after.points) * 2),
+    paint: new Float32Array(changed.length * stride),
+    dashCounts: new Uint32Array(changed.length),
+    dashes: new Float32Array(sum(after.dashes)),
+    patterns: changed.some((shape) => pattern(next, shape) !== "")
+      ? changed.map((shape) => pattern(next, shape))
+      : [],
   };
-  return (
-    previous.count === next.count &&
-    same(previous.ringCounts, next.ringCounts) &&
-    same(previous.pointCounts, next.pointCounts) &&
-    same(previous.lonLat, next.lonLat) &&
-    same(previous.paint, next.paint) &&
-    same(previous.dashCounts, next.dashCounts) &&
-    same(previous.dashes, next.dashes) &&
-    previous.patterns.length === next.patterns.length &&
-    previous.patterns.every((pattern, index) => pattern === next.patterns[index])
-  );
+  let [ring, point, dash] = [0, 0, 0];
+  changed.forEach((shape, position) => {
+    const range = (offsets: Uint32Array, scale = 1) =>
+      [offsets[shape]! * scale, offsets[shape + 1]! * scale] as const;
+    polygons.ringCounts[position] = next.ringCounts[shape]!;
+    polygons.dashCounts[position] = next.dashCounts[shape] ?? 0;
+    polygons.paint.set(next.paint.subarray(shape * stride, (shape + 1) * stride), position * stride);
+    const rings = next.pointCounts.subarray(...range(after.rings));
+    polygons.pointCounts.set(rings, ring);
+    ring += rings.length;
+    const lonLat = next.lonLat.subarray(...range(after.points, 2));
+    polygons.lonLat.set(lonLat, point);
+    point += lonLat.length;
+    const dashes = next.dashes.subarray(...range(after.dashes));
+    polygons.dashes.set(dashes, dash);
+    dash += dashes.length;
+  });
+  return { indices: Uint32Array.from(changed), polygons };
 }
 
 /**

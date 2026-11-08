@@ -111,6 +111,23 @@ export type MapsWgpuBaseMapRenderer = {
     dashes: Float32Array,
     patterns: string[],
   ): number;
+  /**
+   * Replaces shapes of a retained shape group in place (#189): strictly increasing shape
+   * `indices`, then those shapes as `setRetainedPolygons` takes a group. Only they are
+   * lowered and their geometry rewritten. Absent on renderers without in-place updates; the
+   * group is then replaced with `setRetainedPolygons`.
+   */
+  updateRetainedPolygons?(
+    group: number,
+    indices: Uint32Array,
+    ringCounts: Uint32Array,
+    pointCounts: Uint32Array,
+    lonLat: Float64Array,
+    paint: Float32Array,
+    dashCounts: Uint32Array,
+    dashes: Float32Array,
+    patterns: string[],
+  ): number;
   evictRetainedPolygons?(group: number): void;
   /** Style table from `createMapsVectorBasemapStyleTable`. */
   setVectorStyle(table: Float32Array): void;
@@ -187,6 +204,17 @@ type MapsWgpuBaseMapWasmRenderer = {
   evictRetainedPoints(group: number): void;
   setRetainedPolygons(
     group: number,
+    ringCounts: Uint32Array,
+    pointCounts: Uint32Array,
+    lonLat: Float64Array,
+    paint: Float32Array,
+    dashCounts: Uint32Array,
+    dashes: Float32Array,
+    patterns: string[],
+  ): number;
+  updateRetainedPolygons(
+    group: number,
+    indices: Uint32Array,
     ringCounts: Uint32Array,
     pointCounts: Uint32Array,
     lonLat: Float64Array,
@@ -369,6 +397,32 @@ export async function loadMapsWgpuBaseMapRenderer(
           assertLive(disposed);
           return renderer.setRetainedPolygons(
             group,
+            ringCounts,
+            pointCounts,
+            lonLat,
+            paint,
+            dashCounts,
+            dashes,
+            patterns,
+          );
+        });
+      },
+      updateRetainedPolygons(
+        group,
+        indices,
+        ringCounts,
+        pointCounts,
+        lonLat,
+        paint,
+        dashCounts,
+        dashes,
+        patterns,
+      ) {
+        return runRendererOperation(canvas, owner, () => {
+          assertLive(disposed);
+          return renderer.updateRetainedPolygons(
+            group,
+            indices,
             ringCounts,
             pointCounts,
             lonLat,

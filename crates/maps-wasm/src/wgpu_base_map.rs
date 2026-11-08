@@ -26,8 +26,8 @@ use crate::retained_points::{
 };
 use crate::retained_polygons::{
     RETAINED_POLYGON_COVER_VERTEX_COUNT, RETAINED_POLYGON_FILL_VERTEX_SIZE,
-    RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonDraw, RetainedPolygonState,
-    RetainedPolygons,
+    RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonGeometry, RetainedPolygonState,
+    RetainedPolygonUpload, RetainedPolygons,
 };
 use crate::style_symbols::{StyleFrame, StyleSurface, StyleSymbols};
 use crate::vector_basemap_layout::{
@@ -39,6 +39,7 @@ use crate::wgpu_patterns::{PatternGpu, PatternPipelineTargets};
 use crate::wgpu_relief::{ReliefCamera, ReliefGpu};
 use crate::wgpu_retained::{
     FrameUniforms, RetainedResource, RetainedSet, retained_bytes, upload_retained_buffer,
+    upload_retained_buffer_with_capacity,
 };
 use crate::wgpu_symbols::{StyleLines, SymbolGpu};
 use maps_core::LineAtlas;
@@ -88,7 +89,67 @@ struct RetainedPolygonGroup {
     stroke: Option<wgpu::Buffer>,
     pattern_covers: Option<wgpu::Buffer>,
     pattern_outlines: Option<wgpu::Buffer>,
-    draws: Vec<RetainedPolygonDraw>,
+}
+
+impl RetainedPolygonGroup {
+    /// Executes the geometry-buffer work decided by [`RetainedPolygonState`]: new buffers
+    /// with free space for moved shapes, or in-place writes. Returns the bytes written.
+    fn apply(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        upload: RetainedPolygonUpload,
+    ) -> u64 {
+        match upload {
+            RetainedPolygonUpload::Replace(geometry) => self.replace(device, queue, &geometry),
+            RetainedPolygonUpload::Patch(writes) => {
+                let mut written = 0;
+                for write in writes {
+                    if let Some(buffer) = self.buffers()[write.buffer] {
+                        queue.write_buffer(buffer, write.offset, &write.bytes);
+                        written += write.bytes.len() as u64;
+                    }
+                }
+                written
+            }
+        }
+    }
+
+    fn replace(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        geometry: &RetainedPolygonGeometry,
+    ) -> u64 {
+        const LABELS: [&str; 4] = [
+            "Maps retained polygon fills",
+            "Maps retained polygon strokes",
+            "Maps retained polygon pattern covers",
+            "Maps retained polygon pattern outlines",
+        ];
+        let [fill, stroke, pattern_covers, pattern_outlines] = std::array::from_fn(|buffer| {
+            upload_retained_buffer_with_capacity(
+                device,
+                queue,
+                LABELS[buffer],
+                wgpu::BufferUsages::VERTEX,
+                geometry.buffers()[buffer],
+                geometry.capacity[buffer],
+            )
+        });
+        (self.fill, self.stroke) = (fill, stroke);
+        (self.pattern_covers, self.pattern_outlines) = (pattern_covers, pattern_outlines);
+        geometry.lengths().iter().sum()
+    }
+
+    fn buffers(&self) -> [Option<&wgpu::Buffer>; 4] {
+        [
+            self.fill.as_ref(),
+            self.stroke.as_ref(),
+            self.pattern_covers.as_ref(),
+            self.pattern_outlines.as_ref(),
+        ]
+    }
 }
 
 impl RetainedResource for RetainedPolygonGroup {
@@ -1459,21 +1520,15 @@ impl MapsWgpuBaseMapRenderer {
         dashes: &[f32],
         patterns: Vec<String>,
     ) -> Result<u32, JsValue> {
-        let mut polygons = RetainedPolygons::lower(ring_counts, point_counts, lon_lat, paint)
-            .map_err(JsValue::from_str)?;
-        polygons
-            .set_dashes(dash_counts, dashes, &mut self.line_atlas)
-            .map_err(JsValue::from_str)?;
-        polygons
-            .set_patterns(&patterns)
-            .map_err(JsValue::from_str)?;
-        for id in polygons.patterns() {
-            self.images.request_pattern(id);
-        }
-        self.dash_atlas.upload(&self.queue, &self.line_atlas);
-        let count = u32::try_from(polygons.len())
-            .map_err(|_| JsValue::from_str("too many retained polygons"))?;
-        self.retained_polygon_counters.prepared += u64::from(count);
+        let (polygons, count) = self.lower_retained_polygons(
+            ring_counts,
+            point_counts,
+            lon_lat,
+            paint,
+            dash_counts,
+            dashes,
+            &patterns,
+        )?;
         self.retained_polygons.insert(
             group,
             RetainedPolygonGroup {
@@ -1482,10 +1537,84 @@ impl MapsWgpuBaseMapRenderer {
                 stroke: None,
                 pattern_covers: None,
                 pattern_outlines: None,
-                draws: Vec::new(),
             },
         );
         Ok(count)
+    }
+
+    /// Replaces shapes of a retained shape group in place (#189): the strictly increasing
+    /// shape `indices`, then those shapes as for `setRetainedPolygons`. Only they are lowered
+    /// and their geometry rebuilt and written; the rest of the group stays on the GPU
+    /// untouched. Returns the number of updated shapes.
+    #[wasm_bindgen(js_name = updateRetainedPolygons)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_retained_polygons(
+        &mut self,
+        group: u32,
+        indices: &[u32],
+        ring_counts: &[u32],
+        point_counts: &[u32],
+        lon_lat: &[f64],
+        paint: &[f32],
+        dash_counts: &[u32],
+        dashes: &[f32],
+        patterns: Vec<String>,
+    ) -> Result<u32, JsValue> {
+        if !self.retained_polygons.contains(&group) {
+            return Err(JsValue::from_str("unknown retained polygon group"));
+        }
+        let (shapes, count) = self.lower_retained_polygons(
+            ring_counts,
+            point_counts,
+            lon_lat,
+            paint,
+            dash_counts,
+            dashes,
+            &patterns,
+        )?;
+        let atlas = self.images.atlas();
+        let entry = self
+            .retained_polygons
+            .get_mut(&group)
+            .ok_or_else(|| JsValue::from_str("unknown retained polygon group"))?;
+        if let Some(upload) = entry
+            .state
+            .update(indices, shapes, atlas)
+            .map_err(JsValue::from_str)?
+        {
+            self.retained_polygon_counters.upload_bytes +=
+                entry.apply(&self.device, &self.queue, upload);
+        }
+        Ok(count)
+    }
+
+    /// Lowers shapes for `setRetainedPolygons` or `updateRetainedPolygons`, entering their
+    /// dashes and patterns into the atlases.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_retained_polygons(
+        &mut self,
+        ring_counts: &[u32],
+        point_counts: &[u32],
+        lon_lat: &[f64],
+        paint: &[f32],
+        dash_counts: &[u32],
+        dashes: &[f32],
+        patterns: &[String],
+    ) -> Result<(RetainedPolygons, u32), JsValue> {
+        let mut polygons = RetainedPolygons::lower(ring_counts, point_counts, lon_lat, paint)
+            .map_err(JsValue::from_str)?;
+        polygons
+            .set_dashes(dash_counts, dashes, &mut self.line_atlas)
+            .map_err(JsValue::from_str)?;
+        polygons.set_patterns(patterns).map_err(JsValue::from_str)?;
+        for id in polygons.patterns() {
+            self.images.request_pattern(id);
+        }
+        self.dash_atlas.upload(&self.queue, &self.line_atlas);
+        let count = u32::try_from(polygons.len())
+            .map_err(|_| JsValue::from_str("too many retained polygons"))?;
+        self.retained_polygon_counters.prepared += u64::from(count);
+        Ok((polygons, count))
     }
 
     #[wasm_bindgen(js_name = evictRetainedPolygons)]
@@ -2144,42 +2273,13 @@ impl MapsWgpuBaseMapRenderer {
             // Lines use the floored GeoJSON tile zoom (#334); patterns use the image atlas
             // (#323). The same refresh decision drives deterministic work-contract tests.
             if let Some((geometry, rebase)) = group.state.prepare(&view, atlas) {
-                group.pattern_covers = upload_retained_buffer(
-                    &self.device,
-                    &self.queue,
-                    "Maps retained polygon pattern covers",
-                    wgpu::BufferUsages::VERTEX,
-                    &geometry.pattern_covers,
-                );
-                group.pattern_outlines = upload_retained_buffer(
-                    &self.device,
-                    &self.queue,
-                    "Maps retained polygon pattern outlines",
-                    wgpu::BufferUsages::VERTEX,
-                    &geometry.pattern_outlines,
-                );
-                group.fill = upload_retained_buffer(
-                    &self.device,
-                    &self.queue,
-                    "Maps retained polygon fills",
-                    wgpu::BufferUsages::VERTEX,
-                    &geometry.fill,
-                );
-                group.stroke = upload_retained_buffer(
-                    &self.device,
-                    &self.queue,
-                    "Maps retained polygon strokes",
-                    wgpu::BufferUsages::VERTEX,
-                    &geometry.stroke,
-                );
-                group.draws = geometry.draws;
                 if rebase {
                     self.retained_polygon_counters.rebases += 1;
                 } else {
                     self.retained_polygon_counters.tile_zooms += 1;
                 }
                 self.retained_polygon_counters.upload_bytes +=
-                    (geometry.fill.len() + geometry.stroke.len()) as u64;
+                    group.replace(&self.device, &self.queue, &geometry);
             }
             if let Some(anchor) = group.state.anchor() {
                 frames.extend(view.anchor_frames(anchor).map(|frame| (group_key, frame)));
@@ -2219,7 +2319,7 @@ impl MapsWgpuBaseMapRenderer {
         for (_, offset) in draws.iter().filter(|(key, _)| *key == group_key) {
             pass.set_bind_group(0, self.retained_polygon_uniforms.bind_group(), &[*offset]);
             pass.set_bind_group(1, &self.dash_atlas.bind_group, &[]);
-            for draw in &group.draws {
+            for draw in group.state.draws() {
                 if let (true, Some(fill)) = (draw.fan_count > 0, &group.fill) {
                     pass.set_vertex_buffer(0, fill.slice(..));
                     pass.set_stencil_reference(0);
