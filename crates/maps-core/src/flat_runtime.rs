@@ -10,7 +10,11 @@ use std::fmt;
 
 use crate::{
     GeographicCoordinate, MapCamera, MapViewportBounds, MapsTileset, ScreenCoordinate, TileId,
-    ViewportSize, WorldCoordinate, project_web_mercator, unproject_web_mercator,
+    ViewportSize, WorldCoordinate, project_web_mercator,
+    terrain::{
+        CoveringBudget, CoveringOptions, TerrainCamera, TerrainTransform, covering_tiles_within,
+    },
+    unproject_web_mercator,
 };
 
 const CAMERA_TILE_SIZE: f64 = 512.0;
@@ -1277,6 +1281,10 @@ fn visible_tile_placements(
     limit: usize,
     tileset: Option<&MapsTileset>,
 ) -> Result<Vec<RasterTilePlacement>, FlatRasterRuntimeError> {
+    if !is_flat_camera(camera) {
+        return oriented_tile_placements(camera, source, limit, tileset);
+    }
+    // North-up, unpitched: the frustum cover is exactly the viewport rectangle at one zoom.
     let center = project_web_mercator(camera.longitude, camera.latitude)
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
     let size = camera
@@ -1360,6 +1368,74 @@ fn visible_tile_placements(
     }
 
     Ok(placements)
+}
+
+/// MapLibre's `coveringTiles` for an oriented (rotated or pitched) camera (#332): the tiles that
+/// intersect the camera frustum, each at the zoom MapLibre gives it. Above
+/// `maxConstantZoomPitch` (60° at the default field of view) far tiles come from lower zooms,
+/// so the cover holds mixed zooms. The ground footprint may reach the horizon.
+fn oriented_tile_placements(
+    camera: MapCamera,
+    source: RasterSourceSpec,
+    limit: usize,
+    tileset: Option<&MapsTileset>,
+) -> Result<Vec<RasterTilePlacement>, FlatRasterRuntimeError> {
+    let center = project_web_mercator(camera.longitude, camera.latitude)
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+    let size = camera
+        .world_size()
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+    let transform = TerrainTransform::new(TerrainCamera {
+        longitude: camera.longitude,
+        latitude: camera.latitude,
+        zoom: camera.zoom,
+        bearing: camera.bearing,
+        pitch: camera.pitch,
+        width: camera.viewport.width,
+        height: camera.viewport.height,
+        elevation: 0.0,
+        min_elevation_for_current_tile: 0.0,
+    })
+    .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+    let options = CoveringOptions {
+        tile_size: f64::from(source.tile_size),
+        min_zoom: source.min_zoom,
+        max_zoom: source.max_zoom,
+        // Raster sources round the covering zoom, vector sources floor it (`source_covering_zoom`).
+        round_zoom: !source.vector,
+    };
+    let covers = |z: u8, x: u32, y: u32| {
+        TileId::new(z, x, y).is_some_and(|tile| tileset.is_none_or(|source| source.covers(tile)))
+    };
+    let budget = CoveringBudget {
+        fill_below_min_zoom: true,
+        covers: tileset
+            .is_some()
+            .then_some(&covers as &dyn Fn(u8, u32, u32) -> bool),
+        max_tiles: Some(limit),
+    };
+    let tiles = covering_tiles_within(&transform, options, None, &budget);
+    if tiles.len() > limit {
+        return Err(FlatRasterRuntimeError::TileCoverOverflow {
+            required: tiles.len(),
+            limit,
+        });
+    }
+    tiles
+        .into_iter()
+        .map(|covered| {
+            let tile = TileId::new(covered.z, covered.x, covered.y)
+                .ok_or(FlatRasterRuntimeError::InvalidSource)?;
+            Ok(raster_tile_placement(
+                camera,
+                center,
+                size,
+                tile,
+                covered.wrap,
+                true,
+            ))
+        })
+        .collect()
 }
 
 fn raster_tile_placement(
@@ -2045,25 +2121,242 @@ mod tests {
         assert!(plan.visible_bounds.north.is_finite());
     }
 
-    #[test]
-    fn camera_crossing_ground_horizon_is_rejected() {
+    /// The placements of a camera's frame, as MapLibre names covering tiles (`z/x/y@wrap`).
+    fn covered_tiles(
+        center: [f64; 2],
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+        size: [f64; 2],
+        source: RasterSourceSpec,
+    ) -> (BTreeSet<String>, MapViewportBounds) {
         let camera = MapCamera::new(
-            13.405,
-            52.52,
-            8.0,
-            0.0,
-            85.0,
-            ViewportSize::new(800.0, 600.0).unwrap(),
+            center[0],
+            center[1],
+            zoom,
+            bearing,
+            pitch,
+            ViewportSize::new(size[0], size[1]).unwrap(),
         )
         .unwrap();
+        let mut runtime =
+            FlatRasterRuntime::new(camera, source, FlatRasterRuntimeLimits::default()).unwrap();
+        let plan = runtime.frame_plan().unwrap();
+        let tiles = plan
+            .placements
+            .iter()
+            .map(|placement| {
+                let tile = placement.tile;
+                format!("{}/{}/{}@{}", tile.z, tile.x, tile.y, placement.world_copy)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(tiles.len(), plan.placements.len(), "duplicate placements");
+        (tiles, plan.visible_bounds)
+    }
 
+    fn tile_names(names: &str) -> BTreeSet<String> {
+        names.split_whitespace().map(str::to_owned).collect()
+    }
+
+    fn assert_bounds(bounds: MapViewportBounds, expected: [f64; 4]) {
+        let actual = [bounds.west, bounds.south, bounds.east, bounds.north];
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            // The shared local camera is `f32`: far horizon corners agree to well under a pixel.
+            assert!(
+                (actual - expected).abs() < 1.0e-4,
+                "{bounds:?} != {expected:?}"
+            );
+        }
+    }
+
+    /// MapLibre 6.16 `coveringTiles` and `getBounds` for the same cameras (#332), from its
+    /// `MercatorTransform` with `maxPitch` 85.
+    #[test]
+    fn oriented_covers_match_maplibre_covering_tiles() {
+        let raster = RasterSourceSpec::new(0, 19, 256).unwrap();
+        let size = [720.0, 480.0];
+
+        // North-up: the rectangle cover equals MapLibre's frustum cover.
+        let (tiles, bounds) = covered_tiles([10.4, 51.2], 5.55, 0.0, 0.0, size, raster);
+        assert_eq!(
+            tiles,
+            tile_names(
+                "7/67/42@0 7/67/43@0 7/68/42@0 7/68/43@0 7/66/42@0 7/67/41@0 7/66/43@0 7/68/41@0 \
+                 7/66/41@0 7/67/44@0 7/69/42@0 7/68/44@0 7/69/43@0 7/66/44@0 7/69/41@0 7/65/42@0 \
+                 7/65/43@0 7/69/44@0 7/65/41@0 7/65/44@0"
+            )
+        );
+        assert_bounds(
+            bounds,
+            [
+                4.997204062640833,
+                48.88747799973066,
+                15.802795937358155,
+                53.401997944899904,
+            ],
+        );
+
+        // Rotated: frustum culling drops the bounding box's corner tiles.
+        let (tiles, _) = covered_tiles([10.4, 51.2], 5.55, 35.0, 0.0, size, raster);
+        assert_eq!(
+            tiles,
+            tile_names(
+                "7/67/42@0 7/67/43@0 7/68/42@0 7/68/43@0 7/66/42@0 7/67/41@0 7/66/43@0 7/68/41@0 \
+                 7/66/41@0 7/67/44@0 7/69/42@0 7/68/44@0 7/69/43@0 7/65/42@0 7/67/40@0 7/65/43@0 \
+                 7/69/44@0 7/65/41@0 7/66/40@0 7/70/42@0"
+            )
+        );
+
+        // The `pitch` oracle camera, below `maxConstantZoomPitch`: one zoom.
+        let (tiles, _) = covered_tiles([10.4, 51.2], 5.55, -20.0, 50.0, size, raster);
+        assert_eq!(
+            tiles,
+            tile_names(
+                "7/67/42@0 7/67/43@0 7/68/42@0 7/68/43@0 7/66/42@0 7/67/41@0 7/66/43@0 7/68/41@0 \
+                 7/66/41@0 7/67/44@0 7/69/42@0 7/68/44@0 7/69/43@0 7/66/44@0 7/69/41@0 7/65/42@0 \
+                 7/67/40@0 7/65/43@0 7/68/40@0 7/65/41@0 7/66/40@0 7/69/40@0 7/65/40@0 7/64/42@0 \
+                 7/67/39@0 7/68/39@0 7/64/41@0 7/66/39@0 7/69/39@0 7/64/40@0 7/65/39@0 7/68/38@0 \
+                 7/63/41@0 7/69/38@0 7/63/40@0"
+            )
+        );
+
+        // Above 60°: far tiles come from lower zooms, and the viewport reaches the horizon.
+        let (tiles, bounds) = covered_tiles([10.4, 51.2], 5.55, -20.0, 75.0, size, raster);
+        assert_eq!(
+            tiles,
+            tile_names(
+                "7/68/42@0 7/68/43@0 7/67/44@0 7/69/42@0 7/69/43@0 7/66/44@0 6/34/20@0 6/33/21@0 \
+                 6/33/20@0 6/32/21@0 6/32/20@0 5/17/9@0 5/17/8@0 5/16/9@0 5/15/10@0 5/16/8@0 \
+                 4/7/4@0 4/6/4@0 3/4/1@0 3/3/1@0 3/2/1@0 8/136/88@0 8/135/90@0 8/136/89@0 \
+                 8/137/88@0 8/137/89@0 8/138/88@0 8/138/89@0"
+            )
+        );
+        assert_bounds(
+            bounds,
+            [
+                -45.127690655607836,
+                46.842190402938456,
+                22.56520899702403,
+                78.5307928737848,
+            ],
+        );
+
+        // Vector pyramid (floored zoom) at the steepest pitch.
+        let vector = RasterSourceSpec {
+            vector: true,
+            ..RasterSourceSpec::new(0, 14, 512).unwrap()
+        };
+        let (tiles, bounds) = covered_tiles([9.0, 47.2], 8.0, 30.0, 85.0, [800.0, 600.0], vector);
+        assert_eq!(
+            tiles,
+            tile_names(
+                "8/134/90@0 8/135/90@0 7/67/44@0 7/66/44@0 5/17/11@0 5/17/10@0 5/16/10@0 4/9/5@0 \
+                 4/8/4@0 9/267/180@0 9/267/181@0 9/268/182@0 10/535/364@0 11/1068/728@0 \
+                 11/1069/728@0"
+            )
+        );
+        assert_bounds(
+            bounds,
+            [
+                7.819449576324303,
+                45.95151773522383,
+                22.31523554751621,
+                56.85248107922715,
+            ],
+        );
+
+        // Across the antimeridian: the eastern world copy keeps its own wrap.
+        let (tiles, _) = covered_tiles([179.5, 10.0], 6.2, 90.0, 70.0, size, raster);
+        assert_eq!(
+            tiles,
+            tile_names(
+                "7/127/60@0 7/127/59@0 7/127/61@0 6/1/31@1 6/1/30@1 6/1/29@1 6/1/28@1 6/0/31@1 \
+                 6/0/30@1 6/0/29@1 5/1/16@1 5/1/15@1 5/1/14@1 5/1/13@1 4/1/8@1 4/1/7@1 4/1/6@1 \
+                 8/253/119@0 8/253/120@0 8/253/121@0 8/253/122@0"
+            )
+        );
+    }
+
+    #[test]
+    fn steep_oriented_cover_fills_the_source_minimum_zoom() {
+        let source = RasterSourceSpec::new(5, 19, 256).unwrap();
+        let (tiles, _) = covered_tiles([10.4, 51.2], 5.55, -20.0, 75.0, [720.0, 480.0], source);
+        let zooms = tiles
+            .iter()
+            .map(|name| name.split('/').next().unwrap().parse::<u8>().unwrap())
+            .collect::<BTreeSet<_>>();
+        // Far tiles below the source minimum zoom are filled at it, as north-up covers clamp.
+        assert_eq!(zooms.first(), Some(&5));
+        assert!(zooms.len() > 1, "{zooms:?}");
+    }
+
+    #[test]
+    fn steep_oriented_regional_cover_stays_inside_the_tileset() {
+        let camera = MapCamera::new(
+            9.53,
+            47.15,
+            11.0,
+            30.0,
+            80.0,
+            ViewportSize::new(1360.0, 900.0).unwrap(),
+        )
+        .unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(10, 14, 512).unwrap(),
+            FlatRasterRuntimeLimits::default(),
+        )
+        .unwrap();
+        let tileset: MapsTileset = serde_json::from_value(serde_json::json!({
+            "version": 1, "sourceId": "liechtenstein", "dataRevision": "sha256:fixture",
+            "format": "mvt", "schema": {"id": "shortbread", "version": "1.0", "sourceLayers": ["streets"]},
+            "transport": {"kind": "pmtiles", "url": "/liechtenstein.pmtiles"},
+            "projection": "web-mercator", "scheme": "xyz",
+            "bounds": [9.47, 47.04, 9.64, 47.28],
+            "minZoom": 10, "maxZoom": 14, "tileSize": 512,
+            "attribution": "OSM", "license": "ODbL-1.0", "provenance": "fixture"
+        }))
+        .unwrap();
+        let bounds = tileset.clone();
+        runtime.activate_tileset(tileset).unwrap();
+        for zoom in [11.0, 4.0, 0.0] {
+            runtime
+                .set_camera_state(9.53, 47.15, zoom, 30.0, 80.0)
+                .unwrap();
+            let plan = runtime
+                .frame_plan()
+                .expect("regional cover must stay bounded");
+            assert!(!plan.placements.is_empty());
+            assert!(plan.placements.len() <= DEFAULT_MAX_VISIBLE_TILES);
+            assert!(
+                plan.placements
+                    .iter()
+                    .all(|p| p.tile.z >= 10 && bounds.covers(p.tile))
+            );
+        }
+    }
+
+    #[test]
+    fn steep_oriented_cover_overflow_fails_closed() {
+        let camera = MapCamera::new(
+            9.0,
+            47.2,
+            2.0,
+            30.0,
+            80.0,
+            ViewportSize::new(1360.0, 900.0).unwrap(),
+        )
+        .unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(10, 14, 512).unwrap(),
+            FlatRasterRuntimeLimits::default(),
+        )
+        .unwrap();
         assert!(matches!(
-            FlatRasterRuntime::new(
-                camera,
-                RasterSourceSpec::new(0, 19, 512).unwrap(),
-                FlatRasterRuntimeLimits::default(),
-            ),
-            Err(FlatRasterRuntimeError::UnsupportedCamera)
+            runtime.frame_plan(),
+            Err(FlatRasterRuntimeError::TileCoverOverflow { limit, .. })
+                if limit == DEFAULT_MAX_VISIBLE_TILES
         ));
     }
 

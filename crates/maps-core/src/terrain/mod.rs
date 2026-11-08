@@ -13,7 +13,10 @@ mod transform;
 
 use std::collections::{BTreeSet, HashMap};
 
-pub use covering::{CoveredTile, CoveringOptions, TileElevationRange, covering_tiles};
+pub use covering::{
+    CoveredTile, CoveringBudget, CoveringOptions, TileElevationRange, covering_tiles,
+    covering_tiles_within,
+};
 pub use dem::{DemData, DemEncoding};
 pub use style::{
     HillshadeLayer, HillshadeLight, HillshadeMethod, ReliefStyle, TerrainSpec, TileSourceSpec,
