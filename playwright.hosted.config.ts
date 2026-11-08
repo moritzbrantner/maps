@@ -16,8 +16,13 @@ export default defineConfig({
       },
     },
   ],
-  reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report-hosted" }]],
+  reporter: [
+    ["list"],
+    ["html", { open: "never", outputFolder: "playwright-report-hosted" }],
+    ["./e2e-hosted/state-coverage-reporter.ts"],
+  ],
   testDir: "e2e-hosted",
+  testMatch: "**/*.spec.ts",
   timeout: 60_000,
   use: {
     baseURL: "http://127.0.0.1:5182",
@@ -26,8 +31,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command:
-      "bunx --bun vite preview --host 127.0.0.1 --port 5182 --strictPort --base /maps/",
+    command: "bunx --bun vite preview --host 127.0.0.1 --port 5182 --strictPort --base /maps/",
     reuseExistingServer: false,
     url: "http://127.0.0.1:5182/maps/",
   },

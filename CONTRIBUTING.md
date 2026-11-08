@@ -125,6 +125,27 @@ bun run test:browser:update
 
 Review screenshot diffs before committing.
 
+## Model-Based Map View Journeys
+
+`e2e-hosted/engine-state-model.ts` is the single expected-state model for the
+first-party Map View on Pages. Paths generated from it run against a real Pages
+build, so build the artifact first, the way `pages.yml` does, then run the
+targeted command:
+
+```sh
+bun run build:wasm
+rm -rf public/wasm && mkdir -p public/wasm
+cp dist/wasm/maps_wasm.js dist/wasm/maps_wasm_bg.wasm public/wasm/
+VITE_MAPS_WASM_SHOWCASE=1 bunx --bun vite build --base /maps/
+bun run test:browser:state-paths
+```
+
+The run lists per-state and per-edge pass, fail and untested results for desktop
+and touch input plus the unmodeled branches, and writes the same report to
+`test-results-hosted/engine-state-coverage.json`. Failures retain screenshots and
+traces. Set `MAPS_STATE_PATH_TIER=full` to add the generator's simple paths. The
+mandatory Pages check runs only the small `PULL_REQUEST_PATHS` subset.
+
 ## Benchmark Baselines
 
 Run:
