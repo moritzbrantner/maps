@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 use super::color::Rgba;
 use super::expression::{EvaluationContext, evaluate, is_expression, uses_zoom};
+use super::variable_anchors;
 use super::zoom::ZoomCurve;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +87,9 @@ const SYMBOL_LAYOUT: &[&str] = &[
     "text-max-angle",
     "text-keep-upright",
     "text-rotate",
+    "text-variable-anchor",
+    "text-variable-anchor-offset",
+    "text-radial-offset",
     "icon-image",
     "icon-size",
     "icon-anchor",
@@ -151,6 +155,9 @@ const LAYER_CONSTANT: &[&str] = &[
     "icon-keep-upright",
     "icon-text-fit",
     "icon-text-fit-padding",
+    // Constant anchor lists only: Maps does not evaluate expressions for them.
+    "text-variable-anchor",
+    "text-variable-anchor-offset",
     // Translations are not data-driven; Maps takes them constant.
     "text-translate",
     "text-translate-anchor",
@@ -205,7 +212,11 @@ impl StyleLayer {
                         "layer {id}: legacy function for {key} is not supported"
                     ));
                 }
-                validate_operators(value).map_err(|error| format!("layer {id}: {key}: {error}"))?;
+                // `[anchor, [x, y], ...]` reads like an expression but is a literal list.
+                if key != "text-variable-anchor-offset" {
+                    validate_operators(value)
+                        .map_err(|error| format!("layer {id}: {key}: {error}"))?;
+                }
             }
             Ok(section)
         };
@@ -267,6 +278,28 @@ impl StyleLayer {
             only("icon-pitch-alignment", &["auto", "viewport"])?;
         }
         only("icon-text-fit", &["none", "width", "height", "both"])?;
+        for (key, parsed) in [
+            (
+                "text-variable-anchor",
+                layout
+                    .get("text-variable-anchor")
+                    .map(|value| variable_anchors::parse_anchors(value).map(|_| ())),
+            ),
+            (
+                "text-variable-anchor-offset",
+                layout
+                    .get("text-variable-anchor-offset")
+                    .map(|value| variable_anchors::parse_anchor_offsets(value).map(|_| ())),
+            ),
+        ] {
+            if let Some(result) = parsed {
+                result.map_err(|error| format!("layer {id}: {key}: {error}"))?;
+                // Variable anchors only apply to point labels.
+                if !point {
+                    return Err(format!("layer {id}: {key} needs symbol-placement point"));
+                }
+            }
+        }
         for key in ["text-translate-anchor", "icon-translate-anchor"] {
             if let Some(anchor) = paint.get(key).and_then(Value::as_str)
                 && anchor != "map"
@@ -443,6 +476,42 @@ mod tests {
             ),
             Ok(1)
         );
+        for layout in [
+            r#"{"text-variable-anchor":["top","left"]}"#,
+            r#"{"text-variable-anchor":["top"],"text-radial-offset":1}"#,
+            r#"{"text-variable-anchor-offset":["center",[0,0],"top",[0,1]]}"#,
+            r#"{"text-radial-offset":["get","r"]}"#,
+        ] {
+            assert_eq!(
+                parse(&format!(
+                    r#"[{{"id":"a","type":"symbol","source-layer":"p","layout":{layout}}}]"#
+                )),
+                Ok(1),
+                "{layout}"
+            );
+        }
+        for layout in [
+            // Variable anchors only apply to point labels.
+            r#"{"symbol-placement":"line","text-variable-anchor":["top"]}"#,
+            r#"{"symbol-placement":"line-center","text-variable-anchor-offset":["top",[0,1]]}"#,
+            // Malformed anchor lists.
+            r#"{"text-variable-anchor":[]}"#,
+            r#"{"text-variable-anchor":["middle"]}"#,
+            r#"{"text-variable-anchor-offset":["top"]}"#,
+            r#"{"text-variable-anchor-offset":["top",[0]]}"#,
+            // Only constant anchor lists are evaluated.
+            r#"{"text-variable-anchor":["step",["zoom"],["literal",["top"]],4,["literal",["left"]]]}"#,
+            r#"{"text-variable-anchor-offset":["literal",["top",[0,1]]]}"#,
+            r#"{"text-variable-anchor-offset":["step",["zoom"],["literal",["top",[0,1]]],4,["literal",["left",[1,0]]]]}"#,
+        ] {
+            assert!(
+                parse(&format!(
+                    r#"[{{"id":"a","type":"symbol","source-layer":"p","layout":{layout}}}]"#
+                ))
+                .is_err(),
+                "{layout}"
+            );
+        }
         assert_eq!(
             parse(
                 r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":"line","icon-image":"x","icon-rotate":["get","r"],"icon-text-fit":"both","icon-text-fit-padding":[1,2,1,2],"text-rotate":15},"paint":{"icon-translate":[2,-1],"icon-translate-anchor":"viewport","text-translate":[0,3]}}]"#

@@ -101,6 +101,38 @@ fn vs_fill(input: FillInput) -> FillOutput {
   return output;
 }
 
+// The projected application path (#350): covers and outlines of its fills arrive in
+// homogeneous clip space, with the outline's window position `v_pos` computed on the CPU (as
+// the color outlines of `application.wgsl`, for MapLibre's per-tile outline), and `pixel`
+// interpolated perspective-correct under `w`. The frame uniform is not read here.
+struct ClipInput {
+  @location(0) clip: vec3<f32>,
+  @location(1) window: vec2<f32>,
+  @location(2) pixel: vec2<f32>,
+  @location(3) uv_tl: vec2<f32>,
+  @location(4) uv_br: vec2<f32>,
+  @location(5) display_size: vec2<f32>,
+  @location(6) color: vec4<f32>,
+  @location(7) params: vec2<f32>,
+};
+
+@vertex
+fn vs_clip(input: ClipInput) -> FillOutput {
+  let flags = u32(input.params.y);
+  if (flags & PATTERN) != 0u && input.params.x < 0.01 {
+    return culled();
+  }
+  var output: FillOutput;
+  output.position = vec4<f32>(input.clip.xy, 0.0, input.clip.z);
+  pattern_positions(&output, input.pixel, input.display_size);
+  output.uv = vec4<f32>(input.uv_tl, input.uv_br);
+  output.color = input.color;
+  output.params = input.params;
+  output.tile_position = vec2<f32>(0.0);
+  output.window = input.window;
+  return output;
+}
+
 // MapLibre's `gl.LINES` outline as a quad half a physical pixel to either side along its
 // minor axis, with `v_pos` the endpoints' window positions interpolated along it (#331).
 @vertex

@@ -354,6 +354,27 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { center: [8.6, 47.3], zoom: 7.8 },
+    capability:
+      "variable text anchors: text-variable-anchor, text-variable-anchor-offset, text-radial-offset, auto justification, icon-text-fit moving with the chosen anchor",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-variable-anchors",
+    origin: "Milestone E cartography (#80): place labels that shift around their point; variable anchors (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -30, center: [8.6, 47.3], pitch: 40, zoom: 7.8 },
+    capability: "variable text anchors under a pitched and turned camera: shifts scaled by the perspective ratio",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-variable-anchors-pitch",
+    origin: "Milestone E cartography (#80): place labels that shift around their point under pitch (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],
@@ -406,6 +427,47 @@ export const scenarios: Scenario[] = [
       { at: RHINE_POINT, kind: "click", label: "select the hatched Rhine" },
       { by: [-120, 60], kind: "pan", label: "drag pan" },
       { at: [40, -30], deltaY: -120, kind: "wheel", label: "wheel zoom in", ticks: 3 },
+    ],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -25, center: [8.4, 46.75], pitch: 50, zoom: 8.4 },
+    capability:
+      "fill-pattern under a pitched camera: tileset fill layer and GeoJSON fills on the projected path, perspective-correct",
+    knownGaps: [],
+    name: "fill-pattern-pitch",
+    origin: "Patterned fills under a pitched camera (#350), follow-up of sprites and patterns (#323)",
+    size: MAP_SIZE,
+    steps: [
+      { at: [8.85, 46.94], kind: "hover", label: "hover the hatched hexagon" },
+      { at: [7.87, 46.76], kind: "click", label: "select the hatched frame" },
+      { by: [-120, 60], kind: "pan", label: "drag pan" },
+    ],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -25, center: [9.0, 47.4], pitch: 50, zoom: 8 },
+    capability:
+      "line-pattern under a pitched camera: tileset line layers and GeoJSON lines on the projected path, on the map plane",
+    knownGaps: [
+      {
+        gate: "time",
+        issue: 387,
+        reason: "the projected path re-emits every patterned strip per frame; retained lines do not",
+      },
+      {
+        gate: "interaction",
+        issue: 386,
+        reason: "pitched GeoJSON line picks use the screen-space width, wider than MapLibre far from the camera",
+      },
+    ],
+    name: "line-pattern-pitch",
+    origin: "Patterned lines under a pitched camera (#350), follow-up of line patterns (#349)",
+    size: MAP_SIZE,
+    steps: [
+      { at: MOTORWAY_VERTEX, kind: "hover", label: "hover a track-patterned motorway" },
+      { at: RHINE_POINT, kind: "click", label: "select the hatched Rhine" },
+      { by: [-120, 60], kind: "pan", label: "drag pan" },
     ],
   },
   {

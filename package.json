@@ -104,6 +104,7 @@
     "oracle": "node ./oracle/run.ts",
     "test:browser": "playwright test",
     "test:browser:smoke": "playwright test --grep @smoke --project=chromium",
+    "test:browser:state-paths": "MAPS_STATE_PATHS=all playwright test --config playwright.hosted.config.ts --grep @state:maps",
     "test:browser:update": "playwright test --update-snapshots",
     "verify:api-surface": "node ./scripts/verify-api-surface.mjs",
     "verify:engine-scenarios": "node ./scripts/verify-engine-scenarios.mjs",
