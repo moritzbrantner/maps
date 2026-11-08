@@ -32,9 +32,11 @@ import {
   drawCanvasMapLabels,
   drawCanvasMapPrimitive,
   hitTestCanvasMapSceneAll,
+  type CanvasMapDrawOptions,
   type CanvasMapScene,
   type MapScreenPoint,
 } from "./canvas-map-renderer";
+import type { CanvasMapPatternImages } from "./canvas-sprite-images";
 import { ClusterLayer, type ClusterLayerProps } from "./cluster-layer";
 import { FlowLayer, type FlowLayerProps } from "./flow-layer";
 import {
@@ -140,6 +142,8 @@ type MapsOverlayLayersProps = {
   children: ReactNode;
   getViewport: (width: number, height: number) => ViewportAggregationQuery | null;
   project: MapsProjectCoordinate;
+  /** The style sprite's images for Canvas patterns (#350), `null` until decoded. */
+  canvasPatternImages?: () => CanvasMapPatternImages | null;
   renderApplicationFrame?: (
     frame: CanvasMapScene<unknown>,
     interaction: MapScreenInteractionState,
@@ -253,7 +257,16 @@ const LazyMapsHeatLayerMount = lazy(async () => {
 
 export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
   function MapsOverlayLayers(
-    { children, getViewport, project, renderApplicationFrame, retainedPoints, surface, unproject },
+    {
+      canvasPatternImages,
+      children,
+      getViewport,
+      project,
+      renderApplicationFrame,
+      retainedPoints,
+      surface,
+      unproject,
+    },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -262,6 +275,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       motionAnchors: OverlayMotionAnchors | null;
       scene: CanvasMapScene<unknown>;
       snapshot: MapsOverlaySnapshot;
+      patternImages: CanvasMapPatternImages | null;
       renderer: MapsOverlayLayersProps["renderApplicationFrame"];
       ratio: number;
     } | null>(null);
@@ -739,6 +753,13 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           snapshot.renderSteps.filter((step) => step.kind === "raster").length,
         );
 
+        // Sprite images for Canvas `fill-pattern` and `line-pattern` (#350); their arrival
+        // redraws, so they are part of what the retained pixels show.
+        const patternImages = canvasPatternImages?.() ?? null;
+        const drawOptions: CanvasMapDrawOptions =
+          patternImages && viewportQuery
+            ? { ...interaction, patterns: { images: patternImages, project, zoom: viewportQuery.zoom } }
+            : interaction;
         const hasRaster = snapshot.renderSteps.some((step) => step.kind === "raster");
         const ratio = Math.max(1, window.devicePixelRatio || 1);
         const previous = lastDrawRef.current;
@@ -749,6 +770,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           !hadRaster &&
           previous &&
           previous.renderer === renderApplicationFrame &&
+          previous.patternImages === patternImages &&
           previous.ratio === ratio &&
           sameScreenFrame(previous.scene, scene) &&
           sameIds(previous.snapshot.hoveredPrimitiveIds, snapshot.hoveredPrimitiveIds) &&
@@ -760,6 +782,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         }
         lastDrawRef.current = {
           motionAnchors: null,
+          patternImages,
           scene,
           snapshot,
           renderer: renderApplicationFrame,
@@ -787,7 +810,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         context.clearRect(0, 0, scene.width, scene.height);
         if (!hasRaster) {
           for (const primitive of scene.primitives) {
-            drawCanvasMapPrimitive(context, primitive, interaction);
+            drawCanvasMapPrimitive(context, primitive, drawOptions);
           }
           const anchors = isHeavyOverlayScene(scene)
             ? captureOverlayMotionAnchors(unproject, size.width, size.height)
@@ -809,7 +832,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           }
 
           const primitive = screenPrimitives.get(step.primitiveId);
-          if (primitive) drawCanvasMapPrimitive(context, primitive, interaction);
+          if (primitive) drawCanvasMapPrimitive(context, primitive, drawOptions);
         }
       };
 

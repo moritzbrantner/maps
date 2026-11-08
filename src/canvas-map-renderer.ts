@@ -30,7 +30,25 @@ export type CanvasMapScene<TFeature = unknown> = MapScreenRenderFrame<TFeature>;
 
 export type CanvasMapDrawOptions = MapScreenInteractionState & {
   hoveredFeatureId?: string | null;
+  /** Style images and camera for `fill-pattern` and `line-pattern`; absent draws neither. */
+  patterns?: CanvasMapPatterns;
   selectedFeatureId?: string | null;
+};
+
+/** One style image as Canvas draws it (`sdf` images are left out, needing a tinted atlas). */
+export type CanvasMapPatternImage = {
+  height: number;
+  pixelRatio: number;
+  sdf: boolean;
+  source: CanvasImageSource;
+  width: number;
+};
+
+/** The style's sprite images and what patterns are placed with (#350). */
+export type CanvasMapPatterns = {
+  images: (id: string) => CanvasMapPatternImage | null;
+  project: MapRenderProject;
+  zoom: number;
 };
 
 export function createCanvasMapScene<TFeature = unknown>(
@@ -306,7 +324,11 @@ function projectPrimitive<TFeature>(
       };
     }
     case "line": {
-      const points = projectCoordinates(primitive.coordinates, project, cache);
+      // A pitched camera's near plane can hide some vertices of a long line (#350): the
+      // visible part draws and picks, as the GPU clips MapLibre's tile geometry.
+      const points =
+        projectCoordinates(primitive.coordinates, project, cache) ??
+        projectVisibleLineRun(primitive.coordinates, project);
       if (!points || points.length < 2) return null;
       return { kind: "line", points, renderPrimitive: primitive };
     }
@@ -339,6 +361,66 @@ function projectCoordinates(
   }
   cache?.set(coordinates, points);
   return points;
+}
+
+/**
+ * The longest run of projectable vertices of a line, with each end extended along its
+ * segment to the last projectable point towards the hidden neighbour. A line that cannot
+ * be projected at all is `null`.
+ */
+function projectVisibleLineRun(
+  coordinates: readonly [number, number][],
+  project: MapRenderProject,
+): MapScreenPoint[] | null {
+  let best: MapScreenPoint[] | null = null;
+  let run: MapScreenPoint[] = [];
+  const finish = () => {
+    if (run.length > (best?.length ?? 0)) best = run;
+    run = [];
+  };
+  for (let index = 0; index < coordinates.length; index += 1) {
+    const coordinate = coordinates[index]!;
+    const point = projectPoint(project, coordinate);
+    if (isFinitePoint(point)) {
+      const previous = coordinates[index - 1];
+      if (run.length === 0 && previous) {
+        const edge = projectLastVisible(coordinate, previous, project);
+        if (edge) run.push(edge);
+      }
+      run.push(point);
+    } else if (run.length > 0) {
+      const edge = projectLastVisible(coordinates[index - 1]!, coordinate, project);
+      if (edge) run.push(edge);
+      finish();
+    }
+  }
+  finish();
+  return best;
+}
+
+/** Bisects `visible -> hidden` for the projectable point nearest the hidden end. */
+function projectLastVisible(
+  visible: readonly [number, number],
+  hidden: readonly [number, number],
+  project: MapRenderProject,
+): MapScreenPoint | null {
+  let low = 0;
+  let high = 1;
+  let result: MapScreenPoint | null = null;
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    const t = (low + high) / 2;
+    const point = projectPoint(project, [
+      visible[0] + (hidden[0] - visible[0]) * t,
+      visible[1] + (hidden[1] - visible[1]) * t,
+    ]);
+    if (isFinitePoint(point)) {
+      low = t;
+      result = point;
+    } else {
+      high = t;
+    }
+  }
+  return result;
 }
 
 function projectPoint(
@@ -383,7 +465,14 @@ function drawPrimitive<TFeature>(
       drawDirectionMarker(context, scenePrimitive, primitive as MapRenderDirectionMarker<TFeature>);
       return;
     case "line":
-      drawLine(context, scenePrimitive, primitive as MapRenderLine<TFeature>, selected, hovered);
+      drawLine(
+        context,
+        scenePrimitive,
+        primitive as MapRenderLine<TFeature>,
+        selected,
+        hovered,
+        options.patterns,
+      );
       return;
     case "polygon":
       drawPolygon(
@@ -392,6 +481,7 @@ function drawPrimitive<TFeature>(
         primitive as MapRenderPolygon<TFeature>,
         selected,
         hovered,
+        options.patterns,
       );
   }
 }
@@ -449,10 +539,23 @@ function drawLine<TFeature>(
   primitive: MapRenderLine<TFeature>,
   selected: boolean,
   hovered: boolean,
+  patterns: CanvasMapPatterns | undefined,
 ) {
-  // `line-pattern` draws on the retained WebGPU path only (#349): Canvas has no sprite and
-  // leaves the line out, as MapLibre does until a pattern's image loads.
-  if (primitive.linePattern) return;
+  if (primitive.linePattern) {
+    // A missing image (or sprite) leaves the line out, as MapLibre does until it loads.
+    const image = patterns?.images(primitive.linePattern);
+    if (patterns && image && !image.sdf) {
+      drawPatternedLine(
+        context,
+        scene,
+        image,
+        patterns.zoom,
+        interactionStrokeWidth(primitive.strokeWidth, selected, hovered),
+        primitive.strokeOpacity,
+      );
+    }
+    return;
+  }
   traceLine(context, scene.points, false);
   const width = interactionStrokeWidth(primitive.strokeWidth, selected, hovered);
   context.globalAlpha = primitive.strokeOpacity;
@@ -475,15 +578,18 @@ function drawPolygon<TFeature>(
   primitive: MapRenderPolygon<TFeature>,
   selected: boolean,
   hovered: boolean,
+  patterns: CanvasMapPatterns | undefined,
 ) {
   context.beginPath();
   for (const ring of scene.rings) {
     traceLine(context, ring, true, false);
   }
-  // `fill-pattern` draws on the retained WebGPU path only (#323): Canvas has no sprite and
-  // leaves the fill out, as MapLibre does until a pattern's image loads.
-  if (!primitive.fillPattern) {
-    context.fillStyle = primitive.fillColor;
+  // A missing image (or sprite) leaves the fill out, as MapLibre does until it loads.
+  const fillStyle = primitive.fillPattern
+    ? polygonFillPattern(context, scene, primitive, patterns)
+    : primitive.fillColor;
+  if (fillStyle) {
+    context.fillStyle = fillStyle;
     context.globalAlpha = primitive.fillOpacity;
     context.fill("evenodd");
   }
@@ -495,6 +601,138 @@ function drawPolygon<TFeature>(
     context.lineWidth = strokeWidth;
     context.strokeStyle = primitive.strokeColor;
     context.stroke();
+  }
+  context.globalAlpha = 1;
+}
+
+/** MapLibre's GeoJSON tile size, whose grid (at the floored zoom) patterns are placed on. */
+const PATTERN_TILE_SIZE = 512;
+
+function patternTileZoom(zoom: number) {
+  return Math.max(0, Math.floor(zoom + 1e-9));
+}
+
+/** A coordinate in pixels at the tile zoom, from the world's north-west corner (+y south). */
+function patternWorldPixel([longitude, latitude]: readonly [number, number], tileZoom: number) {
+  const size = PATTERN_TILE_SIZE * 2 ** tileZoom;
+  const radians = (Math.min(Math.max(latitude, -85.051129), 85.051129) * Math.PI) / 180;
+  return {
+    x: ((longitude + 180) / 360) * size,
+    y: (0.5 - Math.log(Math.tan(Math.PI / 4 + radians / 2)) / (2 * Math.PI)) * size,
+  };
+}
+
+/**
+ * MapLibre's `fill-pattern` as a Canvas pattern (#350): repeating on the tile grid in pixels
+ * at the floored zoom, like the retained and projected paths. The transform is the local
+ * affine of the projection at the polygon's first vertex, exact under a bearing and an
+ * approximation under pitch, which a 2D pattern cannot follow. `null` draws no fill.
+ */
+function polygonFillPattern<TFeature>(
+  context: CanvasRenderingContext2D,
+  scene: CanvasPolygonScenePrimitive<TFeature>,
+  primitive: MapRenderPolygon<TFeature>,
+  patterns: CanvasMapPatterns | undefined,
+): CanvasPattern | null {
+  const anchor = primitive.rings[0]?.[0];
+  const screen = scene.rings[0]?.[0];
+  const image = primitive.fillPattern ? patterns?.images(primitive.fillPattern) : null;
+  if (!patterns || !image || image.sdf || !anchor || !screen) return null;
+
+  const tileZoom = patternTileZoom(patterns.zoom);
+  const step = 1e-3;
+  const east: [number, number] = [anchor[0] + step, anchor[1]];
+  const north: [number, number] = [anchor[0], anchor[1] + step];
+  const eastScreen = projectPoint(patterns.project, east);
+  const northScreen = projectPoint(patterns.project, north);
+  if (!isFinitePoint(eastScreen) || !isFinitePoint(northScreen)) return null;
+
+  const origin = patternWorldPixel(anchor, tileZoom);
+  const eastWorld = patternWorldPixel(east, tileZoom);
+  const northWorld = patternWorldPixel(north, tileZoom);
+  // Screen CSS px per pixel at the tile zoom, along x and along y.
+  const a = (eastScreen.x - screen.x) / (eastWorld.x - origin.x);
+  const b = (eastScreen.y - screen.y) / (eastWorld.x - origin.x);
+  const c = (northScreen.x - screen.x) / (northWorld.y - origin.y);
+  const d = (northScreen.y - screen.y) / (northWorld.y - origin.y);
+  // Whole periods drop out, as `PatternVertex` does, so the translation stays small.
+  const displayWidth = image.width / image.pixelRatio;
+  const displayHeight = image.height / image.pixelRatio;
+  const phaseX = origin.x - Math.floor(origin.x / displayWidth) * displayWidth;
+  const phaseY = origin.y - Math.floor(origin.y / displayHeight) * displayHeight;
+
+  const pattern = context.createPattern(image.source, "repeat");
+  pattern?.setTransform(
+    new DOMMatrix([
+      a / image.pixelRatio,
+      b / image.pixelRatio,
+      c / image.pixelRatio,
+      d / image.pixelRatio,
+      screen.x - a * phaseX - c * phaseY,
+      screen.y - b * phaseX - d * phaseY,
+    ]),
+  );
+  return pattern;
+}
+
+/**
+ * MapLibre's `line-pattern` on Canvas (#350): per segment, the image spans the line's width
+ * and repeats along it by the screen distance at the floored zoom. Unlike the GPU paths it
+ * measures on the screen and from the line's start, so under pitch and across GeoJSON tiles
+ * it is an approximation, and joins between segments are not mitred.
+ */
+function drawPatternedLine<TFeature>(
+  context: CanvasRenderingContext2D,
+  scene: CanvasLineScenePrimitive<TFeature>,
+  image: CanvasMapPatternImage,
+  zoom: number,
+  width: number,
+  opacity: number,
+) {
+  if (width <= 0) return;
+  const pattern = context.createPattern(image.source, "repeat");
+  if (!pattern) return;
+  const tileToScreen = 2 ** (zoom - patternTileZoom(zoom));
+  // One image period along the line: its aspect ratio at the line's width, in screen px.
+  const period = (image.width / image.height) * width * tileToScreen;
+  // MapLibre samples one texel past the image on every side; a repeating pattern wraps there
+  // like the atlas padding (one extra row and column of the image, either side).
+  const alongScale = period / (image.width + 2);
+  // The image spans half a physical pixel past each edge, as the GPU strip's antialiasing does.
+  const halfWidth = width / 2 + 0.5 / (context.getTransform?.().a || 1);
+  const acrossScale = (2 * halfWidth) / (image.height + 2);
+  const edge = width / 2;
+  context.globalAlpha = opacity;
+  context.fillStyle = pattern;
+  let distance = 0;
+  for (let index = 0; index + 1 < scene.points.length; index += 1) {
+    const start = scene.points[index]!;
+    const end = scene.points[index + 1]!;
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    if (length === 0) continue;
+    const along = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
+    // The image's top row is on the line's right-hand side (MapLibre's `v_normal.y` of -1).
+    const across = { x: -along.y, y: along.x };
+    const phase = distance % period;
+    pattern.setTransform(
+      new DOMMatrix([
+        along.x * alongScale,
+        along.y * alongScale,
+        -across.x * acrossScale,
+        -across.y * acrossScale,
+        start.x + along.x * (alongScale - phase) + across.x * (halfWidth - acrossScale),
+        start.y + along.y * (alongScale - phase) + across.y * (halfWidth - acrossScale),
+      ]),
+    );
+    context.beginPath();
+    // The strip fades over its outer pixel; a box-filtered edge at the half width matches.
+    context.moveTo(start.x + across.x * edge, start.y + across.y * edge);
+    context.lineTo(end.x + across.x * edge, end.y + across.y * edge);
+    context.lineTo(end.x - across.x * edge, end.y - across.y * edge);
+    context.lineTo(start.x - across.x * edge, start.y - across.y * edge);
+    context.closePath();
+    context.fill();
+    distance += length;
   }
   context.globalAlpha = 1;
 }

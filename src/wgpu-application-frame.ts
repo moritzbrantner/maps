@@ -39,12 +39,21 @@ export type MapsWgpuApplicationLine = {
   color: MapsWgpuColor;
   /** `MAPS_RETAINED_POLYGON_PAINT_STRIDE` cap, join and limits; absent means round. */
   lineLayout?: readonly [cap: number, join: number, miterLimit: number, roundLimit: number];
+  /** MapLibre's `line-pattern` image (#350); `color` is then white at its opacity. */
+  linePattern?: string;
+  /**
+   * The whole line's `[longitude, latitude]` pairs: its tile pieces and distances are measured
+   * on these, while `points` holds only the part in front of a pitched camera.
+   */
+  linePatternPath?: readonly (readonly [number, number])[];
   points: readonly MapsWgpuApplicationPoint[];
   strokeWidth: number;
 };
 
 export type MapsWgpuApplicationPolygon = {
   fillColor: MapsWgpuColor;
+  /** MapLibre's `fill-pattern` image (#350); `fillColor` is then white at its opacity. */
+  fillPattern?: string;
   /** Even-odd rings, as Canvas fills them; the renderer tessellates through its stencil. */
   rings: readonly (readonly MapsWgpuApplicationPoint[])[];
   strokeColor: MapsWgpuColor;
@@ -320,7 +329,10 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
           }
           case "line": {
             const primitive = scenePrimitive.renderPrimitive as MapRenderLine<unknown>;
-            const color = paint(primitive.strokeColor, primitive.strokeOpacity);
+            // MapLibre's `line-pattern` ignores `line-color` and `line-dasharray` (#349, #350).
+            const color = primitive.linePattern
+              ? patternPaint(primitive.strokeOpacity)
+              : paint(primitive.strokeColor, primitive.strokeOpacity);
             const strokeWidth = resolveStrokeWidth(
               primitive.strokeWidth,
               primitive.primitiveId,
@@ -338,23 +350,29 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
               return null;
             }
 
-            // `line-pattern` samples the image atlas on the retained path only (#349); a
-            // pitched camera's projected path leaves the line out, as patterned fills.
-            if (primitive.linePattern) break;
             const lineLayout = encodeLineLayout(primitive);
             // Dashes need the retained path's GeoJSON tiles; Canvas draws them otherwise.
-            if (!lineLayout || (primitive.lineDasharray?.length ?? 0) > 0) return null;
+            if (!lineLayout || (!primitive.linePattern && (primitive.lineDasharray?.length ?? 0) > 0)) {
+              return null;
+            }
 
             pushOrder(MAPS_WGPU_APPLICATION_LINE, lines.length);
-            lines.push({ color, lineLayout, points, strokeWidth });
+            lines.push({
+              color,
+              lineLayout,
+              ...(primitive.linePattern
+                ? { linePattern: primitive.linePattern, linePatternPath: primitive.coordinates }
+                : {}),
+              points,
+              strokeWidth,
+            });
             break;
           }
           case "polygon": {
             const primitive = scenePrimitive.renderPrimitive as MapRenderPolygon<unknown>;
-            // Patterns sample the image atlas on the retained path only (#323); a pitched
-            // camera's projected path leaves the fill out until it gains them.
+            // MapLibre's `fill-pattern` ignores `fill-color` and keeps `fill-opacity` (#323, #350).
             const fillColor = primitive.fillPattern
-              ? TRANSPARENT
+              ? patternPaint(primitive.fillOpacity)
               : paint(primitive.fillColor, primitive.fillOpacity);
             const strokeColor = paint(primitive.strokeColor, primitive.strokeOpacity);
             const strokeWidth = resolveStrokeWidth(
@@ -373,6 +391,7 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
             pushOrder(MAPS_WGPU_APPLICATION_POLYGON, polygons.length);
             polygons.push({
               fillColor,
+              ...(primitive.fillPattern ? { fillPattern: primitive.fillPattern } : {}),
               rings,
               strokeColor,
               strokeWidth,
@@ -813,6 +832,11 @@ function createRetainedPoints(
 }
 
 const TRANSPARENT: MapsWgpuColor = [0, 0, 0, 0];
+
+/** A patterned shape's paint (#323, #349, #350): white at its opacity, `null` when not finite. */
+function patternPaint(opacity: number): MapsWgpuColor | null {
+  return Number.isFinite(opacity) ? [1, 1, 1, Math.min(Math.max(opacity, 0), 1)] : null;
+}
 
 function createRetainedShapes(
   primitives: readonly MapVectorRenderFrame<unknown>["primitives"][number][],
