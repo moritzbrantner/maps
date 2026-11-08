@@ -37,20 +37,35 @@ test("hosted Pages runs the first-party PMTiles engine without external tile req
   expect(pageErrors).toEqual([]);
 });
 
-test("hosted evidence page fails closed with actionable missing runtime diagnostics", async ({
+test("hosted evidence page shows absent evidence as unavailable and advertises no unpublished Moonlight source", async ({
   page,
+  request,
 }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  // A failed point-journey run publishes nothing, so this is a real absent state.
+  await page.route("**/maps/evidence/point-journey.json", (route) =>
+    route.fulfill({ status: 404, contentType: "text/html", body: "Not found" }),
+  );
 
   await page.goto("/maps/evidence/");
 
   await expect(page.getByRole("heading", { name: "Evidence" })).toBeVisible();
-  const runtimeRow = page.getByRole("row").filter({ hasText: "Runtime and Moonlight evidence" });
-  await expect(runtimeRow).toContainText("source-unavailable", { timeout: 45_000 });
-  await expect(runtimeRow).toContainText("unavailable");
-  await expect(runtimeRow).toContainText("Evidence source returned non-JSON content (text/html).");
+  const absentRow = page.getByRole("row").filter({ hasText: "Dense-point camera journey" });
+  await expect(absentRow).toContainText("source-unavailable", { timeout: 45_000 });
+  await expect(absentRow).toContainText("unavailable");
   await expect(page.getByText(/evidence sources need attention/)).toBeVisible();
+
+  await expect(page.getByRole("row").filter({ hasText: "Moonlight" })).toHaveCount(0);
+  const advertised = await page.evaluate(() =>
+    (
+      window as unknown as { __PROJECT_PAGES_CONFIG__: { evidenceSources: { url: string }[] } }
+    ).__PROJECT_PAGES_CONFIG__.evidenceSources.map((source) => source.url),
+  );
+  expect(advertised).not.toContain("/maps/evidence/runtime.json");
+  // GitHub Pages answers 404; the preview server answers with its HTML fallback.
+  const runtime = await request.get("/maps/evidence/runtime.json");
+  expect(runtime.headers()["content-type"] ?? "").not.toContain("json");
 
   expect(pageErrors).toEqual([]);
 });

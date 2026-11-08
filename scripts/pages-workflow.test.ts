@@ -34,3 +34,26 @@ test("PR previews preserve CI oracle authority and do not rerun publication meas
   assert.match(ci, /name: MapLibre oracle/);
   assert.match(ci, /bun run oracle -- --out oracle-report/);
 });
+
+test("every same-origin evidence source names a file the Pages build produces", () => {
+  const config = JSON.parse(readFileSync(resolve(root, "pages.config.json"), "utf8")) as {
+    evidenceSources: Array<{ id: string; url: string }>;
+    project: { basePath: string };
+  };
+  const build = workflow.split("      build_command: |\n")[1]?.split("      artifact_paths: dist\n")[0];
+  assert.ok(build);
+
+  const sameOrigin = config.evidenceSources.filter((source) => source.url.startsWith("/"));
+  assert.ok(sameOrigin.length > 0);
+  for (const source of sameOrigin) {
+    assert.ok(
+      source.url.startsWith(config.project.basePath),
+      `${source.id} is outside the Pages base path`,
+    );
+    const file = source.url.slice(config.project.basePath.length);
+    assert.ok(
+      build.includes(`dist/${file}`) || build.includes(`public/${file}`),
+      `${source.id} advertises ${source.url}, which the Pages build never produces`,
+    );
+  }
+});
