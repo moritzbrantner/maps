@@ -597,9 +597,9 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
             ? { glyphs: GLYPHS_URL, layers: ICON_LINE_LAYERS }
             : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
-              : name === "fill-pattern"
+              : name === "fill-pattern" || name === "fill-pattern-pitch"
                 ? { layers: FILL_PATTERN_LAYERS }
-                : name === "line-pattern"
+                : name === "line-pattern" || name === "line-pattern-pitch"
                   ? { layers: LINE_PATTERN_LAYERS }
                   : null;
 
@@ -652,12 +652,14 @@ function referenceStyle(name: string) {
       style.layers.push(...LINE_LAYERS);
       return style;
     }
-    case "fill-pattern": {
+    case "fill-pattern":
+    case "fill-pattern-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...FILL_PATTERN_LAYERS);
       return style;
     }
-    case "line-pattern": {
+    case "line-pattern":
+    case "line-pattern-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...LINE_PATTERN_LAYERS);
       return style;
@@ -855,6 +857,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
         />
       );
     case "fill-pattern":
+    case "fill-pattern-pitch":
       // GeoJSON fills with the sprite's hatch over the patterned tileset glaciers (#323).
       return (context) => (
         <GeoJsonLayer
@@ -897,6 +900,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
         />
       );
     case "line-pattern":
+    case "line-pattern-pitch":
       // GeoJSON lines with the sprite's patterns over the patterned tileset lines (#349):
       // `track` motorways and `hatch` rivers, widened by hover and selection.
       return (context) => (

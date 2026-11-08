@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createCanvasMapScene,
   createCanvasMapSceneProjector,
+  drawCanvasMapPrimitive,
   hitTestCanvasMapScene,
+  type CanvasMapDrawOptions,
+  type CanvasMapPatternImage,
 } from "./canvas-map-renderer";
 import type {
   MapRenderCircle,
@@ -20,14 +23,14 @@ describe("Canvas map renderer", () => {
         circle("circle", [1, 2]),
         line("line", [
           [3, 4],
-          [99, 99],
+          [Number.NaN, 99],
         ]),
       ],
     };
 
     const scene = createCanvasMapScene(
       frame,
-      ([x, y]) => (x === 99 ? null : { x: x * 10, y: y * 10 }),
+      ([x, y]) => (Number.isNaN(x) ? null : { x: x * 10, y: y * 10 }),
       { width: 320, height: 180 },
     );
 
@@ -129,6 +132,204 @@ function base(featureId: string) {
     primitiveId: featureId,
   };
 }
+
+/** A context recording the fills, with their patterns' transforms and the alpha they used. */
+function recordingContext() {
+  const fills: { alpha: number; style: unknown }[] = [];
+  const patterns: { history: number[][]; matrix: number[]; source: unknown }[] = [];
+  const context = {
+    arc: vi.fn(),
+    beginPath: vi.fn(),
+    closePath: vi.fn(),
+    createPattern(source: unknown) {
+      const pattern = {
+        history: [] as number[][],
+        matrix: [] as number[],
+        setTransform(matrix: { a: number; b: number; c: number; d: number; e: number; f: number }) {
+          pattern.matrix = [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f];
+          pattern.history.push(pattern.matrix);
+        },
+        source,
+      };
+      patterns.push(pattern);
+      return pattern;
+    },
+    fill() {
+      fills.push({ alpha: context.globalAlpha, style: context.fillStyle });
+    },
+    fillStyle: "" as unknown,
+    getTransform: () => ({ a: 1 }),
+    globalAlpha: 1,
+    lineTo: vi.fn(),
+    moveTo: vi.fn(),
+    setLineDash: vi.fn(),
+    stroke: vi.fn(),
+  };
+  return { context: context as unknown as CanvasRenderingContext2D, fills, patterns };
+}
+
+class TestDomMatrix {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+  constructor([a, b, c, d, e, f]: number[]) {
+    this.a = a!;
+    this.b = b!;
+    this.c = c!;
+    this.d = d!;
+    this.e = e!;
+    this.f = f!;
+  }
+}
+
+describe("Canvas patterns (#350)", () => {
+  const hatch: CanvasMapPatternImage = {
+    height: 16,
+    pixelRatio: 2,
+    sdf: false,
+    source: {} as CanvasImageSource,
+    width: 16,
+  };
+  // North-up Mercator at the projection's own zoom: one world of 512 * 2^zoom CSS px.
+  const projector = (zoom: number) => {
+    const world = 512 * 2 ** zoom;
+    return ([longitude, latitude]: [number, number]) => ({
+      x: ((longitude + 180) / 360) * world,
+      y:
+        (0.5 - Math.log(Math.tan(Math.PI / 4 + (latitude * Math.PI) / 360)) / (2 * Math.PI)) * world,
+    });
+  };
+  const draw = (
+    primitive: MapRenderLine | MapRenderPolygon,
+    patterns: CanvasMapDrawOptions["patterns"],
+  ) => {
+    vi.stubGlobal("DOMMatrix", TestDomMatrix);
+    const recorded = recordingContext();
+    const scene = createCanvasMapScene({ kind: "vector", primitives: [primitive] }, patterns!.project, {
+      height: 480,
+      width: 640,
+    });
+    drawCanvasMapPrimitive(recorded.context, scene.primitives[0]!, { patterns });
+    vi.unstubAllGlobals();
+    return recorded;
+  };
+
+  it("repeats a fill pattern on the tile grid in the image's display size", () => {
+    const square: [number, number][] = [
+      [10, 40],
+      [12, 40],
+      [12, 42],
+      [10, 40],
+    ];
+    const zoom = 5.5;
+    const project = projector(zoom);
+    const { fills, patterns } = draw(
+      { ...polygon("hatched", [square]), fillOpacity: 0.4, fillPattern: "hatch" },
+      { images: () => hatch, project, zoom },
+    );
+
+    expect(fills[0]?.alpha).toBe(0.4);
+    const [a, b, c, d, e, f] = patterns[0]!.matrix as [number, number, number, number, number, number];
+    // CSS px per sheet pixel: 2^0.5 per pixel at the floored zoom, over a 2x image.
+    expect(a).toBeCloseTo(2 ** 0.5 / 2, 4);
+    expect(d).toBeCloseTo(2 ** 0.5 / 2, 4);
+    expect(b).toBeCloseTo(0, 4);
+    expect(c).toBeCloseTo(0, 4);
+    // Image origins lie on whole periods from the world corner, at zoom 5 pixels.
+    const anchorWorld = (screen: number, translation: number) => (screen - translation) / 2 ** 0.5;
+    const anchor = project(square[0]!);
+    const period = hatch.width / hatch.pixelRatio;
+    expect(anchorWorld(anchor.x, e) % period).toBeCloseTo(
+      ((anchor.x / 2 ** 0.5) % period + period) % period,
+      3,
+    );
+    expect(anchorWorld(anchor.y, f) % period).toBeCloseTo(
+      ((anchor.y / 2 ** 0.5) % period + period) % period,
+      3,
+    );
+  });
+
+  it("leaves fills and lines out for a missing or SDF image, keeping the stroke", () => {
+    const project = projector(5);
+    const square = polygon("hatched", [
+      [
+        [10, 40],
+        [12, 40],
+        [12, 42],
+      ],
+    ]);
+    const missing = draw({ ...square, fillPattern: "hatch" }, { images: () => null, project, zoom: 5 });
+    expect(missing.fills).toEqual([]);
+    expect(missing.context.stroke).toHaveBeenCalledTimes(1);
+    const sdf = draw(
+      { ...square, fillPattern: "hatch" },
+      { images: () => ({ ...hatch, sdf: true }), project, zoom: 5 },
+    );
+    expect(sdf.fills).toEqual([]);
+    const lineRecord = draw(
+      {
+        ...line("track", [
+          [0, 0],
+          [1, 0],
+        ]),
+        linePattern: "track",
+      },
+      { images: () => null, project, zoom: 5 },
+    );
+    expect(lineRecord.fills).toEqual([]);
+    expect(lineRecord.context.stroke).not.toHaveBeenCalled();
+  });
+
+  it("draws a line pattern per segment, the image spanning its width", () => {
+    const project = projector(4);
+    const { fills, patterns } = draw(
+      {
+        ...line("track", [
+          [0, 0],
+          [2, 0],
+          [2, 2],
+        ]),
+        linePattern: "track",
+        strokeOpacity: 0.5,
+        strokeWidth: 8,
+      },
+      { images: () => ({ ...hatch, height: 8, pixelRatio: 1, width: 16 }), project, zoom: 4 },
+    );
+    expect(fills).toHaveLength(2);
+    expect(fills[0]!.alpha).toBe(0.5);
+    // The pattern is reused per segment, its transform along the east-bound one first.
+    const [a, b, c, d] = patterns[0]!.history[0] as [number, number, number, number];
+    expect(b).toBeCloseTo(0, 6);
+    expect(c).toBeCloseTo(0, 6);
+    expect(a).toBeCloseTo(16 / (16 + 2), 6); // one period per (16 + 2) sheet px at width 8
+    expect(d).toBeCloseTo(-9 / (8 + 2), 6); // the strip's outset spread over the padded image
+  });
+
+  it("keeps the visible part of a line whose vertices lie behind the camera", () => {
+    const frame: MapVectorRenderFrame = {
+      kind: "vector",
+      primitives: [
+        line("partly-hidden", [
+          [0, 0],
+          [10, 0],
+          [20, 0],
+        ]),
+      ],
+    };
+    const scene = createCanvasMapScene(frame, ([x, y]) => (x > 15 ? null : { x, y }), {
+      height: 100,
+      width: 100,
+    });
+    expect(scene.primitives).toHaveLength(1);
+    const points = (scene.primitives[0] as { points: { x: number }[] }).points;
+    expect(points.slice(0, 2).map((point) => point.x)).toEqual([0, 10]);
+    expect(points[points.length - 1]!.x).toBeGreaterThan(14.9);
+    expect(points[points.length - 1]!.x).toBeLessThanOrEqual(15);
+  });
+});
 
 function circle(featureId: string, center: [number, number]): MapRenderCircle {
   return {
@@ -297,9 +498,12 @@ describe("retained Canvas projection", () => {
       kind: "vector",
       primitives: [
         circle("visible", [1, 2]),
-        line("hidden", [
-          [3, 4],
-          [99, 5],
+        polygon("hidden", [
+          [
+            [3, 4],
+            [99, 5],
+            [3, 6],
+          ],
         ]),
       ],
     };
@@ -313,14 +517,10 @@ describe("retained Canvas projection", () => {
 
   it("caches whole-primitive rejection and retries it after a camera change", () => {
     const prepare = createCanvasMapSceneProjector();
-    const invalid = vi.fn(([x, y]: [number, number]) => (x === 99 ? null : { x, y }));
+    const invalid = vi.fn(([x, y]: [number, number]) => (Number.isNaN(x) || x === 99 ? null : { x, y }));
     const frame: MapVectorRenderFrame = {
       kind: "vector",
       primitives: [
-        line("line", [
-          [1, 2],
-          [99, 3],
-        ]),
         polygon("polygon", [
           [
             [0, 0],
@@ -340,6 +540,6 @@ describe("retained Canvas projection", () => {
     const calls = invalid.mock.calls.length;
     expect(prepare(frame, invalid, size).primitives).toEqual([]);
     expect(invalid).toHaveBeenCalledTimes(calls);
-    expect(prepare(frame, ([x, y]) => ({ x, y }), size).primitives).toHaveLength(2);
+    expect(prepare(frame, ([x, y]) => ({ x, y }), size).primitives).toHaveLength(1);
   });
 });

@@ -17,6 +17,15 @@
 
 ### Minor Changes
 
+- Patterned GeoJSON fills and lines draw under a pitched camera and on the Canvas fallback
+  (#350). Under pitch the projected path samples the sprite perspective-correct: `fill-pattern`
+  through the fill's stencil with MapLibre's per-tile outline, `line-pattern` on the map plane
+  along its GeoJSON tile pieces, measured on the whole line. On Canvas, fills use a
+  `CanvasPattern` on the tile grid (the local affine at the first vertex, an approximation
+  under pitch) and lines a repeating image per segment (measured on the screen, without
+  mitred joins); SDF images draw only on the GPU paths. Lines that cross a pitched camera's
+  near plane now draw and pick their visible part instead of disappearing. The oracle
+  `fill-pattern-pitch` and `line-pattern-pitch` scenarios are gated.
 - Lines take MapLibre 6.16's `line-pattern` from the map style's `sprite` (#349).
   `tilesetLayers` accepts `line-pattern` on style-spec `line` layers (constant or data-driven,
   not zoom-dependent), and `GeoJsonLayer` styles gain `linePattern` (default `null`). The

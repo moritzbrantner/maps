@@ -1,6 +1,9 @@
 import { chromium, expect, test, type Page, type TestInfo } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
+import { SPRITE_JSON, spritePng } from "../oracle/tiles";
+
+const SPRITE_ORIGIN = "https://oracle-sprite.invalid";
 
 type Backend = "canvas2d" | "wgpu";
 
@@ -30,6 +33,13 @@ async function renderPolygonParity(
     page.on("console", (message) => {
       if (/WGSL|\[Invalid [A-Za-z]+/.test(message.text())) gpuValidation.push(message.text());
     });
+    if (query.sprite) {
+      await page.route(`${SPRITE_ORIGIN}/**`, (route) =>
+        route.request().url().endsWith(".json")
+          ? route.fulfill({ contentType: "application/json", json: SPRITE_JSON })
+          : route.fulfill({ body: spritePng(), contentType: "image/png" }),
+      );
+    }
     const url = new URL("/e2e/fixtures/polygon-parity.html", baseURL ?? "http://127.0.0.1:5181");
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
     await page.goto(url.toString());
@@ -162,7 +172,8 @@ async function expectPolygonParity(
   testInfo: TestInfo,
   query: Record<string, string>,
   overlay: Overlay,
-  journey?: { wgpu: (page: Page) => Promise<void>; canvasQuery: Record<string, string> },
+  journey?: { wgpu: (page: Page) => Promise<void>; canvasQuery: Record<string, string> } | null,
+  maxMismatchedShare = 0.0005,
 ) {
   const canvas = await renderPolygonParity(
     baseURL,
@@ -182,7 +193,7 @@ async function expectPolygonParity(
     await testInfo.attach(name, { contentType: "image/png", path });
   }
   // A real semantic difference (a hole, an even-odd region, a blend) spans thousands of pixels.
-  expect(comparison.mismatched).toBeLessThan(comparison.total * 0.0005);
+  expect(comparison.mismatched).toBeLessThan(comparison.total * maxMismatchedShare);
 }
 
 const POLYGON_ONLY_CASES =
@@ -204,6 +215,35 @@ test("Retained WebGPU lines and flows match the Canvas oracle @smoke", async ({
     { cases: "line-joins,translucent-line,order-lower,order-line,order-point,hovered", flows: "1" },
     "wgpu-retained",
   );
+});
+
+test("Canvas fill patterns match retained WebGPU fill patterns (#350) @smoke", async ({
+  baseURL,
+}, testInfo) => {
+  const sprite = `${SPRITE_ORIGIN}/oracle`;
+  const cases = "pattern-fill,pattern-fill-translucent";
+  await expectPolygonParity(baseURL, testInfo, { cases, sprite }, "wgpu-retained");
+});
+
+test("Canvas line patterns follow retained WebGPU line patterns (#350)", async ({
+  baseURL,
+}, testInfo) => {
+  // Canvas measures along the screen line and leaves joins unmitred (`drawPatternedLine`).
+  const sprite = `${SPRITE_ORIGIN}/oracle`;
+  await expectPolygonParity(
+    baseURL,
+    testInfo,
+    { cases: "pattern-line", sprite },
+    "wgpu-retained",
+    null,
+    0.004,
+  );
+});
+
+test("Canvas patterns follow a rotated map (#350)", async ({ baseURL }, testInfo) => {
+  const sprite = `${SPRITE_ORIGIN}/oracle`;
+  const query = { bearing: "30", cases: "pattern-fill,pattern-fill-translucent", sprite };
+  await expectPolygonParity(baseURL, testInfo, query, "wgpu-retained");
 });
 
 test("A zero-area polygon stays on WebGPU and strokes like Canvas", async ({
