@@ -17,7 +17,8 @@ const config = readStatePathConfig(process.env);
 const plan = buildEnginePlan(config.tier);
 const PMTILES_ARCHIVE = "**/showcase-pmtiles-v1.pmtiles*";
 const FLING_SETTLE_MS = 300;
-// Cold wasm + PMTiles startup can exceed the 5s default on shared runners.
+// Cold wasm + PMTiles startup can exceed the 5s default on shared runners, and it blocks the
+// page in one long stall (5s on CI, up to 10s under local load) after a load or reload.
 const READY_TIMEOUT = { timeout: 30_000 };
 const HOME_CAMERA: Record<"points" | "west", string> = {
   points: "10.300, 50.400 · z4.10",
@@ -66,7 +67,7 @@ async function expectRenderedTiles(page: Page) {
       const backend = await canvas.getAttribute("data-map-base-renderer");
       const counter = backend === "wgpu" ? "data-map-vector-tiles" : "data-map-base-tiles";
       return Number(await canvas.getAttribute(counter));
-    })
+    }, READY_TIMEOUT)
     .toBeGreaterThan(0);
 }
 
@@ -77,6 +78,7 @@ async function expectEngineState(page: Page, state: EngineState) {
   await expect(surface(page)).toHaveAttribute(
     "data-map-source-id",
     expected.source === "mvt" ? "fixture-pmtiles-xyz" : "maps-showcase",
+    READY_TIMEOUT,
   );
   await expect(page).toHaveURL(new RegExp(`[?&]source=${expected.source}(?:&|$)`));
   await expect(page).toHaveURL(new RegExp(`[?&]scene=${expected.scene}(?:&|$)`));
@@ -94,7 +96,8 @@ async function expectEngineState(page: Page, state: EngineState) {
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expectRenderedTiles(page);
   const home = HOME_CAMERA[expected.scene];
-  if (expected.camera === "home") await expect(camera(page)).toHaveText(home);
+  // The readout is sampled, so it stays empty until the page runs again after that stall.
+  if (expected.camera === "home") await expect(camera(page)).toHaveText(home, READY_TIMEOUT);
   if (expected.camera === "moved") await expect(camera(page)).not.toHaveText(home);
 }
 
