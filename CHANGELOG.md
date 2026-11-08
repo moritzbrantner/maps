@@ -46,6 +46,15 @@
   covers keep the north-up policy of filling at the source's minimum zoom. The MapLibre
   runtime now accepts the Maps camera's pitch range (`maxPitch` 85°). The oracle
   `steep-pitch` scenario (65°) is gated.
+- Tileset `symbol` layers meet the map on point placement, ported from MapLibre 6.16 (#346).
+  `text-rotation-alignment` and `icon-rotation-alignment: map`, `text-pitch-alignment` and
+  `icon-pitch-alignment: map` work in any combination: symbols turn with the map (on the
+  viewport or on the pitched map plane, with map-plane perspective sizes), and collision
+  boxes turn and pitch with them, variable anchors included. Labels and icons at
+  `symbol-placement: line` may leave their line with viewport rotation and map pitch, and
+  `text-rotation-alignment: viewport-glyph` keeps each glyph level along its line. Icons
+  under `icon-text-fit` with variable anchors must share their text's pitch plane. The
+  oracle `symbol-alignment` and `symbol-alignment-pitch` scenarios are gated.
 - Tileset `symbol` labels choose their anchor at placement, ported from MapLibre 6.16
   (#346). `text-variable-anchor` and `text-variable-anchor-offset` (constant lists, point
   placement) try each anchor in order, the anchor of the last placement first, then, with
