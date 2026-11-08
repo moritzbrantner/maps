@@ -68,7 +68,7 @@ describe("MapScreenRenderFrame", () => {
       feature("invalid", {
         coordinates: [
           [3, 4],
-          [5, 6],
+          [Number.NaN, 6],
         ],
         type: "LineString",
       }),
@@ -77,7 +77,9 @@ describe("MapScreenRenderFrame", () => {
     const screenFrame = createMapScreenRenderFrame(
       vectorFrame,
       ([longitude, latitude]) =>
-        longitude === 5 ? null : { x: longitude, y: Number.isFinite(latitude) ? latitude : Number.NaN },
+        Number.isNaN(longitude)
+          ? null
+          : { x: longitude, y: Number.isFinite(latitude) ? latitude : Number.NaN },
       { height: -1, width: -1 },
     );
 

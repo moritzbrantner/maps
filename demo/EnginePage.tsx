@@ -64,6 +64,7 @@ function updateUrl(name: string, value: string) {
 
 export function EnginePage() {
   const controllerRef = useRef<EngineController | null>(null);
+  const cameraReadoutRef = useRef<HTMLElement | null>(null);
   const [count, setCount] = useState(() => {
     const requested = Number(new URLSearchParams(location.search).get("points"));
     return counts.includes(requested as (typeof counts)[number]) ? requested : 1000;
@@ -159,6 +160,10 @@ export function EnginePage() {
           ? current
           : next,
       );
+      // Written straight to the DOM so the sampled readout never costs a React render.
+      if (controller && cameraReadoutRef.current) {
+        cameraReadoutRef.current.textContent = formatCamera(controller.getViewState());
+      }
       const isTilted = (controller?.getViewState().pitch ?? 0) > 0;
       setTilted((current) => (current === isTilted ? current : isTilted));
       if (controller && isAtlas(source)) {
@@ -378,6 +383,10 @@ export function EnginePage() {
               </dd>
             </div>
             <div>
+              <dt>Camera</dt>
+              <dd ref={cameraReadoutRef} data-testid="engine-camera" />
+            </div>
+            <div>
               <dt>Base tiles</dt>
               <dd>
                 {telemetry.baseTiles} <small>/ {telemetry.pendingTiles} pending</small>
@@ -437,6 +446,11 @@ export function EnginePage() {
       </footer>
     </main>
   );
+}
+
+function formatCamera(view: MapViewState): string {
+  const [longitude, latitude] = view.center;
+  return `${longitude.toFixed(3)}, ${latitude.toFixed(3)} · z${view.zoom.toFixed(2)}`;
 }
 
 function coverageMessage(coverage: "inside" | "outside" | "zoom"): string {

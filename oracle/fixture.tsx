@@ -583,6 +583,196 @@ const ICON_LINE_LAYERS: Array<Record<string, unknown>> = [
     type: "symbol",
   },
 ];
+/**
+ * The `symbol-variable-anchors` style layers (#346): anchors chosen at placement. Capitals
+ * take a radial offset, wrap and justify towards their anchor; towns take explicit offsets
+ * per anchor, and lakes keep a badge fitted to their name, which moves with the chosen
+ * anchor and must fit there too. Blockers, placed first, take each label's first anchors
+ * so the later ones are chosen and multi-line capitals justify towards theirs.
+ */
+const VARIABLE_ANCHOR_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-badges",
+    layout: {
+      "icon-image": "shield",
+      "icon-text-fit": "both",
+      "icon-text-fit-padding": [1, 3, 1, 3],
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": 12,
+      "text-variable-anchor": ["top", "bottom", "left", "right"],
+    },
+    paint: { "text-color": "#1e3a8a" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "city"],
+    id: "town-offsets",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-padding": 1,
+      "text-size": 12,
+      "text-variable-anchor-offset": [
+        "bottom-left",
+        [0.3, -0.3],
+        "top-right",
+        [-0.3, 0.3],
+        "bottom",
+        [0, -0.6],
+        "left",
+        [0.6, 0],
+      ],
+    },
+    paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-radial",
+    layout: {
+      "text-field": ["concat", ["get", "name"], " ", ["get", "name"]],
+      "text-font": ["NotoSans-Regular"],
+      "text-justify": "auto",
+      "text-max-width": 4,
+      "text-radial-offset": 0.7,
+      "text-size": 16,
+      "text-variable-anchor": ["left", "right", "top", "bottom", "top-left", "bottom-right"],
+    },
+    paint: { "text-color": "#7f1d1d", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    id: "place-blockers",
+    layout: {
+      "text-allow-overlap": true,
+      "text-anchor": "bottom-left",
+      "text-field": "Xxxx",
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0.2, -0.2],
+      "text-padding": 0,
+      "text-size": 13,
+    },
+    paint: { "text-color": "#dc2626" },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-blockers",
+    layout: {
+      "text-allow-overlap": true,
+      "text-anchor": "top",
+      "text-field": "Xx",
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0, 0.6],
+      "text-padding": 0,
+      "text-size": 13,
+    },
+    paint: { "text-color": "#dc2626" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+];
+/**
+ * The `symbol-alignment` style layers (#346): point symbols meeting the map. Capitals lie on
+ * the map plane and turn with it (`rotation-alignment: map`, pitch following); cities turn
+ * with the map but stay on the viewport plane (`pitch-alignment: viewport`), and take
+ * variable anchors there; lakes lie on the map plane without turning (rotation viewport,
+ * pitch map, the skewed axes) on a badge fitted to their name; river names keep each glyph
+ * level along their line (`viewport-glyph`).
+ */
+const ALIGNMENT_LAYERS: Array<Record<string, unknown>> = [
+  {
+    id: "river-names",
+    layout: {
+      "symbol-placement": "line",
+      "symbol-spacing": 220,
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-rotation-alignment": "viewport-glyph",
+      "text-size": 12,
+    },
+    paint: { "text-color": "#1d4ed8", "text-halo-color": "#eff6ff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "water_lines",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-badges",
+    layout: {
+      "icon-image": "shield",
+      "icon-pitch-alignment": "map",
+      "icon-text-fit": "both",
+      "icon-text-fit-padding": [1, 3, 1, 3],
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-pitch-alignment": "map",
+      "text-size": 12,
+    },
+    paint: { "text-color": "#1e3a8a" },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "city"],
+    id: "city-turned",
+    layout: {
+      "icon-image": "town",
+      "icon-pitch-alignment": "viewport",
+      "icon-rotation-alignment": "map",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-padding": 1,
+      "text-pitch-alignment": "viewport",
+      "text-radial-offset": 0.8,
+      "text-rotation-alignment": "map",
+      "text-size": 12,
+      "text-variable-anchor": ["top", "left", "right", "bottom"],
+    },
+    paint: { "text-color": "#111827", "text-halo-color": "#ffffff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-on-map",
+    layout: {
+      "icon-image": "capital",
+      "icon-rotation-alignment": "map",
+      "text-anchor": "top",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0, 0.9],
+      "text-rotation-alignment": "map",
+      "text-size": 15,
+    },
+    paint: {
+      "icon-color": "#b91c1c",
+      "icon-halo-color": "#fef3c7",
+      "icon-halo-width": 1,
+      "text-color": "#7f1d1d",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1.5,
+      "text-translate": [0, 2],
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
@@ -595,11 +785,15 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
           ? { glyphs: GLYPHS_URL, layers: LINE_LABEL_LAYERS }
           : name === "symbol-icon-lines" || name === "symbol-icon-lines-pitch"
             ? { glyphs: GLYPHS_URL, layers: ICON_LINE_LAYERS }
-            : name === "tileset-lines"
+            : name === "symbol-variable-anchors" || name === "symbol-variable-anchors-pitch"
+              ? { glyphs: GLYPHS_URL, layers: VARIABLE_ANCHOR_LAYERS }
+              : name === "symbol-alignment" || name === "symbol-alignment-pitch"
+                ? { glyphs: GLYPHS_URL, layers: ALIGNMENT_LAYERS }
+              : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
-              : name === "fill-pattern"
+              : name === "fill-pattern" || name === "fill-pattern-pitch"
                 ? { layers: FILL_PATTERN_LAYERS }
-                : name === "line-pattern"
+                : name === "line-pattern" || name === "line-pattern-pitch"
                   ? { layers: LINE_PATTERN_LAYERS }
                   : null;
 
@@ -652,12 +846,14 @@ function referenceStyle(name: string) {
       style.layers.push(...LINE_LAYERS);
       return style;
     }
-    case "fill-pattern": {
+    case "fill-pattern":
+    case "fill-pattern-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...FILL_PATTERN_LAYERS);
       return style;
     }
-    case "line-pattern": {
+    case "line-pattern":
+    case "line-pattern-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...LINE_PATTERN_LAYERS);
       return style;
@@ -682,6 +878,18 @@ function referenceStyle(name: string) {
     case "symbol-icon-lines-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...ICON_LINE_LAYERS);
+      return style;
+    }
+    case "symbol-variable-anchors":
+    case "symbol-variable-anchors-pitch": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...VARIABLE_ANCHOR_LAYERS);
+      return style;
+    }
+    case "symbol-alignment":
+    case "symbol-alignment-pitch": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...ALIGNMENT_LAYERS);
       return style;
     }
     default:
@@ -858,6 +1066,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
         />
       );
     case "fill-pattern":
+    case "fill-pattern-pitch":
       // GeoJSON fills with the sprite's hatch over the patterned tileset glaciers (#323).
       return (context) => (
         <GeoJsonLayer
@@ -880,6 +1089,10 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-lines-pitch":
     case "symbol-icon-lines":
     case "symbol-icon-lines-pitch":
+    case "symbol-variable-anchors":
+    case "symbol-variable-anchors-pitch":
+    case "symbol-alignment":
+    case "symbol-alignment-pitch":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":
@@ -900,6 +1113,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
         />
       );
     case "line-pattern":
+    case "line-pattern-pitch":
       // GeoJSON lines with the sprite's patterns over the patterned tileset lines (#349):
       // `track` motorways and `hatch` rivers, widened by hover and selection.
       return (context) => (

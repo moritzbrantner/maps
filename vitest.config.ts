@@ -18,6 +18,7 @@ export default defineConfig({
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
       "demo/**/*.test.ts",
+      "e2e-hosted/**/*.test.ts",
       "scripts/engine-kernel-scenarios.test.mjs",
     ],
   },

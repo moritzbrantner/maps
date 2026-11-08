@@ -17,6 +17,15 @@
 
 ### Minor Changes
 
+- Patterned GeoJSON fills and lines draw under a pitched camera and on the Canvas fallback
+  (#350). Under pitch the projected path samples the sprite perspective-correct: `fill-pattern`
+  through the fill's stencil with MapLibre's per-tile outline, `line-pattern` on the map plane
+  along its GeoJSON tile pieces, measured on the whole line. On Canvas, fills use a
+  `CanvasPattern` on the tile grid (the local affine at the first vertex, an approximation
+  under pitch) and lines a repeating image per segment (measured on the screen, without
+  mitred joins); SDF images draw only on the GPU paths. Lines that cross a pitched camera's
+  near plane now draw and pick their visible part instead of disappearing. The oracle
+  `fill-pattern-pitch` and `line-pattern-pitch` scenarios are gated.
 - Lines take MapLibre 6.16's `line-pattern` from the map style's `sprite` (#349).
   `tilesetLayers` accepts `line-pattern` on style-spec `line` layers (constant or data-driven,
   not zoom-dependent), and `GeoJsonLayer` styles gain `linePattern` (default `null`). The
@@ -44,6 +53,23 @@
   no longer holds a ground point: pans move the center by the pixel delta and zoom and
   rotation keep the center, as in MapLibre. A right-click over the sky opens no context
   menu. The oracle gates `steep-pitch-horizon` (75°, 85°) and `steep-pitch-sky`.
+- Tileset `symbol` layers meet the map on point placement, ported from MapLibre 6.16 (#346).
+  `text-rotation-alignment` and `icon-rotation-alignment: map`, `text-pitch-alignment` and
+  `icon-pitch-alignment: map` work in any combination: symbols turn with the map (on the
+  viewport or on the pitched map plane, with map-plane perspective sizes), and collision
+  boxes turn and pitch with them, variable anchors included. Labels and icons at
+  `symbol-placement: line` may leave their line with viewport rotation and map pitch, and
+  `text-rotation-alignment: viewport-glyph` keeps each glyph level along its line. Icons
+  under `icon-text-fit` with variable anchors must share their text's pitch plane. The
+  oracle `symbol-alignment` and `symbol-alignment-pitch` scenarios are gated.
+- Tileset `symbol` labels choose their anchor at placement, ported from MapLibre 6.16
+  (#346). `text-variable-anchor` and `text-variable-anchor-offset` (constant lists, point
+  placement) try each anchor in order, the anchor of the last placement first, then, with
+  `text-allow-overlap`, again ignoring collisions; `text-radial-offset` applies to both
+  variable and fixed anchors, and `text-justify: auto` keeps multi-line labels justified
+  towards the chosen anchor. An icon under `icon-text-fit` moves with its text and must fit
+  there too. The oracle `symbol-variable-anchors` and `symbol-variable-anchors-pitch`
+  scenarios are gated.
 - Tileset `symbol` icons follow lines, fit their text and turn, ported from MapLibre 6.16
   (#346). `icon-image` works on `symbol-placement: line` and `line-center`: icons along
   the line (`icon-rotation-alignment` `map`/`auto`) walk the projected line like glyphs, on

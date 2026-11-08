@@ -10,6 +10,7 @@ import type { MapScreenRenderFrame } from "./map-screen-render-frame";
 import {
   createMapsRetainedApplicationRuns,
   createMapsWgpuApplicationFrame,
+  MAPS_WGPU_APPLICATION_LINE,
   createMapsWgpuApplicationFramePacker,
   diffMapsRetainedPolygons,
   MAPS_WGPU_APPLICATION_CIRCLE,
@@ -195,6 +196,50 @@ describe("wgpu application frame", () => {
       order: [0, 0, 1, 1, 0, 1, 2, 0, 1],
       polygons: [],
       width: 640,
+    });
+  });
+
+  test("sends a projected polygon's fill-pattern with white paint at its opacity (#350)", () => {
+    const polygon: MapRenderPolygon = {
+      feature: null,
+      featureId: "hatched",
+      fillColor: "#336699",
+      fillOpacity: 0.4,
+      fillPattern: "hatch",
+      interactive: true,
+      kind: "polygon",
+      primitiveId: "hatched",
+      rings: [
+        [
+          [0, 0],
+          [4, 0],
+          [4, 4],
+        ],
+      ],
+      strokeColor: "#ffffff",
+      strokeOpacity: 1,
+      strokeWidth: 0,
+    };
+    const frame = createMapsWgpuApplicationFrame({
+      height: 480,
+      primitives: [
+        {
+          kind: "polygon",
+          renderPrimitive: polygon,
+          rings: [
+            [
+              { x: 10, y: 10 },
+              { x: 50, y: 10 },
+              { x: 50, y: 50 },
+            ],
+          ],
+        },
+      ],
+      width: 640,
+    });
+    expect(frame?.polygons[0]).toMatchObject({
+      fillColor: [1, 1, 1, 0.4],
+      fillPattern: "hatch",
     });
   });
 
@@ -672,7 +717,12 @@ describe("retained application runs (#195)", () => {
       1,
       Math.fround(0.6),
     ]);
-    // A pitched camera's projected path leaves the patterned line out, not the frame.
+    // A pitched camera's projected path keeps it: the whole line for its tile pieces (#350).
+    const coordinates: [number, number][] = [
+      [0, 0],
+      [1, 1],
+      [2, 2],
+    ];
     const frame = createMapsWgpuApplicationFrame({
       height: 100,
       primitives: [
@@ -682,12 +732,17 @@ describe("retained application runs (#195)", () => {
             { x: 10, y: 10 },
             { x: 20, y: 20 },
           ],
-          renderPrimitive: patterned,
+          renderPrimitive: { ...patterned, coordinates, lineDasharray: [2, 1] },
         },
       ],
       width: 100,
     });
-    expect(frame?.lines).toEqual([]);
+    expect(frame?.lines[0]).toMatchObject({
+      color: [1, 1, 1, 0.6],
+      linePattern: "track",
+      linePatternPath: coordinates,
+    });
+    expect(frame?.order[0]).toBe(MAPS_WGPU_APPLICATION_LINE);
   });
 
   test("retains labeled circles with their unlabeled neighbours (#204)", () => {

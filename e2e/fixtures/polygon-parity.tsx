@@ -7,6 +7,7 @@ import {
   type GeoJsonLayerStyle,
   type MapSurfaceController,
   type MapViewState,
+  type RasterMapStyle,
 } from "../../src";
 import type { MapsRendererStats } from "../../src/maps-browser-runtime";
 import { configureMapsWasmPackage } from "../../src/aggregation-wasm";
@@ -196,6 +197,31 @@ const cases = {
     },
     { lineColor: "#0f766e", lineOpacity: 0.5, lineWidth: 14 },
   ),
+  // Opt-in `fill-pattern` and `line-pattern` from the sprite (#350): a hatched polygon with a
+  // hole and a stroke, a hatched translucent one, and a track along a bent line.
+  "pattern-fill": feature(
+    "pattern-fill",
+    { coordinates: [square(-19, 2, 8), square(-17, 4, 4)], type: "Polygon" },
+    { polygonFillPattern: "hatch", polygonStrokeColor: "#1e3a8a", polygonStrokeWidth: 2 },
+  ),
+  "pattern-fill-translucent": feature(
+    "pattern-fill-translucent",
+    { coordinates: [square(-9, 2, 8)], type: "Polygon" },
+    { polygonFillOpacity: 0.5, polygonFillPattern: "hatch", polygonStrokeWidth: 0 },
+  ),
+  "pattern-line": feature(
+    "pattern-line",
+    {
+      coordinates: [
+        [-19, -8],
+        [-11, -8],
+        [-11, -2],
+        [-3, -2],
+      ],
+      type: "LineString",
+    },
+    { lineCap: "butt", lineJoin: "miter", lineOpacity: 1, linePattern: "track", lineWidth: 8 },
+  ),
   // Opt-in invalid input; the packer's whole-frame behavior is part of the contract.
   "zero-area": feature(
     "zero-area",
@@ -214,8 +240,17 @@ const cases = {
   ),
 };
 
-const OPT_IN = new Set(["zero-area", "antimeridian", "line-joins", "translucent-line"]);
+const OPT_IN = new Set([
+  "zero-area",
+  "antimeridian",
+  "line-joins",
+  "translucent-line",
+  "pattern-fill",
+  "pattern-fill-translucent",
+  "pattern-line",
+]);
 const params = new URLSearchParams(window.location.search);
+const sprite = params.get("sprite") ?? undefined;
 const only = params.get("cases")?.split(",");
 const features = Object.entries(cases)
   .filter(([id]) => (only ? only.includes(id) : !OPT_IN.has(id)))
@@ -260,6 +295,7 @@ window.polygonParity = {
 const initialViewState: MapViewState = {
   center: [Number(params.get("lon") ?? 0), Number(params.get("lat") ?? 0)],
   zoom: Number(params.get("zoom") ?? 4),
+  bearing: Number(params.get("bearing") ?? 0),
 };
 
 function PolygonParity() {
@@ -268,7 +304,9 @@ function PolygonParity() {
       fitToData={false}
       flatRuntime="maps"
       mapLabel="Polygon parity"
-      mapStyle={{ maxZoom: 8, minZoom: 0, tileSize: 256, tiles: WHITE_TILE }}
+      mapStyle={
+        { maxZoom: 8, minZoom: 0, sprite, tileSize: 256, tiles: WHITE_TILE } as RasterMapStyle
+      }
       style={{ height: 540, width: 960 }}
       defaultViewState={initialViewState}
       onMapControllerReady={(controller) => {

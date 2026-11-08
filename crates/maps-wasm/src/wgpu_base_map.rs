@@ -1,8 +1,9 @@
 use super::wgpu_geometry::{
-    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw, GeoJsonTileGrid,
-    GroundPerspective, POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey,
-    SurfaceClip, WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices,
-    camera_uniform_bytes, parse_frame_sky, prepare_application_geometry, unpack_tile_draws,
+    APPLICATION_CIRCLE_INSTANCE_SIZE, APPLICATION_VERTEX_SIZE, ApplicationDraw,
+    ApplicationPatterns, GeoJsonTileGrid, GroundPerspective, LinePatternMeshCache,
+    POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey, SurfaceClip,
+    WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
+    parse_frame_sky, prepare_application_geometry, unpack_tile_draws,
 };
 use super::wgpu_mipmaps::{MipmapGenerator, mip_level_count};
 
@@ -258,6 +259,15 @@ pub struct MapsWgpuBaseMapRenderer {
     stencil_view: wgpu::TextureView,
     application_vertex_buffer: wgpu::Buffer,
     application_vertex_capacity: u64,
+    /// Patterned fills of the projected path (#350), `application.wgsl`'s pattern programs.
+    application_pattern_buffer: wgpu::Buffer,
+    application_pattern_capacity: u64,
+    /// `line-pattern` strips of the projected path (#350), on the flat plane.
+    application_line_pattern_buffer: wgpu::Buffer,
+    application_line_pattern_capacity: u64,
+    application_line_pattern_meshes: LinePatternMeshCache,
+    /// The flat plane -> clip matrix those strips and covers read (#350).
+    application_pattern_uniforms: FrameUniforms,
     application_circle_pipeline: wgpu::RenderPipeline,
     application_circle_instance_buffer: wgpu::Buffer,
     application_circle_instance_capacity: u64,
@@ -651,6 +661,10 @@ impl MapsWgpuBaseMapRenderer {
                 wgpu::ColorWrites::empty(),
             ),
         };
+        let application_pattern_buffer =
+            create_application_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
+        let application_line_pattern_buffer =
+            create_application_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
         let application_vertex_buffer =
             create_application_vertex_buffer(&device, INITIAL_VERTEX_BUFFER_SIZE);
 
@@ -926,6 +940,8 @@ impl MapsWgpuBaseMapRenderer {
             FrameUniforms::new(&device, "Maps retained polygon frame layout");
         let dash_atlas = DashAtlasGpu::new(&device);
         let style_line_uniforms = FrameUniforms::new(&device, "Maps style line frame layout");
+        let application_pattern_uniforms =
+            FrameUniforms::new(&device, "Maps application pattern frame layout");
         let retained_polygon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Maps retained polygon shader"),
             source: wgpu::ShaderSource::Wgsl(RETAINED_POLYGONS_SHADER.into()),
@@ -1128,6 +1144,12 @@ impl MapsWgpuBaseMapRenderer {
             stencil_view,
             application_vertex_buffer,
             application_vertex_capacity: INITIAL_VERTEX_BUFFER_SIZE,
+            application_pattern_buffer,
+            application_pattern_capacity: INITIAL_VERTEX_BUFFER_SIZE,
+            application_line_pattern_buffer,
+            application_line_pattern_capacity: INITIAL_VERTEX_BUFFER_SIZE,
+            application_line_pattern_meshes: LinePatternMeshCache::default(),
+            application_pattern_uniforms,
             application_circle_pipeline,
             application_circle_instance_buffer,
             application_circle_instance_capacity: INITIAL_VERTEX_BUFFER_SIZE,
@@ -1849,22 +1871,92 @@ impl MapsWgpuBaseMapRenderer {
             &camera_uniform_bytes(view_projection),
         );
 
+        let geojson_tiles = placements.iter().find_map(GeoJsonTileGrid::from_placement);
         let application_geometry = application_frame
             .map(|mut frame| {
                 let ground = GroundPerspective::new(view_projection, frame.width, frame.height)
-                    .map(|ground| {
-                        ground.with_geojson_tiles(
-                            placements.iter().find_map(GeoJsonTileGrid::from_placement),
-                        )
-                    });
+                    .map(|ground| ground.with_geojson_tiles(geojson_tiles));
                 if let Some(ground) = &ground {
                     frame.place_on_ground(ground)?;
                 }
-                prepare_application_geometry(&frame, clip.pixel_ratio, ground)
+                // Patterns of the projected path (#350) request their images like the
+                // retained path's, and draw once the sprite has them.
+                let pattern_images = frame
+                    .polygons
+                    .iter()
+                    .filter_map(|polygon| polygon.fill_pattern.as_deref())
+                    .chain(
+                        frame
+                            .lines
+                            .iter()
+                            .filter_map(|line| line.line_pattern.as_deref()),
+                    );
+                let mut patterned = false;
+                for image in pattern_images {
+                    self.images.request_pattern(image);
+                    patterned = true;
+                }
+                let plane = GroundPerspective::plane(view_projection, frame.width, frame.height);
+                let patterns = match (patterned, plane, geojson_tiles) {
+                    (true, Some(plane), Some(grid)) => Some(ApplicationPatterns {
+                        atlas: self.images.atlas(),
+                        meshes: &self.application_line_pattern_meshes,
+                        plane,
+                        grid,
+                    }),
+                    _ => None,
+                };
+                let geometry = prepare_application_geometry(
+                    &frame,
+                    clip.pixel_ratio,
+                    ground,
+                    patterns.as_ref(),
+                );
+                self.application_line_pattern_meshes.end_frame();
+                geometry
             })
             .transpose()
             .map_err(JsValue::from_str)?
             .unwrap_or_default();
+        // The flat plane (CSS px, +y south) is `LocalFrame` of unit size at the local origin.
+        let application_pattern_offset = (!application_geometry.pattern_vertices.is_empty()
+            || !application_geometry.line_pattern_vertices.is_empty())
+        .then(|| {
+            let pixel_ratio = clip.pixel_ratio as f32;
+            let (width, height) = (self.config.width as f32, self.config.height as f32);
+            self.application_pattern_uniforms
+                .write(
+                    &self.device,
+                    &self.queue,
+                    [(
+                        (),
+                        LocalFrame {
+                            west: 0.0,
+                            north: 0.0,
+                            size: 1.0,
+                        },
+                    )],
+                    view_projection,
+                    |_| [width, height, pixel_ratio, 1.0],
+                )
+                .first()
+                .map(|&(_, offset)| offset)
+        })
+        .flatten();
+        write_growing_vertex_buffer(
+            &self.device,
+            &self.queue,
+            &mut self.application_pattern_buffer,
+            &mut self.application_pattern_capacity,
+            &application_geometry.pattern_vertices,
+        );
+        write_growing_vertex_buffer(
+            &self.device,
+            &self.queue,
+            &mut self.application_line_pattern_buffer,
+            &mut self.application_line_pattern_capacity,
+            &application_geometry.line_pattern_vertices,
+        );
         let application_required = application_geometry.triangle_vertices.len() as u64;
         if application_required > self.application_vertex_capacity {
             let capacity = application_required
@@ -2080,8 +2172,30 @@ impl MapsWgpuBaseMapRenderer {
                         draw_calls +=
                             self.draw_retained_polygons(&mut pass, group, &retained_polygon_draws);
                     }
+                    ApplicationDraw::LinePattern {
+                        first_vertex,
+                        vertex_count,
+                    } => {
+                        // MapLibre's `line_pattern` program over the image atlas (#350).
+                        if let Some(offset) = application_pattern_offset {
+                            pass.set_bind_group(
+                                0,
+                                self.application_pattern_uniforms.bind_group(),
+                                &[offset],
+                            );
+                            pass.set_bind_group(1, &self.patterns.bind_group, &[]);
+                            pass.set_vertex_buffer(
+                                0,
+                                self.application_line_pattern_buffer.slice(..),
+                            );
+                            pass.set_pipeline(&self.patterns.line);
+                            pass.draw(first_vertex..first_vertex + vertex_count, 0..1);
+                            draw_calls += 1;
+                        }
+                    }
                     ApplicationDraw::Polygon(polygon) => {
-                        draw_calls += self.draw_polygon(&mut pass, polygon);
+                        draw_calls +=
+                            self.draw_polygon(&mut pass, polygon, application_pattern_offset);
                     }
                 }
             }
@@ -2094,6 +2208,8 @@ impl MapsWgpuBaseMapRenderer {
             vector_tiles: vector_draws.len() as u32,
             draw_calls,
             application_upload_bytes: (application_geometry.circle_instances.len()
+                + application_geometry.pattern_vertices.len()
+                + application_geometry.line_pattern_vertices.len()
                 + application_geometry.triangle_vertices.len())
                 as u64,
             retained_point_frames: retained_point_draws.len() as u32,
@@ -2470,7 +2586,12 @@ impl MapsWgpuBaseMapRenderer {
 
     /// Even-odd fill (stencil fan, then cover), then a single-coverage stroke whose
     /// stencil is cleared by redrawing its triangles without color.
-    fn draw_polygon(&self, pass: &mut wgpu::RenderPass<'_>, polygon: PolygonDraw) -> u32 {
+    fn draw_polygon(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        polygon: PolygonDraw,
+        pattern_offset: Option<u32>,
+    ) -> u32 {
         let pipelines = &self.polygon_pipelines;
         let mut draw_calls = 0;
         pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
@@ -2481,12 +2602,41 @@ impl MapsWgpuBaseMapRenderer {
                 polygon.fan_first..polygon.fan_first + polygon.fan_count,
                 0..1,
             );
-            pass.set_pipeline(&pipelines.fill_cover);
-            pass.draw(
-                polygon.cover_first..polygon.cover_first + POLYGON_COVER_VERTEX_COUNT,
-                0..1,
-            );
-            draw_calls += 2;
+            if let Some(pattern) = polygon.pattern {
+                // MapLibre's `fill_pattern` cover, then its pattern outline (#350).
+                if let Some(offset) = pattern_offset {
+                    pass.set_bind_group(
+                        0,
+                        self.application_pattern_uniforms.bind_group(),
+                        &[offset],
+                    );
+                    pass.set_bind_group(1, &self.patterns.bind_group, &[]);
+                    pass.set_vertex_buffer(0, self.application_pattern_buffer.slice(..));
+                    pass.set_pipeline(&self.patterns.application_cover);
+                    pass.draw(
+                        pattern.cover_first..pattern.cover_first + POLYGON_COVER_VERTEX_COUNT,
+                        0..1,
+                    );
+                    draw_calls += 1;
+                    if pattern.outline_count > 0 {
+                        pass.set_pipeline(&self.patterns.application_outline);
+                        pass.draw(
+                            pattern.outline_first..pattern.outline_first + pattern.outline_count,
+                            0..1,
+                        );
+                        draw_calls += 1;
+                    }
+                    pass.set_vertex_buffer(0, self.application_vertex_buffer.slice(..));
+                }
+            } else {
+                pass.set_pipeline(&pipelines.fill_cover);
+                pass.draw(
+                    polygon.cover_first..polygon.cover_first + POLYGON_COVER_VERTEX_COUNT,
+                    0..1,
+                );
+                draw_calls += 1;
+            }
+            draw_calls += 1;
         }
         if polygon.outline_count > 0 {
             pass.set_pipeline(&self.polygon_outline_pipeline);
@@ -2629,6 +2779,24 @@ fn create_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+/// Writes `bytes` to an application vertex buffer that grows to hold them.
+fn write_growing_vertex_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buffer: &mut wgpu::Buffer,
+    capacity: &mut u64,
+    bytes: &[u8],
+) {
+    let required = bytes.len() as u64;
+    if required > *capacity {
+        *capacity = required.next_power_of_two().max(INITIAL_VERTEX_BUFFER_SIZE);
+        *buffer = create_application_vertex_buffer(device, *capacity);
+    }
+    if !bytes.is_empty() {
+        queue.write_buffer(buffer, 0, bytes);
+    }
 }
 
 fn create_application_vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {

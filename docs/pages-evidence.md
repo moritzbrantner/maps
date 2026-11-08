@@ -24,17 +24,17 @@ The Pages build pins the template to an exact Git commit and runs it in `--augme
 - `coding-tooling` supplies repository verification KPIs and their freshness semantics.
 - `runtime-profiler` remains authoritative for runtime capture.
 - Moonlight remains authoritative for comparable baseline/candidate evaluation and verdicts.
-- `pages.config.json` declares the future normalized runtime evidence URL at `/maps/evidence/runtime.json`.
+- `pages.config.json` lists only evidence the Pages build actually produces; `scripts/pages-workflow.test.ts` fails if a same-origin source has no producer in the build.
 
-Until the runtime/Moonlight artifact is durably published to that URL for the exact source revision, the shared evidence page must show that source as unavailable. Missing runtime evidence is never treated as passing evidence.
+Pages currently hosts **no** Moonlight verdict. The camera runtime/Moonlight capture (`bun run verify:engine-runtime-evidence`) runs only in the `workflow_dispatch` `runtime-evidence` CI job, and its bundles exist only as a seven-day run artifact. `/maps/evidence/runtime.json` was therefore removed from the advertised sources rather than left as a permanent 404. Absent hosted Moonlight evidence means no verdict is available; it is never a pass, and no page may present one.
 
-This intentionally separates the presentation rollout from the next transport slice: publishing normalized `project-evidence-v1` runtime observations from CI without re-running or reinterpreting benchmarks in the browser.
+A hosted Moonlight source can return once a real capture is published to a declared URL with its source revision, run and profiler provenance, and Moonlight's actual passed/failed/inconclusive outcome and comparability preserved. Declared sources that a build fails to publish, such as a failed point-journey run, still appear on the evidence page as unavailable.
 
 ## Canonical kernel runtime publication
 
 The separate `kernel-runtime` source publishes profiler-owned kernel harness
-observations at `/maps/evidence/kernel-runtime.json`. It does not fill the
-unpublished camera/Moonlight URL or claim a renderer Fast verdict. The existing
+observations at `/maps/evidence/kernel-runtime.json`. It is not camera/Moonlight
+evidence and does not claim a renderer Fast verdict. The existing
 Pages build captures five canonical Bun processing scenarios, transports their
 validated immutable bundles under `/maps/evidence/kernels/<scenario>/candidate/`,
 and renders their process metrics through the shared `/stats/` and `/evidence/`
