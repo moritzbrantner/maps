@@ -354,6 +354,27 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { center: [8.6, 47.3], zoom: 7.8 },
+    capability:
+      "variable text anchors: text-variable-anchor, text-variable-anchor-offset, text-radial-offset, auto justification, icon-text-fit moving with the chosen anchor",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-variable-anchors",
+    origin: "Milestone E cartography (#80): place labels that shift around their point; variable anchors (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -30, center: [8.6, 47.3], pitch: 40, zoom: 7.8 },
+    capability: "variable text anchors under a pitched and turned camera: shifts scaled by the perspective ratio",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-variable-anchors-pitch",
+    origin: "Milestone E cartography (#80): place labels that shift around their point under pitch (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],

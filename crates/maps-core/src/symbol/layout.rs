@@ -16,6 +16,7 @@ use super::line_anchors::{LabelExtent, center_anchor, clip_line, line_anchors, m
 use super::polylabel::{classify_rings, pole_of_inaccessibility};
 use super::shaping::{ONE_EM, ShapeOptions, Shaping, SymbolAnchor, shape_text};
 use super::style::{StyleLayer, StyleLayerKind};
+use super::variable_anchors::{self, AnchorOffset};
 use super::zoom::{PropertyKind, SizeData, camera_context, packed_size, symbol_paint};
 use crate::line_mesh::{LineCap, LineJoin, LineLayout, LineMesh};
 use crate::mvt_features::{MvtFeature, MvtGeometryType, MvtLayer};
@@ -107,6 +108,37 @@ pub struct SymbolText {
     /// Paint at the tile zoom and one above (they differ for composite functions).
     pub paint: [SymbolPaint; 2],
     pub line: Option<LineText>,
+    /// `text-variable-anchor` or `text-variable-anchor-offset`.
+    pub variable: Option<VariableText>,
+}
+
+/// A label whose anchor is chosen at placement (MapLibre's `textAnchorOffsets` and shapings
+/// per justification): its [`SymbolText::glyphs`] and box are centred on the anchor, and the
+/// chosen anchor shifts them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariableText {
+    /// Anchors in the order placement tries them, with their offsets in glyph units.
+    pub anchors: Vec<AnchorOffset>,
+    /// The layout `text-size` over 24: the box is measured at that size.
+    pub box_scale: f64,
+    /// Quads of a multi-line label per justification (0 left, 0.5 center, 1 right) under
+    /// `text-justify: auto`; empty when [`SymbolText::glyphs`] serve every anchor.
+    pub justified: Vec<(f64, Vec<SymbolGlyph>)>,
+}
+
+impl VariableText {
+    /// The quads for an anchor (`markUsedJustification`), `default` when one set serves all.
+    #[must_use]
+    pub fn glyphs<'a>(
+        &'a self,
+        anchor: SymbolAnchor,
+        default: &'a [SymbolGlyph],
+    ) -> &'a [SymbolGlyph] {
+        self.justified
+            .iter()
+            .find(|(justification, _)| *justification == anchor.justification())
+            .map_or(default, |(_, glyphs)| glyphs)
+    }
 }
 
 /// The icon part of a symbol: MapLibre's `shapeIcon`, `fitIconToText` and `getIconQuads`.
@@ -231,6 +263,10 @@ pub struct SymbolBucket {
     /// The layer sets `icon-offset`: MapLibre's `u_is_offset` then keeps symbol sizes off
     /// the perspective ratio.
     pub icon_offset: bool,
+    /// `icon-text-fit` is not `none`: under variable anchors the icon moves with its text.
+    pub icon_text_fit: bool,
+    /// The layer sets `text-variable-anchor` or `text-variable-anchor-offset`.
+    pub variable_anchors: bool,
 }
 
 impl SymbolBucket {
@@ -408,6 +444,7 @@ pub fn layout_tile(
                         _ => [0.0; 4],
                     },
                 };
+                let icon_text_fit = options.icon_text_fit != "none";
                 let instances = match features {
                     Some(source) => layout_symbols(
                         layer,
@@ -446,6 +483,9 @@ pub fn layout_tile(
                     icon_translate: SymbolTranslate::of(layer, "icon", &constant)?,
                     text_padding: layer.number(false, "text-padding", 2.0, &constant)?,
                     icon_offset: layer.raw_layout("icon-offset").is_some(),
+                    icon_text_fit,
+                    variable_anchors: layer.raw_layout("text-variable-anchor").is_some()
+                        || layer.raw_layout("text-variable-anchor-offset").is_some(),
                     text_allow_overlap: layer.boolean("text-allow-overlap", false, &constant)?,
                     text_ignore_placement: layer.boolean(
                         "text-ignore-placement",
@@ -1307,6 +1347,10 @@ struct FeatureText {
     /// The transformed text (`mergeLines` and `anchorIsTooClose` compare it).
     text: String,
     shaping: Shaping,
+    /// Under variable anchors with several justifications, every shaping (first is `shaping`).
+    justified: Vec<(f64, Shaping)>,
+    /// `text-variable-anchor(-offset)`: anchors with their offsets in glyph units.
+    variable: Option<Vec<AnchorOffset>>,
     stack: String,
     /// `text-size` at the tile zoom plus one, which collision shapes use.
     layout_size: f64,
@@ -1325,12 +1369,55 @@ impl FeatureText {
     /// those centres and a collision circle.
     fn at_anchor(&self, along_line: bool) -> SymbolText {
         let font_scale = self.layout_size / ONE_EM;
+        let (quads, offsets) = self.glyph_quads(&self.shaping, along_line);
+        let variable = self.variable.as_ref().map(|anchors| VariableText {
+            anchors: anchors.clone(),
+            box_scale: font_scale,
+            justified: self
+                .justified
+                .iter()
+                .map(|(justification, shaping)| {
+                    (*justification, self.glyph_quads(shaping, false).0)
+                })
+                .collect(),
+        });
+        let shaping = &self.shaping;
+        SymbolText {
+            collision_box: rotated_box(
+                [
+                    shaping.left * font_scale - self.padding,
+                    shaping.top * font_scale - self.padding,
+                    shaping.right * font_scale + self.padding,
+                    shaping.bottom * font_scale + self.padding,
+                ],
+                self.rotate,
+            ),
+            glyphs: quads,
+            sizes: self.sizes,
+            stack: self.stack.clone(),
+            paint: self.paint.clone(),
+            variable,
+            line: along_line.then(|| {
+                // `CollisionFeature` along a line: a circle as tall as the text, at least
+                // 10 glyph units.
+                let height = shaping.bottom - shaping.top;
+                LineText {
+                    offsets,
+                    line_offset: self.offset,
+                    circle_diameter: (height > 0.0).then(|| height.max(10.0) * font_scale),
+                }
+            }),
+        }
+    }
+
+    /// `getGlyphQuads` for one shaping: quads, and along a line each glyph's centre.
+    fn glyph_quads(&self, shaping: &Shaping, along_line: bool) -> (Vec<SymbolGlyph>, Vec<f32>) {
         let rect_buffer = f64::from(GLYPH_PBF_BORDER + 1);
         let angle = (self.rotate != 0.0 && !self.rotate.is_nan())
             .then(|| self.rotate.to_radians().sin_cos());
         let mut quads = Vec::new();
         let mut offsets = Vec::new();
-        for glyph in self.shaping.lines.iter().flatten() {
+        for glyph in shaping.lines.iter().flatten() {
             if !glyph.has_bitmap {
                 continue;
             }
@@ -1361,32 +1448,7 @@ impl FeatureText {
                 corners: corners.map(|[x, y]| [quantize(x), quantize(y)]),
             });
         }
-        let shaping = &self.shaping;
-        SymbolText {
-            collision_box: rotated_box(
-                [
-                    shaping.left * font_scale - self.padding,
-                    shaping.top * font_scale - self.padding,
-                    shaping.right * font_scale + self.padding,
-                    shaping.bottom * font_scale + self.padding,
-                ],
-                self.rotate,
-            ),
-            glyphs: quads,
-            sizes: self.sizes,
-            stack: self.stack.clone(),
-            paint: self.paint.clone(),
-            line: along_line.then(|| {
-                // `CollisionFeature` along a line: a circle as tall as the text, at least
-                // 10 glyph units.
-                let height = shaping.bottom - shaping.top;
-                LineText {
-                    offsets,
-                    line_offset: self.offset,
-                    circle_diameter: (height > 0.0).then(|| height.max(10.0) * font_scale),
-                }
-            }),
-        }
+        (quads, offsets)
     }
 }
 
@@ -1429,23 +1491,32 @@ fn feature_text(
     let anchor =
         SymbolAnchor::parse(&layer.string(false, "text-anchor", "center", tile_context)?)
             .ok_or_else(|| format!("{}: invalid text-anchor", layer.id))?;
+    let text_justify = layer.string(false, "text-justify", "center", tile_context)?;
     // Text along a line is centred on its anchor.
-    let justify = match layer
-        .string(false, "text-justify", "center", tile_context)?
-        .as_str()
-    {
+    let justify = match text_justify.as_str() {
         _ if options.text_along_line => 0.5,
         "auto" => anchor.justification(),
         "left" => 0.0,
         "right" => 1.0,
         _ => 0.5,
     };
-    let offset = match layer.value("text-offset", tile_context)? {
+    let style_offset = match layer.value("text-offset", tile_context)? {
         Some(Value::Array(values)) if values.len() == 2 => [
             values[0].as_f64().unwrap_or(0.0) * ONE_EM,
             values[1].as_f64().unwrap_or(0.0) * ONE_EM,
         ],
         _ => [0.0, 0.0],
+    };
+    let radial = layer.number(false, "text-radial-offset", 0.0, tile_context)? * ONE_EM;
+    let variable = variable_anchor_offsets(layer, radial, style_offset)?;
+    // Variable anchors take their offsets at placement; otherwise the style spec leaves
+    // `text-offset` with `text-radial-offset` open and MapLibre goes with the radial offset.
+    let offset = if variable.is_some() {
+        [0.0, 0.0]
+    } else if radial != 0.0 {
+        variable_anchors::radial_offset(anchor, radial)
+    } else {
+        style_offset
     };
     let shape_options = ShapeOptions {
         stack: &stack,
@@ -1461,12 +1532,55 @@ fn feature_text(
         spacing: layer.number(false, "text-letter-spacing", 0.0, tile_context)? * ONE_EM,
         translate: offset,
     };
-    let Some(shaping) = shape_text(&text, glyphs, &shape_options) else {
+    // Variable anchors shape around the centre, once per justification their anchors need
+    // (`text-justify: auto`); one line reads the same under every justification.
+    let mut shapings: Vec<(f64, Shaping)> = Vec::new();
+    match &variable {
+        Some(anchors) if !options.text_along_line => {
+            let justifications: Vec<f64> = if text_justify == "auto" {
+                anchors
+                    .iter()
+                    .map(|(anchor, _)| anchor.justification())
+                    .collect()
+            } else {
+                vec![justify]
+            };
+            for justification in justifications {
+                if shapings.iter().any(|(done, _)| *done == justification) {
+                    continue;
+                }
+                let centered = ShapeOptions {
+                    anchor: SymbolAnchor::Center,
+                    justify: justification,
+                    ..shape_options
+                };
+                if let Some(shaping) = shape_text(&text, glyphs, &centered) {
+                    let single_line = shaping.lines.len() == 1;
+                    shapings.push((justification, shaping));
+                    if single_line {
+                        break;
+                    }
+                }
+            }
+        }
+        _ => {
+            if let Some(shaping) = shape_text(&text, glyphs, &shape_options) {
+                shapings.push((justify, shaping));
+            }
+        }
+    }
+    let Some((_, shaping)) = shapings.first().cloned() else {
         return Ok(None);
     };
     Ok(Some(FeatureText {
         text,
         shaping,
+        justified: if shapings.len() > 1 {
+            shapings
+        } else {
+            Vec::new()
+        },
+        variable,
         stack,
         layout_size,
         sizes,
@@ -1475,6 +1589,39 @@ fn feature_text(
         rotate: layer.number(false, "text-rotate", 0.0, tile_context)?,
         paint: feature_paint(layer, "text", feature, z)?,
     }))
+}
+
+/// `getTextVariableAnchorOffset`: a label's anchors with their offsets in glyph units;
+/// `radial` and `style_offset` (`text-radial-offset`, `text-offset`) are in glyph units too.
+fn variable_anchor_offsets(
+    layer: &StyleLayer,
+    radial: f64,
+    style_offset: [f64; 2],
+) -> Result<Option<Vec<AnchorOffset>>, String> {
+    if let Some(value) = layer.raw_layout("text-variable-anchor-offset") {
+        let anchors = variable_anchors::parse_anchor_offsets(value)
+            .map_err(|error| format!("{}: text-variable-anchor-offset: {error}", layer.id))?;
+        return Ok(Some(variable_anchors::em_offsets_to_glyph_units(&anchors)));
+    }
+    let Some(value) = layer.raw_layout("text-variable-anchor") else {
+        return Ok(None);
+    };
+    let anchors = variable_anchors::parse_anchors(value)
+        .map_err(|error| format!("{}: text-variable-anchor: {error}", layer.id))?;
+    let has_radial = layer.raw_layout("text-radial-offset").is_some();
+    Ok(Some(
+        anchors
+            .into_iter()
+            .map(|anchor| {
+                let offset = if has_radial {
+                    variable_anchors::radial_offset(anchor, radial)
+                } else {
+                    variable_anchors::text_offset(anchor, style_offset)
+                };
+                (anchor, offset)
+            })
+            .collect(),
+    ))
 }
 
 /// Point-placement anchors of a feature (`addFeature`): its points, the first vertex of each
@@ -1705,6 +1852,126 @@ mod tests {
         assert!(line.offsets.windows(2).all(|pair| pair[0] < pair[1]));
         assert!((line.offsets[0] + line.offsets[6]).abs() < 2.0);
         assert!(line.circle_diameter.is_some());
+    }
+
+    /// One point feature at the tile centre with a `name` property.
+    fn place_source(name: &str) -> MvtLayer {
+        MvtLayer {
+            name: "places".to_owned(),
+            extent: 4096,
+            features: vec![MvtFeature {
+                id: None,
+                geometry_type: MvtGeometryType::Point,
+                geometry: vec![vec![[2048, 2048]]],
+                properties: BTreeMap::from([("name".to_owned(), Value::from(name))]),
+            }],
+        }
+    }
+
+    fn variable_text(layout: &str, name: &str) -> SymbolText {
+        let layer = line_layer(&format!(
+            r#"{{"id":"p","type":"symbol","source-layer":"places","layout":{{"text-field":["get","name"],"text-font":["NotoSans-Regular"],"text-size":24,{layout}}}}}"#
+        ));
+        let buckets = layout_tile(
+            &[layer],
+            &[place_source(name)],
+            8,
+            &oracle_glyphs(),
+            &ImageStore::default(),
+        )
+        .unwrap();
+        let LayerBucket::Symbols(bucket) = &buckets.layers[0] else {
+            panic!("{buckets:?}")
+        };
+        assert!(bucket.variable_anchors || layout.contains("radial"));
+        bucket.instances[0].text.clone().unwrap()
+    }
+
+    #[test]
+    fn variable_anchors_centre_the_label_and_keep_offsets_for_placement() {
+        let text = variable_text(
+            r#""text-variable-anchor":["left","top"],"text-offset":[1,2],"text-padding":0"#,
+            "Rome",
+        );
+        let variable = text.variable.as_ref().unwrap();
+        // `fromTextOffset`: the offset magnitude towards each anchor, in glyph units.
+        assert_eq!(
+            variable.anchors,
+            [
+                (SymbolAnchor::Left, [24.0, 0.0]),
+                (SymbolAnchor::Top, [0.0, 41.0]),
+            ]
+        );
+        assert_eq!(variable.box_scale, 1.0);
+        assert!(variable.justified.is_empty());
+        // Centred on the anchor: no `text-offset` built in; the shift moves it at placement.
+        let [x1, y1, x2, y2] = text.collision_box;
+        assert!(
+            (x1 + x2).abs() < 1.0 && (y1 + y2).abs() < 6.0,
+            "{x1} {y1} {x2} {y2}"
+        );
+        // A plain label with the same offset carries it in its quads.
+        let plain = variable_text(
+            r#""text-offset":[1,2],"text-padding":0,"text-radial-offset":0"#,
+            "Rome",
+        );
+        assert!(plain.variable.is_none());
+        assert!(plain.collision_box[1] > text.collision_box[1] + 40.0);
+    }
+
+    #[test]
+    fn anchor_offsets_take_ems_and_radial_offsets_follow_the_anchor() {
+        let text = variable_text(
+            r#""text-variable-anchor-offset":["top",[0,1],"right",[-2,0]]"#,
+            "Rome",
+        );
+        assert_eq!(
+            text.variable.as_ref().unwrap().anchors,
+            [
+                (SymbolAnchor::Top, [0.0, 17.0]),
+                (SymbolAnchor::Right, [-48.0, 0.0]),
+            ]
+        );
+        // `text-radial-offset` applies to variable anchors and to a fixed `text-anchor`.
+        let variable = variable_text(
+            r#""text-variable-anchor":["bottom"],"text-radial-offset":1"#,
+            "Rome",
+        );
+        assert_eq!(
+            variable.variable.as_ref().unwrap().anchors,
+            [(SymbolAnchor::Bottom, [0.0, -17.0])]
+        );
+        let fixed = variable_text(r#""text-anchor":"left","text-radial-offset":1"#, "Rome");
+        assert!(fixed.variable.is_none());
+        let plain = variable_text(r#""text-anchor":"left","text-radial-offset":0"#, "Rome");
+        assert!(fixed.collision_box[0] > plain.collision_box[0] + 20.0);
+    }
+
+    #[test]
+    fn multi_line_auto_justified_labels_keep_one_quad_set_per_justification() {
+        // Two lines of different widths: one justified set per justification of the anchors.
+        let layout =
+            r#""text-variable-anchor":["left","right"],"text-justify":"auto","text-max-width":3"#;
+        let two_lines = variable_text(layout, "Aaaaaaaa b");
+        let justified = &two_lines.variable.as_ref().unwrap().justified;
+        assert_eq!(justified.len(), 2);
+        assert_eq!(justified[0].0, 0.0);
+        assert_eq!(justified[1].0, 1.0);
+        let (left, right) = (&justified[0].1, &justified[1].1);
+        assert_eq!(left.len(), right.len());
+        assert_ne!(left[8].corners, right[8].corners);
+        let variable = two_lines.variable.as_ref().unwrap();
+        assert_eq!(
+            variable.glyphs(SymbolAnchor::Left, &two_lines.glyphs),
+            left.as_slice()
+        );
+        assert_eq!(
+            variable.glyphs(SymbolAnchor::Right, &two_lines.glyphs),
+            right.as_slice()
+        );
+        // A single line reads the same under every justification.
+        let one_line = variable_text(layout, "Rome");
+        assert!(one_line.variable.as_ref().unwrap().justified.is_empty());
     }
 
     fn oracle_glyphs() -> GlyphStore {
