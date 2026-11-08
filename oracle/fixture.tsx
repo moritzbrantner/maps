@@ -829,9 +829,21 @@ function reliefStyle(terrain: boolean) {
   };
 }
 
+/** The tile-free base (#170): one constant background layer and no sources. */
+const backgroundOnlyStyle = (color: string) => ({
+  layers: [{ id: "background", paint: { "background-color": color }, type: "background" }],
+  sources: {},
+  version: 8,
+});
+
 /** MapLibre styles beyond the plain vector basemap: `symbols`, `tileset-lines`, `fill-pattern`, `line-pattern`, relief (#324). */
 function referenceStyle(name: string) {
   switch (name) {
+    case "background-only":
+      return backgroundOnlyStyle("#2f7d6b");
+    case "background-only-translucent":
+      // Even channels: premultiplying at 0.5 is exact, so 8-bit rounding is not what is compared.
+      return backgroundOnlyStyle("rgba(48, 128, 108, 0.5)");
     case "hillshade":
       return reliefStyle(false);
     case "hillshade-terrain":
@@ -978,6 +990,7 @@ function interactive(layer: string, context: LayerContext) {
 
 function renderScenario(name: string): (context: LayerContext) => ReactNode {
   switch (name) {
+    case "background-only":
     case "source-location":
       return (context) => (
         <PointLayer
@@ -1096,6 +1109,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":
+    case "background-only-translucent":
       return () => null;
     case "line-styles":
       return (context) => (

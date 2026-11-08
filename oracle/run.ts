@@ -359,7 +359,7 @@ async function openFixture(
   });
   const query = new URLSearchParams({ runtime, scenario: scenario.name });
   await page.goto(`${baseUrl}/oracle/index.html?${query}`);
-  await waitReady(page, runtime).catch((error: Error) => {
+  await waitReady(page, runtime, scenario.tileFree ?? false).catch((error: Error) => {
     const logged = [...errors, ...consoleErrors.slice(0, 5)];
     throw new Error(
       `${error.message}${logged.length ? `; page errors: ${logged.join(" | ")}` : ""}`,
@@ -425,7 +425,7 @@ async function capture(
   }
 }
 
-async function waitReady(page: Page, runtime: Runtime) {
+async function waitReady(page: Page, runtime: Runtime, tileFree: boolean) {
   if (runtime === "maps") {
     await page.waitForSelector('[data-map-ready="true"]', { timeout: 30_000 });
     const canvasState = () =>
@@ -437,20 +437,21 @@ async function waitReady(page: Page, runtime: Runtime) {
       );
     await page
       .waitForFunction(
-        () => {
+        (tileFree) => {
           const canvas = document.querySelector<HTMLCanvasElement>(
             'canvas[data-flat-runtime="maps"]',
           );
           return (
             canvas !== null &&
             canvas.dataset.mapBaseRenderer !== "pending" &&
-            (Number(canvas.dataset.mapBaseTiles) > 0 ||
+            (tileFree ||
+              Number(canvas.dataset.mapBaseTiles) > 0 ||
               Number(canvas.dataset.mapVectorTiles) > 0) &&
             canvas.dataset.mapSourceState !== "loading" &&
             canvas.dataset.mapBasePendingTiles === "0"
           );
         },
-        undefined,
+        tileFree,
         { timeout: 30_000 },
       )
       .catch(async (error: Error) => {

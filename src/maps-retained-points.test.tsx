@@ -92,6 +92,7 @@ beforeEach(() => {
     markLoaded: vi.fn(),
     panBy: vi.fn(),
     setSkyStyle: vi.fn(),
+    setBackgroundStyle: vi.fn(),
     panBetween: vi.fn((previousX, previousY, x, y) => {
       camera.center = [camera.center[0] + previousX - x, camera.center[1] + previousY - y];
     }),

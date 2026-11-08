@@ -157,6 +157,8 @@ export type MapsWgpuBaseMapRenderer = {
   setReliefCamera?(camera: MapsFlatRasterFrame["camera"]): void;
   /** The next frame's band above the horizon line, or `null` when none is in view. */
   setFrameSky?(sky: MapsFlatRasterSky | null): void;
+  /** The next frame's premultiplied background RGBA; null keeps the surface default. */
+  setFrameBackground?(color: readonly [number, number, number, number] | null): void;
   /** Relief tiles the last frame lacked, as `"source|z|x|y"`. */
   reliefRequests?(): string[];
   /** A decoded `raster-dem` tile: `size × size` straight RGBA. */
@@ -235,6 +237,7 @@ type MapsWgpuBaseMapWasmRenderer = {
   addSprite(json: string, rgba: Uint8Array, width: number, height: number): number;
   setFrameTime(now: number): void;
   setFrameSky(values: Float32Array): void;
+  setFrameBackground(values: Float32Array): void;
   isCrossFading(): boolean;
   setReliefStyle(style: string): void;
   setReliefCamera(
@@ -279,6 +282,7 @@ export async function loadMapsWgpuBaseMapRenderer(
     let disposed = false;
     let tileDraws = new Float64Array(PACKED_TILE_DRAW_HEADER_LENGTH);
     const skyBand = new Float32Array(10);
+    const frameBackground = new Float32Array(4);
     if (rendererOwners.get(canvas) === owner) canvas.style.opacity = "1";
 
     return {
@@ -477,6 +481,15 @@ export async function loadMapsWgpuBaseMapRenderer(
         // Style errors are the caller's; they must not hide the canvas.
         assertLive(disposed);
         renderer.setReliefStyle(style);
+      },
+      setFrameBackground(color) {
+        assertLive(disposed);
+        if (!color) {
+          renderer.setFrameBackground(EMPTY_SKY);
+          return;
+        }
+        frameBackground.set(color);
+        renderer.setFrameBackground(frameBackground);
       },
       setFrameSky(sky) {
         assertLive(disposed);

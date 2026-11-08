@@ -12,7 +12,8 @@ use crate::matrix_camera::screen_horizon_y;
 
 use crate::{
     GeographicCoordinate, MapCamera, MapViewportBounds, MapsTileset, ScreenCoordinate, SkyPaint,
-    SkyPass, SkyStyle, TileId, ViewportSize, WorldCoordinate, project_web_mercator, sky_pass,
+    SkyPass, SkyStyle, TileId, ViewportSize, WorldCoordinate, parse_background_color,
+    project_web_mercator, sky_pass,
     terrain::{
         CoveringBudget, CoveringOptions, TerrainCamera, TerrainTransform, covering_tiles_within,
     },
@@ -150,6 +151,8 @@ pub struct RasterFramePlan {
     pub overscan: bool,
     /// The band above the horizon line, when the camera has one in view.
     pub sky: Option<SkyPass>,
+    /// Premultiplied RGBA of a background-only style; `None` is the surface default.
+    pub background: Option<[f32; 4]>,
     /// Loaded fallback tiles precede the requested cover so replacements draw on top.
     pub placements: Vec<RasterTilePlacement>,
     pub requests: Vec<TileId>,
@@ -209,6 +212,7 @@ pub struct FlatRasterRuntime {
     ready_lru: VecDeque<TileId>,
     render_margin: f64,
     sky: SkyStyle,
+    background: Option<[f32; 4]>,
     last_request_camera: MapCamera,
     prefetch_offset: Option<(i64, i64)>,
     tileset: Option<MapsTileset>,
@@ -243,6 +247,7 @@ impl FlatRasterRuntime {
             ready_lru: VecDeque::new(),
             render_margin: 0.0,
             sky: SkyStyle::default(),
+            background: None,
             last_request_camera: camera,
             prefetch_offset: None,
             tileset: None,
@@ -331,6 +336,12 @@ impl FlatRasterRuntime {
     /// Replaces the style's sky; an empty string or a style without `sky` is no sky.
     pub fn set_sky_style(&mut self, json: &str) -> Result<(), String> {
         self.sky = SkyStyle::parse(json)?;
+        Ok(())
+    }
+
+    /// Replaces the constant background; see [`parse_background_color`].
+    pub fn set_background_style(&mut self, json: &str) -> Result<(), String> {
+        self.background = parse_background_color(json)?;
         Ok(())
     }
 
@@ -993,6 +1004,7 @@ impl FlatRasterRuntime {
             surface_margin: margin,
             overscan,
             sky: self.sky_band(),
+            background: self.background,
             placements: fallback,
             requests: request_candidates,
             cancellations,
@@ -2556,6 +2568,34 @@ mod tests {
         // Removing the style's sky leaves a transparent band, the page behind the map.
         steep.set_sky_style("").unwrap();
         assert!(!steep.frame_plan().unwrap().sky.unwrap().is_visible());
+    }
+
+    #[test]
+    fn a_frame_carries_a_constant_background_until_it_is_removed() {
+        let mut runtime = steep_runtime();
+        assert_eq!(runtime.frame_plan().unwrap().background, None);
+
+        runtime
+            .set_background_style(r##"{"background-color":"#ff0000"}"##)
+            .unwrap();
+        assert_eq!(
+            runtime.frame_plan().unwrap().background,
+            Some([1.0, 0.0, 0.0, 1.0])
+        );
+
+        // A rejected color leaves the last accepted one in place.
+        assert!(
+            runtime
+                .set_background_style(r#"{"background-color":[]}"#)
+                .is_err()
+        );
+        assert_eq!(
+            runtime.frame_plan().unwrap().background,
+            Some([1.0, 0.0, 0.0, 1.0])
+        );
+
+        runtime.set_background_style("").unwrap();
+        assert_eq!(runtime.frame_plan().unwrap().background, None);
     }
 
     #[test]

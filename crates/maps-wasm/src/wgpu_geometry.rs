@@ -2829,6 +2829,15 @@ pub(super) fn sky_uniform_bytes(
     bytes
 }
 
+/// Reads a premultiplied background RGBA from the host; empty is the surface default.
+pub(super) fn parse_frame_background(values: &[f32]) -> Result<Option<[f32; 4]>, &'static str> {
+    match values {
+        [] => Ok(None),
+        [r, g, b, a] => Ok(Some([*r, *g, *b, *a])),
+        _ => Err("invalid packed background color"),
+    }
+}
+
 /// Reads `[horizon_y, horizon_blend, sky rgba, horizon rgba]` from the host; empty is no band.
 pub(super) fn parse_frame_sky(values: &[f32]) -> Result<Option<SkyPass>, &'static str> {
     if values.is_empty() {
@@ -2843,6 +2852,21 @@ pub(super) fn parse_frame_sky(values: &[f32]) -> Result<Option<SkyPass>, &'stati
         sky_color: [values[2], values[3], values[4], values[5]],
         horizon_color: [values[6], values[7], values[8], values[9]],
     }))
+}
+
+#[cfg(test)]
+mod frame_background_tests {
+    use super::*;
+
+    #[test]
+    fn reads_a_premultiplied_color_and_rejects_a_malformed_one() {
+        assert_eq!(parse_frame_background(&[]), Ok(None));
+        assert_eq!(
+            parse_frame_background(&[0.5, 0.25, 0.0, 0.5]),
+            Ok(Some([0.5, 0.25, 0.0, 0.5]))
+        );
+        assert!(parse_frame_background(&[0.5]).is_err());
+    }
 }
 
 #[cfg(test)]

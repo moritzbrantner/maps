@@ -16,6 +16,20 @@ import {
 const ACCEPTANCE_RASTER_TILE =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
+/** A tile-free base (#170): one constant background layer and no sources. */
+const acceptanceBackgroundStyle = (kind: "opaque" | "translucent") =>
+  ({
+    layers: [
+      {
+        id: "background",
+        paint: { "background-color": kind === "opaque" ? "#2f7d6b" : "rgba(48, 128, 108, 0.5)" },
+        type: "background",
+      },
+    ],
+    sources: {},
+    version: 8,
+  }) as const;
+
 const INITIAL_VIEW_STATE: MapViewState = {
   center: [13.405, 52.52],
   zoom: 6,
@@ -115,6 +129,7 @@ declare global {
 }
 
 export type MapsRuntimeAcceptanceProps = {
+  background?: "opaque" | "translucent";
   cameraOwner?: "controlled" | "uncontrolled";
   includePolygon?: boolean;
   maxZoom?: number;
@@ -124,6 +139,7 @@ export type MapsRuntimeAcceptanceProps = {
 };
 
 export function MapsRuntimeAcceptance({
+  background,
   cameraOwner = "controlled",
   includePolygon = true,
   maxZoom,
@@ -299,12 +315,16 @@ export function MapsRuntimeAcceptance({
           flatRuntime="maps"
           fitToData={false}
           mapLabel="Maps Rust runtime acceptance"
-          mapStyle={{
-            maxZoom: 19,
-            minZoom: 0,
-            tileSize: 256,
-            tiles: fixture.rasterTileUrl ?? ACCEPTANCE_RASTER_TILE,
-          }}
+          mapStyle={
+            background
+              ? acceptanceBackgroundStyle(background)
+              : {
+                  maxZoom: 19,
+                  minZoom: 0,
+                  tileSize: 256,
+                  tiles: fixture.rasterTileUrl ?? ACCEPTANCE_RASTER_TILE,
+                }
+          }
           maxBounds={fixture.maxBounds}
           maxZoom={fixture.maxZoom}
           onMapControllerReady={handleControllerReady}

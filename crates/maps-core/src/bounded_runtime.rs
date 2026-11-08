@@ -103,6 +103,11 @@ impl BoundedFlatRasterRuntime {
         self.inner.set_render_margin(margin)
     }
 
+    /// The constant background; see [`FlatRasterRuntime::set_background_style`].
+    pub fn set_background_style(&mut self, json: &str) -> Result<(), String> {
+        self.inner.set_background_style(json)
+    }
+
     /// The style's sky; see [`FlatRasterRuntime::set_sky_style`].
     pub fn set_sky_style(&mut self, json: &str) -> Result<(), String> {
         self.inner.set_sky_style(json)

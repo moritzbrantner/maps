@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GeoJsonLayer } from "./geojson-layer";
 import { MapControls } from "./map-components";
-import type { MapSurfaceController } from "./map-display";
+import type { MapLibreMapStyle, MapSurfaceController } from "./map-display";
 import { MapView } from "./map-view";
 import { PointLayer } from "./point-layer";
 
@@ -30,6 +30,7 @@ vi.mock("./canvas-flat-runtime", async () => {
   };
   type Props = {
     viewState: ViewState;
+    background?: string;
     maxBounds?: [number, number, number, number];
     onContextMenu?: (context: {
       client: { x: number; y: number };
@@ -96,6 +97,7 @@ vi.mock("./canvas-flat-runtime", async () => {
 
     return (
       <canvas
+        data-background={props.background}
         data-flat-runtime="maps"
         data-max-bounds={props.maxBounds?.join(",")}
         onContextMenu={(event) => {
@@ -669,6 +671,104 @@ describe("Maps-owned MapView runtime", () => {
         />,
       ),
     ).toThrow(/onMapReady is MapLibre-specific/);
+  });
+});
+
+describe('MapView flatRuntime="maps" background-only style', () => {
+  const backgroundStyle = (
+    layer: Record<string, unknown>,
+    style: Record<string, unknown> = {},
+  ): MapLibreMapStyle =>
+    ({
+      layers: [{ id: "background", type: "background", ...layer }],
+      sources: {},
+      version: 8,
+      ...style,
+    }) as unknown as MapLibreMapStyle;
+
+  function renderBackground(mapStyle: MapLibreMapStyle) {
+    render(
+      <MapView flatRuntime="maps" fitToData={false} mapLabel="Background map" mapStyle={mapStyle} />,
+    );
+    return screen.getByLabelText("Background map");
+  }
+
+  test.each([
+    ["#2f7d6b", "#2f7d6b"],
+    ["rgba(47, 125, 107, 0.5)", "rgba(47, 125, 107, 0.5)"],
+  ])("draws a tile-free base painted %s", (color, expected) => {
+    const map = renderBackground(backgroundStyle({ paint: { "background-color": color } }));
+    expect(getBaseCanvas(map).getAttribute("data-background")).toBe(
+      JSON.stringify({ "background-color": expected }),
+    );
+    // A source-free style has nothing to attribute.
+    expect(map.querySelector(".mb-maps__attribution")).toBeNull();
+  });
+
+  test("forwards a layer without a color for the specification default", () => {
+    const map = renderBackground(backgroundStyle({}));
+    expect(getBaseCanvas(map).getAttribute("data-background")).toBe("{}");
+  });
+
+  test("keeps the surface default for a tile-free style without a background layer", () => {
+    const map = renderBackground({ layers: [], sources: {}, version: 8 } as MapLibreMapStyle);
+    expect(getBaseCanvas(map).getAttribute("data-background")).toBeNull();
+  });
+
+  test.each([
+    ["an interpolate expression", ["interpolate", ["linear"], ["zoom"], 0, "#000", 8, "#fff"]],
+    ["a data expression", ["get", "color"]],
+    ["a zoom function", { stops: [[0, "#000"], [8, "#fff"]] }],
+    ["a number", 7],
+  ])("rejects %s as background-color", (_name, color) => {
+    expect(() =>
+      renderBackground(backgroundStyle({ paint: { "background-color": color } })),
+    ).toThrow(/background-color to be a literal color/);
+  });
+
+  test.each([
+    ["background-opacity", { "background-opacity": 0.5 }],
+    ["background-pattern", { "background-pattern": "hatch" }],
+  ])("rejects paint property %s", (property, paint) => {
+    expect(() => renderBackground(backgroundStyle({ paint }))).toThrow(
+      new RegExp(`background paint property "${property}"`),
+    );
+  });
+
+  test.each([["minzoom"], ["maxzoom"]])("rejects a %s on the background layer", (key) => {
+    expect(() => renderBackground(backgroundStyle({ [key]: 4 }))).toThrow(
+      new RegExp(`does not support "${key}" on a background layer`),
+    );
+  });
+
+  test("rejects a hidden background layer", () => {
+    expect(() =>
+      renderBackground(backgroundStyle({ layout: { visibility: "none" } })),
+    ).toThrow(/only draws a visible background layer/);
+  });
+
+  test.each([
+    ["a second background", { layers: [{ type: "background" }, { type: "background" }] }],
+    ["a raster layer", {
+      layers: [{ type: "background" }, { source: "osm", type: "raster" }],
+      sources: { osm: { tiles: ["https://x.test/{z}/{x}/{y}.png"], type: "raster" } },
+    }],
+    ["a hillshade layer", {
+      layers: [{ type: "background" }, { source: "dem", type: "hillshade" }],
+      sources: { dem: { tiles: ["https://x.test/{z}/{x}/{y}.png"], type: "raster-dem" } },
+    }],
+    ["a vector layer", {
+      layers: [{ type: "background" }, { source: "v", type: "fill" }],
+      sources: { v: { tiles: ["https://x.test/{z}/{x}/{y}.pbf"], type: "vector" } },
+    }],
+    ["an unused source", {
+      sources: { osm: { tiles: ["https://x.test/{z}/{x}/{y}.png"], type: "raster" } },
+    }],
+    ["terrain", { terrain: { source: "dem" } }],
+  ])("rejects a background layer combined with %s", (_name, extra) => {
+    expect(() => renderBackground(backgroundStyle({}, extra))).toThrow(
+      /only as the sole layer of a source-free style/,
+    );
   });
 });
 

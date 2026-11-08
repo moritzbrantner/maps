@@ -68,11 +68,12 @@ struct WasmFlatRasterRuntimeLimits {
 ///   (0/1); placement, request, cancellation and eviction counts; surface margin;
 ///   overscan (0/1); raster alignment x, y (local CSS px); sky band present (0/1),
 ///   horizon y and blend height (CSS px), premultiplied sky and horizon RGBA;
+///   constant background present (0/1), premultiplied background RGBA;
 /// - placements, [`PACKED_PLACEMENT_STRIDE`] values each: z, x, y, world copy,
 ///   local west, local north, local size, screen x, screen y, screen width,
 ///   screen height, visible (0/1);
 /// - requests, cancellations and evictions, [`PACKED_TILE_STRIDE`] values each: z, x, y.
-pub const PACKED_FRAME_HEADER_LENGTH: usize = 48;
+pub const PACKED_FRAME_HEADER_LENGTH: usize = 53;
 pub const PACKED_PLACEMENT_STRIDE: usize = 12;
 pub const PACKED_TILE_STRIDE: usize = 3;
 
@@ -124,6 +125,13 @@ fn pack_frame_plan(camera: MapCamera, plan: &RasterFramePlan) -> Vec<f64> {
     }
     for channel in 0..4 {
         packed.push(band.map_or(0.0, |sky| f64::from(sky.horizon_color[channel])));
+    }
+    packed.push(f64::from(u8::from(plan.background.is_some())));
+    for channel in 0..4 {
+        packed.push(
+            plan.background
+                .map_or(0.0, |color| f64::from(color[channel])),
+        );
     }
     for placement in &plan.placements {
         packed.extend_from_slice(&[
@@ -416,6 +424,14 @@ impl MapsFlatRasterRuntime {
             .map_err(|error| JsValue::from_str(&error))
     }
 
+    /// The constant `background-color` as JSON; an empty string is the surface default.
+    #[wasm_bindgen(js_name = setBackgroundStyle)]
+    pub fn set_background_style(&mut self, style: &str) -> Result<(), JsValue> {
+        self.inner
+            .set_background_style(style)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
     /// Advances scheduling and returns the packed frame (see [`pack_frame_plan`]).
     #[wasm_bindgen(js_name = framePacked)]
     pub fn frame_packed(&mut self) -> Result<Vec<f64>, JsValue> {
@@ -485,6 +501,8 @@ mod tests {
         assert_eq!(&packed[29..33], &counts.map(|count| count as f64));
         assert_eq!(&packed[33..35], &[96.0, 1.0]);
         assert_eq!(&packed[35..37], &plan.render_camera.raster_alignment);
+        // No constant background was set.
+        assert_eq!(&packed[48..53], &[0.0; 5]);
         // A camera below the horizon pitch packs no sky band.
         assert_eq!(packed[37], 0.0);
         let tiles_start = PACKED_FRAME_HEADER_LENGTH + counts[0] * PACKED_PLACEMENT_STRIDE;
