@@ -660,6 +660,36 @@ describe("retained application runs (#195)", () => {
     expect(solid.polygons.dashCounts.length).toBe(0);
   });
 
+  test("sends a line's line-pattern with white stroke paint at its opacity (#349)", () => {
+    const patterned: MapRenderLine = { ...line("p"), linePattern: "track", strokeOpacity: 0.6 };
+    const [shapes] = runs([line("l"), patterned])!;
+    if (shapes?.kind !== "polygons") throw new Error("expected shapes");
+    const stride = MAPS_RETAINED_POLYGON_PAINT_STRIDE;
+    expect(shapes.polygons.patterns).toEqual(["", "track"]);
+    expect(Array.from(shapes.polygons.paint.subarray(stride + 4, stride + 8))).toEqual([
+      1,
+      1,
+      1,
+      Math.fround(0.6),
+    ]);
+    // A pitched camera's projected path leaves the patterned line out, not the frame.
+    const frame = createMapsWgpuApplicationFrame({
+      height: 100,
+      primitives: [
+        {
+          kind: "line",
+          points: [
+            { x: 10, y: 10 },
+            { x: 20, y: 20 },
+          ],
+          renderPrimitive: patterned,
+        },
+      ],
+      width: 100,
+    });
+    expect(frame?.lines).toEqual([]);
+  });
+
   test("retains labeled circles with their unlabeled neighbours (#204)", () => {
     // Only the label text needs a screen position; the circles stay in painter order.
     const result = runs([

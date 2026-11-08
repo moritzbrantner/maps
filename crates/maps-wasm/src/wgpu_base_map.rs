@@ -1504,8 +1504,9 @@ impl MapsWgpuBaseMapRenderer {
     /// RGBA, stroke RGBA, stroke width or marker size in CSS px, shape kind, circle radius,
     /// line cap, join and limits), then each shape's `line-dasharray` length and the
     /// concatenated dash arrays (both empty when nothing is dashed), then each shape's
-    /// `fill-pattern` image id (`""` for none; empty when nothing is patterned; a patterned
-    /// shape's fill alpha is its `fill-opacity`). Replaces the group's previous content.
+    /// `fill-pattern` or `line-pattern` image id (`""` for none; empty when nothing is
+    /// patterned; a patterned fill's alpha is its `fill-opacity`, a patterned line's stroke
+    /// alpha its `line-opacity`). Replaces the group's previous content.
     /// Returns the shape count.
     #[wasm_bindgen(js_name = setRetainedPolygons)]
     #[allow(clippy::too_many_arguments)]
@@ -2011,6 +2012,7 @@ impl MapsWgpuBaseMapRenderer {
                 APPLICATION_CIRCLE_VERTEX_COUNT,
                 &StyleLines {
                     pipeline: &self.retained_line_pipeline,
+                    pattern_pipeline: &self.patterns.line,
                     frames: self.style_line_uniforms.bind_group(),
                     offsets: &style_frame.tile_offsets,
                     dash_atlas: &self.dash_atlas.bind_group,
@@ -2365,6 +2367,15 @@ impl MapsWgpuBaseMapRenderer {
                 if let (true, Some(stroke)) = (draw.stroke_count > 0, &group.stroke) {
                     let range = draw.stroke_first..draw.stroke_first + draw.stroke_count;
                     pass.set_vertex_buffer(0, stroke.slice(..));
+                    if draw.line_pattern {
+                        // MapLibre's `line_pattern` program over the image atlas (#349).
+                        pass.set_bind_group(1, &self.patterns.bind_group, &[]);
+                        pass.set_pipeline(&self.patterns.line);
+                        pass.draw(range, 0..1);
+                        pass.set_bind_group(1, &self.dash_atlas.bind_group, &[]);
+                        calls += 1;
+                        continue;
+                    }
                     if draw.line {
                         pass.set_pipeline(&self.retained_line_pipeline);
                         pass.draw(range, 0..1);

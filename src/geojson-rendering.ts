@@ -15,6 +15,7 @@ export const DEFAULT_GEOJSON_LAYER_STYLE: Required<GeoJsonLayerStyle> = {
   lineJoin: "round",
   lineMiterLimit: 2,
   lineOpacity: 0.82,
+  linePattern: null,
   lineRoundLimit: 1.05,
   lineWidth: 4,
   pointColor: "#0f766e",
@@ -183,13 +184,14 @@ function createFlatPolygonLayer(
   }) as FlatGeometryLayer;
 }
 
-/** A GeoJSON line style's caps, joins and dashes as flat layer options. */
+/** A GeoJSON line style's caps, joins, dashes and `line-pattern` as flat layer options. */
 export function flatLineShape(style: Required<GeoJsonLayerStyle>) {
   return {
     lineCap: style.lineCap,
     lineDasharray: style.lineDasharray,
     lineJoin: style.lineJoin,
     lineMiterLimit: style.lineMiterLimit,
+    ...(style.linePattern ? { linePattern: style.linePattern } : {}),
     lineRoundLimit: style.lineRoundLimit,
   };
 }

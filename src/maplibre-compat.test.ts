@@ -263,6 +263,43 @@ describe("@moritzbrantner/maps maplibre compatibility", () => {
     expect(dashedSource?.data.features).toHaveLength(1);
   });
 
+  test("draws patterned lines in a batch per image with a constant line-pattern (#349)", async () => {
+    const map = createShapeTestMap();
+    const factory = createMapLibreFlatLayerFactory(
+      createTestMapLibre([]),
+      map as unknown as import("maplibre-gl").Map,
+    );
+    const group = createTestLayerGroup();
+    const latLngs: [number, number][] = [
+      [0, 0],
+      [1, 1],
+    ];
+    factory.polyline(latLngs, { color: "#ff0000" }).addTo(group as never);
+    const patterned = factory
+      .polyline(latLngs, { linePattern: "track", lineDasharray: [2, 1], opacity: 0.6 })
+      .addTo(group as never);
+    factory.polyline(latLngs, { linePattern: "track" }).addTo(group as never);
+    await Promise.resolve();
+
+    const layers = [...map.layers.values()] as Array<{
+      metadata?: Record<string, unknown>;
+      paint?: Record<string, unknown>;
+    }>;
+    expect(layers).toHaveLength(2);
+    expect(layers[0]?.paint?.["line-pattern"]).toBeUndefined();
+    expect(layers[1]?.metadata?.flatBatch).toBe("pattern-line");
+    expect(layers[1]?.paint?.["line-pattern"]).toBe("track");
+    // The pattern replaces the dashes; opacity and width stay per feature.
+    expect(layers[1]?.paint?.["line-dasharray"]).toBeUndefined();
+    const [solidSource, patternSource] = map.sources.values();
+    expect(patternSource?.data.features).toHaveLength(2);
+
+    patterned.setStyle?.({ lineDasharray: [], linePattern: null });
+    await Promise.resolve();
+    expect(solidSource?.data.features).toHaveLength(2);
+    expect(patternSource?.data.features).toHaveLength(1);
+  });
+
   test("dispatches batched shape pointer events to the topmost feature that listens", async () => {
     const map = createShapeTestMap();
     const factory = createMapLibreFlatLayerFactory(

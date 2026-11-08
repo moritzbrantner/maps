@@ -43,6 +43,8 @@ export type MapRenderLine<TFeature = unknown> = MapRenderPrimitiveBase<TFeature>
   lineDasharray?: readonly number[];
   lineJoin?: "bevel" | "round" | "miter";
   lineMiterLimit?: number;
+  /** MapLibre's `line-pattern` image (#349): replaces `strokeColor` and dashes, keeps `strokeOpacity`. */
+  linePattern?: string;
   lineRoundLimit?: number;
   strokeColor: string;
   strokeOpacity: number;

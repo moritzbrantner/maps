@@ -108,8 +108,9 @@ export type MapsRetainedApplicationPolygons = {
   dashCounts: Uint32Array;
   dashes: Float32Array;
   /**
-   * `fill-pattern` image per shape (`""` for none), empty when nothing is patterned (#323).
-   * A patterned shape's fill paint is white at its `fill-opacity`.
+   * `fill-pattern` image per polygon and `line-pattern` image per line (`""` for none), empty
+   * when nothing is patterned (#323, #349). A patterned polygon's fill paint is white at its
+   * `fill-opacity`, a patterned line's stroke paint white at its `line-opacity`.
    */
   patterns: string[];
 };
@@ -337,6 +338,9 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
               return null;
             }
 
+            // `line-pattern` samples the image atlas on the retained path only (#349); a
+            // pitched camera's projected path leaves the line out, as patterned fills.
+            if (primitive.linePattern) break;
             const lineLayout = encodeLineLayout(primitive);
             // Dashes need the retained path's GeoJSON tiles; Canvas draws them otherwise.
             if (!lineLayout || (primitive.lineDasharray?.length ?? 0) > 0) return null;
@@ -874,7 +878,16 @@ function createRetainedShapes(
         break;
       }
       case "line": {
-        strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
+        if (primitive.linePattern) {
+          // MapLibre's `line-pattern` ignores `line-color` and `line-dasharray` (#349).
+          const opacity = primitive.strokeOpacity;
+          if (!Number.isFinite(opacity)) return null;
+          strokeColor = [1, 1, 1, Math.min(Math.max(opacity, 0), 1)];
+          patterns[index] = primitive.linePattern;
+          patterned = true;
+        } else {
+          strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
+        }
         strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
         shape = MAPS_RETAINED_SHAPE_LINE;
         // The screen transport rejects lines without a segment; keep the same fallback.

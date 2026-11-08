@@ -46,7 +46,13 @@ const LINE_LAYOUT: &[&str] = &[
     "line-miter-limit",
     "line-round-limit",
 ];
-const LINE_PAINT: &[&str] = &["line-color", "line-opacity", "line-width", "line-dasharray"];
+const LINE_PAINT: &[&str] = &[
+    "line-color",
+    "line-opacity",
+    "line-width",
+    "line-dasharray",
+    "line-pattern",
+];
 const CIRCLE_LAYOUT: &[&str] = &["visibility"];
 const CIRCLE_PAINT: &[&str] = &[
     "circle-radius",
@@ -125,6 +131,7 @@ const ZOOM_CONSTANT: &[&str] = &[
     "line-opacity",
     "line-width",
     "line-dasharray",
+    "line-pattern",
     "circle-radius",
     "circle-color",
     "circle-opacity",
@@ -454,6 +461,7 @@ mod tests {
             r#"[{"id":"a","type":"circle","source-layer":"p","paint":{"circle-radius":["sqrt",["get","n"]]}}]"#,
             r#"[{"id":"a","type":"fill","source-layer":"p","paint":{"fill-translate":[1,1]}}]"#,
             r#"[{"id":"a","type":"fill","source-layer":"p","paint":{"fill-pattern":["step",["zoom"],"a",9,"b"]}}]"#,
+            r#"[{"id":"a","type":"line","source-layer":"p","paint":{"line-pattern":["step",["zoom"],"a",9,"b"]}}]"#,
             r#"[{"id":"a","type":"fill-extrusion","source-layer":"p"}]"#,
         ] {
             assert!(parse(rejected).is_err(), "{rejected}");

@@ -98,7 +98,7 @@ export type MapsWgpuBaseMapRenderer = {
    * markers (#195). Per-shape ring counts, per-ring point counts, `[longitude, latitude]`
    * pairs (lowered once by Rust) and `MAPS_RETAINED_POLYGON_PAINT_STRIDE` paint values per
    * shape, then each shape's `line-dasharray` length and the concatenated arrays (#322),
-   * then each shape's `fill-pattern` image (#323). Camera frames do not re-upload it.
+   * then each shape's `fill-pattern` or `line-pattern` image (#323, #349). Camera frames do not re-upload it.
    * Absent on renderers without retained shapes.
    */
   setRetainedPolygons?(
@@ -139,7 +139,7 @@ export type MapsWgpuBaseMapRenderer = {
   setVectorLayers(layers: string): void;
   /**
    * Adds a style sprite (#323): its JSON index and its sheet's straight-alpha RGBA pixels.
-   * `fill-pattern` images resolve against every sprite added. Returns the image count.
+   * `fill-pattern` and `line-pattern` images resolve against every sprite added. Returns the image count.
    */
   addSprite?(json: string, rgba: Uint8Array, width: number, height: number): number;
   /**

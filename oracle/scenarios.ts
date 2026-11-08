@@ -393,6 +393,22 @@ export const scenarios: Scenario[] = [
     ],
   },
   {
+    basemap: "vector",
+    camera: { center: [9.0, 47.4], zoom: 8 },
+    capability:
+      "line-pattern from a sprite: tileset line layers (constant and data-driven) and GeoJSON lines",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "line-pattern",
+    origin: "Milestone D vector style (#79): rail and border styling; line patterns (#349)",
+    size: MAP_SIZE,
+    steps: [
+      { at: MOTORWAY_VERTEX, kind: "hover", label: "hover a track-patterned motorway" },
+      { at: RHINE_POINT, kind: "click", label: "select the hatched Rhine" },
+      { by: [-120, 60], kind: "pan", label: "drag pan" },
+      { at: [40, -30], deltaY: -120, kind: "wheel", label: "wheel zoom in", ticks: 3 },
+    ],
+  },
+  {
     basemap: "style",
     camera: { bearing: 20, center: [9.0, 47.2], zoom: 8 },
     capability: "raster-dem hillshade over a raster basemap, light anchored to the rotated viewport",

@@ -82,7 +82,7 @@ export function demPng(z: number, x: number, y: number): Buffer {
  * `symbol-icons` images (#346): a crisp 12 px `town` square, an SDF `capital` star and a
  * `lake` disc at pixel ratio 2; for `symbol-icon-lines` an `arrow` pointing east, a `shield`
  * with `stretchX` / `stretchY` zones and a `content` box, and a `badge` whose content box
- * keeps its aspect ratio (`textFitWidth` / `textFitHeight`).
+ * keeps its aspect ratio (`textFitWidth` / `textFitHeight`); for `line-pattern` (#349) a `track`.
  */
 export const SPRITE_JSON = {
   arrow: { height: 10, pixelRatio: 1, width: 16, x: 68, y: 0 },
@@ -110,8 +110,9 @@ export const SPRITE_JSON = {
     y: 0,
   },
   town: { height: 12, pixelRatio: 1, width: 12, x: 16, y: 0 },
+  track: { height: 8, pixelRatio: 1, width: 16, x: 118, y: 0 },
 };
-const SPRITE_SIZE = { height: 24, width: 118 };
+const SPRITE_SIZE = { height: 24, width: 134 };
 
 type Rgba = [number, number, number, number];
 
@@ -174,6 +175,13 @@ export function spritePng(): Buffer {
     const corner = Math.min(column, 13 - column) + Math.min(row, 9 - row) < 1;
     if (corner) return [255, 255, 255, 0];
     return edge < 1 ? [29, 78, 216, 255] : [219, 234, 254, 230];
+  });
+  // A track for `line-pattern` (#349), asymmetric both ways: a red top rail, a blue bottom
+  // rail and a dark tie at its start, so a flipped side or direction shows.
+  image(SPRITE_JSON.track, (column, row) => {
+    if (row < 2) return [220, 38, 38, 255];
+    if (row >= 6) return [30, 58, 138, 255];
+    return column < 3 ? [17, 24, 39, 255] : [255, 255, 255, 0];
   });
   return encodePng(width, height, rows, 6);
 }

@@ -33,9 +33,10 @@ pub(crate) struct SymbolGpu {
 
 /// What tile-frame draws need besides their vertices: the retained line pipeline, the tile
 /// frame uniforms with each `StyleFrame::tile_frames` entry's dynamic offset, the dash atlas,
-/// and the fill pipelines with the image atlas (#323).
+/// and the fill and `line-pattern` pipelines with the image atlas (#323, #349).
 pub(crate) struct StyleLines<'a> {
     pub(crate) pipeline: &'a wgpu::RenderPipeline,
+    pub(crate) pattern_pipeline: &'a wgpu::RenderPipeline,
     pub(crate) frames: &'a wgpu::BindGroup,
     pub(crate) offsets: &'a [Option<u32>],
     pub(crate) dash_atlas: &'a wgpu::BindGroup,
@@ -371,13 +372,19 @@ impl SymbolGpu {
                     frame,
                     first,
                     count,
+                    pattern,
                 } => {
                     let Some(Some(offset)) = lines.offsets.get(frame as usize) else {
                         continue;
                     };
-                    pass.set_pipeline(lines.pipeline);
+                    if pattern {
+                        pass.set_pipeline(lines.pattern_pipeline);
+                        pass.set_bind_group(1, lines.image_atlas, &[]);
+                    } else {
+                        pass.set_pipeline(lines.pipeline);
+                        pass.set_bind_group(1, lines.dash_atlas, &[]);
+                    }
                     pass.set_bind_group(0, lines.frames, &[*offset]);
-                    pass.set_bind_group(1, lines.dash_atlas, &[]);
                     pass.set_vertex_buffer(0, self.lines.slice(..));
                     pass.draw(first..first + count, 0..1);
                 }

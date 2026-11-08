@@ -28,7 +28,7 @@
     allow(dead_code)
 )]
 
-use maps_core::symbol::{ImageAtlas, PatternVertex};
+use maps_core::symbol::{ImageAtlas, LinePattern, PatternVertex};
 use maps_core::{
     DashEntry, GEOJSON_VT_EXTENT, GEOJSON_VT_MAX_ZOOM, LINE_ATLAS_HEIGHT, LineAtlas, LineCap,
     LineJoin, LineLayout, LineMesh, SimplifiedLine, project_web_mercator,
@@ -95,7 +95,9 @@ struct RetainedPolygon {
     /// A dashed line's atlas entry.
     dash: Option<DashEntry>,
     /// A polygon's `fill-pattern` image id (#323): the fill then samples the image atlas, with
-    /// `fill[3]` as its `fill-opacity`, and draws MapLibre's pattern outline.
+    /// `fill[3]` as its `fill-opacity`, and draws MapLibre's pattern outline. A line's
+    /// `line-pattern` image id (#349): the strip samples it, with `stroke[3]` as its
+    /// `line-opacity`, instead of dashes.
     pattern: Option<String>,
 }
 
@@ -371,6 +373,8 @@ pub(crate) struct RetainedPolygonDraw {
     /// A line strip: drawn without the single-coverage stroke stencil, like a MapLibre line
     /// layer, whose mesh only overlaps itself at sharp round joins and crossings.
     pub(crate) line: bool,
+    /// A `line-pattern` strip (#349): its vertices are `line_pattern.wgsl` vertices.
+    pub(crate) line_pattern: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -574,7 +578,8 @@ impl RetainedPolygons {
         self.polygons.len()
     }
 
-    /// Sets each shape's `fill-pattern` image id (empty for none); an empty list clears them.
+    /// Sets each polygon's `fill-pattern` and each line's `line-pattern` image id (empty for
+    /// none); an empty list clears them.
     pub(crate) fn set_patterns(&mut self, patterns: &[String]) -> Result<(), &'static str> {
         if patterns.is_empty() {
             return Ok(());
@@ -583,13 +588,17 @@ impl RetainedPolygons {
             return Err("retained fill patterns do not match the shapes");
         }
         for (polygon, pattern) in self.polygons.iter_mut().zip(patterns) {
-            polygon.pattern =
-                (polygon.shape == Shape::Polygon && !pattern.is_empty()).then(|| pattern.clone());
+            let patterned = matches!(polygon.shape, Shape::Polygon | Shape::Line);
+            polygon.pattern = (patterned && !pattern.is_empty()).then(|| pattern.clone());
+            if polygon.pattern.is_some() {
+                // MapLibre's `line_pattern` program draws no dashes.
+                polygon.dash = None;
+            }
         }
         Ok(())
     }
 
-    /// The `fill-pattern` images the shapes draw.
+    /// The `fill-pattern` and `line-pattern` images the shapes draw.
     pub(crate) fn patterns(&self) -> impl Iterator<Item = &str> {
         self.polygons
             .iter()
@@ -833,6 +842,18 @@ impl RetainedPolygon {
                 let source_zoom = tile_zoom.min(GEOJSON_VT_MAX_ZOOM);
                 let overscale = f64::from(tile_zoom - source_zoom).exp2();
                 let tiles = f64::from(source_zoom).exp2();
+                // `line-pattern` (#349): a pattern whose image is not in the atlas draws no
+                // line, as in MapLibre.
+                let line_pattern = match &polygon.pattern {
+                    Some(id) => match images.pattern(id) {
+                        Some(position) => Some(LinePattern::new(&position, images)),
+                        None => {
+                            geometry.draws.push(draw);
+                            return;
+                        }
+                    },
+                    None => None,
+                };
                 draw.stroke_first = stroke_index(&geometry.stroke);
                 let line_vertex = |bytes: &mut Vec<u8>,
                                    mesh: &LineMesh,
@@ -840,6 +861,22 @@ impl RetainedPolygon {
                                    clip: [f32; 4]| {
                     for &index in &mesh.indices {
                         let vertex = mesh.vertices[index as usize];
+                        if let Some(pattern) = &line_pattern {
+                            // `line_pattern.vertex.glsl`'s `v_linesofar` in px at the tile
+                            // zoom (`u_scale.x`), as the dashes measure it.
+                            push_line_pattern_vertex(
+                                bytes,
+                                at(vertex.point),
+                                vertex.extrude.map(|value| value as f32),
+                                vertex.normal,
+                                polygon.stroke_width,
+                                pattern,
+                                vertex.linesofar * (overscale / 16.0) as f32,
+                                polygon.stroke[3],
+                                clip,
+                            );
+                            continue;
+                        }
                         // MapLibre's `v_tex.x`: tile units to px at the tile zoom, over
                         // the pattern's period in px (`line_sdf.vertex.glsl`).
                         let dash = polygon.dash.map_or(NO_DASH, |entry| {
@@ -866,11 +903,11 @@ impl RetainedPolygon {
                         );
                     }
                 };
-                if polygon.dash.is_some()
+                if (polygon.dash.is_some() || line_pattern.is_some())
                     && let Some(line) = &polygon.simplified
                 {
-                    // Dashes restart at every tile's edge, as MapLibre measures them along
-                    // each GeoJSON tile's piece and clips every tile to its square.
+                    // Dashes and patterns restart at every tile's edge, as MapLibre measures
+                    // them along each GeoJSON tile's piece and clips every tile to its square.
                     let size = tiles.recip();
                     for piece in line.tile_pieces(source_zoom) {
                         let west = wrap_world_delta(f64::from(piece.x) * size - anchor[0]);
@@ -910,6 +947,7 @@ impl RetainedPolygon {
                 }
                 draw.stroke_count = stroke_index(&geometry.stroke) - draw.stroke_first;
                 draw.line = true;
+                draw.line_pattern = line_pattern.is_some();
                 geometry.draws.push(draw);
                 return;
             }
@@ -1089,6 +1127,41 @@ pub(crate) fn push_line_strip_vertex(
     push_vertex(bytes, point, extrude, normal, width, 4.0, color, dash, clip);
 }
 
+/// A line strip vertex of MapLibre's `line_pattern` program (#349, `line_pattern.wgsl`): the
+/// stroke vertex layout, with the image's atlas corners in the color slot and (px along the
+/// line at the tile zoom, display width, display height, `line-opacity`) in the dash slot.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_line_pattern_vertex(
+    bytes: &mut Vec<u8>,
+    point: [f32; 2],
+    extrude: [f32; 2],
+    normal: [f32; 2],
+    width: f32,
+    pattern: &LinePattern,
+    along: f32,
+    opacity: f32,
+    clip: [f32; 4],
+) {
+    let corners = [
+        pattern.uv_tl[0] as f32,
+        pattern.uv_tl[1] as f32,
+        pattern.uv_br[0] as f32,
+        pattern.uv_br[1] as f32,
+    ];
+    let size = pattern.display_size.map(|value| value as f32);
+    push_vertex(
+        bytes,
+        point,
+        extrude,
+        normal,
+        width,
+        4.0,
+        corners,
+        [along, size[0], size[1], opacity],
+        clip,
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_vertex(
     bytes: &mut Vec<u8>,
@@ -1216,12 +1289,14 @@ impl GeometryMirror {
                     draw.fan_count,
                     draw.stroke_count,
                     draw.line,
+                    draw.line_pattern,
                     draw.pattern.is_some()
                 ),
                 (
                     fresh.fan_count,
                     fresh.stroke_count,
                     fresh.line,
+                    fresh.line_pattern,
                     fresh.pattern.is_some()
                 ),
                 "draw {index} shape"
@@ -1237,6 +1312,7 @@ impl GeometryMirror {
 #[cfg(test)]
 mod tests {
     use maps_core::GEOJSON_VT_MAX_ZOOM;
+    use maps_core::symbol::ImageStore;
 
     use super::*;
 
@@ -1538,6 +1614,72 @@ mod tests {
         assert!(!kinds.is_empty() && kinds.iter().all(|&kind| kind == 4.0));
         assert_eq!(kinds.len() % 3, 0);
         assert_eq!(draw.stroke_count as usize, kinds.len());
+    }
+
+    #[test]
+    fn a_patterned_line_is_a_line_pattern_strip_measured_along_its_tile_pieces() {
+        let lon_lat = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+        let mut lines = RetainedPolygons::lower(&[1], &[3], &lon_lat, &LINE).unwrap();
+        let mut atlas_line = LineAtlas::default();
+        lines
+            .set_dashes(&[2], &[2.0, 1.0], &mut atlas_line)
+            .unwrap();
+        lines.set_patterns(&["track".to_owned()]).unwrap();
+        assert_eq!(lines.patterns().collect::<Vec<_>>(), ["track"]);
+
+        // Without its image the line is left out, as MapLibre leaves it undrawn.
+        let empty = lines.geometry([0.5, 0.5], 8, &ImageAtlas::default());
+        assert_eq!(empty.draws[0].stroke_count, 0);
+        assert!(empty.stroke.is_empty());
+
+        let mut images = ImageStore::default();
+        let sheet = [255_u8; 2 * 2 * 4];
+        images
+            .add_sprite(
+                r#"{"track":{"x":0,"y":0,"width":2,"height":1,"pixelRatio":1}}"#,
+                &sheet,
+                2,
+                2,
+            )
+            .unwrap();
+        images.request_pattern("track");
+        let atlas = images.atlas().clone();
+        let expected = LinePattern::new(&atlas.pattern("track").unwrap(), &atlas);
+        let geometry = lines.geometry([0.5, 0.5], 8, &atlas);
+        let [draw] = geometry.draws[..] else { panic!() };
+        assert!(draw.line && draw.line_pattern);
+        let floats = |vertex: &[u8; 80], range: std::ops::Range<usize>| -> Vec<f32> {
+            vertex[range]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
+                .collect()
+        };
+        let vertices = geometry.stroke.as_chunks::<80>().0;
+        assert_eq!(vertices.len(), draw.stroke_count as usize);
+        let mut along_max = 0.0_f32;
+        for vertex in vertices {
+            assert_eq!(floats(vertex, 28..32), [4.0], "a line strip vertex");
+            let corners = floats(vertex, 32..48);
+            assert_eq!(
+                corners,
+                [
+                    expected.uv_tl[0] as f32,
+                    expected.uv_tl[1] as f32,
+                    expected.uv_br[0] as f32,
+                    expected.uv_br[1] as f32,
+                ]
+            );
+            let [along, width, height, opacity] = floats(vertex, 48..64)[..] else {
+                panic!()
+            };
+            // The display size and `line-opacity` replace the dash, which a pattern drops.
+            assert_eq!((width, height, opacity), (2.0, 1.0, LINE[7]));
+            along_max = along_max.max(along);
+        }
+        // Px along each tile piece at zoom 8: well past one pattern period, within a tile.
+        assert!(along_max > 2.0 && along_max <= 512.0 * 2.0, "{along_max}");
     }
 
     #[test]
