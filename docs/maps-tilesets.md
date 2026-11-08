@@ -128,6 +128,73 @@ the camera and application-layer features. The page provides linked ODbL
 attribution, the input snapshot date and the immutable data revision. OSM data
 is not CC0, and the observation timestamp is not historical validity.
 
+## Precomputed place-search index (#281)
+
+A manifest may carry one optional `searchIndex` reference. It is the only
+search-related manifest extension and does not affect source identity:
+
+```json
+"searchIndex": {
+  "schema": "maps-place-search-v1",
+  "url": "/search-indexes/maps-showcase-places-r1.json",
+  "sha256": "<64 lowercase hex of the exact artifact bytes>",
+  "bytes": 2127,
+  "languages": ["en", "de"],
+  "bounds": [-180, -85.0511287798066, 180, 85.0511287798066],
+  "license": "CC0-1.0",
+  "provenance": "…"
+}
+```
+
+The URL is static HTTP(S) or root-relative, without credentials, query or
+fragment, so it never carries access secrets. The artifact (≤ 8 MiB) is UTF-8
+JSON:
+
+```json
+{
+  "schema": "maps-place-search-v1",
+  "sourceId": "maps-showcase",
+  "dataRevision": "1",
+  "languages": ["en"],
+  "attribution": "…", "license": "…", "provenance": "…",
+  "places": [{
+    "id": "stable source feature key, or null",
+    "name": "Harbor Point", "language": "en", "type": "locality",
+    "context": "optional producer-supplied disambiguation",
+    "aliases": [{ "name": "…", "language": "en" }],
+    "center": [lon, lat], "bounds": [west, south, east, north]
+  }]
+}
+```
+
+`west > east` denotes an antimeridian-crossing extent; `center` must lie inside
+`bounds`; non-null ids are unique. Maps owns reading, normalization and ranking:
+NFKD, diacritic removal, locale-independent case folding (`ß`→`ss`, `æ`→`ae`,
+…) and punctuation collapsing. There is no cross-script transliteration — names
+in other scripts must be supplied as aliases. Ranking is exact name, exact alias,
+name prefix, alias prefix, then word-start prefix, tie-broken by normalized name
+and key; results are bounded (default 8, at most 50). Identical names at
+different places stay distinct results. A place without a source id gets a
+positional key and `sourceFeatureId: null`.
+
+`loadMapsPlaceSearchIndex` fetches only the pinned artifact — never tiles —
+verifies byte length and SHA-256, then requires the artifact's
+`sourceId`/`dataRevision` to equal the active tileset's. Any mismatch, missing
+reference, unsupported schema or unreachable artifact without an exact cached
+copy is reported as unavailable with a reason (`no-index`, `hash-mismatch`,
+`revision-mismatch`, `offline`, `unsupported`, `invalid`) rather than returning
+stale places. Verified bytes are stored content-addressed in the Cache API
+(`maps-place-search-v1`) where permitted, so the exact revision is reused across
+style changes and works offline; denied storage does not block an online load.
+`MapPlaceSearch` / `useMapsPlaceSearchIndex` abort superseded loads when the
+source, revision or index changes.
+
+Producing indexes from canonical source features belongs to
+[asset-tooling #407](https://github.com/moritzbrantner/asset-tooling/issues/407).
+The two committed `public/search-indexes/*-r1.json` artifacts are hand-authored
+synthetic fixtures for the Engine Page's synthetic sources; the Liechtenstein
+Atlas has no index until that producer publishes one.
+
 ## Runtime lifetime
 
 Rust retains the existing canonical `TileId(z,x,y)`, scheduler, load concurrency,

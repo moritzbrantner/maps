@@ -1,0 +1,30 @@
+{
+  "schema": "maps-place-search-v1",
+  "sourceId": "fixture-pmtiles-xyz",
+  "dataRevision": "1",
+  "languages": ["en"],
+  "attribution": "Maps synthetic CC0 place fixture",
+  "license": "CC0-1.0",
+  "provenance": "Hand-authored synthetic fixture for Maps #281; illustrative names without geographic claims",
+  "places": [
+    {
+      "id": "xyz/harbor-point",
+      "name": "Harbor Point",
+      "language": "en",
+      "type": "locality",
+      "context": "Fixture island",
+      "aliases": [],
+      "center": [-100, 35],
+      "bounds": [-105, 30, -95, 40]
+    },
+    {
+      "id": "xyz/street-crossing",
+      "name": "Street Crossing",
+      "language": "en",
+      "type": "street",
+      "aliases": [{ "name": "The Crossing", "language": "en" }],
+      "center": [0, 0],
+      "bounds": [-5, -5, 5, 5]
+    }
+  ]
+}

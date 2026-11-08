@@ -229,6 +229,60 @@ body {
   color: #eaf3ed;
   border-color: #547077;
 }
+.engine-place-search {
+  position: relative;
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1rem;
+  font-size: 0.78rem;
+}
+.engine-place-search .mb-place-search__label {
+  color: #c1d8d3;
+  font-weight: 600;
+}
+.engine-place-search .mb-place-search__input {
+  min-height: 38px;
+  padding: 0.5rem 0.7rem;
+  color: #f1f6f2;
+  background: #26434a;
+  border: 1px solid #547077;
+  border-radius: 7px;
+}
+.engine-place-search .mb-place-search__input:disabled {
+  opacity: 0.6;
+}
+.engine-place-search .mb-place-search__results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin: 0.2rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: #19383c;
+  border: 1px solid #3a6761;
+  border-radius: 7px;
+}
+.engine-place-search .mb-place-search__option {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.engine-place-search .mb-place-search__option[aria-selected="true"] {
+  background: #35555b;
+}
+.engine-place-search .mb-place-search__name {
+  color: #f1f6f2;
+}
+.engine-place-search .mb-place-search__detail,
+.engine-place-search .mb-place-search__status {
+  margin: 0;
+  color: #a9c4bf;
+  font-size: 0.7rem;
+}
 .engine-divider {
   height: 1px;
   background: #345057;

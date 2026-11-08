@@ -377,3 +377,30 @@ export {
 
 export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "./maps-tileset";
 export { type MapsTilesetLayers, type MapsVectorBasemapStyle } from "./maps-tileset-style";
+export {
+  createMapsPlaceSearchIndex,
+  loadMapsPlaceSearchIndex,
+  MAPS_PLACE_SEARCH_SCHEMA,
+  MapsPlaceSearchUnavailableError,
+  normalizePlaceSearchText,
+  placeBoundsContain,
+  validateMapsPlaceSearchArtifact,
+  validateMapsPlaceSearchIndexRef,
+  type MapsPlaceBounds,
+  type MapsPlaceName,
+  type MapsPlaceSearchArtifact,
+  type MapsPlaceSearchIndex,
+  type MapsPlaceSearchIndexRef,
+  type MapsPlaceSearchLoadOptions,
+  type MapsPlaceSearchMatch,
+  type MapsPlaceSearchPlace,
+  type MapsPlaceSearchResult,
+  type MapsPlaceSearchUnavailableReason,
+} from "./maps-place-search";
+export {
+  describeMapsPlaceSearchResult,
+  MapPlaceSearch,
+  useMapsPlaceSearchIndex,
+  type MapPlaceSearchProps,
+  type MapsPlaceSearchState,
+} from "./map-place-search";

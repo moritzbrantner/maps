@@ -1,0 +1,76 @@
+{
+  "schema": "maps-place-search-v1",
+  "sourceId": "maps-showcase",
+  "dataRevision": "1",
+  "languages": ["en", "de", "ru", "ru-Latn"],
+  "attribution": "Maps synthetic CC0 place fixture",
+  "license": "CC0-1.0",
+  "provenance": "Hand-authored synthetic fixture for Maps #281; illustrative names without geographic claims",
+  "places": [
+    {
+      "id": "showcase/harbor-point-north",
+      "name": "Harbor Point",
+      "language": "en",
+      "type": "locality",
+      "context": "Northern shore",
+      "aliases": [],
+      "center": [20, 45],
+      "bounds": [15, 40, 25, 50]
+    },
+    {
+      "id": "showcase/harbor-point-south",
+      "name": "Harbor Point",
+      "language": "en",
+      "type": "locality",
+      "context": "Southern shore",
+      "aliases": [],
+      "center": [-60, -30],
+      "bounds": [-65, -35, -55, -25]
+    },
+    {
+      "id": "showcase/zurichberg-reach",
+      "name": "Zürichberg Reach",
+      "language": "de",
+      "type": "region",
+      "aliases": [{ "name": "Zuerichberg Reach", "language": "de" }, { "name": "Mount Reach", "language": "en" }],
+      "center": [60, 20],
+      "bounds": [50, 10, 70, 30]
+    },
+    {
+      "id": "showcase/dateline-atoll",
+      "name": "Dateline Atoll",
+      "language": "en",
+      "type": "island",
+      "aliases": [],
+      "center": [179.5, -15],
+      "bounds": [175, -20, -175, -10]
+    },
+    {
+      "id": null,
+      "name": "Quiet Shoal",
+      "language": "en",
+      "type": "water",
+      "aliases": [],
+      "center": [-30, 10],
+      "bounds": [-30, 10, -30, 10]
+    },
+    {
+      "id": "showcase/severnaya-gavan",
+      "name": "Северная Гавань",
+      "language": "ru",
+      "type": "locality",
+      "aliases": [{ "name": "Severnaya Gavan", "language": "ru-Latn" }],
+      "center": [100, 60],
+      "bounds": [95, 55, 105, 65]
+    },
+    {
+      "id": "showcase/saint-aelfric-bay",
+      "name": "Saint Ælfric Bay",
+      "language": "en",
+      "type": "bay",
+      "aliases": [{ "name": "St. Aelfric Bay", "language": "en" }],
+      "center": [140, -35],
+      "bounds": [135, -40, 145, -30]
+    }
+  ]
+}

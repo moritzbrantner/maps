@@ -218,3 +218,23 @@ export {
 } from "../polygon-line-drawing";
 
 export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "../maps-tileset";
+export {
+  createMapsPlaceSearchIndex,
+  loadMapsPlaceSearchIndex,
+  MAPS_PLACE_SEARCH_SCHEMA,
+  MapsPlaceSearchUnavailableError,
+  normalizePlaceSearchText,
+  placeBoundsContain,
+  validateMapsPlaceSearchArtifact,
+  validateMapsPlaceSearchIndexRef,
+  type MapsPlaceBounds,
+  type MapsPlaceName,
+  type MapsPlaceSearchArtifact,
+  type MapsPlaceSearchIndex,
+  type MapsPlaceSearchIndexRef,
+  type MapsPlaceSearchLoadOptions,
+  type MapsPlaceSearchMatch,
+  type MapsPlaceSearchPlace,
+  type MapsPlaceSearchResult,
+  type MapsPlaceSearchUnavailableReason,
+} from "../maps-place-search";
