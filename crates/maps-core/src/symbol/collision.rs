@@ -3,9 +3,13 @@
 //! point label's padded box and each line label's circles along its line (#346) tested
 //! against those already placed.
 
-use super::layout::{EXTENT, LayerBucket, TileStyleBuckets};
+use std::collections::HashMap;
+
+use super::layout::{EXTENT, LayerBucket, SymbolInstance, TileStyleBuckets, VariableText};
 use super::line_anchors::clip_line;
 use super::projection::{LineGlyphs, LineLabelContext, PathInterpolator, TileProjection};
+use super::shaping::SymbolAnchor;
+use super::variable_anchors::layout_shift;
 use crate::TileId;
 
 /// Collision grids extend this far past the viewport (MapLibre `viewportPadding`).
@@ -446,6 +450,63 @@ pub struct PlacedSymbol {
     pub icon_perspective_ratio: f64,
     pub text: bool,
     pub icon: bool,
+    /// The chosen entry of the text's [`VariableText::anchors`].
+    pub variable_anchor: Option<usize>,
+}
+
+/// The anchor each variable label took in the last placement, by tile, layer and instance, so
+/// the next placement tries it first (MapLibre's `prevPlacement.variableOffsets`).
+pub type VariableAnchorMemory = HashMap<(TileId, usize, usize), SymbolAnchor>;
+
+/// MapLibre's `placeBoxForVariableAnchors` for one label: the anchors in style order, the
+/// last placement's anchor first, then, with `text-allow-overlap`, again ignoring collisions.
+/// An icon that fits its text (`icon_box`) must fit at the same shift. Returns the anchor's
+/// index, the shift in CSS px at the layout text size, and the text's grid box.
+#[allow(clippy::too_many_arguments)]
+fn place_variable_text(
+    index: &CollisionIndex,
+    variable: &VariableText,
+    previous: Option<SymbolAnchor>,
+    anchor: [f64; 2],
+    ratio: f64,
+    collision_box: [f64; 4],
+    allow_overlap: bool,
+    icon_box: Option<([f64; 2], f64, [f64; 4])>,
+) -> Option<(usize, [f64; 2], [f64; 4])> {
+    let moved = |b: [f64; 4], [x, y]: [f64; 2]| [b[0] + x, b[1] + y, b[2] + x, b[3] + y];
+    let (width, height) = (
+        collision_box[2] - collision_box[0],
+        collision_box[3] - collision_box[1],
+    );
+    let mut prefer = previous;
+    let mut overlap = false;
+    let passes = usize::from(previous.is_some()) + if allow_overlap { 2 } else { 1 };
+    for _ in 0..passes {
+        for (choice, &(candidate, offset)) in variable.anchors.iter().enumerate() {
+            if prefer.is_some_and(|preferred| preferred != candidate) {
+                continue;
+            }
+            let shift = layout_shift(candidate, width, height, offset, variable.box_scale);
+            let Some(b) = index.place_box(anchor, ratio, moved(collision_box, shift), overlap)
+            else {
+                continue;
+            };
+            if let Some((icon_anchor, icon_ratio, icon_box)) = icon_box
+                && index
+                    .place_box(icon_anchor, icon_ratio, moved(icon_box, shift), overlap)
+                    .is_none()
+            {
+                continue;
+            }
+            return Some((choice, shift, b));
+        }
+        if prefer.is_some() {
+            prefer = None;
+        } else {
+            overlap = allow_overlap;
+        }
+    }
+    None
 }
 
 /// MapLibre's symbol tile order (`getRenderableIds(true)`), which symbols draw in reversed:
@@ -472,8 +533,9 @@ pub fn symbol_tile_order(tiles: &[TileId], bearing_radians: f64) -> Vec<usize> {
 /// Places every symbol layer, top layer first, at the camera `zoom` and `bearing` (clockwise,
 /// radians), tiles in MapLibre's placement order (`Style._updatePlacement`: zoom descending,
 /// then `isLessThan`: x, then y ascending). Returns placed symbols per layer in placement
-/// order, `tile` indexing `tiles`.
+/// order, `tile` indexing `tiles`. `memory` carries variable labels' anchors between frames.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn place_symbols(
     tiles: &[PlacementTile<'_>],
     layer_count: usize,
@@ -481,7 +543,9 @@ pub fn place_symbols(
     height: f64,
     zoom: f64,
     bearing: f64,
+    memory: &mut VariableAnchorMemory,
 ) -> Vec<Vec<PlacedSymbol>> {
+    let previous = std::mem::take(memory);
     let mut index = CollisionIndex::new(width, height);
     let mut placed = vec![Vec::new(); layer_count];
     let mut order: Vec<usize> = (0..tiles.len()).collect();
@@ -509,6 +573,7 @@ pub fn place_symbols(
             let text_projection = tile.projection.with(&text_project);
             let icon_projection = tile.projection.with(&icon_project);
             for (instance_index, instance) in bucket.instances.iter().enumerate() {
+                let memory_key = (tile.tile, layer, instance_index);
                 let (Some((anchor, ratio)), Some((icon_anchor, icon_ratio))) = (
                     text_projection.anchor(instance.anchor),
                     icon_projection.anchor(instance.anchor),
@@ -516,6 +581,15 @@ pub fn place_symbols(
                     continue;
                 };
                 let mut text_circles = None;
+                let mut variable_choice = None;
+                let mut variable_shift = None;
+                // An icon fitted to variable text moves with it and must fit with it.
+                let fitted_icon_box = |instance: &SymbolInstance| {
+                    (bucket.icon_text_fit && !bucket.icon_allow_overlap)
+                        .then_some(instance.icon.as_ref())
+                        .flatten()
+                        .map(|icon| (icon_anchor, icon_ratio, icon.collision_box))
+                };
                 let text_box = match (&instance.text, &instance.line) {
                     (Some(text), Some(symbol_line)) if text.line.is_some() => {
                         let line = text.line.as_ref().expect("line label");
@@ -543,6 +617,34 @@ pub fn place_symbols(
                         });
                         None
                     }
+                    (Some(text), _) if text.variable.is_some() => {
+                        let variable = text.variable.as_ref().expect("variable label");
+                        let prior = previous.get(&memory_key).copied();
+                        let placed = place_variable_text(
+                            &index,
+                            variable,
+                            prior,
+                            anchor,
+                            ratio,
+                            text.collision_box,
+                            bucket.text_allow_overlap,
+                            fitted_icon_box(instance),
+                        );
+                        match placed {
+                            Some((choice, shift, b)) => {
+                                variable_choice = Some(choice);
+                                variable_shift = Some(shift);
+                                memory.insert(memory_key, variable.anchors[choice].0);
+                                Some(b)
+                            }
+                            None => {
+                                if let Some(prior) = prior {
+                                    memory.insert(memory_key, prior);
+                                }
+                                None
+                            }
+                        }
+                    }
                     (Some(text), _) => index.place_box(
                         anchor,
                         ratio,
@@ -563,10 +665,21 @@ pub fn place_symbols(
                             bucket.icon_allow_overlap,
                         )
                     } else {
+                        // An icon fitted to its text moves with the chosen anchor.
+                        let shift = match (bucket.icon_text_fit, variable_shift) {
+                            (true, Some(shift)) => shift,
+                            _ => [0.0, 0.0],
+                        };
+                        let b = icon.collision_box;
                         index.place_box(
                             icon_anchor,
                             icon_ratio,
-                            icon.collision_box,
+                            [
+                                b[0] + shift[0],
+                                b[1] + shift[1],
+                                b[2] + shift[0],
+                                b[3] + shift[1],
+                            ],
                             bucket.icon_allow_overlap,
                         )
                     }
@@ -600,7 +713,14 @@ pub fn place_symbols(
                 if let (true, Some(circles)) = (place_text, &text_circles) {
                     index.insert_circles(circles, bucket.text_ignore_placement);
                 }
-                let text = instance.text.is_some() && (place_text || always_text);
+                // A variable label without an anchor has nowhere to draw.
+                let variable_unplaced = variable_choice.is_none()
+                    && instance
+                        .text
+                        .as_ref()
+                        .is_some_and(|text| text.variable.is_some());
+                let text =
+                    instance.text.is_some() && (place_text || always_text) && !variable_unplaced;
                 let icon = instance.icon.is_some() && (place_icon || always_icon);
                 if text || icon {
                     placed[layer].push(PlacedSymbol {
@@ -613,6 +733,7 @@ pub fn place_symbols(
                         icon_perspective_ratio: icon_ratio,
                         text,
                         icon,
+                        variable_anchor: if text { variable_choice } else { None },
                     });
                 }
             }
@@ -624,6 +745,7 @@ pub fn place_symbols(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::symbol::layout::SymbolBucket;
 
     #[test]
     fn overlapping_boxes_collide_and_separate_ones_do_not() {
@@ -708,11 +830,198 @@ mod tests {
         assert!(grid.hit_test([105.0, 95.0, 120.0, 105.0]));
     }
 
+    /// `place_symbols` over one tile holding `bucket`.
+    fn variable_placement(
+        bucket: SymbolBucket,
+        memory: &mut VariableAnchorMemory,
+    ) -> Vec<PlacedSymbol> {
+        let buckets = TileStyleBuckets {
+            layers: vec![LayerBucket::Symbols(Box::new(bucket))],
+            ..TileStyleBuckets::default()
+        };
+        let project = |uv: [f64; 2]| ([uv[0] * 400.0, uv[1] * 400.0], 1.0);
+        let tiles = [PlacementTile {
+            tile: TileId::new(0, 0, 0).unwrap(),
+            buckets: &buckets,
+            projection: TileProjection {
+                project: &project,
+                center_w: 1.0,
+                tile_px: 400.0,
+            },
+        }];
+        place_symbols(&tiles, 1, 400.0, 400.0, 0.0, 0.0, memory).remove(0)
+    }
+
+    /// An offset clearing a 20 px box centred on the anchor, towards a `left` anchor's side.
+    fn far(anchor: SymbolAnchor) -> [f64; 2] {
+        if anchor == SymbolAnchor::Left {
+            [30.0, 0.0]
+        } else {
+            [0.0, 0.0]
+        }
+    }
+
+    fn variable_instance(anchors: &[SymbolAnchor]) -> SymbolInstance {
+        let paint = crate::symbol::layout::SymbolPaint {
+            color: [0.0; 4],
+            halo_color: [0.0; 4],
+            halo_width: 0.0,
+            halo_blur: 0.0,
+            opacity: 1.0,
+        };
+        SymbolInstance {
+            anchor: [0.5, 0.5],
+            line: None,
+            text: Some(crate::symbol::layout::SymbolText {
+                collision_box: [-10.0, -5.0, 10.0, 5.0],
+                glyphs: Vec::new(),
+                sizes: [16.0; 2],
+                stack: String::new(),
+                paint: [paint.clone(), paint],
+                line: None,
+                variable: Some(VariableText {
+                    anchors: anchors
+                        .iter()
+                        .map(|anchor| (*anchor, far(*anchor)))
+                        .collect(),
+                    box_scale: 1.0,
+                    justified: Vec::new(),
+                }),
+            }),
+            icon: None,
+            feature_index: 0,
+        }
+    }
+
+    #[test]
+    fn variable_labels_take_the_first_anchor_that_fits() {
+        // The first label takes the centre; the second is the same point, so `center` hits
+        // it and `left` (its box to the right) does not.
+        let mut memory = VariableAnchorMemory::default();
+        let placed = variable_placement(
+            SymbolBucket {
+                instances: vec![
+                    variable_instance(&[SymbolAnchor::Center]),
+                    variable_instance(&[SymbolAnchor::Center, SymbolAnchor::Left]),
+                ],
+                variable_anchors: true,
+                ..SymbolBucket::default()
+            },
+            &mut memory,
+        );
+        assert_eq!(
+            placed
+                .iter()
+                .map(|symbol| (symbol.instance, symbol.variable_anchor))
+                .collect::<Vec<_>>(),
+            vec![(0, Some(0)), (1, Some(1))]
+        );
+        assert_eq!(
+            memory[&(TileId::new(0, 0, 0).unwrap(), 0, 1)],
+            SymbolAnchor::Left
+        );
+    }
+
+    #[test]
+    fn a_variable_label_prefers_its_last_anchor_while_it_still_fits() {
+        let bucket = || SymbolBucket {
+            instances: vec![variable_instance(&[
+                SymbolAnchor::Center,
+                SymbolAnchor::Left,
+                SymbolAnchor::Right,
+            ])],
+            variable_anchors: true,
+            ..SymbolBucket::default()
+        };
+        let key = (TileId::new(0, 0, 0).unwrap(), 0, 0);
+        // The free centre would win a first placement, but the last anchor is tried first.
+        let mut memory = VariableAnchorMemory::from([(key, SymbolAnchor::Right)]);
+        let placed = variable_placement(bucket(), &mut memory);
+        assert_eq!(placed[0].variable_anchor, Some(2));
+        assert_eq!(memory[&key], SymbolAnchor::Right);
+    }
+
+    #[test]
+    fn a_variable_label_with_no_fitting_anchor_is_hidden_and_keeps_its_memory() {
+        let key = (TileId::new(0, 0, 0).unwrap(), 0, 1);
+        let mut memory = VariableAnchorMemory::from([(key, SymbolAnchor::Left)]);
+        let placed = variable_placement(
+            SymbolBucket {
+                instances: vec![
+                    variable_instance(&[SymbolAnchor::Center]),
+                    variable_instance(&[SymbolAnchor::Center]),
+                ],
+                variable_anchors: true,
+                ..SymbolBucket::default()
+            },
+            &mut memory,
+        );
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].instance, 0);
+        assert_eq!(memory[&key], SymbolAnchor::Left);
+        // With `text-allow-overlap` the second pass ignores collisions.
+        let placed = variable_placement(
+            SymbolBucket {
+                instances: vec![
+                    variable_instance(&[SymbolAnchor::Center]),
+                    variable_instance(&[SymbolAnchor::Center]),
+                ],
+                variable_anchors: true,
+                text_allow_overlap: true,
+                ..SymbolBucket::default()
+            },
+            &mut VariableAnchorMemory::default(),
+        );
+        assert_eq!(placed.len(), 2);
+        assert_eq!(placed[1].variable_anchor, Some(0));
+    }
+
+    #[test]
+    fn an_icon_fitted_to_variable_text_must_fit_at_the_same_shift() {
+        // A fitted icon around each text: the second can't sit on the first at `center`, so
+        // it moves with `left` and both its boxes fit.
+        let with_icon = |instance: SymbolInstance| {
+            let paint = instance.text.as_ref().unwrap().paint.clone();
+            SymbolInstance {
+                icon: Some(crate::symbol::layout::SymbolIcon {
+                    image: "shield".to_owned(),
+                    quads: Vec::new(),
+                    collision_box: [-14.0, -8.0, 14.0, 8.0],
+                    line_offset: [0.0; 2],
+                    sizes: [1.0; 2],
+                    pixel_ratio: 1.0,
+                    paint,
+                }),
+                ..instance
+            }
+        };
+        let placed = variable_placement(
+            SymbolBucket {
+                instances: vec![
+                    with_icon(variable_instance(&[SymbolAnchor::Center])),
+                    with_icon(variable_instance(&[
+                        SymbolAnchor::Center,
+                        SymbolAnchor::Left,
+                    ])),
+                ],
+                icon_text_fit: true,
+                variable_anchors: true,
+                ..SymbolBucket::default()
+            },
+            &mut VariableAnchorMemory::default(),
+        );
+        assert_eq!(
+            placed
+                .iter()
+                .map(|symbol| (symbol.text, symbol.icon, symbol.variable_anchor))
+                .collect::<Vec<_>>(),
+            vec![(true, true, Some(0)), (true, true, Some(1))]
+        );
+    }
+
     #[test]
     fn icons_and_text_place_jointly_unless_one_is_optional() {
-        use crate::symbol::layout::{
-            SymbolBucket, SymbolIcon, SymbolInstance, SymbolPaint, SymbolText,
-        };
+        use crate::symbol::layout::{SymbolIcon, SymbolPaint, SymbolText};
         let paint = SymbolPaint {
             color: [0.0; 4],
             halo_color: [0.0; 4],
@@ -732,6 +1041,7 @@ mod tests {
                 stack: String::new(),
                 paint: [paint.clone(), paint.clone()],
                 line: None,
+                variable: None,
             }),
             icon: Some(SymbolIcon {
                 image: "dot".to_owned(),
@@ -766,7 +1076,7 @@ mod tests {
                     tile_px: 200.0,
                 },
             }];
-            place_symbols(&tiles, 1, 200.0, 100.0, 0.0, 0.0)[0]
+            place_symbols(&tiles, 1, 200.0, 100.0, 0.0, 0.0, &mut Default::default())[0]
                 .iter()
                 .map(|symbol| (symbol.instance, symbol.text, symbol.icon))
                 .collect::<Vec<_>>()

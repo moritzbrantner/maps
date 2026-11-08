@@ -37,6 +37,14 @@
   covers keep the north-up policy of filling at the source's minimum zoom. The MapLibre
   runtime now accepts the Maps camera's pitch range (`maxPitch` 85°). The oracle
   `steep-pitch` scenario (65°) is gated.
+- Tileset `symbol` labels choose their anchor at placement, ported from MapLibre 6.16
+  (#346). `text-variable-anchor` and `text-variable-anchor-offset` (constant lists, point
+  placement) try each anchor in order, the anchor of the last placement first, then, with
+  `text-allow-overlap`, again ignoring collisions; `text-radial-offset` applies to both
+  variable and fixed anchors, and `text-justify: auto` keeps multi-line labels justified
+  towards the chosen anchor. An icon under `icon-text-fit` moves with its text and must fit
+  there too. The oracle `symbol-variable-anchors` and `symbol-variable-anchors-pitch`
+  scenarios are gated.
 - Tileset `symbol` icons follow lines, fit their text and turn, ported from MapLibre 6.16
   (#346). `icon-image` works on `symbol-placement: line` and `line-center`: icons along
   the line (`icon-rotation-alignment` `map`/`auto`) walk the projected line like glyphs, on

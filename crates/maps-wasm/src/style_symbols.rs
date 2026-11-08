@@ -8,11 +8,13 @@
 use std::collections::{BTreeSet, HashMap};
 
 use maps_core::symbol::layout::EXTENT;
+use maps_core::symbol::variable_anchors::render_shift;
 use maps_core::symbol::{
     AtlasRect, GlyphStore, IconQuad, ImageAtlas, ImageStore, LayerBucket, LineGlyphs,
     LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile, StyleLayer,
-    StyleLayerKind, SymbolBucket, SymbolDrawState, SymbolPaint, TileProjection, TileStyleBuckets,
-    layout_tile, line_label_glyphs, parse_glyph_pbf, place_symbols, symbol_tile_order,
+    StyleLayerKind, SymbolBucket, SymbolDrawState, SymbolGlyph, SymbolPaint, SymbolText,
+    TileProjection, TileStyleBuckets, VariableAnchorMemory, layout_tile, line_label_glyphs,
+    parse_glyph_pbf, place_symbols, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
@@ -148,6 +150,8 @@ pub(crate) struct StyleSymbols {
     line_generation: u64,
     /// Tiles and builds of the fill bytes uploaded last.
     fill_signature: Vec<(TileKey, u64)>,
+    /// The anchors variable labels took in the last placement.
+    variable_anchors: VariableAnchorMemory,
 }
 
 impl StyleSymbols {
@@ -520,6 +524,7 @@ impl StyleSymbols {
             viewport.1,
             zoom,
             bearing,
+            &mut self.variable_anchors,
         );
 
         let to_clip = |viewport_point: [f64; 2]| -> [f32; 2] {
@@ -691,6 +696,7 @@ impl StyleSymbols {
                             let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                             let kind = if bucket.sdf_icons { 1.0 } else { 2.0 };
                             let icon_size = bucket.icon_size.at_zoom(zoom);
+                            let icon_text_size = bucket.text_size.at_zoom(zoom);
                             let tile_projection = &placement_tiles[*tile_index].projection;
                             let shift = bucket.icon_translate.uv(bearing, tile_projection.tile_px);
                             let shifted = tile_projection.shifted(shift);
@@ -817,12 +823,32 @@ impl StyleSymbols {
                                 if !bucket.icon_offset {
                                     size *= symbol.icon_perspective_ratio.clamp(0.0, 4.0);
                                 }
+                                // `updateVariableAnchors`: an icon fitted to variable text sits
+                                // at the text's shifted anchor, and is hidden without one.
+                                let mut icon_anchor = symbol.icon_anchor;
+                                if bucket.variable_anchors && bucket.icon_text_fit {
+                                    let Some((_, shift)) =
+                                        instance.text.as_ref().and_then(|text| {
+                                            variable_label(
+                                                text,
+                                                symbol,
+                                                bucket
+                                                    .text_size
+                                                    .for_feature(icon_text_size, text.sizes),
+                                            )
+                                        })
+                                    else {
+                                        continue;
+                                    };
+                                    icon_anchor =
+                                        [symbol.anchor[0] + shift[0], symbol.anchor[1] + shift[1]];
+                                }
                                 for quad in &icon.quads {
                                     quads.push(SymbolQuad {
                                         corners: offsets(quad, size).map(|[x, y]| {
                                             quad_context.viewport_vertex([
-                                                symbol.icon_anchor[0] + x,
-                                                symbol.icon_anchor[1] + y,
+                                                icon_anchor[0] + x,
+                                                icon_anchor[1] + y,
                                             ])
                                         }),
                                         uv: uv(quad.tex),
@@ -898,7 +924,11 @@ impl StyleSymbols {
                                         size *= symbol.perspective_ratio.clamp(0.0, 4.0);
                                     }
                                     let font_scale = size / 24.0;
-                                    for glyph in &text.glyphs {
+                                    let (glyphs, shift) = variable_label(text, symbol, font_size)
+                                        .unwrap_or((text.glyphs.as_slice(), [0.0, 0.0]));
+                                    let origin =
+                                        [symbol.anchor[0] + shift[0], symbol.anchor[1] + shift[1]];
+                                    for glyph in glyphs {
                                         let Some(rect) = atlas.rect(&text.stack, glyph.codepoint)
                                         else {
                                             continue;
@@ -906,8 +936,8 @@ impl StyleSymbols {
                                         quads.push(SymbolQuad {
                                             corners: glyph.corners.map(|[x, y]| {
                                                 quad_context.viewport_vertex([
-                                                    symbol.anchor[0] + f64::from(x) * font_scale,
-                                                    symbol.anchor[1] + f64::from(y) * font_scale,
+                                                    origin[0] + f64::from(x) * font_scale,
+                                                    origin[1] + f64::from(y) * font_scale,
                                                 ])
                                             }),
                                             uv: uv(rect),
@@ -1040,6 +1070,29 @@ fn quad_meets_rect(quad: [[f64; 2]; 4], size: [f64; 2]) -> bool {
 
 /// Asks the image atlas for every icon a tile's symbols use (MapLibre's `getImages`), before
 /// any frame packs it.
+/// A placed variable label's quads and its `calculateVariableRenderShift` in CSS px at the
+/// drawn `font_size`, or `None` without a chosen anchor.
+fn variable_label<'a>(
+    text: &'a SymbolText,
+    symbol: &PlacedSymbol,
+    font_size: f64,
+) -> Option<(&'a [SymbolGlyph], [f64; 2])> {
+    let variable = text.variable.as_ref()?;
+    let &(anchor, offset) = variable.anchors.get(symbol.variable_anchor?)?;
+    let [x1, y1, x2, y2] = text.collision_box;
+    Some((
+        variable.glyphs(anchor, &text.glyphs),
+        render_shift(
+            anchor,
+            x2 - x1,
+            y2 - y1,
+            offset,
+            variable.box_scale,
+            font_size * symbol.perspective_ratio / 24.0,
+        ),
+    ))
+}
+
 fn request_icons(buckets: &TileStyleBuckets, images: &mut ImageStore) {
     for bucket in &buckets.layers {
         if let LayerBucket::Symbols(bucket) = bucket {
