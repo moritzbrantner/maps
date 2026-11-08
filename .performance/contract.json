@@ -953,6 +953,47 @@
           "notes": "Circle instance bytes re-encoded for upload per frame (56 bytes per circle)."
         }
       ]
+    },
+    {
+      "id": "retained-polygons-camera-pan",
+      "description": "Pan the unchanged first-party polygon group through 32 real maps-core camera frames after its first geometry build. RetainedPolygonState::prepare is the same refresh decision used by the WebGPU backend; each rebuild produces real fill/stroke/pattern bytes and is counted. A frame still places the retained anchor and submits one uniform, with no per-shape geometry rebuild or upload. Correctness of the built shape geometry is covered by the retained-polygons unit tests and the independent visual oracle.",
+      "publicContract": "maps-wasm RetainedPolygonState::prepare behind MapsWgpuBaseMapRenderer.renderPacked",
+      "dimensions": {
+        "staticShapes": {
+          "description": "Unchanged filled four-vertex polygons retained in a group"
+        }
+      },
+      "scalePoints": [
+        { "staticShapes": 100 },
+        { "staticShapes": 1000 },
+        { "staticShapes": 10000 }
+      ],
+      "metrics": [
+        {
+          "name": "geometry-rebuilds",
+          "unit": "rebuilds",
+          "signal": "operation-count",
+          "budget": { "max": 0 },
+          "growth": [{ "dimension": "staticShapes", "bound": "constant" }],
+          "notes": "Initial geometry build is outside the measured camera phase. No ordinary camera frame may rebuild it."
+        },
+        {
+          "name": "geometry-upload-bytes",
+          "unit": "bytes",
+          "signal": "size",
+          "budget": { "max": 0 },
+          "growth": [{ "dimension": "staticShapes", "bound": "constant" }],
+          "notes": "Counts all four geometry buffer payloads emitted by any refresh during the camera phase."
+        },
+        {
+          "name": "frame-uniform-writes",
+          "unit": "uniforms",
+          "signal": "operation-count",
+          "budget": { "max": 32 },
+          "growth": [{ "dimension": "staticShapes", "bound": "constant" }],
+          "notes": "One retained-anchor frame per camera frame at zoom 5, independent of polygon count."
+        }
+      ]
     }
   ]
 }

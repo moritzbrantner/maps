@@ -26,7 +26,8 @@ use crate::retained_points::{
 };
 use crate::retained_polygons::{
     RETAINED_POLYGON_COVER_VERTEX_COUNT, RETAINED_POLYGON_FILL_VERTEX_SIZE,
-    RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonDraw, RetainedPolygons,
+    RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonDraw, RetainedPolygonState,
+    RetainedPolygons,
 };
 use crate::style_symbols::{StyleFrame, StyleSurface, StyleSymbols};
 use crate::vector_basemap_layout::{
@@ -82,12 +83,7 @@ impl RetainedResource for RetainedPointGroup {
 /// One retained application polygon group (#196): `f64` world rings in Rust, anchor-offset
 /// fan/cover and stroke geometry on the GPU. Camera frames only move the frame uniform.
 struct RetainedPolygonGroup {
-    polygons: RetainedPolygons,
-    anchor: Option<[f64; 2]>,
-    /// The GeoJSON tile zoom the line and pattern geometry was built for.
-    tile_zoom: Option<u8>,
-    /// The image atlas the pattern geometry was built against.
-    atlas_revision: Option<u64>,
+    state: RetainedPolygonState,
     fill: Option<wgpu::Buffer>,
     stroke: Option<wgpu::Buffer>,
     pattern_covers: Option<wgpu::Buffer>,
@@ -1481,10 +1477,7 @@ impl MapsWgpuBaseMapRenderer {
         self.retained_polygons.insert(
             group,
             RetainedPolygonGroup {
-                polygons,
-                anchor: None,
-                tile_zoom: None,
-                atlas_revision: None,
+                state: RetainedPolygonState::new(polygons),
                 fill: None,
                 stroke: None,
                 pattern_covers: None,
@@ -1633,7 +1626,7 @@ impl MapsWgpuBaseMapRenderer {
             f64::from(self.frame_stats.retained_point_frames),
             self.retained_polygons
                 .values()
-                .map(|group| group.polygons.len())
+                .map(|group| group.state.len())
                 .sum::<usize>() as f64,
             self.retained_polygon_counters.prepared as f64,
             self.retained_polygon_counters.rebases as f64,
@@ -2142,26 +2135,15 @@ impl MapsWgpuBaseMapRenderer {
         let Some(view) = self.retained_view(placements, view_projection, clip) else {
             return Vec::new();
         };
-        let tile_zoom = view.tile_zoom();
         let atlas = self.images.atlas();
         let mut frames = Vec::new();
         for group_key in groups {
             let Some(group) = self.retained_polygons.get_mut(&group_key) else {
                 continue;
             };
-            // Lines follow MapLibre's GeoJSON tiles of the floored zoom (#334), patterns its
-            // pixels and the image atlas (#323).
-            let rezoomed = group.polygons.has_lines()
-                && (group.tile_zoom != Some(tile_zoom)
-                    || group.polygons.patterns().next().is_some()
-                        && group.atlas_revision != Some(atlas.revision));
-            let rebase = view.needs_rebase(group.anchor)
-                || group.fill.is_none() && group.stroke.is_none() && group.pattern_covers.is_none();
-            if rezoomed || rebase {
-                let anchor = view.center;
-                let geometry = group.polygons.geometry(anchor, tile_zoom, atlas);
-                group.tile_zoom = Some(tile_zoom);
-                group.atlas_revision = Some(atlas.revision);
+            // Lines use the floored GeoJSON tile zoom (#334); patterns use the image atlas
+            // (#323). The same refresh decision drives deterministic work-contract tests.
+            if let Some((geometry, rebase)) = group.state.prepare(&view, atlas) {
                 group.pattern_covers = upload_retained_buffer(
                     &self.device,
                     &self.queue,
@@ -2191,7 +2173,6 @@ impl MapsWgpuBaseMapRenderer {
                     &geometry.stroke,
                 );
                 group.draws = geometry.draws;
-                group.anchor = Some(anchor);
                 if rebase {
                     self.retained_polygon_counters.rebases += 1;
                 } else {
@@ -2200,7 +2181,7 @@ impl MapsWgpuBaseMapRenderer {
                 self.retained_polygon_counters.upload_bytes +=
                     (geometry.fill.len() + geometry.stroke.len()) as u64;
             }
-            if let Some(anchor) = group.anchor {
+            if let Some(anchor) = group.state.anchor() {
                 frames.extend(view.anchor_frames(anchor).map(|frame| (group_key, frame)));
             }
         }

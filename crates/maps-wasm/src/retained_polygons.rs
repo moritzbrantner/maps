@@ -34,7 +34,7 @@ use maps_core::{
     LineJoin, LineLayout, LineMesh, SimplifiedLine, project_web_mercator,
 };
 
-use crate::retained_points::wrap_world_delta;
+use crate::retained_points::{RetainedView, wrap_world_delta};
 
 /// Per-shape paint record: fill RGBA, stroke RGBA, stroke width (CSS px; a marker's size),
 /// shape kind, circle radius (CSS px), then a line's `line-cap` (0 butt, 1 round, 2 square),
@@ -103,6 +103,61 @@ struct RetainedPolygon {
 #[derive(Debug)]
 pub(crate) struct RetainedPolygons {
     polygons: Vec<RetainedPolygon>,
+}
+
+/// The renderer-independent refresh state for one retained shape group. Camera-only
+/// frames must not rebuild geometry, including when an invisible group has no GPU
+/// buffers to upload. The WebGPU backend consumes only the returned changes.
+#[derive(Debug)]
+pub(crate) struct RetainedPolygonState {
+    polygons: RetainedPolygons,
+    anchor: Option<[f64; 2]>,
+    tile_zoom: Option<u8>,
+    atlas_revision: Option<u64>,
+}
+
+impl RetainedPolygonState {
+    pub(crate) fn new(polygons: RetainedPolygons) -> Self {
+        Self {
+            polygons,
+            anchor: None,
+            tile_zoom: None,
+            atlas_revision: None,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.polygons.len()
+    }
+
+    pub(crate) fn anchor(&self) -> Option<[f64; 2]> {
+        self.anchor
+    }
+
+    /// Returns geometry only on first use, a local-frame rebase, or a zoom/atlas
+    /// change that affects line/pattern geometry. The boolean distinguishes rebases
+    /// from zoom-only rebuilds for the backend's existing work counters.
+    pub(crate) fn prepare(
+        &mut self,
+        view: &RetainedView,
+        atlas: &ImageAtlas,
+    ) -> Option<(RetainedPolygonGeometry, bool)> {
+        let tile_zoom = view.tile_zoom();
+        let rezoomed = self.polygons.has_lines()
+            && (self.tile_zoom != Some(tile_zoom)
+                || (self.polygons.patterns().next().is_some()
+                    && self.atlas_revision != Some(atlas.revision)));
+        let rebase = view.needs_rebase(self.anchor);
+        if !rezoomed && !rebase {
+            return None;
+        }
+
+        let geometry = self.polygons.geometry(view.center, tile_zoom, atlas);
+        self.anchor = Some(view.center);
+        self.tile_zoom = Some(tile_zoom);
+        self.atlas_revision = Some(atlas.revision);
+        Some((geometry, rebase))
+    }
 }
 
 /// One polygon's ranges: the fan and cover in the fill buffer, the stroke in the stroke
@@ -908,6 +963,51 @@ mod tests {
                 ]
             })
             .collect()
+    }
+
+    fn retained_test_view(zoom: u8) -> RetainedView {
+        RetainedView {
+            copy_origins_x: vec![0.0],
+            origin_y: 1.0,
+            scale: 1.0,
+            center: [0.5, 0.5],
+            px_per_world: 512.0 * f64::from(zoom).exp2(),
+            half_width_world: 0.05,
+        }
+    }
+
+    #[test]
+    fn invisible_retained_shapes_do_not_rebuild_empty_buffers_every_frame() {
+        let mut invisible = PAINT;
+        invisible[3] = 0.0;
+        invisible[7] = 0.0;
+        let polygons = RetainedPolygons::lower(&[1], &[4], &square(0.0, 0.0, 1.0)[..8], &invisible)
+            .expect("valid polygon");
+        let mut state = RetainedPolygonState::new(polygons);
+        let view = retained_test_view(5);
+        let atlas = ImageAtlas::default();
+        let (geometry, rebased) = state.prepare(&view, &atlas).expect("initial preparation");
+        assert!(rebased);
+        assert!(geometry.fill.is_empty());
+        assert!(geometry.stroke.is_empty());
+        assert!(state.prepare(&view, &atlas).is_none());
+    }
+
+    #[test]
+    fn line_refreshes_on_tile_zoom_change_without_rebasing_the_anchor() {
+        let polygons = RetainedPolygons::lower(&[1], &[3], &[0.0, 0.0, 1.0, 0.0, 2.0, 1.0], &LINE)
+            .expect("valid line");
+        let mut state = RetainedPolygonState::new(polygons);
+        let atlas = ImageAtlas::default();
+        let first = retained_test_view(5);
+        assert!(state.prepare(&first, &atlas).is_some());
+        assert!(state.prepare(&first, &atlas).is_none());
+        let next = retained_test_view(6);
+        let (_, rebased) = state
+            .prepare(&next, &atlas)
+            .expect("zoom-dependent geometry");
+        assert!(!rebased);
+        assert!(state.prepare(&next, &atlas).is_none());
     }
 
     #[test]
