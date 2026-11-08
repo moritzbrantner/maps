@@ -5,9 +5,12 @@ import type { AggregatedMapFeature, MapPoint } from "../src/aggregation";
 import { ClusterLayer } from "../src/cluster-layer";
 import type { MapSurfaceController, MapViewState } from "../src/map-display";
 import type { MapsRendererStats } from "../src/maps-browser-runtime";
+import { MapPlaceSearch, describeMapsPlaceSearchResult } from "../src/map-place-search";
 import { MapView } from "../src/map-view";
+import type { MapsPlaceSearchResult } from "../src/maps-place-search";
 import { createFixturePmtilesXyzTileset } from "../src/tileset-fixtures";
 import { atlasReleaseIndex, createAtlasTileset } from "./atlas-source";
+import { withFixturePlaceSearch } from "./place-search-fixtures";
 import { createShowcaseTileset } from "./showcase-tileset";
 
 type EngineController = MapSurfaceController & { getRendererStats(): MapsRendererStats | null };
@@ -89,12 +92,46 @@ export function EnginePage() {
     if (source === "atlas-north") {
       return createAtlasTileset("liechtenstein-north", import.meta.env.BASE_URL);
     }
-    if (source === "pmtiles") return createShowcaseTileset(import.meta.env.BASE_URL);
-    return createFixturePmtilesXyzTileset(import.meta.env.BASE_URL);
+    const base = import.meta.env.BASE_URL;
+    if (source === "pmtiles") return withFixturePlaceSearch(createShowcaseTileset(base), base);
+    return withFixturePlaceSearch(createFixturePmtilesXyzTileset(base), base);
   }, [source]);
-  const onControllerReady = useCallback((controller: MapSurfaceController | null) => {
-    controllerRef.current = controller as EngineController | null;
-  }, []);
+  const [place, setPlace] = useState<{
+    result: MapsPlaceSearchResult;
+    center: readonly [number, number];
+  } | null>(null);
+  // A place chosen before the Map View is ready is applied once its controller exists.
+  const pendingPlaceRef = useRef<MapsPlaceSearchResult | null>(null);
+  useEffect(() => {
+    pendingPlaceRef.current = null;
+    setPlace(null);
+  }, [tileset]);
+  const applyPlace = useCallback(
+    (controller: MapSurfaceController, result: MapsPlaceSearchResult) => {
+      pendingPlaceRef.current = null;
+      // Bounds fitting is defined for a flat camera; keep the search result north-up.
+      controller.setViewState({ ...controller.getViewState(), bearing: 0, pitch: 0 });
+      controller.fitBounds([...result.bounds], { animate: false, maxZoom: 8 });
+      setTilted(false);
+      setPlace({ result, center: controller.getViewState().center });
+    },
+    [],
+  );
+  const navigateToPlace = useCallback(
+    (result: MapsPlaceSearchResult) => {
+      const controller = controllerRef.current;
+      if (controller) applyPlace(controller, result);
+      else pendingPlaceRef.current = result;
+    },
+    [applyPlace],
+  );
+  const onControllerReady = useCallback(
+    (controller: MapSurfaceController | null) => {
+      controllerRef.current = controller as EngineController | null;
+      if (controller && pendingPlaceRef.current) applyPlace(controller, pendingPlaceRef.current);
+    },
+    [applyPlace],
+  );
   const select = useCallback((feature: AggregatedMapFeature | null) => {
     setSelected(feature ? featureId(feature) : null);
   }, []);
@@ -297,6 +334,27 @@ export function EnginePage() {
               <Button variant="outline" onClick={resetView}>
                 View covered region
               </Button>
+            </div>
+          ) : null}
+
+          <MapPlaceSearch
+            className="engine-place-search"
+            tileset={tileset}
+            onSelect={navigateToPlace}
+          />
+          {place ? (
+            <div
+              role="status"
+              className="engine-source-note"
+              data-place-key={place.result.key}
+              data-camera-center={place.center.map((value) => value.toFixed(3)).join(",")}
+            >
+              <strong>{place.result.name}</strong>
+              <span>{describeMapsPlaceSearchResult(place.result)}</span>
+              <span>
+                Map moved to this place's extent. No rendered map feature is highlighted for it.
+              </span>
+              <span>Source: {place.result.attribution}</span>
             </div>
           ) : null}
 

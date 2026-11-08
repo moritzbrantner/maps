@@ -1,3 +1,5 @@
+import { validateMapsPlaceSearchIndexRef, type MapsPlaceSearchIndexRef } from "./maps-place-search";
+
 /** Versioned data-only contract; style and historical interpretation are separate inputs. */
 export type MapsTilesetMetadata = {
   version: 1;
@@ -16,6 +18,8 @@ export type MapsTilesetMetadata = {
   license: string;
   provenance: string;
   observation?: { snapshot: string; effectiveDate?: string };
+  /** Optional precomputed place-search artifact pinned to this exact source revision. */
+  searchIndex?: MapsPlaceSearchIndexRef;
 };
 
 /** A metadata-valid artifact becomes activatable only with a supported transport. */
@@ -115,6 +119,14 @@ export function validateMapsTilesetMetadata(input: unknown): MapsTilesetMetadata
     return fail("invalid coverage bounds");
   }
   const observation = value.observation === undefined ? undefined : record(value.observation);
+  let searchIndex: MapsPlaceSearchIndexRef | undefined;
+  if (value.searchIndex !== undefined) {
+    try {
+      searchIndex = validateMapsPlaceSearchIndexRef(value.searchIndex);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : "invalid search index reference");
+    }
+  }
   return {
     version: 1,
     sourceId: text(value.sourceId),
@@ -140,6 +152,7 @@ export function validateMapsTilesetMetadata(input: unknown): MapsTilesetMetadata
           },
         }
       : {}),
+    ...(searchIndex ? { searchIndex } : {}),
   };
 }
 

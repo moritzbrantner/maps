@@ -72,3 +72,47 @@ test("packed WASM projection preserves scalar failures and coordinate ordering @
   });
   expect(result).toEqual({ parity: true, rejectsOdd: true, length: 8, empty: 0 });
 });
+
+test("engine page searches the source-pinned place index and navigates @smoke", async ({ page }) => {
+  const errors: string[] = [];
+  const indexRequests: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (request.url().includes("/search-indexes/")) indexRequests.push(new URL(request.url()).pathname);
+  });
+  await page.goto("/engine/?source=pmtiles&e2e=1");
+  const search = page.getByRole("combobox", { name: "Search places" });
+  await expect(search).toBeEnabled();
+  await search.fill("harbor");
+  const results = page.getByRole("listbox", { name: "Search places results" });
+  const options = results.getByRole("option");
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(0)).toContainText("Northern shore");
+  await expect(options.nth(1)).toContainText("Southern shore");
+  await search.press("ArrowDown");
+  await search.press("Enter");
+  const note = page.locator("[data-place-key]").filter({ hasText: "No rendered map feature" });
+  await expect(note).toHaveAttribute("data-place-key", "showcase/harbor-point-south");
+  const [longitude, latitude] = (await note.getAttribute("data-camera-center"))!
+    .split(",")
+    .map(Number);
+  expect(Math.abs(longitude! + 60)).toBeLessThan(0.5);
+  expect(Math.abs(latitude! + 30)).toBeLessThan(1);
+
+  await page.getByRole("combobox", { name: "Tile source" }).selectOption("mvt");
+  await expect(note).toHaveCount(0);
+  await expect(search).toBeEnabled();
+  await search.fill("harbor");
+  await expect(results.getByRole("option")).toHaveCount(1);
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Tile source" })).toHaveValue("mvt");
+  await expect(search).toBeEnabled();
+  await search.fill("crossing");
+  await expect(results.getByRole("option")).toHaveText(/Street Crossing/);
+
+  await page.getByRole("combobox", { name: "Tile source" }).selectOption("atlas");
+  await expect(search).toBeDisabled();
+  await expect(page.getByText("Place search is not available for this map source.")).toBeVisible();
+  expect(indexRequests.every((path) => path.endsWith("-r1.json"))).toBe(true);
+  expect(errors).toEqual([]);
+});
