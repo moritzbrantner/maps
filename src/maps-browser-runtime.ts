@@ -9,7 +9,7 @@ import { decodeShortbreadTilePixels } from "./vector-tile-wasm";
 import { paintShortbreadTile } from "./shortbread-tile-paint";
 import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
-import { drawCanvasSky } from "./canvas-sky";
+import { drawCanvasSky, premultipliedCssColor } from "./canvas-sky";
 import {
   createCanvasSpriteImages,
   type CanvasMapPatternImages,
@@ -248,6 +248,8 @@ export type MapsBrowserRuntimeOptions = {
   relief?: MapsRelief;
   /** The style's `sky` as JSON (`{"sky": ...}`), or undefined for none. */
   sky?: string;
+  /** The style's constant background as JSON, or undefined for the surface default. */
+  background?: string;
   tileLimits?: MapsFlatRasterRuntimeConfig["limits"];
   createTileImageLoader?: () => MapsTileImageLoader;
   maxBounds?: MapBounds;
@@ -578,6 +580,7 @@ export function createMapsBrowserRuntime(
 
     activeRuntime = runtime;
     applySky(runtime);
+    applyBackground(runtime);
     let renderer: MapsWgpuBaseMapRenderer | null = null;
     let packApplicationFrame: MapsWgpuApplicationFrameFactory | null = null;
     let retainedPointTransport: MapsRetainedPointTransport | null = null;
@@ -824,6 +827,13 @@ export function createMapsBrowserRuntime(
     }
     emitContextMenu(client);
   }
+  function applyBackground(runtime: MapsFlatRasterRuntime) {
+    try {
+      runtime.setBackgroundStyle(config.background ?? "");
+    } catch (error) {
+      config.onError?.(error);
+    }
+  }
   function applySky(runtime: MapsFlatRasterRuntime) {
     try {
       runtime.setSkyStyle(config.sky ?? "");
@@ -1009,11 +1019,16 @@ export function createMapsBrowserRuntime(
     const previousSprite = config.sprite;
     const previousRelief = config.relief;
     const previousSky = config.sky;
+    const previousBackground = config.background;
     config = { ...next, viewState: copyViewState(next.viewState) };
     source = runtimeTileSource(config);
     if (previousSprite !== config.sprite) synchronize?.();
     if (previousRelief !== config.relief) {
       configureRelief?.();
+      synchronize?.();
+    }
+    if (previousBackground !== config.background && activeRuntime) {
+      applyBackground(activeRuntime);
       synchronize?.();
     }
     if (previousSky !== config.sky && activeRuntime) {
@@ -1794,6 +1809,7 @@ function createFrameSynchronizer({
         const started = performance.now();
         if (relief()) currentRenderer.setReliefCamera?.(frame.camera);
         currentRenderer.setFrameSky?.(frame.sky ?? null);
+        currentRenderer.setFrameBackground?.(frame.background ?? null);
         const drawnTiles = currentRenderer.render(
           placements,
           frame.renderCamera,
@@ -2410,7 +2426,9 @@ function drawCanvasFrame(
     width: frame.camera.width + 2 * margin,
   };
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.fillStyle = MAP_BACKGROUND;
+  // A translucent background must not accumulate over the previous frame.
+  if (frame.background) context.clearRect(0, 0, viewport.width, viewport.height);
+  context.fillStyle = frame.background ? premultipliedCssColor(frame.background) : MAP_BACKGROUND;
   context.fillRect(0, 0, viewport.width, viewport.height);
   if (frame.sky) drawCanvasSky(context, frame.sky, viewport.width, margin);
 

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type {
   MapsRuntimeSequenceFixture,
   MapsRuntimeSequenceHandle,
@@ -961,6 +961,67 @@ test("teardown releases the Map View mid-camera and remounts a working runtime @
   expect(errors).toEqual([]);
 });
 
+for (const backend of ["wgpu", "canvas2d"] as const) {
+  test(`background-only style is a tile-free base with interactions (${backend}) @smoke`, async ({
+    page,
+  }) => {
+    if (backend === "canvas2d") {
+      await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+    }
+    await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-background");
+    const map = page.getByLabel("Maps Rust runtime acceptance");
+    const base = map.locator('canvas[data-flat-runtime="maps"]');
+    const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+    const viewState = page.getByTestId("maps-runtime-view-state");
+    await expect(map).toHaveAttribute("data-map-ready", "true");
+    await expect(base).toHaveAttribute("data-map-base-renderer", backend);
+    await expect(base).toHaveAttribute("data-map-base-tiles", "0");
+    await expect(overlay).toHaveAttribute("data-map-overlay-primitives", "7");
+    await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+    // Nothing to attribute: a source-free style carries no attribution.
+    await expect(map.locator(".mb-maps__attribution")).toHaveCount(0);
+
+    await expect.poll(() => cornerPixel(page, map)).toEqual([47, 125, 107]);
+
+    const bounds = (await overlay.boundingBox())!;
+    const point = await overlayPointPosition(page);
+    await page.mouse.click(bounds.x + point.x, bounds.y + point.y);
+    await expect(page.getByTestId("maps-runtime-feature-popup")).toHaveText("Selected Berlin");
+    await page.keyboard.press("Escape");
+
+    const before = await viewState.textContent();
+    await page.mouse.move(bounds.x + bounds.width * 0.3, bounds.y + bounds.height * 0.7);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width * 0.4, bounds.y + bounds.height * 0.6, { steps: 4 });
+    await page.mouse.up();
+    await expect(viewState).not.toHaveText(before!);
+    // The base keeps its color after the camera moved.
+    await expect.poll(() => cornerPixel(page, map)).toEqual([47, 125, 107]);
+  });
+}
+
+test("a translucent background does not accumulate across Canvas frames @smoke", async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-background-translucent");
+  const map = page.getByLabel("Maps Rust runtime acceptance");
+  const overlay = map.locator('canvas[data-map-overlay-runtime="maps"]');
+  await expect(map).toHaveAttribute("data-map-ready", "true");
+  await expect(map.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
+    "data-map-base-renderer",
+    "canvas2d",
+  );
+  const before = await cornerPixel(page, map);
+  expect(before).not.toEqual([47, 125, 107]);
+
+  const bounds = (await overlay.boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width * 0.3, bounds.y + bounds.height * 0.7);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width * 0.4, bounds.y + bounds.height * 0.6, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByTestId("maps-runtime-view-state")).not.toHaveText("");
+  expect(await cornerPixel(page, map)).toEqual(before);
+});
+
 function expectCamera(
   actual: { center: [number, number]; zoom: number },
   center: [number, number],
@@ -1173,4 +1234,21 @@ function isInsideAcceptanceBounds(viewState: ReturnType<typeof parseViewState>) 
     viewState.center[1] >= 34 &&
     viewState.center[1] <= 66
   );
+}
+
+/** The map's composited pixel near the corner the fixture leaves empty, element-relative. */
+async function cornerPixel(page: Page, map: Locator) {
+  const png = await map.screenshot();
+  return page.evaluate(async (encoded) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${encoded}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d")!;
+    context.drawImage(image, 0, 0);
+    const data = context.getImageData(12, image.height - 12, 1, 1).data;
+    return [data[0]!, data[1]!, data[2]!];
+  }, png.toString("base64"));
 }

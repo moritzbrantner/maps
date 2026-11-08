@@ -3,7 +3,7 @@ import type { MapsFlatRasterSky } from "./flat-runtime-wasm";
 /** Gradient stops along the horizon blend; MapLibre's `pow(1 - d, 2)` is not linear. */
 const SKY_GRADIENT_STOPS = 16;
 
-function cssColor([r, g, b, a]: readonly [number, number, number, number]) {
+export function premultipliedCssColor([r, g, b, a]: readonly [number, number, number, number]) {
   if (a === 0) return "rgba(0,0,0,0)";
   const channel = (value: number) => Math.round((value / a) * 255);
   return `rgba(${channel(r)},${channel(g)},${channel(b)},${a})`;
@@ -31,11 +31,11 @@ export function drawCanvasSky(
       const color = sky.skyColor.map(
         (channel, component) => channel * (1 - fade) + sky.horizonColor[component]! * fade,
       ) as unknown as readonly [number, number, number, number];
-      gradient.addColorStop(above, cssColor(color));
+      gradient.addColorStop(above, premultipliedCssColor(color));
     }
     context.fillStyle = gradient;
   } else {
-    context.fillStyle = cssColor(sky.skyColor);
+    context.fillStyle = premultipliedCssColor(sky.skyColor);
   }
   context.fillRect(0, 0, surfaceWidth, bottom);
 }

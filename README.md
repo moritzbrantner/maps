@@ -183,7 +183,9 @@ controller?.fitPoints(points, { padding: 72 });
 />
 ```
 
-Use `mapStyle={{ tiles: false }}` for a tile-free Map View. Pass tile templates in
+Use `mapStyle={{ tiles: false }}` for a tile-free Map View, or a MapLibre style with
+no sources and one `background` layer to paint it a constant `background-color`
+(expressions, zoom functions and other background paint are rejected). Pass tile templates in
 the explicit raster style, not as a MapLibre style URL. Replace MapLibre-specific
 `onMapReady` calls with `onMapControllerReady` when using the Maps runtime.
 The removed selector fails with a migration error for JavaScript callers; it does

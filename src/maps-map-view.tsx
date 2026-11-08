@@ -105,6 +105,10 @@ export function MapsMapView({
   const sprite = useMemo(() => resolveMapsRuntimeSprite(mapStyle), [mapStyle]);
   const relief = useMemo(() => resolveMapsRuntimeRelief(mapStyle), [mapStyle]);
   const sky = useMemo(() => resolveMapsRuntimeSky(mapStyle), [mapStyle]);
+  const background = useMemo(
+    () => (activeTileset ? undefined : resolveMapsRuntimeBackground(mapStyle)),
+    [activeTileset, mapStyle],
+  );
   const tileSource = useMemo(() => resolveTileLayerOptions(resolvedMapStyle), [resolvedMapStyle]);
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
@@ -748,6 +752,7 @@ export function MapsMapView({
           sprite={sprite}
           relief={relief}
           sky={sky}
+          background={background}
           tileLimits={tileLimits}
           createTileImageLoader={createTileImageLoader}
           mapStyle={resolvedMapStyle}
@@ -869,6 +874,66 @@ function resolveMapsRuntimeRelief(mapStyle: string | RasterMapStyle): MapsRelief
   };
 }
 
+type MapsStyleBackgroundLayer = {
+  id?: unknown;
+  layout?: Record<string, unknown>;
+  paint?: Record<string, unknown>;
+  type?: unknown;
+} & Record<string, unknown>;
+
+/**
+ * A background layer is accepted only as the sole layer of a source-free style, painting one
+ * literal color. Anything else stays MapLibre-owned: this is not style evaluation (#170).
+ */
+function assertConstantBackgroundOnlyStyle(style: {
+  layers?: readonly MapsStyleBackgroundLayer[];
+  sources?: Record<string, unknown>;
+  terrain?: unknown;
+}) {
+  const layers = style.layers ?? [];
+  if (layers.length !== 1 || Object.keys(style.sources ?? {}).length !== 0 || style.terrain) {
+    throw new Error(
+      'flatRuntime="maps" accepts a background layer only as the sole layer of a source-free style; styles combining it with other layers or sources remain MapLibre-owned.',
+    );
+  }
+  const layer = layers[0]!;
+  const allowedLayerKeys = new Set(["id", "layout", "metadata", "paint", "type"]);
+  const unsupportedKey = Object.keys(layer).find((key) => !allowedLayerKeys.has(key));
+  if (unsupportedKey !== undefined) {
+    throw new Error(
+      `flatRuntime="maps" does not support "${unsupportedKey}" on a background layer; it needs a constant background-color only.`,
+    );
+  }
+  const layoutEntries = Object.entries(layer.layout ?? {});
+  if (layoutEntries.some(([key, value]) => key !== "visibility" || value !== "visible")) {
+    throw new Error(
+      'flatRuntime="maps" only draws a visible background layer; other background layout remains MapLibre-owned.',
+    );
+  }
+  const paint = layer.paint ?? {};
+  const unsupportedPaint = Object.keys(paint).find((key) => key !== "background-color");
+  if (unsupportedPaint !== undefined) {
+    throw new Error(
+      `flatRuntime="maps" does not support background paint property "${unsupportedPaint}"; only a constant background-color is drawn.`,
+    );
+  }
+  const color = paint["background-color"];
+  if (color !== undefined && typeof color !== "string") {
+    throw new Error(
+      'flatRuntime="maps" requires background-color to be a literal color; expressions and zoom functions remain MapLibre-owned.',
+    );
+  }
+}
+
+/** The constant color of an accepted background-only style; undefined for any other style. */
+function resolveMapsRuntimeBackground(mapStyle: string | RasterMapStyle): string | undefined {
+  if (typeof mapStyle === "string" || !("version" in mapStyle)) return undefined;
+  const layers = (mapStyle as unknown as { layers?: readonly MapsStyleBackgroundLayer[] }).layers;
+  const layer = layers?.[0];
+  if (layers?.length !== 1 || layer?.type !== "background") return undefined;
+  return JSON.stringify({ "background-color": layer.paint?.["background-color"] });
+}
+
 function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapStyle {
   if (typeof mapStyle === "string") {
     throw new Error(
@@ -884,6 +949,11 @@ function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapSt
     layers?: readonly { source?: unknown; type?: unknown }[];
     sources?: Record<string, unknown>;
   };
+  if ((style.layers ?? []).some((layer) => layer.type === "background")) {
+    assertConstantBackgroundOnlyStyle(style as Parameters<typeof assertConstantBackgroundOnlyStyle>[0]);
+    return mapStyle;
+  }
+
   // Relief (#324) draws from `raster-dem` sources through `resolveMapsRuntimeRelief`.
   const layers = (style.layers ?? []).filter((layer) => layer.type !== "hillshade");
   const sources = Object.fromEntries(

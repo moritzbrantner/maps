@@ -17,6 +17,11 @@
 
 ### Minor Changes
 
+- `flatRuntime="maps"` accepts a MapLibre style with no sources and one
+  constant-`background-color` `background` layer as a tile-free base, drawn on
+  WebGPU and the Canvas fallback. Expressions, zoom functions, other background
+  paint and extra layers fail closed with an explicit error.
+
 - Patterned GeoJSON fills and lines draw under a pitched camera and on the Canvas fallback
   (#350). Under pitch the projected path samples the sprite perspective-correct: `fill-pattern`
   through the fill's stencil with MapLibre's per-tile outline, `line-pattern` on the map plane

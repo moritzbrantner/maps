@@ -68,6 +68,10 @@ async function bootstrap() {
     content = <MapsRuntimeAcceptance sequences />;
   } else if (acceptanceMode === "maps-runtime-sequences-uncontrolled") {
     content = <MapsRuntimeAcceptance cameraOwner="uncontrolled" sequences />;
+  } else if (acceptanceMode === "maps-runtime-background") {
+    content = <MapsRuntimeAcceptance background="opaque" />;
+  } else if (acceptanceMode === "maps-runtime-background-translucent") {
+    content = <MapsRuntimeAcceptance background="translucent" />;
   } else if (acceptanceMode === "maps-runtime-wgpu-strokes") {
     content = <MapsRuntimeAcceptance includePolygon={false} />;
   } else if (acceptanceMode === "maps-runtime-raster-fetch") {

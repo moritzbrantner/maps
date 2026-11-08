@@ -79,6 +79,8 @@ export type MapsFlatRasterFrame = {
   requests: MapsRasterTileId[];
   /** The sky band, when the camera has the horizon in view. */
   sky?: MapsFlatRasterSky | null;
+  /** Premultiplied RGBA of a background-only style; absent keeps the surface default. */
+  background?: readonly [r: number, g: number, b: number, a: number] | null;
   /**
    * Render-surface geometry. With `overscan`, the margin holds map content, so a pure
    * screen translation of this frame is a valid presentation of a panned camera.
@@ -135,6 +137,8 @@ export type MapsFlatRasterRuntime = {
   rotateAbout(deltaBearing: number, x: number, y: number): void;
   /** The style's `sky` as JSON (`{"sky": ...}`), or an empty string for none. */
   setSkyStyle(style: string): void;
+  /** The constant `background-color` as JSON, or an empty string for the surface default. */
+  setBackgroundStyle(style: string): void;
   setViewState(viewState: MapViewState): void;
   unproject(x: number, y: number): [longitude: number, latitude: number];
   /** Current camera zoom, without planning a frame. */
@@ -157,6 +161,8 @@ type MapsFlatRasterWasmRuntime = {
   /** Packed frame; layout documented with `pack_frame_plan` in maps-wasm. */
   framePacked(): Float64Array;
   setSkyStyle(style: string): void;
+  /** The constant `background-color` as JSON, or an empty string for the surface default. */
+  setBackgroundStyle(style: string): void;
   free?: () => void;
   markFailed(z: number, x: number, y: number): void;
   markLoaded(z: number, x: number, y: number): void;
@@ -226,6 +232,10 @@ export async function loadMapsFlatRasterRuntime(
       assertLive(disposed);
       return decodePackedRasterFrame(runtime.framePacked());
     },
+    setBackgroundStyle(style) {
+      assertLive(disposed);
+      runtime.setBackgroundStyle(style);
+    },
     setSkyStyle(style) {
       assertLive(disposed);
       runtime.setSkyStyle(style);
@@ -289,7 +299,7 @@ export async function loadMapsFlatRasterRuntime(
 
 // Mirrors PACKED_FRAME_HEADER_LENGTH / PACKED_PLACEMENT_STRIDE / PACKED_TILE_STRIDE
 // in crates/maps-wasm/src/engine_scenario.rs.
-const PACKED_FRAME_HEADER_LENGTH = 48;
+const PACKED_FRAME_HEADER_LENGTH = 53;
 const PACKED_PLACEMENT_STRIDE = 12;
 const PACKED_TILE_STRIDE = 3;
 
@@ -368,6 +378,7 @@ export function decodePackedRasterFrame(packed: Float64Array): MapsFlatRasterFra
             skyColor: [packed[40]!, packed[41]!, packed[42]!, packed[43]!],
           }
         : null,
+    background: packed[48] === 1 ? [packed[49]!, packed[50]!, packed[51]!, packed[52]!] : null,
     requests: tiles(0, requestCount),
     cancellations: tiles(requestCount, cancellationCount),
     evictions: tiles(requestCount + cancellationCount, evictionCount),

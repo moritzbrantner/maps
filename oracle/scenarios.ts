@@ -44,7 +44,8 @@ export type Unsupported = { issue: number; reason: string };
  * - `vector`: Shortbread MVT built from `oracle/data/alpine-foreland.json`
  *   (`oracle/vector-tiles.ts`), styled by the Maps class palette: `tileset` on Maps and the
  *   equivalent data-driven MapLibre style on MapLibre;
- * - `style`: a MapLibre-only style built by the fixture (unsupported scenarios).
+ * - `style`: a style built by the fixture: MapLibre-only when unsupported, otherwise both
+ *   runtimes read the same object (relief, background-only).
  */
 export type Basemap = "geographic" | "zoom-tinted" | "vector" | "style";
 
@@ -62,6 +63,8 @@ export type Scenario = {
   steps: Step[];
   knownGaps: KnownGap[];
   unsupported?: Unsupported;
+  /** The basemap has no tiles at all, so readiness cannot wait for any (background-only). */
+  tileFree?: boolean;
   /** The MapLibre style's `sky`, for raster basemaps. */
   sky?: Record<string, unknown>;
 };
@@ -535,6 +538,33 @@ export const scenarios: Scenario[] = [
       { at: RHINE_POINT, kind: "click", label: "select the hatched Rhine" },
       { by: [-120, 60], kind: "pan", label: "drag pan" },
     ],
+  },
+  {
+    basemap: "style",
+    camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
+    capability: "a constant background-only style as a tile-free base: pointer input over it",
+    knownGaps: [],
+    name: "background-only",
+    origin: "church-atlas#8 background-only base (#170, #232)",
+    tileFree: true,
+    size: MAP_SIZE,
+    steps: [
+      { at: DEAD_SEA_SCROLLS, kind: "hover", label: "hover the source point" },
+      { at: DEAD_SEA_SCROLLS, kind: "click", label: "select the source point" },
+      { at: [37.2, 30.4], kind: "click", label: "click empty base (clears selection)" },
+      { by: [-140, 90], kind: "pan", label: "drag pan" },
+    ],
+  },
+  {
+    basemap: "style",
+    camera: { center: DEAD_SEA_SCROLLS, zoom: 5 },
+    capability: "a translucent constant background over the page behind the map",
+    knownGaps: [],
+    name: "background-only-translucent",
+    origin: "church-atlas#8 background-only base (#170, #232)",
+    tileFree: true,
+    size: MAP_SIZE,
+    steps: [],
   },
   {
     basemap: "style",

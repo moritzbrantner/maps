@@ -5,6 +5,7 @@
 //! React, MapLibre, or JavaScript runtime concerns.
 
 mod aggregation;
+mod background;
 mod bounded_runtime;
 mod engine;
 mod flat_runtime;
@@ -29,6 +30,7 @@ pub use aggregation::{
     PointAggregationIndex, PointAggregationOptions, ViewportAggregation, ViewportAggregationQuery,
     VisibleAggregationSummary,
 };
+pub use background::parse_background_color;
 pub use bounded_runtime::BoundedFlatRasterRuntime;
 pub use engine::{
     GeographicCoordinate, MapCamera, MapViewportBounds, ScreenCoordinate, TileId, ViewportSize,

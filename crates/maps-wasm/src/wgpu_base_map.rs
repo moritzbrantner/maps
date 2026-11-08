@@ -3,7 +3,7 @@ use super::wgpu_geometry::{
     ApplicationPatterns, GeoJsonTileGrid, GroundPerspective, LinePatternMeshCache,
     POLYGON_COVER_VERTEX_COUNT, PolygonDraw, RasterAlignment, RasterTileKey, SurfaceClip,
     WgpuApplicationFrame, WgpuRasterTilePlacement, append_tile_vertices, camera_uniform_bytes,
-    parse_frame_sky, prepare_application_geometry, unpack_tile_draws,
+    parse_frame_background, parse_frame_sky, prepare_application_geometry, unpack_tile_draws,
 };
 use super::wgpu_mipmaps::{MipmapGenerator, mip_level_count};
 
@@ -242,6 +242,8 @@ pub struct MapsWgpuBaseMapRenderer {
     sky: SkyGpu,
     /// The band above the horizon of the next frame; see `setFrameSky`.
     frame_sky: Option<SkyPass>,
+    /// The next frame's constant background; see `setFrameBackground`.
+    frame_background: Option<[f32; 4]>,
     device_lost: Arc<AtomicBool>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -1128,6 +1130,7 @@ impl MapsWgpuBaseMapRenderer {
             surface_clear_alpha,
             sky,
             frame_sky: None,
+            frame_background: None,
             device_lost,
             camera_buffer,
             camera_bind_group,
@@ -1224,6 +1227,14 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = setFrameSky)]
     pub fn set_frame_sky(&mut self, values: &[f32]) -> Result<(), JsValue> {
         self.frame_sky = parse_frame_sky(values).map_err(JsValue::from_str)?;
+        Ok(())
+    }
+
+    /// The next frame's premultiplied background RGBA, from the frame plan; empty for the
+    /// surface default.
+    #[wasm_bindgen(js_name = setFrameBackground)]
+    pub fn set_frame_background(&mut self, values: &[f32]) -> Result<(), JsValue> {
+        self.frame_background = parse_frame_background(values).map_err(JsValue::from_str)?;
         Ok(())
     }
 
@@ -2027,12 +2038,20 @@ impl MapsWgpuBaseMapRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        let background = wgpu::Color {
-            r: MAP_BACKGROUND_RED,
-            g: MAP_BACKGROUND_GREEN,
-            b: MAP_BACKGROUND_BLUE,
-            a: self.surface_clear_alpha,
-        };
+        let background = self.frame_background.map_or(
+            wgpu::Color {
+                r: MAP_BACKGROUND_RED,
+                g: MAP_BACKGROUND_GREEN,
+                b: MAP_BACKGROUND_BLUE,
+                a: self.surface_clear_alpha,
+            },
+            |[r, g, b, a]| wgpu::Color {
+                r: f64::from(r),
+                g: f64::from(g),
+                b: f64::from(b),
+                a: f64::from(a),
+            },
+        );
         let scissor = clip.scissor(self.config.width, self.config.height);
         let mut drawn_tiles = 0;
         let mut draw_calls = 0;
