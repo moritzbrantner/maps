@@ -2,7 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function expectPaintedEngineTiles(page: Page) {
   const base = page.locator('canvas[data-flat-runtime="maps"]');
-  await expect(base).toHaveAttribute("data-map-source-state", "ready");
+  // Cold wasm + PMTiles startup can exceed the 5s default on shared runners.
+  await expect(base).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
   // On WebGPU the vector basemap is GPU-retained, so the raster-only
   // data-map-base-tiles counter legitimately remains zero.
   await expect
