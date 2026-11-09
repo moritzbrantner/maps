@@ -996,7 +996,20 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     await page.mouse.up();
     await expect(viewState).not.toHaveText(before!);
     // The base keeps its color after the camera moved.
-    await expect.poll(() => cornerPixel(page, map)).toEqual([47, 125, 107]);
+    try {
+      await expect.poll(() => cornerPixel(page, map)).toEqual([47, 125, 107]);
+    } catch (error) {
+      const composited = await cornerPixel(page, map);
+      const canvas2d = await map.locator('canvas[data-map-base-fallback="canvas2d"]').evaluate((element) => {
+        const canvas = element as HTMLCanvasElement;
+        const context = canvas.getContext("2d")!;
+        const pixel = context.getImageData(12, canvas.height - 12, 1, 1).data;
+        return [...pixel];
+      });
+      throw new Error(`Background after pan: map=${composited}, Canvas2D=${canvas2d}`, {
+        cause: error,
+      });
+    }
   });
 }
 
