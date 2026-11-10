@@ -88,7 +88,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Points and clusters | Yes | Yes | In progress | Circle instancing landed in #153; finish packed/retained application transport under #154/#60 with representative density evidence. Labeled points are GPU-retained like the others; camera frames project only the labeled points, for the Canvas label pass (#204). Deterministic work contracts (#189, `performance:work`) hold camera pan/zoom/bearing/pitch at 1k/10k/100k points to zero point encoding and upload, and in-place updates to work linear in the changed points only. Cluster layers still use the projected path. |
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
 | GeoJSON polygon fills/strokes and holes | Yes | Yes (#161: WebGPU matches the Canvas oracle) | In progress | Polygons are GPU-retained (#196): Rust lowers rings once and camera frames upload nothing. Frames that mix polygons, lines and points keep them retained as point and shape groups in one painter order (#195). Deterministic work contracts (#189, `performance:work`) hold camera pan and zoom/bearing at 100/1k/10k polygons to zero geometry rebuilds and uploads, in-place shape updates (`updateRetainedPolygons`) to work linear in the changed shapes only, and dataset replacement to declared linear work. |
-| Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. |
+| Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. |
 | Heat/scalar surfaces | Existing product capability | Existing correctness coverage | Needs first-party performance pass | Integrate through the common rendering/runtime evidence path before calling the first-party path complete. |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. |
@@ -179,3 +179,51 @@ Follow-up executable repair `4b8eda5eca95196fafba56b4ea61f998544ece36`:
   `2440c4b5e2cc8bb8992adb364e2961c21eb48e9b2bf34dfc475cb600e8945971`.
   The existing #268.Q1 decision remains open; no ceiling was changed and the
   feature is not declared complete or mergeable.
+
+### Mixed-layer Map View composition (#170)
+
+`mixed-layer-journey-v1` profiles the public `flatRuntime="maps"` acceptance composition:
+raster base, clusters, flow, polygon, points and anchored Map UI. See
+[the evidence contract](engine-evidence.md#mixed-layer-journey-evidence-170). This is
+Fast *evidence*, not a Fast pass: no reference or parent revision runs the journey, so
+comparison and Moonlight are unavailable. The PRD stays open for phase D.
+
+Executed at `3aed78df2c2ab63625871798a73d000683779328` plus this change. WASM SHA-256 was
+`9e742de90aeb7a5f859ede2fe500b3d726c61b070cbed708282aef31849421a8`. The run used Chromium
+headless shell 158.0.8127.18, Playwright 1.65.0, Node 24.19.0 and the pinned
+runtime-profiler at `6d2c92e`, on Linux x64 (AMD Ryzen 7 5700X, WSL2).
+
+- **Invalidation counts.** The Chromium test passed 3/3 repeats on WebGPU and Canvas:
+  - An idle page and five unrelated React commits did zero work.
+  - Each hover change was exactly one overlay repaint: one WebGPU frame, or one Canvas
+    clear. It made no frame plan, projection, aggregation, base redraw, retained write
+    or upload.
+  - A camera-only change made one projection batch (9 coordinates) and one aggregation
+    query, with zero retained writes, evictions or released resources.
+
+  Before the fixture's layer inputs were made identity-stable, each unrelated commit cost
+  one overlay repaint and re-projected one to two coordinates. The inline `getFeatureId`
+  callbacks and a fresh points array caused it. Map Layers re-prepare inputs whose
+  identity changes, by design.
+- **Journey profile (Canvas fallback; the pinned collector has no WebGPU flags).**
+
+  | Phase | Work | rAF interval p95 | Long tasks |
+  | --- | --- | ---: | ---: |
+  | Camera | 94 frame plans, 35 projection batches (297 coordinates), 35 aggregation queries, 92 base and 35 overlay redraws | 16.8 ms | 0 |
+  | Hover | 11 overlay redraws, nothing else | 16.7 ms | 0 |
+  | Select | 9 overlay redraws, nothing else | 16.8 ms | 0 |
+  | Unrelated commits (20) | none | 16.8 ms | 0 |
+  | Teardown (3 cycles) | 3 runtimes and 3 aggregation indexes released, then rebuilt on remount | 50 ms | 0 |
+
+  - **Pointer → interaction latency (9 picks):** median 16.1 ms, maximum 20.1 ms.
+  - **Trace:** the profiler recorded 7 long tasks (949 ms total, longest 487 ms). They
+    fall outside the journey phases: page load and the forced GCs for heap sampling.
+  - **Measured crossings (≥ 100 µs):** frame plan 107 (25.7 ms total), aggregation query
+    22 (4.5 ms) and projection batch 9 (0.9 ms).
+  - **JS heap after GC:** 46.6 MB when ready and 47.5 MB after interaction. Across three
+    unmounts it stayed at 47.4 to 47.5 MB, and it was 47.6 MB after remount.
+  - **Unavailable:** GPU, WASM linear and total browser memory, and GPU completion time.
+
+  Bundle manifest SHA-256:
+  `8de3ff5b5312acf80a1a0835019ed06b82d45d818d9b7301c8adf0cd77367fa4`.
+

@@ -101,6 +101,59 @@ This command expects an already built WASM package, the pinned runtime-profiler 
 
 The candidate emits ordinary User Timing measures named `runtime-profiler:js-to-wasm:camera-world-pan` around scenario serialization, the WASM call and returned observation. These describe the inclusive instrumented section, not isolated marshaling/copying overhead. Do not infer a separate WASM-to-JavaScript cost from it. Raw trace events remain artifacts; bounded long-task/hot-path/boundary summaries come from runtime-profiler. Trace durations include loading and fixture execution, while the explicit measure identifies only the scenario boundary section. React render summaries, source-file/line attribution, worker/GPU work and browser memory remain outside this shipped collector's scope and unavailable here. #76 therefore remains open for its richer attribution requirements.
 
+## Mixed-layer journey evidence (#170)
+
+`runtime-profiler-scenarios/mixed-layer-journey-browser-v1.yaml` captures the canonical
+`mixed-layer-journey-v1` through the same `browser-chromium` collector. Its Maps-owned journey,
+`scripts/profile-mixed-layer-journey.ts`, builds the existing acceptance page for production,
+serves it with the built `dist/wasm` package, and drives the public Map View. It writes a
+Maps observation (`maps.mixed-layer-journey-observation/v1`) next to the immutable bundle.
+`verify:engine-runtime-evidence` runs it as `verify:engine-mixed-layer-evidence`, under
+`mixed-layer/` in the existing artifact:
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-mixed-layer-evidence
+```
+
+The counters in `e2e/helpers/mixed-layer-work.ts` wrap the prototypes of the WASM classes
+the Map View already loaded. They count actual crossings, not React renders or mocks:
+
+- frame plans, projection batches and coordinates, and aggregation queries;
+- WebGPU frame submissions and their packed bytes;
+- retained point and shape writes, updates, evictions and their bytes;
+- tile uploads;
+- released runtimes, renderers and aggregation indexes;
+- Canvas base and overlay redraws.
+
+The profiler journey also emits each crossing as a `runtime-profiler:js-to-wasm:<label>`
+measure. Chromium coarsens `performance.now()` to 100 µs on this page and records
+zero-length measures as instant events, which the pinned collector does not aggregate.
+The profiler's marker occurrences therefore count only crossings of at least one timer
+tick. The Maps observation counts every crossing.
+
+The same counters back `e2e/maps-runtime.spec.ts` on WebGPU and Canvas. That test asserts
+four invariants:
+
+- an idle page does no work;
+- a camera-only change keeps every prepared source, retained group and runtime resource;
+- each hover change repaints only the application overlay (no frame plan, projection,
+  aggregation, base redraw or upload);
+- unrelated React commits reach no runtime, renderer or draw at all.
+
+Each repaint is one WebGPU frame or one Canvas clear.
+
+Limits:
+
+- The pinned collector launches Chromium without WebGPU flags, so this capture measures
+  the Canvas fallback. WebGPU work counts come from the Chromium test, not from a
+  profiled trace.
+- Trace long tasks include page load and the journey's forced GCs for heap sampling.
+  The in-page phase observer reports long tasks per phase separately.
+- GPU memory, WASM linear memory and total browser memory are unavailable.
+- No reference implementation or parent revision runs this journey, so `evaluation.json`
+  records comparison and Moonlight as `unavailable`. This evidence is descriptive, not a
+  Fast verdict.
+
 ## Comparability
 
 Runtime evidence may only be compared when runtime-profiler considers it strictly comparable. Missing or incomparable evidence is not reinterpreted as success by Maps or Moonlight.

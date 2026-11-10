@@ -30,6 +30,13 @@
       "runtimePhases": ["tile-decode-paint", "warm-pan-zoom", "frame-presentation"]
     },
     {
+      "id": "mixed-layer-journey-v1",
+      "family": "map-view-composition",
+      "reference": "none",
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": ["camera", "hover", "select", "unrelated-commits", "teardown"]
+    },
+    {
       "id": "temporal-geojson-indexed-playback-v1",
       "family": "temporal-kernel",
       "reference": "legacy-kernel-observations-at-748166c",

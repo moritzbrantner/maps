@@ -41,6 +41,12 @@ run("bun", ["run", "verify:engine-browser-evidence"], {
   label: "Chromium trace evidence and strict comparability",
 });
 
+run("bun", ["run", "verify:engine-mixed-layer-evidence"], {
+  cwd: rootDir,
+  env: { ...process.env, MAPS_MIXED_LAYER_EVIDENCE_DIR: path.join(evidenceRoot, "mixed-layer") },
+  label: "mixed-layer journey trace and Maps work observations",
+});
+
 const score = run(runtimeProfiler, [
   "score",
   "--reference",

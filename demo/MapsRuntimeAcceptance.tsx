@@ -8,6 +8,7 @@ import {
   MapControls,
   MapView,
   PointLayer,
+  type AggregatedMapFeature,
   type MapBounds,
   type MapSurfaceController,
   type MapViewState,
@@ -97,6 +98,21 @@ const ACCEPTANCE_POLYGONS = {
   replaced: acceptancePolygon("acceptance-zone-b", [14, 52, 14.6, 52.4]),
 };
 
+/**
+ * Layer inputs keep their identity across unrelated commits: Map Layers re-prepare an input
+ * whose identity changes, so the Fast evidence (#170) can tell unrelated commits apart.
+ */
+const ACCEPTANCE_POINTS = {
+  moved: [ACCEPTANCE_POINT_DATA.moved],
+  original: [ACCEPTANCE_POINT_DATA.original],
+  replaced: [ACCEPTANCE_POINT_DATA.replaced],
+};
+const acceptanceFlowFeatureId = () => "acceptance-flow";
+const acceptanceClusterFeatureId = (feature: AggregatedMapFeature) =>
+  feature.kind === "cluster"
+    ? "acceptance-hamburg-cluster"
+    : `acceptance-hamburg-point:${feature.point.id}`;
+
 export type MapsRuntimeAcceptanceLayerId = "cluster" | "flow" | "point" | "polygon";
 
 /** Everything the composition sequences change on one mounted acceptance Map View. */
@@ -115,6 +131,11 @@ export type MapsRuntimeSequenceFixture = {
 
 /** Browser-only handle: sequences drive the public Map View as an application would. */
 export type MapsRuntimeSequenceHandle = {
+  /**
+   * Commits React state the Map Layers do not depend on. The whole acceptance tree re-renders
+   * (fresh inline callbacks and arrays included), as an application's unrelated UI would.
+   */
+  commitUnrelated: () => void;
   controller: () => MapSurfaceController | null;
   /** Ordered `onMapControllerReady` and `onViewStateChange` deliveries. */
   events: string[];
@@ -170,10 +191,12 @@ export function MapsRuntimeAcceptance({
   const [pointSelectedId, setPointSelectedId] = useState<string | null>(null);
   const [zoneSelectedId, setZoneSelectedId] = useState<string | null>("acceptance-zone");
   const [lastInteraction, setLastInteraction] = useState("none");
+  const [unrelatedCommits, setUnrelatedCommits] = useState(0);
 
   useEffect(() => {
     if (!sequences) return;
     window.mapsRuntimeSequences = {
+      commitUnrelated: () => flushSync(() => setUnrelatedCommits((count) => count + 1)),
       controller: () => controllerRef.current,
       events,
       // Synchronous commits let a sequence interleave React updates with camera commands.
@@ -198,11 +221,7 @@ export function MapsRuntimeAcceptance({
     cluster: (
       <ClusterLayer
         clusterRadius={48}
-        getFeatureId={(feature) =>
-          feature.kind === "cluster"
-            ? "acceptance-hamburg-cluster"
-            : `acceptance-hamburg-point:${feature.point.id}`
-        }
+        getFeatureId={acceptanceClusterFeatureId}
         key="cluster"
         onSelectedFeatureIdChange={(featureId, context) => {
           setClusterSelectedId(featureId);
@@ -230,7 +249,7 @@ export function MapsRuntimeAcceptance({
       <FlowLayer
         flowColor="#0f766e"
         flows={fixture.flowData === "replaced" ? REPLACED_FLOWS : ACCEPTANCE_FLOWS}
-        getFeatureId={() => "acceptance-flow"}
+        getFeatureId={acceptanceFlowFeatureId}
         hoveredFeatureId={flowHoveredId}
         key="flow"
         maxWidth={8}
@@ -269,7 +288,7 @@ export function MapsRuntimeAcceptance({
         }}
         pointColor="#dc2626"
         pointRadius={8}
-        points={[ACCEPTANCE_POINT_DATA[fixture.pointData]]}
+        points={ACCEPTANCE_POINTS[fixture.pointData]}
         renderFeatureContextMenu={(feature, context) => (
           <button type="button">
             Context {feature.point.label} at {context.coordinates[0].toFixed(3)},
@@ -364,6 +383,7 @@ export function MapsRuntimeAcceptance({
             </output>
             <output data-testid="maps-runtime-interaction">{lastInteraction}</output>
             <output data-testid="maps-runtime-cluster-summary">{clusterSummary}</output>
+            <output data-testid="maps-runtime-unrelated-commits">{unrelatedCommits}</output>
           </MapControls>
         </MapView>
       ) : null}

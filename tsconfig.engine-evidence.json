@@ -20,6 +20,8 @@
     "scripts/npm-pack-result.test.ts",
     "scripts/profile-engine-camera-journey.ts",
     "scripts/verify-engine-browser-evidence.ts",
+    "scripts/profile-mixed-layer-journey.ts",
+    "scripts/verify-engine-mixed-layer-evidence.ts",
     "scripts/profile-tileset-source-journey.ts"
   ]
 }
