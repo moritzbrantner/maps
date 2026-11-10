@@ -30,6 +30,11 @@ export type MapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   tilesetStyle?: MapsVectorBasemapStyle;
   /** MapLibre `circle`/`symbol` layers drawn over the Tileset, supported by flatRuntime="maps" only. */
   tilesetLayers?: MapsTilesetLayers;
+  /**
+   * Opt in to keeping downloaded Tileset bytes in browser Cache Storage across sessions
+   * (flatRuntime="maps" only). Off by default; `budgetBytes` targets about 250 MiB.
+   */
+  tilePersistence?: boolean | import("./maps-tile-persistence").MapsTilePersistenceOptions;
   /** Existing Rust request/decoded-resource budgets, shared across source revisions. */
   tileLimits?: import("./flat-runtime-wasm").MapsFlatRasterRuntimeConfig["limits"];
 };

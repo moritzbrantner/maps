@@ -9,11 +9,50 @@ import {
 import type { MapsRasterTileId } from "./flat-runtime-wasm";
 import type { MapsTileset } from "./maps-tileset";
 
+/** HTTP cache metadata of the response that carried a tile; consumed by opt-in persistence only. */
+export type MapsTileHttpMetadata = {
+  cacheControl: string | null;
+  etag: string | null;
+  lastModified: string | null;
+  expires: string | null;
+  age: string | null;
+  vary: string | null;
+};
+
+/** A stored copy's validators, sent as a conditional request where the transport can. */
+export type MapsTileValidator = { etag?: string | null; lastModified?: string | null };
+
+/** `bytes: null` is an HTTP 304 answer to the supplied validator. */
+export type MapsTilesetTileRead = { bytes: Uint8Array | null; http: MapsTileHttpMetadata };
+
 /** Browser I/O only. Rust owns tile coordinates, scheduling, source identity and decoded retention. */
 export type MapsTilesetTileReader = {
   fetchTile(tile: MapsRasterTileId, signal: AbortSignal): Promise<Uint8Array>;
+  /** `fetchTile` plus the response's cache metadata. PMTiles ignores `validator`. */
+  readTile(
+    tile: MapsRasterTileId,
+    signal: AbortSignal,
+    validator?: MapsTileValidator,
+  ): Promise<MapsTilesetTileRead>;
+  /**
+   * The Map View reports whether returned bytes decoded as a tile. Only a persistent reader
+   * acts on it: accepted bytes may be stored. Rejected bytes that came from storage are
+   * discarded and the call returns true, so the caller can read the tile again from the network.
+   */
+  settleTile?(bytes: Uint8Array, accepted: boolean): boolean;
   dispose(): void;
 };
+
+function httpMetadata(headers: Headers): MapsTileHttpMetadata {
+  return {
+    cacheControl: headers.get("Cache-Control"),
+    etag: headers.get("ETag"),
+    lastModified: headers.get("Last-Modified"),
+    expires: headers.get("Expires"),
+    age: headers.get("Age"),
+    vary: headers.get("Vary"),
+  };
+}
 
 const MAX_RANGE_BYTES = 8 * 1024 * 1024;
 const MAX_DECODED_TILE_BYTES = 16 * 1024 * 1024;
@@ -25,7 +64,12 @@ function archiveError(source: MapsTileset, message: string): Error {
 }
 
 /** Strict HTTP 206 adapter. Never download an entire archive when a host ignores Range. */
-function createRangeSource(source: MapsTileset, url: string, lifetime: AbortSignal): Source {
+function createRangeSource(
+  source: MapsTileset,
+  url: string,
+  lifetime: AbortSignal,
+  onResponse: (http: MapsTileHttpMetadata) => void,
+): Source {
   let archiveLength: number | null = null;
   return {
     getKey: () => url,
@@ -90,6 +134,7 @@ function createRangeSource(source: MapsTileset, url: string, lifetime: AbortSign
         throw archiveError(source, "byte Range body length differs from Content-Range");
       }
       archiveLength = total;
+      onResponse(httpMetadata(response.headers));
       return { data: bytes, etag: responseEtag };
     },
   };
@@ -172,37 +217,57 @@ export function createMapsTilesetTileReader(source: MapsTileset): MapsTilesetTil
   const lifetime = new AbortController();
   if (source.transport.kind === "xyz") {
     const { urlTemplate } = source.transport;
-    return {
-      async fetchTile(tile, signal) {
-        lifetime.signal.throwIfAborted();
-        const url = urlTemplate
-          .replace("{z}", String(tile.z))
-          .replace("{x}", String(tile.x))
-          .replace("{y}", String(tile.y));
-        const combined = AbortSignal.any([signal, lifetime.signal]);
-        const response = await fetch(url, {
+    const readTile: MapsTilesetTileReader["readTile"] = async (tile, signal, validator) => {
+      lifetime.signal.throwIfAborted();
+      const url = urlTemplate
+        .replace("{z}", String(tile.z))
+        .replace("{x}", String(tile.x))
+        .replace("{y}", String(tile.y));
+      const combined = AbortSignal.any([signal, lifetime.signal]);
+      const accept = { Accept: "application/vnd.mapbox-vector-tile,application/x-protobuf" };
+      const conditional = validator?.etag
+        ? { "If-None-Match": validator.etag }
+        : validator?.lastModified
+          ? { "If-Modified-Since": validator.lastModified }
+          : null;
+      let response: Response;
+      try {
+        response = await fetch(url, {
           signal: combined,
-          headers: { Accept: "application/vnd.mapbox-vector-tile,application/x-protobuf" },
+          headers: conditional ? { ...accept, ...conditional } : accept,
         });
-        if (!response.ok) {
-          throw new Error(
-            `Maps Tileset ${source.sourceId}: tile ${tile.key} HTTP ${response.status}`,
-          );
-        }
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        combined.throwIfAborted();
-        if (!bytes.length) {
-          throw new Error(`Maps Tileset ${source.sourceId}: empty tile ${tile.key}`);
-        }
-        return bytes;
-      },
+      } catch (error) {
+        if (!conditional || combined.aborted) throw error;
+        // A cross-origin host may refuse the conditional header's preflight; ask plainly.
+        response = await fetch(url, { signal: combined, headers: accept });
+      }
+      if (conditional && response.status === 304) {
+        return { bytes: null, http: httpMetadata(response.headers) };
+      }
+      if (!response.ok) {
+        throw new Error(`Maps Tileset ${source.sourceId}: tile ${tile.key} HTTP ${response.status}`);
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      combined.throwIfAborted();
+      if (!bytes.length) {
+        throw new Error(`Maps Tileset ${source.sourceId}: empty tile ${tile.key}`);
+      }
+      return { bytes, http: httpMetadata(response.headers) };
+    };
+    return {
+      readTile,
+      fetchTile: async (tile, signal) => (await readTile(tile, signal)).bytes!,
       dispose: () => lifetime.abort(),
     };
   }
 
   const cache = new SharedPromiseCache(32); // Header/directory entries only, never tile contents.
+  // Tiles share the archive's cache directives: the latest range response speaks for them.
+  let archiveHttp = httpMetadata(new Headers());
   const pmtiles = new PMTiles(
-    createRangeSource(source, source.transport.url, lifetime.signal),
+    createRangeSource(source, source.transport.url, lifetime.signal, (http) => {
+      archiveHttp = http;
+    }),
     cache,
   );
   let validated: Promise<void> | null = null;
@@ -217,29 +282,31 @@ export function createMapsTilesetTileReader(source: MapsTileset): MapsTilesetTil
     })();
     return validated;
   }
-  return {
-    async fetchTile(tile, signal) {
-      try {
-        lifetime.signal.throwIfAborted();
-        signal.throwIfAborted();
-        await ensureValidated();
-        const combined = AbortSignal.any([signal, lifetime.signal]);
-        combined.throwIfAborted();
-        const result = await pmtiles.getZxy(tile.z, tile.x, tile.y, combined);
-        combined.throwIfAborted();
-        if (!result) throw archiveError(source, `missing tile ${tile.key}`);
-        const bytes = new Uint8Array(result.data);
-        if (!bytes.length || bytes.length > MAX_DECODED_TILE_BYTES) {
-          throw archiveError(source, `empty or oversized decoded MVT tile ${tile.key}`);
-        }
-        return bytes;
-      } catch (error) {
-        if (signal.aborted || lifetime.signal.aborted) throw error;
-        if (error instanceof Error && error.message.startsWith(`Maps Tileset ${source.sourceId}:`))
-          throw error;
-        throw archiveError(source, error instanceof Error ? error.message : String(error));
+  const readTile: MapsTilesetTileReader["readTile"] = async (tile, signal) => {
+    try {
+      lifetime.signal.throwIfAborted();
+      signal.throwIfAborted();
+      await ensureValidated();
+      const combined = AbortSignal.any([signal, lifetime.signal]);
+      combined.throwIfAborted();
+      const result = await pmtiles.getZxy(tile.z, tile.x, tile.y, combined);
+      combined.throwIfAborted();
+      if (!result) throw archiveError(source, `missing tile ${tile.key}`);
+      const bytes = new Uint8Array(result.data);
+      if (!bytes.length || bytes.length > MAX_DECODED_TILE_BYTES) {
+        throw archiveError(source, `empty or oversized decoded MVT tile ${tile.key}`);
       }
-    },
+      return { bytes, http: archiveHttp };
+    } catch (error) {
+      if (signal.aborted || lifetime.signal.aborted) throw error;
+      if (error instanceof Error && error.message.startsWith(`Maps Tileset ${source.sourceId}:`))
+        throw error;
+      throw archiveError(source, error instanceof Error ? error.message : String(error));
+    }
+  };
+  return {
+    readTile,
+    fetchTile: async (tile, signal) => (await readTile(tile, signal)).bytes!,
     dispose() {
       lifetime.abort();
       cache.cache.clear();

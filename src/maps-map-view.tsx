@@ -65,6 +65,11 @@ export type MapsMapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   tilesetStyle?: MapsVectorBasemapStyle;
   /** MapLibre `circle`/`symbol` layers drawn over the Tileset, supported by flatRuntime="maps" only. */
   tilesetLayers?: MapsTilesetLayers;
+  /**
+   * Opt in to keeping downloaded Tileset bytes in browser Cache Storage across sessions
+   * (flatRuntime="maps" only). Off by default; `budgetBytes` targets about 250 MiB.
+   */
+  tilePersistence?: boolean | import("./maps-tile-persistence").MapsTilePersistenceOptions;
   tileLimits?: import("./flat-runtime-wasm").MapsFlatRasterRuntimeConfig["limits"];
   /** Decoder for tile pixels, scoped to this Map View runtime. */
   createTileImageLoader?: () => MapsTileImageLoader;
@@ -80,6 +85,7 @@ export function MapsMapView({
   tileset,
   tilesetStyle,
   tilesetLayers,
+  tilePersistence,
   tileLimits,
   dataBounds = null,
   defaultViewState,
@@ -762,6 +768,7 @@ export function MapsMapView({
           tileset={activeTileset}
           tilesetStyle={tilesetStyle}
           tilesetLayers={tilesetLayers}
+          tilePersistence={tilePersistence}
           sprite={sprite}
           relief={relief}
           sky={sky}

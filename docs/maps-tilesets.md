@@ -225,9 +225,68 @@ source namespace as well.
 `tileLimits` exposes the existing Rust `maxVisibleTiles`, `cacheCapacity` and
 `loadConcurrency` budgets. Capacity must be at least the visible-placement limit;
 undersized covers fail explicitly. The browser keeps resources only while Rust
-retains them; there is no JS geographic scheduler or persistent byte cache.
-Persistent caching remains #264. Data bytes are retained in memory only for the
-current bounded decoded-resource lifetime.
+retains them; there is no JS geographic scheduler. Without `tilePersistence`
+data bytes are retained in memory only for the current bounded decoded-resource
+lifetime.
+
+## Opt-in tile persistence (#264)
+
+`tilePersistence` on a `flatRuntime="maps"` Map View keeps downloaded **raw MVT
+bytes** in browser Cache Storage, so a later visit reuses them across reloads and
+browser restarts. It is off by default: a Map View without the option never writes
+to origin storage. This is opportunistic reuse, not an offline-area download.
+
+```tsx
+<MapView flatRuntime="maps" tileset={tileset} tilePersistence />
+<MapView flatRuntime="maps" tileset={tileset} tilePersistence={{ budgetBytes: 64 * 1024 * 1024 }} />
+```
+
+- **Boundary.** Persistence wraps the first-party transport reader
+  (`createMapsTilesetTileReader`, XYZ and PMTiles). Rust still owns tile identity,
+  scheduling, deduplication, cancellation and decoded retention; the store never
+  plans a request. The MapLibre comparison path and the benchmark-only Shortbread
+  loader stay HTTP-only.
+- **Keys.** One origin-wide cache, `maps-tiles-v1`. A tile's key is the Rust source
+  identity (source id, data revision and schema) plus its canonical `z/x/y`. World
+  copies and overzoom resolve to the same key. The transport URL, credentials and
+  the visual style are never part of a key, so a refreshed URL or a style change
+  reuses the stored bytes and a new revision does not.
+- **Freshness.** `Cache-Control: no-store` or `private` (and `Vary: *`) responses
+  are never stored. A content-pinned `sha256:` data revision does not expire. Any
+  other tile is stored only with an explicit `max-age`/`Expires` or a validator
+  (`ETag`/`Last-Modified`); once expired, an XYZ tile is revalidated with a
+  conditional request and reused only on HTTP 304, and a PMTiles tile is read
+  again. An expired tile is never shown when its server cannot be reached. For
+  PMTiles the archive's range-response headers speak for its tiles.
+- **Budget.** `budgetBytes` targets about 250 MiB (`DEFAULT_MAPS_TILE_BUDGET_BYTES`)
+  and is capped at half the quota the browser reports. Least recently used tiles
+  are evicted first. Every opted-in Map View of a page shares the store, and the
+  most recent option sets the target. The budget is a target, not a guarantee: the
+  browser may evict the origin's storage at any time.
+- **What is written.** Bytes are stored only after the Map View decoded them for
+  its current source, so cancelled, failed, empty, undecodable or superseded
+  responses leave no entry. One index entry holds sizes, recency and freshness; it
+  is rewritten at most once a second after a write and once in 30 seconds for
+  reads.
+- **Failure.** Missing or denied storage, a refused quota and corrupt entries all
+  fall back to the network reader. Stored bytes that are truncated or do not decode
+  are discarded and fetched again. A tile that is neither stored nor reachable
+  fails visibly as before.
+- **Diagnostics and clearing.** `getMapsTilePersistenceStatus()` and
+  `getRendererStats().tileset.persistence` report state, stored bytes and tiles,
+  budget, hits, misses, revalidations, writes, evictions, discarded entries and
+  write failures; the canvas mirrors them as `data-map-tile-persistence*`.
+  `clearMapsDownloadedTiles()` deletes every stored tile of the origin. The Maps
+  engine page keeps Atlas tiles and shows the status with a **Clear downloaded
+  tiles** action; its synthetic fixtures always load from the network.
+
+Limits of this phase: two tabs keep separate indexes, so the store can briefly
+exceed its target until the next visit reconciles it, and tiles written in the
+last second before a page closes may be dropped at the next visit. The source
+manifest is the consumer's statement of identity: do not reuse one `sourceId` and
+`dataRevision` for data that differs by user or credential. Measured comparison
+against HTTP-only caching is the remaining #264 work; no performance benefit is
+claimed here.
 
 Switching sources preserves the valid camera and application-layer selection;
 basemap geometry does not acquire application feature identity. Canvas uses the

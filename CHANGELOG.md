@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Minor Changes
+
+- Opt-in tile persistence (#264). `tilePersistence` on a `flatRuntime="maps"` Map View keeps
+  downloaded Tileset MVT bytes in browser Cache Storage (about 250 MiB by default, set with
+  `budgetBytes`), so later visits reuse them. It is off by default.
+  `clearMapsDownloadedTiles()` and `getMapsTilePersistenceStatus()` clear and inspect the store.
+  See `docs/maps-tilesets.md`.
+
 ## 0.2.0
 
 First release that ships the first-party Flat Map runtime: `MapView flatRuntime="maps"` and

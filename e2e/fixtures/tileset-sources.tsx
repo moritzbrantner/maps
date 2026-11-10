@@ -11,6 +11,11 @@ import {
   createFixtureTileset,
 } from "../../src/tileset-fixtures";
 import type { MapsVectorBasemapStyle } from "../../src/maps-tileset-style";
+import {
+  clearMapsDownloadedTiles,
+  getMapsTilePersistenceStatus,
+  type MapsTilePersistenceStatus,
+} from "../../src/maps-tile-persistence";
 import "../../styles.css";
 
 if (new URLSearchParams(location.search).has("canvas")) {
@@ -19,8 +24,25 @@ if (new URLSearchParams(location.search).has("canvas")) {
 declare global {
   interface Window {
     tilesetController: MapSurfaceController | null;
+    tilePersistence: {
+      clear(): Promise<void>;
+      status(): MapsTilePersistenceStatus;
+    };
   }
 }
+window.tilePersistence = {
+  clear: clearMapsDownloadedTiles,
+  status: getMapsTilePersistenceStatus,
+};
+const query = new URLSearchParams(location.search);
+// `?persist` opts in with the default budget, `?persist=<bytes>` with a small one.
+const persistence = query.has("persist")
+  ? query.get("persist")
+    ? { budgetBytes: Number(query.get("persist")) }
+    : true
+  : undefined;
+/** A content-pinned revision of the fixture archive: its tiles never expire. */
+const createPinnedPmtilesTileset = () => createFixturePmtilesTileset("sha256:fixture-v1");
 const limits = new URLSearchParams(location.search).has("smallCache")
   ? { maxVisibleTiles: 1, cacheCapacity: 2, loadConcurrency: 1 }
   : undefined;
@@ -28,7 +50,8 @@ const building = new URLSearchParams(location.search).has("building");
 const points = [{ id: "application-point", longitude: 0, latitude: 0 }];
 configureMapsWasmPackage("/wasm/maps_wasm.js");
 function Host() {
-  const [source, setSource] = useState(() => {
+  const [source, setSource] = useState<MapsTileset>(() => {
+    if (query.get("start") === "pinned") return createPinnedPmtilesTileset();
     const initial = createFixtureTileset("a");
     return building
       ? {
@@ -127,6 +150,7 @@ function Host() {
         initialViewState={{ center: [0, 0], zoom: 0 }}
         tileset={source}
         tilesetStyle={style}
+        tilePersistence={persistence}
         tileLimits={limits}
         onMapControllerReady={(controller) => {
           window.tilesetController = controller;
