@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Minor Changes
+
+- Opt-in tile persistence (#264). `tilePersistence` on a `flatRuntime="maps"` Map View keeps
+  downloaded Tileset MVT bytes in browser Cache Storage (about 250 MiB by default, set with
+  `budgetBytes`), so later visits reuse them. It is off by default.
+  `clearMapsDownloadedTiles()` and `getMapsTilePersistenceStatus()` clear and inspect the store.
+  See `docs/maps-tilesets.md`.
+
 ## 0.2.0
 
 First release that ships the first-party Flat Map runtime: `MapView flatRuntime="maps"` and
@@ -30,11 +38,6 @@ it. MapLibre stays the default `flatRuntime`.
   `selectedFeatureId` had selected that feature and no longer does; a hover the layer delivered
   clears (tooltip, `onHoveredFeatureIdChange(null)`) when its feature leaves, because MapLibre
   fires no `mouseleave` for a removed layer. Another layer's popup is never closed.
-- Opt-in tile persistence (#264). `tilePersistence` on a `flatRuntime="maps"` Map View keeps
-  downloaded Tileset MVT bytes in browser Cache Storage (about 250 MiB by default, set with
-  `budgetBytes`), so later visits reuse them. It is off by default.
-  `clearMapsDownloadedTiles()` and `getMapsTilePersistenceStatus()` clear and inspect the store.
-  See `docs/maps-tilesets.md`.
 - Scalar-field masks (#171). `maskGeoJson` on `HeatLayer`/`HeatMap` field mode,
   `createScalarFieldGrid()` and `createIdwInterpolator()` was reserved and is now applied: the
   field raster, contours and samples are clipped to the union of the mask's polygons (Polygon,
