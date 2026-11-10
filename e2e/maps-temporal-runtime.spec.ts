@@ -78,6 +78,8 @@ test("temporal points play, pause and seek over static regions on the Maps runti
   await expect(overlay).toHaveAttribute("data-map-overlay-backend", /^(wgpu|canvas2d)$/);
   const primitives = await overlay.getAttribute("data-map-overlay-primitives");
   expect(Number(primitives)).toBeGreaterThanOrEqual(3);
+  // Rust/WASM samples the moving tracks picked below.
+  await expect(page.getByTestId("temporal-runtime-sampler")).toHaveText("ready");
 
   // Select a moving Map Feature at a seeked time through first-party picking.
   await seek(page, 30);
@@ -132,6 +134,17 @@ test("temporal points play, pause and seek over static regions on the Maps runti
   await page.mouse.click(region.x, region.y);
   await expect(page.getByTestId("temporal-runtime-region")).toHaveText("static-region");
   await expect(map.locator(".maplibregl-canvas")).toHaveCount(0);
+});
+
+// #172 Correct: the Rust/WASM sampler the Map View uses matches the independent reference.
+test("the Rust temporal sampler matches the reference sampler over the edge sequence @smoke", async ({
+  page,
+}) => {
+  await page.goto("/demo-reference/?e2e=1&acceptance=maps-runtime-temporal");
+
+  await expect(page.getByTestId("temporal-runtime-sampler")).toHaveText("ready");
+  const parity = await page.evaluate(() => window.mapsTemporalAcceptance!.sampleEdgeSequence());
+  expect(parity).toEqual({ mismatches: [], sampler: "ready", steps: 30 });
 });
 
 // #172 Correct: a source change keeps the one map-scoped time, playback and selection.

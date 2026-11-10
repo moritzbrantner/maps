@@ -8,6 +8,7 @@ import {
   snapTemporalMapTime,
   type TemporalMapTimeRange,
 } from "./temporal-core";
+import { getMapsTemporalWasmRuntime, type MapsTemporalWasmRuntime } from "./temporal-points-wasm";
 
 export type TemporalMapKeyframe<TProperties = Record<string, unknown>> = {
   latitude: number;
@@ -55,12 +56,138 @@ export function getTemporalMapPointsAtTime<TProperties = Record<string, unknown>
     return [];
   }
 
+  const runtime = getMapsTemporalWasmRuntime();
+
+  if (runtime) {
+    const index = createWasmTemporalMapPlaybackIndex(runtime, tracks);
+
+    try {
+      return index.getPointsAtTime(time);
+    } finally {
+      index.dispose();
+    }
+  }
+
   return tracks
     .map((track, index) => resolveTrackAtTime(track, index, time))
     .filter((point): point is MapPoint<TProperties> => point !== null);
 }
 
+/**
+ * Prepares moving point tracks once for repeated sampling. When the Maps Rust/WASM temporal
+ * runtime is installed (see `initializeMapsTemporalWasm`), Rust owns keyframe selection,
+ * admission and the sampled positions; otherwise the TypeScript reference implementation below
+ * samples the same positions.
+ */
 export function createTemporalMapPlaybackIndex<TProperties = Record<string, unknown>>(
+  tracks: readonly TemporalMapTrack<TProperties>[],
+): TemporalMapPlaybackIndex<TProperties> {
+  const runtime = getMapsTemporalWasmRuntime();
+
+  if (runtime) {
+    // Playback indexes have no public dispose: the generated WASM binding frees the Rust index
+    // once it is garbage collected.
+    const { dispose: _dispose, ...index } = createWasmTemporalMapPlaybackIndex(runtime, tracks);
+    return index;
+  }
+
+  return createReferenceTemporalMapPlaybackIndex(tracks);
+}
+
+const TEMPORAL_KEYFRAME_STRIDE = 4;
+const TEMPORAL_SAMPLE_STRIDE = 6;
+
+function createWasmTemporalMapPlaybackIndex<TProperties>(
+  runtime: MapsTemporalWasmRuntime,
+  tracks: readonly TemporalMapTrack<TProperties>[],
+): TemporalMapPlaybackIndex<TProperties> & { dispose(): void } {
+  // Labels, properties and metrics are joined from the keyframes as they were at preparation.
+  const sourceTracks = tracks.map((track) => ({ frames: [...track.frames], track }));
+  const frameCounts = new Uint32Array(sourceTracks.length);
+  let keyframeCount = 0;
+
+  sourceTracks.forEach(({ frames }, trackIndex) => {
+    frameCounts[trackIndex] = frames.length;
+    keyframeCount += frames.length;
+  });
+
+  const keyframes = new Float64Array(keyframeCount * TEMPORAL_KEYFRAME_STRIDE);
+  let offset = 0;
+
+  for (const { frames } of sourceTracks) {
+    for (const frame of frames) {
+      keyframes[offset] = numberOrNaN(frame.time);
+      keyframes[offset + 1] = numberOrNaN(frame.longitude);
+      keyframes[offset + 2] = numberOrNaN(frame.latitude);
+      keyframes[offset + 3] = frame.visible === false ? 0 : 1;
+      offset += TEMPORAL_KEYFRAME_STRIDE;
+    }
+  }
+
+  const rustIndex = runtime.createPointIndex(keyframes, frameCounts);
+  const range = rustIndex.timeRange();
+  const timeRange = range.length === 2 ? { end: range[1]!, start: range[0]! } : null;
+  let disposed = false;
+
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      rustIndex.free?.();
+    },
+    getPointsAtTime(time) {
+      if (disposed) {
+        throw new Error("The temporal playback index was disposed.");
+      }
+
+      if (!Number.isFinite(time)) {
+        return [];
+      }
+
+      const samples = rustIndex.sample(time);
+      const points: Array<MapPoint<TProperties>> = [];
+
+      sourceTracks.forEach(({ frames, track }, trackIndex) => {
+        const sample = trackIndex * TEMPORAL_SAMPLE_STRIDE;
+        const kind = samples[sample];
+
+        if (kind !== 1 && kind !== 2) {
+          return;
+        }
+
+        const previousFrame = frames[samples[sample + 1]!]!;
+        const previousMetrics = mergeMetrics(track.metrics, previousFrame.metrics);
+
+        points.push({
+          id: String(track.id ?? trackIndex),
+          label: previousFrame.label ?? track.label ?? "",
+          latitude: samples[sample + 5]!,
+          longitude: samples[sample + 4]!,
+          metrics:
+            kind === 1
+              ? previousMetrics
+              : interpolateMetrics(
+                  previousMetrics,
+                  mergeMetrics(track.metrics, frames[samples[sample + 2]!]!.metrics),
+                  samples[sample + 3]!,
+                ),
+          properties: mergeProperties(track.properties, previousFrame.properties),
+        });
+      });
+
+      return points;
+    },
+    getTimeRange() {
+      return timeRange;
+    },
+  };
+}
+
+function numberOrNaN(value: unknown) {
+  return typeof value === "number" ? value : Number.NaN;
+}
+
+function createReferenceTemporalMapPlaybackIndex<TProperties>(
   tracks: readonly TemporalMapTrack<TProperties>[],
 ): TemporalMapPlaybackIndex<TProperties> {
   const preparedTracks = tracks.map(prepareTemporalMapTrack);

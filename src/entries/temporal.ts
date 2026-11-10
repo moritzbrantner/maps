@@ -11,6 +11,12 @@ export {
   type TemporalMapTrack,
 } from "../temporal-points";
 export {
+  ensureMapsTemporalWasm,
+  getMapsTemporalRuntimeStatus,
+  initializeMapsTemporalWasm,
+  type MapsTemporalRuntimeStatus,
+} from "../temporal-points-wasm";
+export {
   createTemporalMapTracksFromGeoJson,
   type TemporalGeoJsonPointFeature,
   type TemporalGeoJsonPointFeatureCollection,

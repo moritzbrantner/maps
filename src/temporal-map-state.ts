@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import {
   createGeoJsonOverlayFeatureCollection,
@@ -14,6 +14,11 @@ import {
 } from "./map-scoped-timeline-react";
 import { mergeTemporalMapTimeRanges } from "./temporal-core";
 import { createTemporalMapPlaybackIndex, type TemporalMapTrack } from "./temporal-points";
+import {
+  ensureMapsTemporalWasm,
+  getMapsTemporalRuntimeVersion,
+  subscribeMapsTemporalRuntime,
+} from "./temporal-points-wasm";
 import { createTemporalMapTracksFromGeoJson, type TemporalGeoJsonTrackOptions } from "./temporal-geojson";
 import {
   createTemporalGeoJsonPlaybackIndex,
@@ -59,7 +64,21 @@ export function useTemporalMapState<TProperties extends Record<string, unknown>>
         : []),
     [geoJson, geoJsonTrackOptions, tracks],
   );
-  const playbackIndex = useMemo(() => createTemporalMapPlaybackIndex(resolvedTracks), [resolvedTracks]);
+  // Rust samples moving tracks once its runtime is ready; until then the TypeScript reference
+  // samples the same positions, so the rebuild on a runtime change is not observable.
+  const temporalRuntimeVersion = useSyncExternalStore(
+    subscribeMapsTemporalRuntime,
+    getMapsTemporalRuntimeVersion,
+    getMapsTemporalRuntimeVersion,
+  );
+  useEffect(() => {
+    void ensureMapsTemporalWasm();
+  }, []);
+  const playbackIndex = useMemo(
+    // The runtime version selects the sampling authority.
+    () => createTemporalMapPlaybackIndex(resolvedTracks),
+    [resolvedTracks, temporalRuntimeVersion],
+  );
   const overlaySource = useMemo(
     () =>
       geoJson

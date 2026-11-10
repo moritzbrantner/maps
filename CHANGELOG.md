@@ -9,6 +9,14 @@
   `budgetBytes`), so later visits reuse them. It is off by default.
   `clearMapsDownloadedTiles()` and `getMapsTilePersistenceStatus()` clear and inspect the store.
   See `docs/maps-tilesets.md`.
+- Rust/WASM samples moving point tracks (#172 phase C). Once the Maps WASM runtime is loaded,
+  `createTemporalMapPlaybackIndex`, `getTemporalMapPointsAtTime`, `TemporalClusteredMap` and
+  `TemporalHeatMap` take keyframe selection, admission and positions from the Rust
+  `TemporalPointTrackIndex`. The TypeScript implementation stays as the reference and the
+  fallback before loading, during SSR or when loading fails, and returns the same results.
+  New: `initializeMapsTemporalWasm()`, `ensureMapsTemporalWasm()` and
+  `getMapsTemporalRuntimeStatus()`. Temporal GeoJSON geometry sampling is unchanged (owned by
+  #173). See "Temporal computation authority" in `docs/timeline.md`.
 
 ### Internal
 
