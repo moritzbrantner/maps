@@ -995,8 +995,19 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     await page.mouse.move(bounds.x + bounds.width * 0.4, bounds.y + bounds.height * 0.6, { steps: 4 });
     await page.mouse.up();
     await expect(viewState).not.toHaveText(before!);
-    // The base keeps its color after the camera moved.
-    await expect.poll(() => cornerPixel(page, map)).toEqual([47, 125, 107]);
+    // The camera transition is observable before sampling. Avoid repeated full-map
+    // screenshots under software-GPU CI load; they exceeded the 5s poll budget
+    // even when the eventual composited pixel and Canvas2D backing pixel agreed.
+    if (backend === "canvas2d") {
+      const canvas2d = map.locator('canvas[data-map-base-fallback="canvas2d"]');
+      const backgroundPixel = await canvas2d.evaluate((element) => {
+        const canvas = element as HTMLCanvasElement;
+        const context = canvas.getContext("2d")!;
+        return [...context.getImageData(12, canvas.height - 12, 1, 1).data];
+      });
+      expect(backgroundPixel).toEqual([47, 125, 107, 255]);
+    }
+    expect(await cornerPixel(page, map)).toEqual([47, 125, 107]);
   });
 }
 
