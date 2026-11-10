@@ -775,6 +775,184 @@ select {
   box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.18);
 }
 
+.demo-history-locales {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 12px 10px;
+  color: #101827;
+  font-size: 0.86rem;
+}
+
+.demo-history-locales legend {
+  padding: 0 4px;
+  font-weight: 730;
+}
+
+.demo-history-locales label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.demo-history-locales small {
+  flex-basis: 100%;
+  color: #526170;
+  line-height: 1.4;
+}
+
+.demo-history-selectors {
+  display: grid;
+  gap: 12px;
+  color: #101827;
+  font-size: 0.86rem;
+  font-weight: 730;
+}
+
+.demo-history-selectors label,
+.demo-history-selectors > div {
+  display: grid;
+  gap: 6px;
+}
+
+.demo-history-selectors select {
+  width: 100%;
+  border: 1px solid #b9c5d3;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 6px 8px;
+  font: inherit;
+  font-weight: 500;
+}
+
+.demo-history-selectors ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.demo-history-selected,
+.demo-history-panel .maps-historical-context {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  font-size: 0.86rem;
+}
+
+.demo-history-selected h3,
+.demo-history-selected p,
+.demo-history-panel .maps-historical-context h3,
+.demo-history-panel .maps-historical-context p {
+  margin: 0;
+}
+
+.demo-history-selected h3 {
+  font-size: 0.9rem;
+}
+
+.demo-history-selected > p {
+  color: #526170;
+  line-height: 1.45;
+}
+
+.demo-history-panel .maps-historical-context {
+  border-color: #b45309;
+}
+
+.demo-history-panel .maps-historical-context__status {
+  color: #9a3412;
+  font-weight: 760;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.demo-history-panel .maps-historical-context__dates {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 0;
+}
+
+.demo-history-panel .maps-historical-context__dates dt {
+  color: #526170;
+}
+
+.demo-history-panel .maps-historical-context__dates dd {
+  margin: 0;
+}
+
+.demo-history-panel .maps-historical-context__mini-timeline ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.demo-history-panel .maps-historical-context__mini-timeline li {
+  display: grid;
+  gap: 2px;
+}
+
+.demo-history-panel .maps-historical-context__mini-timeline li span {
+  color: #526170;
+  font-size: 0.76rem;
+}
+
+.demo-history-panel .maps-historical-context button {
+  cursor: pointer;
+  border: 1px solid #b9c5d3;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 4px 9px;
+  font: inherit;
+  font-weight: 650;
+}
+
+.demo-history-panel .maps-historical-context button:disabled {
+  cursor: not-allowed;
+  color: #8a97a6;
+}
+
+.demo-history-panel .maps-historical-context__dismiss {
+  justify-self: start;
+}
+
+@media (min-width: 961px) {
+  /* The panel scrolls instead of stretching the map when details are open. */
+  .demo-history-panel {
+    max-height: 620px;
+    overflow-y: auto;
+  }
+}
+
+/* Place pins use the Point Layer label as a name under the pin instead of a count on it. */
+.demo-history-map .mb-maps__cluster-count {
+  place-items: start center;
+  overflow: visible;
+  padding-top: 27px;
+  color: #101827;
+  font-size: 0.78rem;
+  font-variant-numeric: normal;
+  text-shadow:
+    0 0 2px #ffffff,
+    0 0 2px #ffffff,
+    0 0 3px #ffffff,
+    0 0 4px #ffffff;
+  white-space: nowrap;
+}
+
 .demo-history-caveat {
   margin: 0;
   border: 1px solid #d5dde7;

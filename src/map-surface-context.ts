@@ -46,7 +46,8 @@ export type MapInteractionMode = "none" | "measurement" | "editing";
  * hover updates: those have their own subscriptions below (#119).
  */
 export type MapSurfaceContextValue = {
-  closeFeaturePopup: () => void;
+  /** Closes the open feature popup; with `feature`, only when it is that feature's popup. */
+  closeFeaturePopup: (feature?: unknown) => void;
   display: MapDisplayMode;
   handleBackgroundClick: () => void;
   handleFeatureClick: <TFeature>(

@@ -17,6 +17,12 @@
 
 ### Minor Changes
 
+- On the MapLibre path, `GeoJsonLayer`, `PointLayer` and `BubbleLayer` now retire their anchored
+  feature overlays like `flatRuntime="maps"` does (#231): the popup a layer opened closes when its
+  Map Feature leaves the layer or stops being interactive, or when the layer's controlled
+  `selectedFeatureId` had selected that feature and no longer does; a hover the layer delivered
+  clears (tooltip, `onHoveredFeatureIdChange(null)`) when its feature leaves, because MapLibre
+  fires no `mouseleave` for a removed layer. Another layer's popup is never closed.
 - Scalar-field masks (#171). `maskGeoJson` on `HeatLayer`/`HeatMap` field mode,
   `createScalarFieldGrid()` and `createIdwInterpolator()` was reserved and is now applied: the
   field raster, contours and samples are clipped to the union of the mask's polygons (Polygon,
