@@ -40,6 +40,9 @@ try {
         type: "module",
         dependencies: {
           "@moritzbrantner/maps": `file:${tarballPath}`,
+          "@moritzbrantner/ui": rootPackage.devDependencies["@moritzbrantner/ui"],
+          react: rootPackage.devDependencies.react,
+          "react-dom": rootPackage.devDependencies["react-dom"],
           vite: rootPackage.devDependencies.vite,
           supercluster: rootPackage.devDependencies.supercluster,
         },
@@ -54,7 +57,38 @@ try {
   );
   writeFileSync(
     path.join(tempRoot, "index.html"),
-    '<!doctype html><html><body><div id="root"></div><script type="module" src="/src/main.js"></script></body></html>',
+    '<!doctype html><html><body><div id="root"></div><script type="module" src="/src/main.js"></script><script type="module" src="/src/map-view.js"></script></body></html>',
+  );
+  // A consumer that pins the released package must get the first-party Flat Map runtime from
+  // the tarball alone: no Rust toolchain, no tile requests, no MapLibre surface.
+  writeFileSync(
+    path.join(tempRoot, "src", "map-view.js"),
+    `import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import "@moritzbrantner/maps/styles.css";
+import { MapView, PointLayer } from "@moritzbrantner/maps/layers";
+
+createRoot(document.getElementById("root")).render(
+  createElement(
+    MapView,
+    {
+      defaultViewState: { center: [13.405, 52.52], zoom: 8 },
+      fitToData: false,
+      flatRuntime: "maps",
+      mapLabel: "Packed first-party Map View",
+      mapStyle: {
+        layers: [{ id: "background", paint: { "background-color": "#2f7d6b" }, type: "background" }],
+        sources: {},
+        version: 8,
+      },
+      style: { height: 320 },
+    },
+    createElement(PointLayer, {
+      points: [{ id: "berlin", latitude: 52.52, longitude: 13.405 }],
+    }),
+  ),
+);
+`,
   );
   writeFileSync(
     path.join(tempRoot, "src", "supercluster-aggregation.ts"),
@@ -74,6 +108,13 @@ const DEFAULT_OPTIONS = {
   minZoom: 0,
   radius: 72,
 };
+
+// The Rust index keeps cluster centroids as f64 Mercator coordinates. The supercluster 9
+// reference stores them as Int32 fixed point (2^-30 of the world, about 0.0000003 degrees) and
+// re-quantizes the weighted centroid on every zoom level, so centroids drift apart by some
+// tens of steps. Points, metrics, counts, expansion zooms and leaves stay exact.
+const CLUSTER_CENTROID_TOLERANCE_DEGREES = 2e-5;
+let maxClusterCentroidDeviationDegrees = 0;
 
 window.mapsWasmEvidence = (async () => {
   await init();
@@ -158,6 +199,7 @@ window.mapsWasmEvidence = (async () => {
   return {
     canonicalResults,
     duplicateId,
+    maxClusterCentroidDeviationDegrees,
     performance,
     seeded,
   };
@@ -248,15 +290,33 @@ function compareQuery(name, query, control, rust) {
     name + " viewport " + JSON.stringify(query),
   );
 
-  for (const controlCluster of controlAggregation.features.filter((feature) => feature.kind === "cluster")) {
-    const signature = clusterSignature(controlCluster);
-    const rustCluster = rustAggregation.features.find(
-      (feature) => feature.kind === "cluster" && clusterSignature(feature) === signature,
-    );
+  const controlClusters = sortedClusters(controlAggregation);
+  const rustClusters = sortedClusters(rustAggregation);
 
-    if (!rustCluster) {
+  for (const [index, controlCluster] of controlClusters.entries()) {
+    const signature = clusterSignature(controlCluster);
+    const rustCluster = rustClusters[index];
+
+    if (!rustCluster || clusterSignature(rustCluster) !== signature) {
       throw new Error(name + " missing Rust cluster for " + signature);
     }
+
+    const deviation = Math.max(
+      longitudeDistance(controlCluster.coordinates[0], rustCluster.coordinates[0]),
+      Math.abs(controlCluster.coordinates[1] - rustCluster.coordinates[1]),
+    );
+    if (!(deviation <= CLUSTER_CENTROID_TOLERANCE_DEGREES)) {
+      throw new Error(
+        name +
+          " cluster centroid mismatch for " +
+          signature +
+          ": control=" +
+          JSON.stringify(controlCluster.coordinates) +
+          " rust=" +
+          JSON.stringify(rustCluster.coordinates),
+      );
+    }
+    maxClusterCentroidDeviationDegrees = Math.max(maxClusterCentroidDeviationDegrees, deviation);
 
     const controlExpansionZoom = control.getClusterExpansionZoom(controlCluster.clusterId);
     const rustExpansionZoom = rust.getClusterExpansionZoom(rustCluster.clusterId);
@@ -320,8 +380,8 @@ function comparableFeature(feature) {
     };
   }
 
+  // Centroids are compared within CLUSTER_CENTROID_TOLERANCE_DEGREES in compareQuery.
   return {
-    coordinates: feature.coordinates.map(roundCoordinate),
     expansionZoom: feature.expansionZoom,
     kind: "cluster",
     metrics: comparableMetrics(feature.metrics),
@@ -331,10 +391,25 @@ function comparableFeature(feature) {
 
 function clusterSignature(feature) {
   return JSON.stringify({
-    coordinates: feature.coordinates.map(roundCoordinate),
     metrics: comparableMetrics(feature.metrics),
     pointCount: feature.pointCount,
   });
+}
+
+function sortedClusters(aggregation) {
+  return aggregation.features
+    .filter((feature) => feature.kind === "cluster")
+    .sort(
+      (left, right) =>
+        clusterSignature(left).localeCompare(clusterSignature(right)) ||
+        left.coordinates[0] - right.coordinates[0] ||
+        left.coordinates[1] - right.coordinates[1],
+    );
+}
+
+function longitudeDistance(left, right) {
+  const distance = Math.abs(left - right) % 360;
+  return Math.min(distance, 360 - distance);
 }
 
 function comparablePoint(point) {
@@ -522,6 +597,8 @@ function roundTiming(value) {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
     await page.goto("http://127.0.0.1:4187/");
     const result = await page.evaluate(() => window.mapsWasmEvidence);
 
@@ -541,6 +618,25 @@ function roundTiming(value) {
 
     console.log("Packed Maps WASM parity evidence passed.");
     console.log(JSON.stringify(result, null, 2));
+
+    const mapView = page.getByLabel("Packed first-party Map View");
+    const baseCanvas = mapView.locator('canvas[data-flat-runtime="maps"]');
+    await mapView.and(page.locator('[data-map-runtime="maps"][data-map-ready="true"]')).waitFor();
+    await page.waitForFunction(() =>
+      /^(wgpu|canvas2d)$/.test(
+        document.querySelector('canvas[data-flat-runtime="maps"]')?.dataset.mapBaseRenderer ?? "",
+      ),
+    );
+    if ((await page.locator(".maplibregl-canvas").count()) !== 0) {
+      throw new Error('packed flatRuntime="maps" Map View created a MapLibre surface');
+    }
+    if (pageErrors.length > 0) {
+      throw new Error(`packed first-party Map View reported errors:\n${pageErrors.join("\n")}`);
+    }
+
+    console.log(
+      `Packed first-party Map View ready (base renderer: ${await baseCanvas.getAttribute("data-map-base-renderer")}).`,
+    );
   } finally {
     await browser.close();
   }
