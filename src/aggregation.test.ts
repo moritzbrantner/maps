@@ -344,6 +344,25 @@ describe("@moritzbrantner/maps aggregation without the WASM runtime", () => {
     expect(visibleIds([-200, -90, 200, 90])).toEqual(["berlin", "east", "north", "west"]);
     expect(visibleIds([10, 50, 15, 55])).toEqual(["berlin"]);
   });
+
+  test("finds points supplied with unwrapped longitudes where they are", () => {
+    // A moving feature may cross the antimeridian as 174° → 186°: 183°E is 177°W.
+    const index = createPointAggregationIndex([
+      { id: "east", latitude: 10, longitude: 183 },
+      { id: "west", latitude: -10, longitude: -190 },
+    ]);
+    const visible = (bounds: [number, number, number, number]) =>
+      index
+        .getViewportAggregation({ bounds, zoom: 6 })
+        .features.map((feature) => (feature.kind === "point" ? [feature.point.id, feature.coordinates] : []));
+
+    expect(visible([-178, 5, -176, 15])).toEqual([["east", [183, 10]]]);
+    expect(visible([165, -20, 190, 20])).toEqual([
+      ["east", [183, 10]],
+      ["west", [-190, -10]],
+    ]);
+    expect(visible([0, -20, 20, 20])).toEqual([]);
+  });
 });
 
 function createSyntheticPoints(count: number): TestPoint[] {

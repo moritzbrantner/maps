@@ -840,7 +840,10 @@ export function MapView({
 
   const context = useMemo<MapSurfaceContextValue>(
     () => ({
-      closeFeaturePopup: () => setPopup(null),
+      closeFeaturePopup: (feature?: unknown) =>
+        setPopup((current) =>
+          feature === undefined || current?.feature === feature ? null : current,
+        ),
       display: mapDisplay,
       handleBackgroundClick: () => {
         blockedHoverPositionRef.current = null;

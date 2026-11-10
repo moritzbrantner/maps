@@ -24,6 +24,12 @@ it. MapLibre stays the default `flatRuntime`.
 
 ### Minor Changes
 
+- On the MapLibre path, `GeoJsonLayer`, `PointLayer` and `BubbleLayer` now retire their anchored
+  feature overlays like `flatRuntime="maps"` does (#231): the popup a layer opened closes when its
+  Map Feature leaves the layer or stops being interactive, or when the layer's controlled
+  `selectedFeatureId` had selected that feature and no longer does; a hover the layer delivered
+  clears (tooltip, `onHoveredFeatureIdChange(null)`) when its feature leaves, because MapLibre
+  fires no `mouseleave` for a removed layer. Another layer's popup is never closed.
 - Scalar-field masks (#171). `maskGeoJson` on `HeatLayer`/`HeatMap` field mode,
   `createScalarFieldGrid()` and `createIdwInterpolator()` was reserved and is now applied: the
   field raster, contours and samples are clipped to the union of the mask's polygons (Polygon,
@@ -52,6 +58,14 @@ it. MapLibre stays the default `flatRuntime`.
   component owns a clock configured from its existing `autoPlay`, `currentTime`,
   `defaultTime`, `loopPlayback`, `onTimeChange`, `playbackRate` and `timeStep` props, which
   keep their behaviour; neither component runs its own `requestAnimationFrame` loop any more.
+- Map-Scoped Timeline edge and source-change correctness (#172). The clock keeps its time when
+  one of several consumers replaces its registered range, `seek()` ignores a non-finite time,
+  and a frame requested before a pause, `dispose()` or a scheduler change can no longer advance
+  the time or start a second frame loop. `docs/timeline.md` states the temporal edge policy
+  (endpoints, duplicate times, gaps, invalid input, world wrapping, geometry transitions).
+- Points supplied with a longitude outside `[-180, 180]` (for example a track crossing the
+  antimeridian as 174° → 186°) are now clustered, drawn and picked at their wrapped location
+  instead of disappearing from viewport aggregation.
 - `ClusteredMap` and `TemporalClusteredMap` accept `flatRuntime`, so temporal points run on
   `flatRuntime="maps"` over static Map Layers passed as children. Measurement props remain
   MapLibre-only there and fail closed.
