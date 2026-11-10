@@ -25,11 +25,15 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // #343 builds the WASM for speed (opt-level 3, 705,345 -> 845,540 bytes): the unpacked budget
 // now covers everything but the report-only WASM runtime, with the allowance it had before
 // (1,752,500 - 705,345).
+// #172 phase C moves moving point track sampling to Rust (`MapsTemporalPointIndex`, the
+// temporal runtime loader and its exports): +9,192 bytes unpacked without the WASM runtime
+// (+4,516 generated WASM bindings, +4,676 JavaScript, declarations and changelog), so the
+// budget grows by the same amount.
 const budgets = {
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSizeWithoutWasm: 1_047_155,
+  unpackedSizeWithoutWasm: 1_056_347,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {

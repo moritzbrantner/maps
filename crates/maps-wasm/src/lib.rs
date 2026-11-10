@@ -329,6 +329,36 @@ impl MapsPointAggregationIndex {
     }
 }
 
+/// Direct WASM handle over the Maps-owned moving point track index (#172). Keyframes cross once,
+/// packed; each sample returns one packed `Float64Array` (see
+/// [`maps_core::TemporalPointTrackIndex::sample_packed`]).
+#[wasm_bindgen]
+pub struct MapsTemporalPointIndex {
+    inner: maps_core::TemporalPointTrackIndex,
+}
+
+#[wasm_bindgen]
+impl MapsTemporalPointIndex {
+    #[wasm_bindgen(constructor)]
+    pub fn new(keyframes: &[f64], frame_counts: &[u32]) -> Result<MapsTemporalPointIndex, JsValue> {
+        maps_core::TemporalPointTrackIndex::from_packed(keyframes, frame_counts)
+            .map(|inner| Self { inner })
+            .map_err(to_js_error)
+    }
+
+    /// `[start, end]`, or empty when no track has a valid keyframe.
+    #[wasm_bindgen(js_name = timeRange)]
+    pub fn time_range(&self) -> Vec<f64> {
+        self.inner
+            .time_range()
+            .map_or_else(Vec::new, |(start, end)| vec![start, end])
+    }
+
+    pub fn sample(&self, time: f64) -> Vec<f64> {
+        self.inner.sample_packed(time)
+    }
+}
+
 /// Decodes selected Shortbread vector-tile linework through the Maps-owned Rust boundary.
 #[wasm_bindgen(js_name = decodeShortbreadBasemapLines)]
 pub fn decode_shortbread_basemap_lines_for_js(

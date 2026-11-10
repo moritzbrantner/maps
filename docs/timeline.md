@@ -104,6 +104,35 @@ sampler (`src/temporal-edge-sequences.test.ts`):
   application-controlled time the latest time supplied by the application always wins; seeks
   and frames are only requests.
 
+## Temporal computation authority
+
+The #75 authority audit of temporal computation (#172 phase C) assigns each concern one owner.
+Rust/Maps owns geographic results; TypeScript keeps controls, lifecycle and application data.
+
+| Concern | Owner | Why |
+| --- | --- | --- |
+| Map-scoped time, playback, snapping, ranges (`createMapScopedTimelineClock`) | TypeScript, framework-free | Lifecycle and controls, not a geographic result. One frame loop per clock. |
+| Moving point tracks: keyframe selection, admission/removal and sampled positions | **Rust** (`maps-core` `TemporalPointTrackIndex`) | The position of a Map Feature at a time is a geographic result, sampled every frame and fed to the Rust aggregation index. |
+| Track identity, labels, properties and metric values of a sample | TypeScript | Application data; joined to the keyframes Rust reports. Metric values blend with Rust's progress. |
+| Parsing temporal GeoJSON points into tracks (`createTemporalMapTracksFromGeoJson`) | TypeScript | Source preparation; the tracks are then sampled as above. |
+| Temporal GeoJSON geometry sampling and transitions | TypeScript, unchanged | Geometry transition authority belongs to #173 (and #175 for geography-preserving transitions); migrating it here would duplicate that work. |
+| Temporal heat | Same point sampler, then `HeatLayer` | Heat/scalar authority belongs to #171. |
+
+`createTemporalMapPlaybackIndex` and `getTemporalMapPointsAtTime` sample through the Rust index
+once the Maps WASM runtime is loaded: temporal Convenience Maps start loading it on mount, and
+`initializeMapsTemporalWasm()` / `ensureMapsTemporalWasm()` load it directly. Keyframes cross
+the boundary once, packed; each sample returns one `Float64Array`. Before the runtime is ready,
+during SSR and when it fails to load (`getMapsTemporalRuntimeStatus()` is `unavailable`), the
+TypeScript implementation remains the reference and explicit fallback. It computes the same
+positions with the same floating-point operations, so a Map View that switches to Rust while
+playing shows no change. Once Rust is selected, an error building its index is thrown rather
+than hidden by the fallback.
+
+Evidence: `crates/maps-core/tests/temporal_points.rs`, and the browser test in
+`e2e/maps-temporal-runtime.spec.ts`, which compares the real Rust/WASM sampler with the
+independent reference sampler over the shared edge sequence and picks Rust-sampled positions on
+`flatRuntime="maps"`.
+
 ## Historical Map Feature selection
 
 `useHistoricalMapFeatureSelection({ features, locale, timeline })` validates Map Feature

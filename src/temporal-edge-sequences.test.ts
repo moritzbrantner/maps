@@ -8,9 +8,13 @@ import {
   getTemporalMapPointsAtTime,
   getTemporalMapTimeRange,
   type TemporalGeoJsonTrack,
-  type TemporalMapTrack,
 } from ".";
 import { sampleTemporalGeoJsonNaively, sampleTemporalPointsNaively } from "./test-temporal-oracle";
+import {
+  canonicalTemporalSample as rounded,
+  TEMPORAL_EDGE_POINT_TRACKS,
+  TEMPORAL_EDGE_SEQUENCE,
+} from "./test-temporal-point-sequences";
 
 /**
  * #172 Correct: deterministic multi-step sequences over the temporal edge policy. The prepared
@@ -18,142 +22,34 @@ import { sampleTemporalGeoJsonNaively, sampleTemporalPointsNaively } from "./tes
  * samplers in `test-temporal-oracle.ts` at every step.
  */
 
-// Forward, exact keyframes, just around a duplicate time, past both ends, then backward jumps,
-// repeats and invalid times in between: an index must not carry anything from step to step.
-const SEQUENCE = [
-  -10, 0, 10, 25, 30, 39.999, 40, 40.001, 50, 60, 70, 80, 90, 100, 110, 55, 40, 0, 100, 30, 30,
-  Number.NaN, 20, Number.POSITIVE_INFINITY, 65, Number.NEGATIVE_INFINITY, 50, 99.5, 0.5, 85,
-];
-
-/** Rounds every number so independently computed samples compare without float noise. */
-function rounded<T>(value: T): T {
-  if (typeof value === "number") {
-    return (Number(value.toFixed(9)) + 0) as T;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(rounded) as T;
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, rounded(entry)]),
-    ) as T;
-  }
-
-  return value;
-}
-
-const POINT_TRACKS: TemporalMapTrack[] = [
-  {
-    frames: [
-      { latitude: 10, longitude: 20, metrics: { load: 2 }, properties: { phase: "out" }, time: 0 },
-      { latitude: 30, longitude: 60, metrics: { load: 6, stops: 4 }, properties: { phase: "back" }, time: 100 },
-    ],
-    id: "steady",
-    label: "Steady",
-    metrics: { capacity: 9 },
-    properties: { fleet: "north" },
-  },
-  {
-    // Keyframes are declared out of order.
-    frames: [
-      { latitude: 0, longitude: 80, time: 90 },
-      { label: "Early", latitude: 5, longitude: 5, time: 10 },
-      { latitude: 40, longitude: 40, time: 50 },
-    ],
-    id: "unsorted",
-  },
-  {
-    // Two keyframes share time 40: an instantaneous jump.
-    frames: [
-      { latitude: 0, longitude: 0, time: 0 },
-      { latitude: 10, longitude: 10, time: 40 },
-      { latitude: -20, longitude: 50, time: 40 },
-      { latitude: -20, longitude: 90, time: 80 },
-    ],
-    id: "duplicate",
-  },
-  {
-    // Hidden from 30, admitted again at 50, removed for good at 70.
-    frames: [
-      { latitude: 1, longitude: 1, time: 0 },
-      { latitude: 2, longitude: 2, time: 30, visible: false },
-      { latitude: 3, longitude: 3, time: 50 },
-      { latitude: 4, longitude: 4, time: 70, visible: false },
-    ],
-    id: "gap",
-  },
-  { frames: [{ latitude: 7, longitude: 7, time: 25 }], id: "single" },
-  { frames: [], id: "empty" },
-  {
-    frames: [
-      { latitude: 1, longitude: 1, time: Number.NaN },
-      { latitude: 11, longitude: 12, time: 10 },
-      { latitude: Number.POSITIVE_INFINITY, longitude: 50, time: 50 },
-      { latitude: 50, longitude: Number.NaN, time: 60 },
-      { latitude: 19, longitude: 28, time: 90 },
-      { latitude: 0, longitude: 0, time: Number.POSITIVE_INFINITY },
-    ],
-    id: "invalid",
-  },
-  {
-    frames: [{ latitude: Number.NaN, longitude: 0, time: 0 }],
-    id: "all-invalid",
-  },
-  {
-    // No id: the track's position in the source identifies it.
-    frames: [
-      { latitude: -5, longitude: -5, time: 20 },
-      { latitude: -6, longitude: -8, time: 60 },
-    ],
-  },
-  {
-    // Eastward across the antimeridian, supplied as unwrapped longitudes.
-    frames: [
-      { latitude: 0, longitude: 170, time: 0 },
-      { latitude: 0, longitude: 190, time: 100 },
-    ],
-    id: "antimeridian-unwrapped",
-  },
-  {
-    // Wrapped longitudes are taken as supplied: this track travels west through 0°.
-    frames: [
-      { latitude: 0, longitude: 170, time: 0 },
-      { latitude: 0, longitude: -170, time: 100 },
-    ],
-    id: "antimeridian-wrapped",
-  },
-];
-
 function pointById(points: ReturnType<typeof getTemporalMapPointsAtTime>, id: string) {
   return points.find((point) => point.id === id) ?? null;
 }
 
 describe("temporal point edge sequences (#172)", () => {
   test("the prepared index and the one-shot sampler match the reference at every step", () => {
-    const index = createTemporalMapPlaybackIndex(POINT_TRACKS);
+    const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
 
-    for (const time of SEQUENCE) {
-      const expected = rounded(sampleTemporalPointsNaively(POINT_TRACKS, time));
+    for (const time of TEMPORAL_EDGE_SEQUENCE) {
+      const expected = rounded(sampleTemporalPointsNaively(TEMPORAL_EDGE_POINT_TRACKS, time));
 
       expect(rounded(index.getPointsAtTime(time)), `index at ${time}`).toEqual(expected);
-      expect(rounded(getTemporalMapPointsAtTime(POINT_TRACKS, time)), `one-shot at ${time}`).toEqual(expected);
+      expect(rounded(getTemporalMapPointsAtTime(TEMPORAL_EDGE_POINT_TRACKS, time)), `one-shot at ${time}`).toEqual(expected);
     }
   });
 
   test("a sample depends only on its time, not on the steps before it", () => {
-    const index = createTemporalMapPlaybackIndex(POINT_TRACKS);
+    const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
 
-    for (const time of SEQUENCE) {
+    for (const time of TEMPORAL_EDGE_SEQUENCE) {
       expect(index.getPointsAtTime(time)).toEqual(
-        createTemporalMapPlaybackIndex(POINT_TRACKS).getPointsAtTime(time),
+        createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS).getPointsAtTime(time),
       );
     }
   });
 
   test("endpoints and exact keyframes return the declared keyframe", () => {
-    const index = createTemporalMapPlaybackIndex(POINT_TRACKS);
+    const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
 
     expect(pointById(index.getPointsAtTime(0), "steady")).toEqual({
       id: "steady",
@@ -182,7 +78,7 @@ describe("temporal point edge sequences (#172)", () => {
   });
 
   test("a duplicate time is an instantaneous jump to the keyframe declared last", () => {
-    const index = createTemporalMapPlaybackIndex(POINT_TRACKS);
+    const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
 
     expect(pointById(index.getPointsAtTime(20), "duplicate")).toMatchObject({ latitude: 5, longitude: 5 });
     expect(pointById(index.getPointsAtTime(40), "duplicate")).toMatchObject({ latitude: -20, longitude: 50 });
@@ -190,14 +86,14 @@ describe("temporal point edge sequences (#172)", () => {
   });
 
   test("empty, single-keyframe and invalid tracks follow one policy", () => {
-    const index = createTemporalMapPlaybackIndex(POINT_TRACKS);
+    const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
     const idsAt = (time: number) => index.getPointsAtTime(time).map((point) => point.id);
 
     expect(idsAt(24.999)).not.toContain("single");
     expect(pointById(index.getPointsAtTime(25), "single")).toMatchObject({ latitude: 7, longitude: 7 });
     expect(pointById(index.getPointsAtTime(100), "single")).toMatchObject({ latitude: 7, longitude: 7 });
 
-    for (const time of SEQUENCE) {
+    for (const time of TEMPORAL_EDGE_SEQUENCE) {
       expect(idsAt(time)).not.toContain("empty");
       expect(idsAt(time)).not.toContain("all-invalid");
     }
@@ -214,7 +110,7 @@ describe("temporal point edge sequences (#172)", () => {
   });
 
   test("an invisible keyframe opens a gap that closes at the next visible keyframe", () => {
-    const index = createTemporalMapPlaybackIndex(POINT_TRACKS);
+    const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
     const visibleAt = (time: number) => pointById(index.getPointsAtTime(time), "gap") !== null;
 
     expect([0, 29.999, 30, 40, 49.999, 50, 60, 69.999, 70, 100].map(visibleAt)).toEqual([
@@ -226,7 +122,7 @@ describe("temporal point edge sequences (#172)", () => {
   });
 
   test("longitudes interpolate as supplied across the antimeridian", () => {
-    const index = createTemporalMapPlaybackIndex(POINT_TRACKS);
+    const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
     const longitudeAt = (id: string, time: number) => pointById(index.getPointsAtTime(time), id)?.longitude;
 
     expect([25, 50, 75].map((time) => longitudeAt("antimeridian-unwrapped", time))).toEqual([175, 180, 185]);
@@ -234,12 +130,12 @@ describe("temporal point edge sequences (#172)", () => {
   });
 
   test("the time range spans valid keyframes only, visible or not", () => {
-    expect(getTemporalMapTimeRange(POINT_TRACKS)).toEqual({ end: 100, start: 0 });
-    expect(createTemporalMapPlaybackIndex(POINT_TRACKS).getTimeRange()).toEqual({ end: 100, start: 0 });
-    expect(createTemporalMapPlaybackIndex([POINT_TRACKS[3]!]).getTimeRange()).toEqual({ end: 70, start: 0 });
-    expect(createTemporalMapPlaybackIndex([POINT_TRACKS[4]!]).getTimeRange()).toEqual({ end: 25, start: 25 });
-    expect(createTemporalMapPlaybackIndex([POINT_TRACKS[6]!]).getTimeRange()).toEqual({ end: 90, start: 10 });
-    expect(createTemporalMapPlaybackIndex([POINT_TRACKS[5]!, POINT_TRACKS[7]!]).getTimeRange()).toBeNull();
+    expect(getTemporalMapTimeRange(TEMPORAL_EDGE_POINT_TRACKS)).toEqual({ end: 100, start: 0 });
+    expect(createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS).getTimeRange()).toEqual({ end: 100, start: 0 });
+    expect(createTemporalMapPlaybackIndex([TEMPORAL_EDGE_POINT_TRACKS[3]!]).getTimeRange()).toEqual({ end: 70, start: 0 });
+    expect(createTemporalMapPlaybackIndex([TEMPORAL_EDGE_POINT_TRACKS[4]!]).getTimeRange()).toEqual({ end: 25, start: 25 });
+    expect(createTemporalMapPlaybackIndex([TEMPORAL_EDGE_POINT_TRACKS[6]!]).getTimeRange()).toEqual({ end: 90, start: 10 });
+    expect(createTemporalMapPlaybackIndex([TEMPORAL_EDGE_POINT_TRACKS[5]!, TEMPORAL_EDGE_POINT_TRACKS[7]!]).getTimeRange()).toBeNull();
     expect(createTemporalMapPlaybackIndex([]).getTimeRange()).toBeNull();
   });
 });
@@ -323,7 +219,7 @@ describe("temporal GeoJSON edge sequences (#172)", () => {
   test("the prepared index and the one-shot sampler match the reference at every step", () => {
     const index = createTemporalGeoJsonPlaybackIndex(GEOJSON_TRACKS);
 
-    for (const time of SEQUENCE) {
+    for (const time of TEMPORAL_EDGE_SEQUENCE) {
       const expected = rounded(sampleTemporalGeoJsonNaively(GEOJSON_TRACKS, time));
 
       expect(rounded(index.getFeatureCollectionAtTime(time).features), `index at ${time}`).toEqual(expected);
@@ -338,7 +234,7 @@ describe("temporal GeoJSON edge sequences (#172)", () => {
     const index = createTemporalGeoJsonPlaybackIndex(GEOJSON_TRACKS);
     const source = structuredClone(GEOJSON_TRACKS);
 
-    for (const time of SEQUENCE) {
+    for (const time of TEMPORAL_EDGE_SEQUENCE) {
       const sample = index.getFeatureCollectionAtTime(time);
       const fresh = createTemporalGeoJsonPlaybackIndex(GEOJSON_TRACKS).getFeatureCollectionAtTime(time);
 
@@ -395,7 +291,7 @@ describe("temporal GeoJSON edge sequences (#172)", () => {
     ]);
     expect([24.999, 25, 100].map((time) => visibleAt("single", time))).toEqual([false, true, true]);
     expect([9.999, 10, 100].map((time) => visibleAt("invalid-time", time))).toEqual([false, true, true]);
-    expect(SEQUENCE.some((time) => visibleAt("empty", time))).toBe(false);
+    expect(TEMPORAL_EDGE_SEQUENCE.some((time) => visibleAt("empty", time))).toBe(false);
     // Features keep the source order of their tracks.
     expect(idsAt(55)).toEqual(["region", "route", "transition", "gap", "single", "invalid-time", "antimeridian"]);
     expect(index.getFeatureCollectionAtTime(Number.NaN).features).toEqual([]);

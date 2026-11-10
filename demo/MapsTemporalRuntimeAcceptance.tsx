@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import {
   createMapScopedTimelineClock,
+  createTemporalMapPlaybackIndex,
+  getMapsTemporalRuntimeStatus,
   GeoJsonLayer,
   MapScopedTimelineControls,
   TemporalClusteredMap,
@@ -9,6 +11,16 @@ import {
   type MapScopedTimelineClock,
   type MapViewState,
 } from "../src";
+import {
+  getMapsTemporalRuntimeVersion,
+  subscribeMapsTemporalRuntime,
+} from "../src/temporal-points-wasm";
+import { sampleTemporalPointsNaively } from "../src/test-temporal-oracle";
+import {
+  canonicalTemporalSample,
+  TEMPORAL_EDGE_POINT_TRACKS,
+  TEMPORAL_EDGE_SEQUENCE,
+} from "../src/test-temporal-point-sequences";
 import {
   TEMPORAL_ACCEPTANCE_ANTIMERIDIAN_TRACKS,
   TEMPORAL_ACCEPTANCE_REPLACEMENT_TRACKS,
@@ -48,14 +60,49 @@ const STATIC_REGIONS: GeoJSON.FeatureCollection<GeoJSON.Polygon> = {
 
 declare global {
   interface Window {
-    mapsTemporalAcceptance?: { clock: MapScopedTimelineClock };
+    mapsTemporalAcceptance?: {
+      clock: MapScopedTimelineClock;
+      sampleEdgeSequence(): TemporalSamplerParity;
+    };
   }
+}
+
+type TemporalSamplerParity = {
+  mismatches: Array<{ actual: string; expected: string; time: number }>;
+  sampler: string;
+  steps: number;
+};
+
+/**
+ * #172: samples the shared edge sequence with the playback index the Map View uses (Rust once its
+ * runtime is ready) and compares every step with the independent reference sampler.
+ */
+function sampleEdgeSequence(): TemporalSamplerParity {
+  const index = createTemporalMapPlaybackIndex(TEMPORAL_EDGE_POINT_TRACKS);
+  const mismatches: TemporalSamplerParity["mismatches"] = [];
+
+  for (const time of TEMPORAL_EDGE_SEQUENCE) {
+    const actual = JSON.stringify(canonicalTemporalSample(index.getPointsAtTime(time)));
+    const expected = JSON.stringify(
+      canonicalTemporalSample(sampleTemporalPointsNaively(TEMPORAL_EDGE_POINT_TRACKS, time)),
+    );
+
+    if (actual !== expected) mismatches.push({ actual, expected, time });
+  }
+
+  return {
+    mismatches,
+    sampler: getMapsTemporalRuntimeStatus(),
+    steps: TEMPORAL_EDGE_SEQUENCE.length,
+  };
 }
 
 /** Temporal points over static regions on `flatRuntime="maps"`, driven by one shared clock. */
 export function MapsTemporalRuntimeAcceptance() {
   const [clock] = useState(() => createMapScopedTimelineClock({ playbackRate: 20 }));
   const snapshot = useMapScopedTimelineSnapshot(clock);
+  useSyncExternalStore(subscribeMapsTemporalRuntime, getMapsTemporalRuntimeVersion);
+  const sampler = getMapsTemporalRuntimeStatus();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [regionSelectedId, setRegionSelectedId] = useState<string | null>(null);
   const [source, setSource] = useState<"initial" | "replacement">("initial");
@@ -67,7 +114,7 @@ export function MapsTemporalRuntimeAcceptance() {
       : TEMPORAL_ACCEPTANCE_REPLACEMENT_TRACKS;
 
   useEffect(() => {
-    window.mapsTemporalAcceptance = { clock };
+    window.mapsTemporalAcceptance = { clock, sampleEdgeSequence };
     return () => {
       delete window.mapsTemporalAcceptance;
       clock.dispose();
@@ -115,6 +162,7 @@ export function MapsTemporalRuntimeAcceptance() {
         />
       </TemporalClusteredMap>
       <MapScopedTimelineControls timeline={clock} timelineLabel="Acceptance timeline" />
+      <output data-testid="temporal-runtime-sampler">{sampler}</output>
       <output data-testid="temporal-runtime-source">{source}</output>
       <output data-testid="temporal-runtime-time">{snapshot.activeTime}</output>
       <output data-testid="temporal-runtime-playing">
