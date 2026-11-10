@@ -75,7 +75,9 @@ export function MapsTemporalRuntimeAcceptance() {
         pointRadius={10}
         renderFeaturePopup={(feature) => (
           <span data-testid="temporal-runtime-popup">
-            {feature.kind === "cluster" ? `Cluster ${feature.pointCount}` : `Selected ${feature.point.label}`}
+            {feature.kind === "cluster"
+              ? `Cluster ${feature.pointCount}`
+              : `Selected ${feature.point.label}`}
           </span>
         )}
         selectedFeatureId={selectedId}
@@ -95,7 +97,9 @@ export function MapsTemporalRuntimeAcceptance() {
       </TemporalClusteredMap>
       <MapScopedTimelineControls timeline={clock} timelineLabel="Acceptance timeline" />
       <output data-testid="temporal-runtime-time">{snapshot.activeTime}</output>
-      <output data-testid="temporal-runtime-playing">{snapshot.isPlaying ? "playing" : "paused"}</output>
+      <output data-testid="temporal-runtime-playing">
+        {snapshot.isPlaying ? "playing" : "paused"}
+      </output>
       <output data-testid="temporal-runtime-selection">{selectedId ?? "none"}</output>
       <output data-testid="temporal-runtime-region">{regionSelectedId ?? "none"}</output>
     </main>
