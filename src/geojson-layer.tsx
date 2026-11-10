@@ -2,6 +2,7 @@
 
 import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 
+import { useFlatFeatureOverlayRetirement } from "./flat-feature-overlay-retirement";
 import { joinClassNames, toLatLng } from "./map-display";
 import {
   createFlatGeometryLayers,
@@ -173,6 +174,34 @@ export function GeoJsonLayer<
   );
   const surfaceDisplay = surface?.display;
   const registerMapLibreLayer = surface?.registerMapLibreLayer;
+  const interactiveFeatureKeys = useMemo(
+    () =>
+      new Set(
+        features
+          .filter((feature) => isFeatureInteractive?.(feature) ?? true)
+          .map((feature) => getFlatGeoJsonFeatureKey(feature, getFeatureId)),
+      ),
+    [features, getFeatureId, isFeatureInteractive],
+  );
+  const trackPopup = useFlatFeatureOverlayRetirement({
+    clearHover: () => {
+      const currentSurface = surfaceRef.current;
+
+      if (currentSurface?.maplibreMap) {
+        currentSurface.maplibreMap.getContainer().style.cursor = "";
+      }
+      currentSurface?.handleFeatureHover(null, null, {
+        getFeatureId,
+        onFeatureHover,
+        onHoveredFeatureIdChange,
+        renderFeatureTooltip,
+      });
+    },
+    deliveredHoverKeyRef,
+    interactiveFeatureKeys,
+    selectedFeatureId,
+    surface,
+  });
 
   useEffect(() => {
     surfaceRef.current = surface;
@@ -241,6 +270,7 @@ export function GeoJsonLayer<
                       renderFeaturePopup,
                       renderFeatureTooltip,
                       surface: currentSurface,
+                      trackPopup,
                     });
                   }
 
@@ -342,6 +372,7 @@ export function GeoJsonLayer<
     resolvedLayerId,
     selectedFeatureId,
     styleProps,
+    trackPopup,
     registerMapLibreLayer,
     surfaceDisplay,
   ]);
@@ -581,9 +612,11 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
     renderFeaturePopup?: (feature: GeoJsonLayerFeature<TProperties>) => ReactNode;
     renderFeatureTooltip?: (feature: GeoJsonLayerFeature<TProperties>) => ReactNode;
     surface: MapSurfaceContextValue;
+    trackPopup: (key: string, feature: unknown) => void;
   },
 ) {
 	  layer.on("click", (event: FlatFeaturePointerEvent = {}) => {
+	    if (options.renderFeaturePopup) options.trackPopup(options.featureKey, options.feature);
 	    options.surface.handleFeatureClick(options.feature, options.getPosition(event), {
 	      getFeatureId: options.getFeatureId,
 	      onFeatureSelect: options.onFeatureSelect,
@@ -593,6 +626,9 @@ function bindFlatLayerInteraction<TProperties extends Record<string, unknown>>(
 	  });
   layer.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
     suppressNativeContextMenu(event);
+	    if (options.renderFeaturePopup && !options.renderFeatureContextMenu) {
+	      options.trackPopup(options.featureKey, options.feature);
+	    }
 	    options.surface.handleFeatureContextMenu(options.feature, options.getPosition(event), {
 	      coordinates: getGeometryCenter(options.feature.geometry),
 	      getFeatureId: options.getFeatureId,
