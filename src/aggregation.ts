@@ -288,12 +288,21 @@ function createBoundsPredicate(bounds: ViewportAggregationQuery["bounds"]) {
   const minLongitude = wrapLongitude(west);
   const maxLongitude = east === 180 ? 180 : wrapLongitude(east);
 
-  return (longitude: number, latitude: number) =>
-    latitude >= minLatitude &&
-    latitude <= maxLatitude &&
-    (minLongitude <= maxLongitude
-      ? longitude >= minLongitude && longitude <= maxLongitude
-      : longitude >= minLongitude || longitude <= maxLongitude);
+  return (suppliedLongitude: number, latitude: number) => {
+    // Like the Rust index, a point supplied with an unwrapped longitude is found where it is.
+    const longitude =
+      suppliedLongitude >= -180 && suppliedLongitude <= 180
+        ? suppliedLongitude
+        : wrapLongitude(suppliedLongitude);
+
+    return (
+      latitude >= minLatitude &&
+      latitude <= maxLatitude &&
+      (minLongitude <= maxLongitude
+        ? longitude >= minLongitude && longitude <= maxLongitude
+        : longitude >= minLongitude || longitude <= maxLongitude)
+    );
+  };
 }
 
 function wrapLongitude(longitude: number) {

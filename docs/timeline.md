@@ -64,6 +64,46 @@ ignored when a `timeline` is supplied.
 static Map Layers such as `GeoJsonLayer` go in as children and stay retained while only the
 time changes.
 
+## Temporal edge policy
+
+Sampling is a pure function of the source and the time: a direct seek, forward playback, a
+backward seek and resumed playback give the same Map Features at the same time. Point tracks
+and temporal GeoJSON tracks follow one policy, checked against an independent reference
+sampler (`src/temporal-edge-sequences.test.ts`):
+
+- **Endpoints.** A track is absent before its first keyframe and holds its last keyframe
+  afterwards. Exactly on a keyframe, the keyframe is returned as declared.
+- **Admission, removal and gaps.** A keyframe with `visible: false` removes the feature from
+  that time until its next keyframe; it reappears on that keyframe without moving in. A final
+  invisible keyframe removes it for good.
+- **Order and duplicate times.** Keyframes are sampled in time order however they are
+  declared. Keyframes that share a time are an instantaneous jump: the feature moves toward
+  the one declared first and continues from the one declared last.
+- **Invalid input.** Keyframes with a non-finite time or coordinate (or an unsupported
+  geometry) are dropped and do not extend the time range; a track left without keyframes never
+  appears. A non-finite sample time yields no features, and `clock.seek()` ignores a
+  non-finite time.
+- **Empty and single-keyframe sources.** Without any valid keyframe there is no time range and
+  nothing to play. A single keyframe gives a range of one instant: the feature appears from
+  that time on and the clock has no playable range.
+- **World wrapping.** Longitudes interpolate as supplied; nothing picks a shorter way around.
+  To cross the antimeridian, supply unwrapped longitudes (`174` → `186`, not `174` → `-174`,
+  which travels west through 0°). Point aggregation indexes an unwrapped longitude at its
+  wrapped location and reports it as supplied, so the Maps runtime draws and picks such a
+  feature continuously across 180°.
+- **Geometry transitions.** With the default `compatible` strategy, geometries of the same
+  type and vertex layout move vertex by vertex; any other transition holds the earlier
+  geometry until the next keyframe (or hides it with `fallback: "hide"`).
+- **Source changes.** Replacing a map's tracks keeps the map-scoped time, the playback state
+  and the application's selection; the new source is sampled at that time. The clock keeps the
+  last requested time and the time range only clamps what is sampled, so a time outside the
+  new range is sampled at the nearest bound and returns if the range covers it again before
+  the next seek or playback frame.
+- **Stale work.** The clock has one live frame request. A frame requested before a pause,
+  `dispose()` or a scheduler change never advances the time or starts a second loop. With
+  application-controlled time the latest time supplied by the application always wins; seeks
+  and frames are only requests.
+
 ## Historical Map Feature selection
 
 `useHistoricalMapFeatureSelection({ features, locale, timeline })` validates Map Feature

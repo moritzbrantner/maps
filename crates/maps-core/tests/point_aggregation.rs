@@ -259,3 +259,47 @@ fn rejects_invalid_options_and_non_finite_queries() {
             .is_err()
     );
 }
+
+#[test]
+fn indexes_unwrapped_longitudes_at_their_wrapped_location() {
+    // A moving feature may cross the antimeridian with unwrapped longitudes: 183°E is 177°W.
+    let points = normalize_map_points(vec![
+        MapPoint::new(10.0, 183.0).with_id("east"),
+        MapPoint::new(-10.0, -190.0).with_id("west"),
+        MapPoint::new(0.0, 365.0).with_id("lap"),
+    ]);
+    let mut index = PointAggregationIndex::new(points, PointAggregationOptions::default())
+        .expect("aggregation index should build");
+    let mut visible = |bounds: [f64; 4]| {
+        let mut points = index
+            .get_viewport_aggregation(ViewportAggregationQuery { bounds, zoom: 6.0 })
+            .expect("viewport should aggregate")
+            .features
+            .into_iter()
+            .map(|feature| match feature {
+                AggregatedMapFeature::Point(point) => (point.point.id, point.coordinates),
+                AggregatedMapFeature::Cluster(_) => panic!("distant points must not cluster"),
+            })
+            .collect::<Vec<_>>();
+        points.sort_by(|left, right| left.0.cmp(&right.0));
+        points
+    };
+
+    // Found where it is on the globe, reported with the coordinates it was supplied with.
+    assert_eq!(
+        visible([-178.0, 5.0, -176.0, 15.0]),
+        vec![("east".to_owned(), [183.0, 10.0])]
+    );
+    assert_eq!(
+        visible([4.0, -1.0, 6.0, 1.0]),
+        vec![("lap".to_owned(), [365.0, 0.0])]
+    );
+    // A viewport across the antimeridian sees both, once each.
+    assert_eq!(
+        visible([165.0, -20.0, 190.0, 20.0]),
+        vec![
+            ("east".to_owned(), [183.0, 10.0]),
+            ("west".to_owned(), [-190.0, -10.0])
+        ]
+    );
+}
