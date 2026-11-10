@@ -1,0 +1,343 @@
+{
+  "schema": "maps-tileset-qa-v1",
+  "checkVersion": "1.0.0",
+  "fixtureId": "showcase-pmtiles-v1",
+  "status": "passed",
+  "mode": "sampled",
+  "seed": 1,
+  "limits": {
+    "sampleTiles": 32,
+    "maxContentTiles": 32,
+    "maxAddressedTiles": 250000,
+    "maxExpectedTiles": 250000,
+    "tilesPerFinding": 16,
+    "reportedTiles": 64
+  },
+  "source": {
+    "sourceId": "maps-showcase",
+    "dataRevision": "1",
+    "schema": {
+      "id": "shortbread",
+      "version": "1.0",
+      "sourceLayers": ["water_polygons", "land", "streets"]
+    },
+    "bounds": [-180, -85.0511287798066, 180, 85.0511287798066],
+    "minZoom": 0,
+    "maxZoom": 2,
+    "attribution": "Maps synthetic CC0 geometry",
+    "license": "CC0-1.0",
+    "provenance": "scripts/create-pmtiles-fixture.mjs; complete z0–z2 synthetic vector geometry, not real-world geographic data"
+  },
+  "archive": {
+    "name": "showcase-pmtiles-v1.pmtiles",
+    "bytes": 351749,
+    "sha256": "903f437836c2234a457946b110ed56560202c7caa392568ec0ea485b34486b8e",
+    "expectedSha256": "903f437836c2234a457946b110ed56560202c7caa392568ec0ea485b34486b8e",
+    "expectedBytes": 351749,
+    "header": {
+      "specVersion": 3,
+      "tileType": 1,
+      "tileCompression": 2,
+      "internalCompression": 2,
+      "minZoom": 0,
+      "maxZoom": 2,
+      "bounds": [-180, -85.0511288, 180, 85.0511288],
+      "addressedTiles": 21,
+      "tileEntries": 21,
+      "tileContents": 21
+    }
+  },
+  "tools": {
+    "pmtilesReader": "4.5.0",
+    "upstreamVerify": {
+      "tool": "go-pmtiles",
+      "version": "1.31.2"
+    }
+  },
+  "checks": [
+    {
+      "id": "manifest",
+      "status": "passed",
+      "summary": "manifest is valid Maps Tileset metadata"
+    },
+    {
+      "id": "archive-identity",
+      "status": "passed",
+      "summary": "archive bytes compared with declared SHA-256 903f437836c2234a457946b110ed56560202c7caa392568ec0ea485b34486b8e"
+    },
+    {
+      "id": "archive-header",
+      "status": "passed",
+      "summary": "PMTiles v3 header compared with the manifest"
+    },
+    {
+      "id": "archive-metadata",
+      "status": "passed",
+      "summary": "archive JSON metadata compared with the manifest"
+    },
+    {
+      "id": "archive-directory",
+      "status": "passed",
+      "summary": "21 addressed tiles in 21 entries"
+    },
+    {
+      "id": "upstream-verify",
+      "status": "passed",
+      "summary": "go-pmtiles 1.31.2 verify passed"
+    },
+    {
+      "id": "tile-coverage",
+      "status": "passed",
+      "summary": "21 of 21 required tiles present, 0 missing"
+    },
+    {
+      "id": "tile-content",
+      "status": "passed",
+      "summary": "21 of 21 inspected tiles decoded (21 addressed)"
+    }
+  ],
+  "findings": [],
+  "coverage": {
+    "expected": 21,
+    "covered": 21,
+    "missing": 0,
+    "outside": 0,
+    "outOfZoomRange": 0,
+    "addressed": 21,
+    "byZoom": [
+      {
+        "zoom": 0,
+        "expected": 1,
+        "covered": 1,
+        "missing": 0,
+        "outside": 0
+      },
+      {
+        "zoom": 1,
+        "expected": 4,
+        "covered": 4,
+        "missing": 0,
+        "outside": 0
+      },
+      {
+        "zoom": 2,
+        "expected": 16,
+        "covered": 16,
+        "missing": 0,
+        "outside": 0
+      }
+    ]
+  },
+  "content": {
+    "addressedTiles": 21,
+    "inspectedTiles": 21,
+    "layers": [
+      {
+        "name": "land",
+        "declared": true,
+        "tiles": 21,
+        "features": 21,
+        "points": 0,
+        "lines": 0,
+        "polygons": 21,
+        "featuresWithId": 0,
+        "extents": [4096],
+        "propertyKeys": ["kind"]
+      },
+      {
+        "name": "streets",
+        "declared": true,
+        "tiles": 21,
+        "features": 1248,
+        "points": 0,
+        "lines": 1248,
+        "polygons": 0,
+        "featuresWithId": 0,
+        "extents": [4096],
+        "propertyKeys": []
+      },
+      {
+        "name": "water_polygons",
+        "declared": true,
+        "tiles": 21,
+        "features": 21,
+        "points": 0,
+        "lines": 0,
+        "polygons": 21,
+        "featuresWithId": 0,
+        "extents": [4096],
+        "propertyKeys": []
+      }
+    ],
+    "tiles": [
+      {
+        "z": 0,
+        "x": 0,
+        "y": 0,
+        "bytes": 67200,
+        "sha256": "8e541a713f5be6d9aee5df87b0111360aa4667b03924b6e64c3c8d0adfad665f",
+        "features": 130
+      },
+      {
+        "z": 1,
+        "x": 0,
+        "y": 0,
+        "bytes": 22304,
+        "sha256": "4d7264cd6594cd48c332b3aada66a9f00496d74bd749c883bc47180d5ce48374",
+        "features": 58
+      },
+      {
+        "z": 1,
+        "x": 0,
+        "y": 1,
+        "bytes": 22304,
+        "sha256": "666d1b893c53798fe778daed0182dac0d99a282d425bee010ce2c99dfd3e6154",
+        "features": 58
+      },
+      {
+        "z": 1,
+        "x": 1,
+        "y": 1,
+        "bytes": 22304,
+        "sha256": "cae188cb564cb2d21d1f19d9a2ab90c3ed21011fa551f14fcdba1bde9e3de6f4",
+        "features": 58
+      },
+      {
+        "z": 1,
+        "x": 1,
+        "y": 0,
+        "bytes": 22304,
+        "sha256": "11da0d2682f8db4156ec02073bfa5ec33ad7f609731920b6fb2d0ef2c5d705de",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 0,
+        "y": 0,
+        "bytes": 22304,
+        "sha256": "d82e4d63d2fd147571b42fb2d7bf4a0edb76742cd67facdbb904caae982d8748",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 1,
+        "y": 0,
+        "bytes": 22304,
+        "sha256": "c7b4013b7a465d1cd7ee968d15fba300b1aa202ea7091e7e0635d3efd67d2b84",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 1,
+        "y": 1,
+        "bytes": 22304,
+        "sha256": "35a264f6b97b0d611cb0a06d0b4f1b55787b25981964498afc7641dfa2a460de",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 0,
+        "y": 1,
+        "bytes": 22304,
+        "sha256": "a915cf7fd36a37c9b660b71ccd9a2f28504f2bb764cfd43c030093f25e219b10",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 0,
+        "y": 2,
+        "bytes": 22304,
+        "sha256": "c604ee892b9b9517f2dc0733403ebdc2166f7075dc78fe1463b29b59ba1be407",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 0,
+        "y": 3,
+        "bytes": 22304,
+        "sha256": "63672206b2c052c184adb7b316e061c8af60737a4c64ad12d30f09c68a3cf809",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 1,
+        "y": 3,
+        "bytes": 22304,
+        "sha256": "a1db48e8856899328247d3e9e90cf58bcea1b0e3af5b6fdff94f8d207b7b5c53",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 1,
+        "y": 2,
+        "bytes": 22304,
+        "sha256": "2bccc5e45f65e13cef653dfaf9fdda1a5b8fde40fb48cbb9fc8df6638388d5c3",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 2,
+        "y": 2,
+        "bytes": 22304,
+        "sha256": "9ff973a72205dd4ebb6269067610a5ff9986420d5da898e33bb17205abd42919",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 2,
+        "y": 3,
+        "bytes": 22304,
+        "sha256": "44427fd4d1c4901d0b8f35b1ac538cacded0a9712083900e80570ae46a2e3c90",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 3,
+        "y": 3,
+        "bytes": 22304,
+        "sha256": "45ae4e7b0bb38750c3fc4efbe4de9fe6c7517a272791107232e8dfdbe924c616",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 3,
+        "y": 2,
+        "bytes": 22304,
+        "sha256": "75987c67c0ae8eb7a33eb437194a50f9289ac97d5b79d17b155c207288e4fad9",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 3,
+        "y": 1,
+        "bytes": 22304,
+        "sha256": "327be49e0382f061d9cbfdd7a4d4a08fd6d86aafd61e9a95258d5e8ffff9519f",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 2,
+        "y": 1,
+        "bytes": 22304,
+        "sha256": "95e9321ff67bb7ebc34d885b0c93ada0d30e8cdcb32cf7d0239f7055e0189606",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 2,
+        "y": 0,
+        "bytes": 22304,
+        "sha256": "851fad666a06aa7e141b5b1bbf360bea508e8e61c551d7bf840ae8a0f24d1727",
+        "features": 58
+      },
+      {
+        "z": 2,
+        "x": 3,
+        "y": 0,
+        "bytes": 22304,
+        "sha256": "1dffa06349306a5a835e394630787802ca9614e3f64726da4c1596c14584709d",
+        "features": 58
+      }
+    ]
+  }
+}

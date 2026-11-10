@@ -329,6 +329,36 @@ impl MapsPointAggregationIndex {
     }
 }
 
+/// Direct WASM handle over the Maps-owned moving point track index (#172). Keyframes cross once,
+/// packed; each sample returns one packed `Float64Array` (see
+/// [`maps_core::TemporalPointTrackIndex::sample_packed`]).
+#[wasm_bindgen]
+pub struct MapsTemporalPointIndex {
+    inner: maps_core::TemporalPointTrackIndex,
+}
+
+#[wasm_bindgen]
+impl MapsTemporalPointIndex {
+    #[wasm_bindgen(constructor)]
+    pub fn new(keyframes: &[f64], frame_counts: &[u32]) -> Result<MapsTemporalPointIndex, JsValue> {
+        maps_core::TemporalPointTrackIndex::from_packed(keyframes, frame_counts)
+            .map(|inner| Self { inner })
+            .map_err(to_js_error)
+    }
+
+    /// `[start, end]`, or empty when no track has a valid keyframe.
+    #[wasm_bindgen(js_name = timeRange)]
+    pub fn time_range(&self) -> Vec<f64> {
+        self.inner
+            .time_range()
+            .map_or_else(Vec::new, |(start, end)| vec![start, end])
+    }
+
+    pub fn sample(&self, time: f64) -> Vec<f64> {
+        self.inner.sample_packed(time)
+    }
+}
+
 /// Decodes selected Shortbread vector-tile linework through the Maps-owned Rust boundary.
 #[wasm_bindgen(js_name = decodeShortbreadBasemapLines)]
 pub fn decode_shortbread_basemap_lines_for_js(
@@ -360,6 +390,50 @@ pub fn decode_shortbread_basemap_for_js(
 pub fn decode_shortbread_tile_pixels_for_js(bytes: &[u8], size: u32) -> Result<JsValue, JsValue> {
     let tile = maps_core::decode_shortbread_tile_pixels(bytes, size).map_err(to_js_error)?;
     encode_json_compatible(&tile)
+}
+
+/// Tileset QA (#276): what one MVT payload contains, decoded by the runtime MVT decoder.
+#[wasm_bindgen(js_name = inspectMvtTile)]
+pub fn inspect_mvt_tile_for_js(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    encode_json_compatible(&maps_core::inspect_mvt_tile(bytes).map_err(to_js_error)?)
+}
+
+/// Tileset QA (#276): declared coverage against addressed tiles, packed as `z, x, y` triples.
+#[wasm_bindgen(js_name = auditTilesetCoverage)]
+pub fn audit_tileset_coverage_for_js(
+    bounds: &[f64],
+    min_zoom: u8,
+    max_zoom: u8,
+    addressed: &[u32],
+    sample_limit: u32,
+    max_expected: u32,
+) -> Result<JsValue, JsValue> {
+    let bounds: [f64; 4] = bounds
+        .try_into()
+        .map_err(|_| to_js_error("coverage bounds need west, south, east, north"))?;
+    let (triples, remainder) = addressed.as_chunks::<3>();
+    if !remainder.is_empty() {
+        return Err(to_js_error("addressed tiles need z, x, y triples"));
+    }
+    let addressed = triples
+        .iter()
+        .map(|&[z, x, y]| {
+            u8::try_from(z)
+                .ok()
+                .and_then(|z| TileId::new(z, x, y))
+                .ok_or_else(|| to_js_error("addressed tile is outside its zoom pyramid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let audit = maps_core::audit_tileset_coverage(
+        bounds,
+        min_zoom,
+        max_zoom,
+        &addressed,
+        sample_limit as usize,
+        max_expected,
+    )
+    .map_err(to_js_error)?;
+    encode_json_compatible(&audit)
 }
 
 /// Normalizes native map points using the Maps-owned Rust contract.

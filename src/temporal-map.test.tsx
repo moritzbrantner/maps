@@ -16,7 +16,12 @@ import {
   resetMapsAggregationRuntimeForTests,
   setMapsAggregationWasmRuntimeForTests,
 } from "./aggregation-runtime";
+import {
+  resetMapsTemporalWasmRuntimeForTests,
+  setMapsTemporalWasmRuntimeForTests,
+} from "./temporal-points-wasm";
 import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
+import { createScanTemporalRuntimeForTests } from "./test-temporal-runtime";
 import { createManualTimelineScheduler } from "./test-timeline-scheduler";
 
 const flatMock = vi.hoisted(() => {
@@ -182,6 +187,7 @@ vi.mock("flat", () => flatMock);
 
 afterEach(() => {
   flatMock.reset();
+  resetMapsTemporalWasmRuntimeForTests();
 });
 
 function getRenderedLayersByType(type: string) {
@@ -966,6 +972,26 @@ describe("Map-Scoped Timeline parity (#172)", () => {
     for (const time of [20, 35, 47.5, 60]) {
       expect(await playTo(time)).toEqual(direct.get(time));
     }
+  });
+
+  test("the Map View moves sampling to the Rust temporal runtime once it is ready", async () => {
+    const { seek } = await renderParityMap();
+    const before = await seek(35);
+    const calls = { indexes: 0, samples: 0 };
+
+    act(() => setMapsTemporalWasmRuntimeForTests(createScanTemporalRuntimeForTests(calls)));
+    await waitFor(() => {
+      expect(calls.indexes).toBe(1);
+    });
+    // The switch of authority is not observable: same positions, order and selection.
+    expect(renderedPointMarkers()).toEqual(before);
+
+    for (const time of [...targets].reverse()) {
+      await seek(time);
+    }
+    // One prepared index; time changes only sample it.
+    expect(calls.indexes).toBe(1);
+    expect(calls.samples).toBeGreaterThanOrEqual(targets.length);
   });
 
   test("TemporalClusteredMap and TemporalHeatMap sample one shared clock and frame loop", async () => {

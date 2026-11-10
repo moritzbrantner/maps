@@ -7,7 +7,7 @@ import {
   type Source,
 } from "pmtiles";
 import type { MapsRasterTileId } from "./flat-runtime-wasm";
-import type { MapsTileset } from "./maps-tileset";
+import type { MapsTileset, MapsTilesetMetadata } from "./maps-tileset";
 
 /** HTTP cache metadata of the response that carried a tile; consumed by opt-in persistence only. */
 export type MapsTileHttpMetadata = {
@@ -55,11 +55,12 @@ function httpMetadata(headers: Headers): MapsTileHttpMetadata {
 }
 
 const MAX_RANGE_BYTES = 8 * 1024 * 1024;
-const MAX_DECODED_TILE_BYTES = 16 * 1024 * 1024;
+/** Largest decoded MVT tile the Map View accepts; Tileset QA reports larger ones. */
+export const MAX_DECODED_TILE_BYTES = 16 * 1024 * 1024;
 const HEADER_REQUEST_BYTES = 16_384; // The upstream PMTiles v3 header/root request.
 const BOUNDS_TOLERANCE = 1e-5; // E7 header coordinates and producer metadata rounding.
 
-function archiveError(source: MapsTileset, message: string): Error {
+function archiveError(source: MapsTilesetMetadata, message: string): Error {
   return new Error(`Maps Tileset ${source.sourceId}: PMTiles ${message}`);
 }
 
@@ -140,7 +141,8 @@ function createRangeSource(
   };
 }
 
-function validateArchiveHeader(source: MapsTileset, header: Header) {
+/** Throws when a PMTiles v3 header conflicts with the manifest. Shared with Tileset QA. */
+export function validateArchiveHeader(source: MapsTilesetMetadata, header: Header) {
   if (header.specVersion !== 3 || header.tileType !== TileType.Mvt) {
     throw archiveError(source, "requires PMTiles v3 with MVT vector tiles");
   }
@@ -169,7 +171,8 @@ function validateArchiveHeader(source: MapsTileset, header: Header) {
   }
 }
 
-function validateArchiveMetadata(source: MapsTileset, input: unknown) {
+/** Throws when archive JSON metadata conflicts with the manifest. Shared with Tileset QA. */
+export function validateArchiveMetadata(source: MapsTilesetMetadata, input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw archiveError(source, "invalid JSON metadata");
   }

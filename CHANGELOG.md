@@ -9,6 +9,14 @@
   `budgetBytes`), so later visits reuse them. It is off by default.
   `clearMapsDownloadedTiles()` and `getMapsTilePersistenceStatus()` clear and inspect the store.
   See `docs/maps-tilesets.md`.
+- Rust/WASM samples moving point tracks (#172 phase C). Once the Maps WASM runtime is loaded,
+  `createTemporalMapPlaybackIndex`, `getTemporalMapPointsAtTime`, `TemporalClusteredMap` and
+  `TemporalHeatMap` take keyframe selection, admission and positions from the Rust
+  `TemporalPointTrackIndex`. The TypeScript implementation stays as the reference and the
+  fallback before loading, during SSR or when loading fails, and returns the same results.
+  New: `initializeMapsTemporalWasm()`, `ensureMapsTemporalWasm()` and
+  `getMapsTemporalRuntimeStatus()`. Temporal GeoJSON geometry sampling is unchanged (owned by
+  #173). See "Temporal computation authority" in `docs/timeline.md`.
 
 ### Internal
 
@@ -16,6 +24,11 @@
   compares MapLibre GL + `pmtiles` with the first-party Map View over the same
   content-pinned Atlas archives through runtime-profiler and Moonlight (#270). Pages deploy
   builds publish the outcome at `/maps/evidence/atlas-tileset-runtime.json`.
+- Tileset integrity QA, tooling only (#276 part 1): `bun run qa:tileset` audits a PMTiles
+  archive against its manifest (identity, header, metadata, directory, coverage, decoded
+  tile content, pinned `go-pmtiles verify`) and writes a `maps-tileset-qa-v1` artifact with
+  `passed`/`failed`/`inconclusive` checks. `bun run verify:tileset-qa` gates the committed
+  fixtures in CI. See `docs/maps-tilesets.md`.
 
 ## 0.2.0
 
