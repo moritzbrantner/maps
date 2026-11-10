@@ -373,7 +373,8 @@ fn collect_metric_keys(points: &[IndexedMapPoint]) -> Vec<String> {
 fn to_geojson_feature(point: &IndexedMapPoint) -> Feature {
     let mut properties = JsonObject::new();
     properties.insert("pointId".to_owned(), json!(point.id));
-    let [longitude, latitude] = javascript_supercluster_coordinate(point.longitude, point.latitude);
+    let [longitude, latitude] =
+        javascript_supercluster_coordinate(wrap_longitude(point.longitude), point.latitude);
 
     Feature {
         bbox: None,
@@ -383,6 +384,20 @@ fn to_geojson_feature(point: &IndexedMapPoint) -> Feature {
         id: Some(Id::String(point.id.clone())),
         properties: Some(properties),
         foreign_members: None,
+    }
+}
+
+/// The longitude of the same location inside `[-180, 180]`.
+///
+/// Longitude is periodic: a source may supply unwrapped values, for example a track that
+/// crosses the antimeridian from 174° to 186°. The hierarchy indexes the wrapped location so
+/// viewport queries find the point, while `point_lookup` and unclustered-point results keep the
+/// supplied coordinates. In-range longitudes pass through untouched.
+fn wrap_longitude(longitude: f64) -> f64 {
+    if (-180.0..=180.0).contains(&longitude) {
+        longitude
+    } else {
+        (longitude + 180.0).rem_euclid(360.0) - 180.0
     }
 }
 

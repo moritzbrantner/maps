@@ -56,7 +56,10 @@ export type MapScopedTimelineClock = {
    * function. Ignored while an explicit `timeRange` option is set.
    */
   registerTimeRange(timeRange: TemporalMapTimeRange | null): () => void;
-  /** Moves to `time` (clamped to the range) without changing the playback state. */
+  /**
+   * Moves to `time` (clamped to the range) without changing the playback state. A non-finite
+   * `time` is ignored.
+   */
   seek(time: number): void;
   /**
    * Makes the application the owner of the time. While defined, the snapshot reports it and
@@ -74,7 +77,11 @@ type ClockState = {
   isPlaying: boolean;
   options: MapScopedTimelineOptions;
   registeredRanges: Map<number, TemporalMapTimeRange | null>;
-  /** Uncontrolled time, or the base playback advances from while time is controlled. */
+  /**
+   * The last requested uncontrolled time, or the base playback advances from while time is
+   * controlled. It is kept as requested: the time range clamps only what the snapshot reports,
+   * so a consumer replacing its registered range cannot lose the time in between.
+   */
   time: number | null;
 };
 
@@ -107,6 +114,11 @@ export function createMapScopedTimelineClockInternals(
   const listeners = new Set<() => void>();
   let nextRegistration = 0;
   let frameHandle: number | null = null;
+  // The scheduler that issued `frameHandle`, and the `scheduler` option it was resolved from.
+  let frameScheduler: MapScopedTimelineScheduler | null = null;
+  let frameSchedulerOption: MapScopedTimelineScheduler | undefined;
+  // Identifies the one live frame request; a callback from any earlier request is stale.
+  let frameToken = 0;
   let previousTimestamp: number | null = null;
   let lastReportedTime: number | null = null;
   let snapshot = computeSnapshot();
@@ -124,9 +136,7 @@ export function createMapScopedTimelineClockInternals(
       state.time = clampTemporalMapTime(state.options.defaultTime ?? timeRange.start, timeRange);
     }
 
-    state.time = clampTemporalMapTime(state.time, timeRange);
-
-    return state.time;
+    return clampTemporalMapTime(state.time, timeRange);
   }
 
   function computeSnapshot(): MapScopedTimelineSnapshot {
@@ -213,10 +223,12 @@ export function createMapScopedTimelineClockInternals(
 
   function suspendFrames() {
     if (frameHandle !== null) {
-      getScheduler()?.cancelFrame(frameHandle);
+      frameScheduler?.cancelFrame(frameHandle);
     }
 
     frameHandle = null;
+    frameScheduler = null;
+    frameToken += 1;
     previousTimestamp = null;
   }
 
@@ -226,10 +238,24 @@ export function createMapScopedTimelineClockInternals(
       return;
     }
 
+    if (frameHandle !== null && frameSchedulerOption !== state.options.scheduler) {
+      // The scheduler was replaced: the pending frame belongs to the previous one.
+      suspendFrames();
+    }
+
     if (frameHandle === null) {
       const scheduler = getScheduler();
+      const token = ++frameToken;
 
-      frameHandle = scheduler?.requestFrame(tick) ?? null;
+      frameScheduler = scheduler;
+      frameSchedulerOption = state.options.scheduler;
+      frameHandle =
+        scheduler?.requestFrame((timestamp) => {
+          // A frame that was cancelled or superseded must not advance or restart the loop.
+          if (token === frameToken) {
+            tick(timestamp);
+          }
+        }) ?? null;
     }
   }
 
@@ -301,7 +327,9 @@ export function createMapScopedTimelineClockInternals(
       };
     },
     seek(time) {
-      commitTime(time);
+      if (Number.isFinite(time)) {
+        commitTime(time);
+      }
     },
     setControlledTime(time) {
       state.controlledTime = time;
