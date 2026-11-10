@@ -7,6 +7,7 @@ import type {
 } from "./heat-layer-types";
 import type { PreparedHeatLayerColorRamp } from "./heat-surface";
 import type { HeatFieldContourFeatureCollection, HeatFieldImage } from "./scalar-field-render";
+import type { HeatLayerDataWork } from "./heat-layer-work";
 
 export type MapsHeatLayerSourceIndex = {
   getFeatureCollection(
@@ -43,4 +44,6 @@ export type MapsHeatLayerDescriptor = {
   heatmapSurfaceMode: HeatLayerSurfaceMode;
   layerId: string;
   showDataPoints: boolean;
+  /** Camera-independent artifact work of the mounted layer, shared by all its descriptors. */
+  work: HeatLayerDataWork;
 };

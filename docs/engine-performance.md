@@ -312,6 +312,50 @@ groups use the same update path but have no operation contracts of their own yet
 side still rebuilds and compares the transport arrays of a changed frame, so JS-side
 materialization is linear in the group size.
 
+## Heat/scalar work counters (#171 phase 2)
+
+TypeScript is still the computational authority for heat and scalar surfaces, so their
+deterministic counters live in TypeScript (`src/heat-layer-work.ts`). Each count is kept
+by the resource that decides the work:
+
+- `HeatLayerDataWork` belongs to one mounted `HeatLayer` and travels on its descriptor. It
+  counts the camera-independent artifacts: density source-index builds and their points,
+  bounds queries and query-cache hits, and the scalar-field grid (interpolation cells),
+  field image and contour builds. It also counts retained grids reused for a style-only
+  change and superseded async field results.
+- `HeatLayerSurfaceWork` belongs to one `MapsHeatLayerRenderState`. It counts the camera
+  path: density plans, sources lowered into raster space, sources hashed into the cache
+  key, rasterizations and their pixels, raster reuses, discarded async rasters, and raster
+  images handed to the pixel backend (uploads) with their pixels.
+
+`src/heat-layer-work.test.tsx` drives the production mount and render state together and
+asserts these properties:
+
+| Operation | Bound |
+| --- | --- |
+| 32 camera frames (pan and zoom within the rebuild bucket) inside a stable density raster, 500 points | No index queries, source lowering, signature hashing, rasterization or upload; one raster reuse per frame |
+| Camera leaves the stable coverage | One plan, rasterization and upload; lowers only the sources inside the new coverage |
+| Density style change (color ramp) / opacity / data | Ramp: one rasterization, no index rebuild. Opacity: no rasterization. Data: one index rebuild and one rasterization |
+| Viewport-raster (pixel radius) camera frames | Declared camera-dependent: one rasterization per moved frame |
+| 32 camera frames over a scalar field (raster and contours) | No grid, image, contour or upload work |
+| Scalar-field color ramp / contour levels / data | Ramp: one image and one upload only. Levels: one contour build only. Data: one grid, image and contour build |
+| Async scalar field, style-only change | Reuses the retained grid |
+
+Before this phase, the fix for stale stable-raster reuse (#401) checked raster reuse by
+re-planning on every camera frame. For 32 frames at 500 points it lowered and hashed
+16,000 sources while rasterizing nothing. The Maps render state now records which
+descriptor produced the committed raster. A frame with that descriptor and a camera inside
+the raster's zoom bucket and coverage reuses the raster without querying or planning.
+Every planning input lives on the descriptor, and the mount publishes a new descriptor
+whenever an input changes. The retained-vs-uncached oracle
+(`src/heat-surface-retained-oracle.test.ts`) still covers the reuse and invalidation steps.
+
+These are work counts, not frame-time evidence. They are not yet part of the root
+`performance:work` contract, which collects Cargo evidence only. No WASM bridge is involved
+while TypeScript is the authority, so bridge bytes are reported as not applicable rather
+than zero. Full-map frame distribution, stalls, memory and async latency are still missing
+for heat/scalar (#171 phase 5).
+
 ## Evidence tooling repair — September 30
 
 The build now copies its optimized WASM and matching glue to `public/wasm`, so

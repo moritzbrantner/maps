@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { MapPoint, MapPointFilter } from "./aggregation";
 import { createHeatLayerSourceIndex } from "./heat-layer-data";
+import { createHeatLayerDataWork } from "./heat-layer-work";
 import {
   METERS_PER_DEGREE_AT_EQUATOR,
   type HeatLayerColorStop,
@@ -350,6 +351,7 @@ function createProductionDescriptor(inputs: DensityInputs): MapsHeatLayerDescrip
     heatmapSurfaceMode: "interpolated",
     layerId: "oracle-heat",
     showDataPoints: false,
+    work: createHeatLayerDataWork(),
   };
 }
 
