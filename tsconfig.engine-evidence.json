@@ -22,6 +22,10 @@
     "scripts/verify-engine-browser-evidence.ts",
     "scripts/profile-mixed-layer-journey.ts",
     "scripts/verify-engine-mixed-layer-evidence.ts",
-    "scripts/profile-tileset-source-journey.ts"
+    "scripts/profile-tileset-source-journey.ts",
+    "scripts/atlas-tileset-evaluation.ts",
+    "scripts/atlas-tileset-evaluation.test.ts",
+    "scripts/profile-atlas-tileset-journey.ts",
+    "scripts/verify-engine-atlas-tileset-evidence.ts"
   ]
 }

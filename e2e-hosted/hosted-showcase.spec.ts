@@ -37,7 +37,7 @@ test("hosted Pages runs the first-party PMTiles engine without external tile req
   expect(pageErrors).toEqual([]);
 });
 
-test("hosted evidence page shows absent evidence as unavailable and advertises no unpublished Moonlight source", async ({
+test("hosted evidence page shows absent evidence as unavailable and never a Moonlight pass without its capture", async ({
   page,
   request,
 }) => {
@@ -56,7 +56,26 @@ test("hosted evidence page shows absent evidence as unavailable and advertises n
   await expect(absentRow).toContainText("unavailable");
   await expect(page.getByText(/evidence sources need attention/)).toBeVisible();
 
-  await expect(page.getByRole("row").filter({ hasText: "Moonlight" })).toHaveCount(0);
+  // The Atlas tileset evaluation (#270) is the only Moonlight source. Deploy builds
+  // publish Moonlight's actual outcome; a PR preview captures none and must say so.
+  const atlasRows = page.getByRole("row").filter({ hasText: "Atlas tileset journey" });
+  await expect(page.getByRole("row").filter({ hasText: "Moonlight" })).toHaveCount(
+    await atlasRows.count(),
+  );
+  const atlas = await request.get("/maps/evidence/atlas-tileset-runtime.json");
+  if ((atlas.headers()["content-type"] ?? "").includes("json")) {
+    const report = await atlas.json();
+    expect(["passed", "failed", "inconclusive"]).toContain(report.status);
+    expect(report.evaluation.outcome).toBe(report.status);
+    expect(report.evaluation.browser.comparability).toMatch(
+      /^(comparable|incomparable|insufficient-evidence)$/,
+    );
+    expect(report.evaluation.rounds.length).toBeGreaterThanOrEqual(2);
+    await expect(atlasRows.first()).not.toContainText("source-unavailable");
+  } else {
+    await expect(atlasRows.first()).toContainText("source-unavailable");
+    await expect(atlasRows.first()).not.toContainText("passed");
+  }
   const advertised = await page.evaluate(() =>
     (
       window as unknown as { __PROJECT_PAGES_CONFIG__: { evidenceSources: { url: string }[] } }

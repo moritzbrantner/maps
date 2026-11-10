@@ -29,6 +29,12 @@ test("PR previews preserve CI oracle authority and do not rerun publication meas
   assert.match(build, /if \[ "\$GITHUB_EVENT_NAME" != "pull_request" \] && CI=1 node scripts\/benchmark-interactions\.mjs/);
   assert.match(build, /node scripts\/build-benchmark-history\.mjs --run=/);
   assert.match(build, /PR preview: retaining published main benchmark history/);
+  // The Atlas tileset evaluation (#270) is a publication measurement with its pinned evaluator.
+  assert.match(setup, /pip" install[^\n]+\n(?:\s+#[^\n]*\n)*\s+cargo install [^\n]+moonlight-runtime-profile/);
+  assert.match(
+    build,
+    /if \[ "\$GITHUB_EVENT_NAME" != "pull_request" \]; then\n\s+if ! RUNTIME_PROFILER_BIN=[^\n]+\n\s+MOONLIGHT_RUNTIME_PROFILE_BIN=[^\n]+\n[^\n]+\n\s+bun run verify:engine-atlas-tileset-evidence -- --report dist\/evidence\/atlas-tileset-runtime\.json/,
+  );
 
   const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /name: MapLibre oracle/);

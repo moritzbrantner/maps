@@ -279,6 +279,75 @@ comparison is explicitly unavailable. No Maps-generated success substitutes for
 runtime-profiler comparability or a Moonlight evaluation. Rust and Chromium tile
 churn checks remain correctness evidence, not camera-churn performance scores.
 
+## Atlas tileset journey evidence (#270)
+
+`maps-atlas-tileset-v1` is the matched reference/candidate comparison for the
+content-pinned Atlas tileset. Both sides read the **same** Liechtenstein PMTiles
+archives (full and northern, digest-verified by `scripts/fetch-atlas-tiles.ts`) from
+one range-serving origin, at a 1280×720 viewport, through one journey:
+
+`cold` → `pan-north` → `zoom-13` → `zoom-14` → `zoom-11` → `warm-revisit` →
+`pan-shared` → `source-b` → `source-a`.
+
+- **reference:** MapLibre GL + `pmtiles` (`scripts/engine-reference/maplibre-atlas.ts`)
+  with the Maps Shortbread class palette as a MapLibre style. Both regions stay
+  loaded once visited, like the candidate's inactive sources.
+- **candidate:** the public `MapView flatRuntime="maps"` with the Atlas `tileset`
+  (`e2e/fixtures/atlas-tileset-journey-candidate.tsx`) and nothing else on the page.
+
+`e2e/fixtures/atlas-tileset-journey.ts` puts both behind one handle and one settle
+rule: a step is done at the first animation frame, at least two frames after it was
+applied, in which the runtime reports every visible tile loaded and presented (`idle`
+for MapLibre; ready source, no pending tiles and the requested camera for Maps). The Node journey
+`scripts/profile-atlas-tileset-journey.ts` cannot tell the two apart. It fails when
+an archive response is not an HTTP 206 range read.
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler \
+MOONLIGHT_RUNTIME_PROFILE_BIN=/path/to/moonlight-runtime-profile \
+  bun run verify:engine-atlas-tileset-evidence -- --report atlas-tileset-runtime.json
+```
+
+The command needs the built `dist/wasm` package and Playwright Chromium. It:
+
+1. builds the fixture once and re-checks each archive against its digest-named file;
+2. captures one browser trace per side (`atlas-tileset-browser-v1.yaml`) and asks
+   runtime-profiler's `compare-browser` for strict comparability;
+3. captures interleaved process rounds (`atlas-tileset-v1.yaml`, one warmup and five
+   measured journeys per side), alternating which side runs first (two rounds by
+   default; `--rounds`);
+4. has Moonlight evaluate every round with the camera foundation policy: at least five
+   samples, complete candidate execution, runtime score ≥ 75;
+5. writes `evaluation.json` with source revision, archive and WASM digests, the
+   environment fingerprint, browser/runtime identity, every raw sample and the outcome.
+
+The outcome is `passed` only when every round passed, both capture orders ran, the
+browser bundles are `comparable` and both sides ran the same steps over the same
+archive revisions. One failed round is `failed`. Everything else is `inconclusive`. The
+command exits 0 only for `passed`; it writes the evidence first in every case.
+
+Read the result with these limits:
+
+- The Moonlight score rates **process wall time and RSS of the journey driver**, which
+  includes Chromium launch and teardown. It is a viability guard, not a claim that Maps
+  is faster than MapLibre. Absolute timings on a shared runner are advisory.
+- The sampled RSS is the driver process, not Chromium. Browser heap and GPU memory are
+  unavailable (#76). The candidate's retained tile count and RGBA + MVT lower-bound
+  bytes are recorded; GPU-buffer bytes only exist on the WebGPU backend.
+- The pinned collector launches Chromium without WebGPU, so the candidate runs its
+  Canvas2D backend against MapLibre's WebGL.
+- Per-step first-useful-map, warm-revisit and switch-to-ready times, range requests and
+  transferred bytes are Maps observations for both sides. Rust decodes, bucket builds
+  and cache reuses are counted for the candidate; they are not timed.
+- The journey jumps between settled cameras. It measures no frame time during motion.
+- The archives are sparse inside their declared bounds and the first-party transport
+  fails closed on a missing tile, so the cameras were chosen with every visible and
+  neighbouring tile present. The journey does not cover a view over such a gap.
+
+Every Pages deploy build runs the command and publishes the bundles under
+`/maps/evidence/atlas-tileset/` and the report at
+`/maps/evidence/atlas-tileset-runtime.json`. PR previews skip it.
+
 ## MapLibre oracle gate
 
 `bun run oracle` ([oracle/](../oracle/run.ts), [#306](https://github.com/moritzbrantner/maps/issues/306)) renders each named scenario in `oracle/scenarios.ts` through `MapView flatRuntime="maplibre"` and `flatRuntime="maps"` with the same style, tiles, camera and data. Three gates block per scenario:

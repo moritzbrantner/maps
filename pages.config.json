@@ -38,6 +38,13 @@
       "url": "/maps/evidence/kernel-runtime.json"
     },
     {
+      "id": "atlas-tileset-runtime",
+      "label": "Atlas tileset journey: MapLibre reference vs first-party Map View",
+      "kind": "project-evidence-v1",
+      "producer": "moonlight-runtime-profile",
+      "url": "/maps/evidence/atlas-tileset-runtime.json"
+    },
+    {
       "id": "engine-interaction",
       "label": "Full map interaction benchmark",
       "kind": "project-evidence-v1",

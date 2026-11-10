@@ -26,9 +26,11 @@ The Pages build pins the template to an exact Git commit and runs it in `--augme
 - Moonlight remains authoritative for comparable baseline/candidate evaluation and verdicts.
 - `pages.config.json` lists only evidence the Pages build actually produces; `scripts/pages-workflow.test.ts` fails if a same-origin source has no producer in the build.
 
-Pages currently hosts **no** Moonlight verdict. The camera runtime/Moonlight capture (`bun run verify:engine-runtime-evidence`) runs only in the `workflow_dispatch` `runtime-evidence` CI job, and its bundles exist only as a seven-day run artifact. `/maps/evidence/runtime.json` was therefore removed from the advertised sources rather than left as a permanent 404. Absent hosted Moonlight evidence means no verdict is available; it is never a pass, and no page may present one.
+Pages hosts one Moonlight source: the Atlas tileset journey (#270) at `/maps/evidence/atlas-tileset-runtime.json`, with its bundles under `/maps/evidence/atlas-tileset/`. Every deploy build captures the MapLibre reference and the first-party candidate interleaved in the same job and publishes Moonlight's actual `passed`, `failed` or `inconclusive` outcome with the source revision, comparability and raw samples; see [the evidence contract](engine-evidence.md#atlas-tileset-journey-evidence-270). The outcome never blocks the deploy. PR previews do not run the capture, and a deploy build whose capture breaks publishes nothing: the source then shows as unavailable, never as a pass.
 
-A hosted Moonlight source can return once a real capture is published to a declared URL with its source revision, run and profiler provenance, and Moonlight's actual passed/failed/inconclusive outcome and comparability preserved. Declared sources that a build fails to publish, such as a failed point-journey run, still appear on the evidence page as unavailable.
+The camera runtime/Moonlight capture (`bun run verify:engine-runtime-evidence`) still runs only in the `workflow_dispatch` `runtime-evidence` CI job, and its bundles exist only as a seven-day run artifact. `/maps/evidence/runtime.json` therefore stays out of the advertised sources rather than being a permanent 404. Absent hosted Moonlight evidence means no verdict is available; it is never a pass, and no page may present one.
+
+Another hosted Moonlight source can be added once a real capture is published to a declared URL with its source revision, run and profiler provenance, and Moonlight's actual passed/failed/inconclusive outcome and comparability preserved. Declared sources that a build fails to publish, such as a failed point-journey run, still appear on the evidence page as unavailable.
 
 ## Canonical kernel runtime publication
 
