@@ -111,7 +111,7 @@ jobs:
             wasm-bindgen --version
             wasm-opt --version
             cargo --version
-            node --test scripts/install-wasm-bindgen-ci.test.ts scripts/pages-workflow.test.ts scripts/provisioning-comparison.test.ts
+            node --test scripts/install-wasm-bindgen-ci.test.ts scripts/pages-workflow.test.ts scripts/provisioning-comparison.test.ts scripts/atlas-tileset-evaluation.test.ts
             bun run verify:rust
           '
 

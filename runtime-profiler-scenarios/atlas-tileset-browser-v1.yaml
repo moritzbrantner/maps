@@ -1,0 +1,21 @@
+schema_version: runtime-profiler/scenario/v1
+id: maps-atlas-tileset-v1
+target:
+  type: browser-journey
+  module: scripts/profile-atlas-tileset-journey.ts
+  working_directory: ..
+  inherit_env:
+    - HOME
+    - MAPS_ATLAS_TILESET_OBSERVATIONS
+    - MAPS_ATLAS_TILESET_SITE
+    - MAPS_RUNTIME_PROFILE_IMPLEMENTATION
+    - PATH
+    - PLAYWRIGHT_BROWSERS_PATH
+    - TMPDIR
+    - XDG_CACHE_HOME
+run:
+  warmup_iterations: 0
+  measurement_iterations: 1
+  timeout_seconds: 180
+collectors:
+  - browser-chromium

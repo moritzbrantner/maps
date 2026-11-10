@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Evidence tooling only, no package change: `bun run verify:engine-atlas-tileset-evidence`
+  compares MapLibre GL + `pmtiles` with the first-party Map View over the same
+  content-pinned Atlas archives through runtime-profiler and Moonlight (#270). Pages deploy
+  builds publish the outcome at `/maps/evidence/atlas-tileset-runtime.json`.
+
 ## 0.2.0
 
 First release that ships the first-party Flat Map runtime: `MapView flatRuntime="maps"` and

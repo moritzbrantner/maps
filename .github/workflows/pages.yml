@@ -44,6 +44,8 @@ jobs:
         if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
           python3 -m venv "$RUNNER_TEMP/flip"
           "$RUNNER_TEMP/flip/bin/pip" install --quiet flip-evaluator numpy pillow
+          # Pinned Moonlight evaluator for the Atlas tileset Fast evidence (#270).
+          cargo install --git https://github.com/moritzbrantner/moonlight.git --rev b5803275fb62b1fee659c42a31209adca6e3da04 --locked moonlight-cli --bin moonlight-runtime-profile --root "$RUNNER_TEMP/maps-moonlight"
         fi
         rm -rf .github-pages-template
         git init .github-pages-template
@@ -90,6 +92,23 @@ jobs:
           --report=dist/evidence/kernel-runtime.json \
           --previous-history="https://moritzbrantner.github.io/${{ github.event.repository.name }}/evidence/kernels"
         git worktree remove "$RUNNER_TEMP/maps-kernel-reference"
+        # Atlas tileset Fast evidence (#270): MapLibre GL + pmtiles and the first-party
+        # Map View run one journey over the same content-pinned archives, interleaved
+        # in this job. Moonlight's actual outcome is published, whatever it is; it
+        # never blocks the deploy. A run without evidence publishes nothing.
+        if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+          if ! RUNTIME_PROFILER_BIN="$RUNNER_TEMP/maps-profiler/bin/runtime-profiler" \
+            MOONLIGHT_RUNTIME_PROFILE_BIN="$RUNNER_TEMP/maps-moonlight/bin/moonlight-runtime-profile" \
+            MAPS_ATLAS_TILESET_EVIDENCE_DIR=dist/evidence/atlas-tileset \
+            bun run verify:engine-atlas-tileset-evidence -- --report dist/evidence/atlas-tileset-runtime.json; then
+            if [ -f dist/evidence/atlas-tileset-runtime.json ]; then
+              echo "::warning::Atlas tileset evaluation did not pass; publishing its recorded outcome."
+            else
+              echo "::warning::Atlas tileset evidence was not captured; it stays unavailable."
+              rm -rf dist/evidence/atlas-tileset
+            fi
+          fi
+        fi
         # Dense-point journey lanes (#197): descriptive evidence that never blocks the deploy.
         # A failed run publishes nothing, so /stats/ shows the source as unavailable.
         if ! CI=1 bun run bench:point-journey -- --repeats=1 --json=dist/evidence/point-journey.json; then

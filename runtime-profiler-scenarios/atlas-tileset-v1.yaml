@@ -1,0 +1,22 @@
+schema_version: runtime-profiler/scenario/v1
+id: maps-atlas-tileset-v1
+target:
+  type: command
+  program: bun
+  args:
+    - ./scripts/profile-atlas-tileset-runtime.mjs
+  working_directory: ..
+  inherit_env:
+    - HOME
+    - MAPS_ATLAS_TILESET_OBSERVATIONS
+    - MAPS_ATLAS_TILESET_SITE
+    - MAPS_RUNTIME_PROFILE_IMPLEMENTATION
+    - PLAYWRIGHT_BROWSERS_PATH
+    - TMPDIR
+    - XDG_CACHE_HOME
+run:
+  warmup_iterations: 1
+  measurement_iterations: 5
+  timeout_seconds: 120
+collectors:
+  - process
