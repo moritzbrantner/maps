@@ -17,6 +17,20 @@
 
 ### Minor Changes
 
+- One public Map-Scoped Timeline clock (#172). `createMapScopedTimelineClock()` owns the
+  authoritative time, play/pause, seeking, snapping, looping and the single frame loop that
+  advances it; `setControlledTime()` hands ownership of the time to the application, whose
+  `onTimeChange` then receives seek and playback requests. `TemporalClusteredMap` and
+  `TemporalHeatMap` take it as `timeline`, register their data's time range with it and only
+  sample its `activeTime`, so several Map Views can share one clock (with
+  `MapScopedTimelineControls` and `useMapScopedTimelineSnapshot`). Without `timeline` each
+  component owns a clock configured from its existing `autoPlay`, `currentTime`,
+  `defaultTime`, `loopPlayback`, `onTimeChange`, `playbackRate` and `timeStep` props, which
+  keep their behaviour; neither component runs its own `requestAnimationFrame` loop any more.
+- `ClusteredMap` and `TemporalClusteredMap` accept `flatRuntime`, so temporal points run on
+  `flatRuntime="maps"` over static Map Layers passed as children. Measurement props remain
+  MapLibre-only there and fail closed.
+
 - `flatRuntime="maps"` accepts a MapLibre style with no sources and one
   constant-`background-color` `background` layer as a tile-free base, drawn on
   WebGPU and the Canvas fallback. Expressions, zoom functions, other background
