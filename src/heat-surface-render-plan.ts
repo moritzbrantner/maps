@@ -289,8 +289,53 @@ function createStableHeatSurfaceRenderPlan({
   surfaceCache: HeatSurfaceCacheMetadata | null;
   width: number;
 }): HeatSurfaceRenderPlan | null {
-  const coverageBounds = getHeatLayerStableCoverageBounds(map, radius, intensity, overscanRatio);
   const zoomBucket = getHeatLayerZoomBucket(map.getZoom(), minZoomDeltaForRebuild);
+
+  if (
+    surfaceCache &&
+    surfaceCache.strategy === "stable-raster" &&
+    surfaceCache.zoomBucket === zoomBucket &&
+    heatLayerBoundsContain(
+      surfaceCache.coverageBounds,
+      getHeatLayerPaddedBounds(map, radius, intensity),
+    )
+  ) {
+    // The cached raster geometry still covers the viewport, and the caller queried
+    // data for exactly that coverage. Plan the current inputs against the same
+    // geometry: the raster is reusable only when that plan is identical.
+    const plan = createStableHeatSurfaceRenderPlanForGeometry({
+      colorRamp,
+      coverageBounds: surfaceCache.coverageBounds,
+      data,
+      dimensions: { height: surfaceCache.rasterHeight, width: surfaceCache.rasterWidth },
+      intensity,
+      mode,
+      radius,
+      zoomBucket,
+    });
+
+    if (plan?.cacheKey !== surfaceCache.key) {
+      return plan;
+    }
+
+    return createHeatSurfaceRenderPlanFromOptions({
+      cacheKey: surfaceCache.key,
+      colorRamp,
+      coverageBounds: surfaceCache.coverageBounds,
+      dataSignature: surfaceCache.dataSignature,
+      height: surfaceCache.rasterHeight,
+      maxInfluenceRadius: plan.maxInfluenceRadius,
+      metricProjection: plan.metricProjection,
+      mode,
+      overlayBounds: surfaceCache.bounds,
+      sources: [],
+      strategy: "stable-raster",
+      width: surfaceCache.rasterWidth,
+      zoomBucket,
+    });
+  }
+
+  const coverageBounds = getHeatLayerStableCoverageBounds(map, radius, intensity, overscanRatio);
   const dimensions = resolveStableHeatLayerRasterDimensions({
     bounds: coverageBounds,
     maxRasterPixels,
@@ -302,35 +347,37 @@ function createStableHeatSurfaceRenderPlan({
     return null;
   }
 
-  if (
-    surfaceCache &&
-    surfaceCache.strategy === "stable-raster" &&
-    surfaceCache.zoomBucket === zoomBucket &&
-    heatLayerBoundsContain(
-      surfaceCache.coverageBounds,
-      getHeatLayerPaddedBounds(map, radius, intensity),
-    )
-  ) {
-    return createHeatSurfaceRenderPlanFromOptions({
-      cacheKey: surfaceCache.key,
-      colorRamp,
-      coverageBounds: surfaceCache.coverageBounds,
-      dataSignature: surfaceCache.dataSignature,
-      height: surfaceCache.rasterHeight,
-      maxInfluenceRadius: 1,
-      metricProjection: createStableHeatLayerMetricProjection(surfaceCache.coverageBounds, {
-        height: surfaceCache.rasterHeight,
-        width: surfaceCache.rasterWidth,
-      }),
-      mode,
-      overlayBounds: surfaceCache.bounds,
-      sources: [],
-      strategy: "stable-raster",
-      width: surfaceCache.rasterWidth,
-      zoomBucket,
-    });
-  }
+  return createStableHeatSurfaceRenderPlanForGeometry({
+    colorRamp,
+    coverageBounds,
+    data,
+    dimensions,
+    intensity,
+    mode,
+    radius,
+    zoomBucket,
+  });
+}
 
+function createStableHeatSurfaceRenderPlanForGeometry({
+  colorRamp,
+  coverageBounds,
+  data,
+  dimensions,
+  intensity,
+  mode,
+  radius,
+  zoomBucket,
+}: {
+  colorRamp: PreparedHeatLayerColorRamp;
+  coverageBounds: HeatSurfaceBounds;
+  data: HeatLayerFeatureCollection;
+  dimensions: { height: number; width: number };
+  intensity: number;
+  mode: HeatLayerSurfaceMode;
+  radius: { meters: number };
+  zoomBucket: number;
+}): HeatSurfaceRenderPlan | null {
   const metricBounds = getHeatLayerMetricBounds(coverageBounds);
   const metersPerPixel = Math.max(
     (metricBounds.east - metricBounds.west) / Math.max(1, dimensions.width),
