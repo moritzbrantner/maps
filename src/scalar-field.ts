@@ -1,5 +1,6 @@
 import type { IndexedMapPoint, MapPoint, MapPointFilter } from "./aggregation";
 import { DEFAULT_MAPS_WASM_PACKAGE, importMapsWasmModule } from "./aggregation-wasm";
+import { createScalarFieldMask, type ScalarFieldMask } from "./scalar-field-mask";
 
 const EARTH_RADIUS_METERS = 6_371_008.8;
 const DEFAULT_FIELD_COLUMNS = 256;
@@ -38,8 +39,15 @@ export type HeatFieldOptions<TProperties = Record<string, unknown>> = {
   interpolationK?: number;
   interpolationMaxDistanceMeters?: number;
   interpolationPower?: number;
-  // Reserved for clipping field rasters to polygons. The first field implementation
-  // intentionally keeps the core IDW path unmasked and deterministic.
+  /**
+   * Clips the field to polygonal GeoJSON (Polygon, MultiPolygon, GeometryCollection, Feature or
+   * FeatureCollection). Grid cells whose center lies outside the mask, or inside a polygon's
+   * hole, have no value, so the field raster, contours and samples omit them, and an inferred
+   * `valueDomain` covers only the cells inside the mask. The mask is the union of its polygons;
+   * a position on an exterior boundary is inside and on a hole boundary is outside. The mask
+   * does not change the field bounds. `null`/`undefined` leaves the field unclipped; a mask
+   * without polygonal area hides the whole field.
+   */
   maskGeoJson?: HeatFieldMaskGeoJson | null;
   opacity?: number;
   valueDomain?: readonly [min: number, max: number];
@@ -229,11 +237,14 @@ function createScalarFieldGridTypeScript<TProperties = Record<string, unknown>>(
     };
   }
 
+  const mask = createScalarFieldMask(options.maskGeoJson);
+
   if (canUseFastScalarFieldGrid(valuePoints, dimensions, options)) {
-    return createScalarFieldGridFastIdw(valuePoints, bounds, dimensions, options);
+    return createScalarFieldGridFastIdw(valuePoints, bounds, dimensions, options, mask);
   }
 
-  const interpolator = createIdwInterpolatorFromValuePoints(valuePoints, bounds, options);
+  // Masked cells are skipped below, so the interpolator itself stays unmasked.
+  const interpolator = createIdwInterpolatorFromValuePoints(valuePoints, bounds, options, null);
   const values: Array<number | null> = [];
   const [west, south, east, north] = bounds;
   const longitudeStep = (east - west) / dimensions.columns;
@@ -244,7 +255,11 @@ function createScalarFieldGridTypeScript<TProperties = Record<string, unknown>>(
 
     for (let column = 0; column < dimensions.columns; column += 1) {
       const longitude = west + longitudeStep * (column + 0.5);
-      values.push(interpolator.getValueAtCoordinate([longitude, latitude]));
+      values.push(
+        mask && !mask.contains([longitude, latitude])
+          ? null
+          : interpolator.getValueAtCoordinate([longitude, latitude]),
+      );
     }
   }
 
@@ -262,6 +277,7 @@ function createScalarFieldGridFastIdw<TProperties = Record<string, unknown>>(
   bounds: [west: number, south: number, east: number, north: number],
   dimensions: { columns: number; rows: number },
   options: HeatFieldOptions<TProperties>,
+  mask: ScalarFieldMask | null,
 ): ScalarFieldGrid {
   const valueCount = valuePoints.length;
   const values: Array<number | null> = Array.from(
@@ -333,8 +349,13 @@ function createScalarFieldGridFastIdw<TProperties = Record<string, unknown>>(
 
   for (let row = 0; row < dimensions.rows; row += 1) {
     const y = sampleYs[row]!;
+    const latitude = north - latitudeStep * (row + 0.5);
 
     for (let column = 0; column < dimensions.columns; column += 1) {
+      if (mask && !mask.contains([west + longitudeStep * (column + 0.5), latitude])) {
+        continue;
+      }
+
       const x = sampleXs[column]!;
       let value = interpolateFastIdwCell({
         epsilonSquared,
@@ -540,7 +561,12 @@ export function createIdwInterpolator<TProperties = Record<string, unknown>>(
   const valuePoints = resolveScalarFieldValuePoints(points, options);
   const bounds = resolveScalarFieldBounds(valuePoints, options) ?? [0, 0, 0, 0];
 
-  return createIdwInterpolatorFromValuePoints(valuePoints, bounds, options);
+  return createIdwInterpolatorFromValuePoints(
+    valuePoints,
+    bounds,
+    options,
+    createScalarFieldMask(options.maskGeoJson),
+  );
 }
 
 export function getScalarFieldValueAtCoordinate(
@@ -599,6 +625,7 @@ function createIdwInterpolatorFromValuePoints<TProperties = Record<string, unkno
   valuePoints: readonly ScalarFieldValuePoint<TProperties>[],
   bounds: [west: number, south: number, east: number, north: number],
   options: HeatFieldOptions<TProperties>,
+  mask: ScalarFieldMask | null,
 ): ScalarFieldInterpolator {
   const projection = createLocalEquirectangularProjection(bounds);
   const projectedPoints = valuePoints.map((entry) => {
@@ -630,7 +657,11 @@ function createIdwInterpolatorFromValuePoints<TProperties = Record<string, unkno
   return {
     bounds,
     getValueAtCoordinate(coordinate) {
-      if (projectedPoints.length === 0 || !isValidCoordinate(coordinate)) {
+      if (
+        projectedPoints.length === 0 ||
+        !isValidCoordinate(coordinate) ||
+        (mask && !mask.contains(coordinate))
+      ) {
         return null;
       }
 
