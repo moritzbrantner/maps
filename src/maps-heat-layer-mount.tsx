@@ -42,6 +42,7 @@ type HeatLayerFieldArtifacts = {
   getValue: unknown;
   getWeight: unknown;
   image: HeatFieldImage | null;
+  maskGeoJson: unknown;
   points: readonly unknown[];
 };
 
@@ -240,7 +241,8 @@ export function MapsHeatLayerMount({
         previousArtifacts.points === deferredPoints &&
         previousArtifacts.filterPoint === filterPoint &&
         previousArtifacts.getValue === getValue &&
-        previousArtifacts.getWeight === getWeight
+        previousArtifacts.getWeight === getWeight &&
+        previousArtifacts.maskGeoJson === maskGeoJson
           ? previousArtifacts.grid
           : createScalarFieldGrid(deferredPoints, {
               domainBounds,
@@ -285,6 +287,7 @@ export function MapsHeatLayerMount({
         getValue,
         getWeight,
         image,
+        maskGeoJson,
         points: deferredPoints,
       });
     }, 0);
