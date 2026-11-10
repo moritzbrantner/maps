@@ -518,13 +518,14 @@ describe("Maps-owned MapView runtime", () => {
     clickSurface(baseCanvas, 534.05, 37.4);
     await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
 
-    // The same Map Feature in a replaced source keeps its open popup.
+    // The same Map Feature in a replaced source keeps its open popup, which shows the
+    // committed feature rather than the one captured at click time (#170 phase D).
     rerender(composition([{ ...berlin, label: "Berlin renamed" }]));
-    expect(screen.getByText("Popup Berlin")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Popup Berlin renamed")).toBeTruthy());
 
     rerender(composition([]));
     await waitFor(() => {
-      expect(screen.queryByText("Popup Berlin")).toBeNull();
+      expect(screen.queryByText(/^Popup Berlin/)).toBeNull();
       expect(screen.queryByText("Tooltip Berlin")).toBeNull();
       expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
         null,

@@ -149,14 +149,27 @@ type MapsOverlayLayersProps = {
     interaction: MapScreenInteractionState,
   ) => boolean;
   retainedPoints?: MapsOverlayRetainedPoints;
-  /** Closes feature overlays whose Map Feature left the composition. */
-  retireFeatureOverlays?: (isRendered: (overlayKey: string) => boolean) => void;
+  /**
+   * Closes feature overlays whose Map Feature left the composition and refreshes a retained
+   * popup with its layer's latest feature and renderer, so popup content follows the
+   * committed composition (such as a date-appropriate name) instead of the click-time props.
+   */
+  retireFeatureOverlays?: (
+    isRendered: (overlayKey: string) => boolean,
+    latestPopup?: (overlayKey: string) => MapsOverlayPopupSource | undefined,
+  ) => void;
   surface: MapsOverlayInteractionSurface;
   unproject: MapsUnprojectCoordinate;
 };
 
 type MapsFeatureInteractionOptions<TFeature> = MapFeatureInteractionProps<TFeature> & {
   onFeatureSelect?: (feature: TFeature | null) => void;
+};
+
+/** The feature and popup renderer a rendered Map Feature's popup shows. */
+export type MapsOverlayPopupSource = {
+  feature: unknown;
+  render: (feature: unknown) => ReactNode;
 };
 
 type MapsOverlayInteraction = {
@@ -168,6 +181,7 @@ type MapsOverlayInteraction = {
   key: string;
   /** The `MapView` child layer that owns the feature: picking is per layer, as in MapLibre. */
   layer: string;
+  popup?: MapsOverlayPopupSource;
 };
 
 type MapsOverlayRenderStep =
@@ -668,7 +682,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       if (reconciledEntriesRef.current === entries) return;
       reconciledEntriesRef.current = entries;
       const rendered = new Set<string>();
-      for (const interaction of snapshot.interactions.values()) rendered.add(interaction.key);
+      const popups = new Map<string, MapsOverlayPopupSource>();
+      for (const interaction of snapshot.interactions.values()) {
+        rendered.add(interaction.key);
+        if (interaction.popup) popups.set(interaction.key, interaction.popup);
+      }
       const viewportLayers = entries.flatMap((entry) =>
         entry.kind === "cluster"
           ? [`${entry.prefix}|`]
@@ -683,7 +701,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         hoveredByLayerRef.current.delete(layer);
         interaction.clearHover();
       }
-      retireFeatureOverlays?.(isRendered);
+      retireFeatureOverlays?.(isRendered, (key) => popups.get(key));
     };
 
     useLayoutEffect(() => {
@@ -1463,6 +1481,9 @@ function createFeatureInteraction<TFeature>(
     },
     key: `${layer}|${featureId}`,
     layer,
+    popup: options.renderFeaturePopup
+      ? { feature, render: options.renderFeaturePopup as (feature: unknown) => ReactNode }
+      : undefined,
   };
 }
 
@@ -1511,6 +1532,8 @@ function createClusterFeatureInteraction(
     },
     key: `${layer}|${rendererFeatureId}`,
     layer,
+    // No popup source: a cluster's renderer ID is viewport-dependent (an expansion re-forms
+    // clusters), so the clicked cluster keeps the popup it was opened with.
   };
 }
 
