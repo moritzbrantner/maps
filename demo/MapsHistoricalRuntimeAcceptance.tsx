@@ -94,9 +94,7 @@ export function MapsHistoricalRuntimeAcceptance() {
           pointColor="#b45309"
           pointRadius={12}
           renderFeaturePopup={(feature) => (
-            <span data-testid="historical-popup">
-              {selection.getFeatureName(feature.id)?.text}
-            </span>
+            <span data-testid="historical-popup">{selection.getFeatureName(feature.id)?.text}</span>
           )}
           renderFeatureTooltip={(feature) => (
             <span data-testid="historical-tooltip">
@@ -139,7 +137,8 @@ export function MapsHistoricalRuntimeAcceptance() {
       <output data-testid="historical-selection">{selection.selectedFeatureId ?? "none"}</output>
       <output data-testid="historical-selected-name">
         {selection.selectedFeatureId
-          ? (selection.getFeatureName(selection.selectedFeatureId)?.text ?? selection.selectedFeatureId)
+          ? (selection.getFeatureName(selection.selectedFeatureId)?.text ??
+            selection.selectedFeatureId)
           : "none"}
       </output>
       <output data-testid="historical-hover">{selection.hoveredFeatureId ?? "none"}</output>
