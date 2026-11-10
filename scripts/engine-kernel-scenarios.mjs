@@ -101,6 +101,27 @@ export function prepareKernelScenario(id) {
   };
 }
 
+// Kernel results are hashed in a canonical numeric form rather than as raw
+// IEEE-754 bit patterns. Math.hypot/sin/cos/atan2 are implementation-approximated
+// (ECMA-262 does not require correct rounding), and their last bit differs between
+// engines, C library versions and CPUs; downstream arithmetic amplifies that to a
+// few tens of ULP. Every number is therefore rounded to nine decimal places (about
+// 0.1 mm of longitude/latitude) and then to twelve significant digits (for large
+// magnitudes such as areas). That is several orders of magnitude coarser than the
+// platform noise and far finer than any map-domain result, while structure, keys,
+// strings, counts and ordering stay exact.
+function canonicalObservationValue(_key, value) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Number(Number(value.toFixed(9)).toPrecision(12))
+    : value;
+}
+
+export function kernelObservationSha256(result) {
+  return createHash("sha256")
+    .update(JSON.stringify(result, canonicalObservationValue))
+    .digest("hex");
+}
+
 export function measureKernelScenario(id) {
   const workload = prepareKernelScenario(id);
   const { warmups, runs } = workload.scenario.sampling;
@@ -119,7 +140,7 @@ export function measureKernelScenario(id) {
     scenarioId: id,
     name: workload.scenario.legacyBenchmark,
     scenarioSha256: workload.scenarioSha256,
-    observationSha256: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
+    observationSha256: kernelObservationSha256(result),
     metadata: workload.metadata,
     stats: {
       mean: samples.reduce((sum, value) => sum + value, 0) / samples.length,
