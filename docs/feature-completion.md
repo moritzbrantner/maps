@@ -89,7 +89,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
 | GeoJSON polygon fills/strokes and holes | Yes | Yes (#161: WebGPU matches the Canvas oracle) | In progress | Polygons are GPU-retained (#196): Rust lowers rings once and camera frames upload nothing. Frames that mix polygons, lines and points keep them retained as point and shape groups in one painter order (#195). Deterministic work contracts (#189, `performance:work`) hold camera pan and zoom/bearing at 100/1k/10k polygons to zero geometry rebuilds and uploads, in-place shape updates (`updateRetainedPolygons`) to work linear in the changed shapes only, and dataset replacement to declared linear work. |
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. |
-| Heat/scalar surfaces | Existing product capability | Partial (#171: deterministic density/scalar fixtures and retained-vs-uncached differential oracles; scalar-field polygon masks with holes clip the raster, contours and samples at grid-cell resolution, with mask boundary/hole fixtures and a masked-field oracle; browser alignment evidence is pending) | In progress (#171 phase 2: deterministic work counters; no frame-time evidence yet) | The oracle found and fixed stale stable-raster reuse after filter/weight/radius/style/data changes. The masked-field oracle found and fixed async field reuse after the mask was replaced. Work counters (`src/heat-layer-work.ts`, asserted in `src/heat-layer-work.test.tsx`) separate source-index, interpolation-grid, field-image, contour and raster work, cache hits and raster uploads. Camera frames inside a stable density raster or over a scalar field now do no per-point work; the per-frame source lowering and signature hashing that the stale-reuse fix had introduced (16,000 of each for 32 frames at 500 points) is gone. Bridge bytes are not applicable while TypeScript is the authority. Next: browser alignment evidence, then full-map Fast evidence (#171). |
+| Heat/scalar surfaces | Existing product capability | Partial (#171: deterministic density/scalar fixtures and retained-vs-uncached differential oracles; scalar-field polygon masks with holes clip the raster, contours and samples at grid-cell resolution, with mask boundary/hole fixtures and a masked-field oracle; browser alignment evidence on both pixel backends, see [below](#heatscalar-alignment-evidence-171-phase-3)) | In progress (#171 phase 2: deterministic work counters; no frame-time evidence yet) | The oracle found and fixed stale stable-raster reuse after filter/weight/radius/style/data changes. The masked-field oracle found and fixed async field reuse after the mask was replaced. Work counters (`src/heat-layer-work.ts`, asserted in `src/heat-layer-work.test.tsx`) separate source-index, interpolation-grid, field-image, contour and raster work, cache hits and raster uploads. Camera frames inside a stable density raster or over a scalar field now do no per-point work; the per-frame source lowering and signature hashing that the stale-reuse fix had introduced (16,000 of each for 32 frames at 500 points) is gone. Bridge bytes are not applicable while TypeScript is the authority. Browser alignment evidence found and fixed stable-raster misplacement under pitch (up to 14 px). Next: full-map Fast evidence (#171). |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
 | Style-spec-compatible vector layers/expressions | Not complete | Not complete | Not started | Develop background/fill/line/circle/raster + filters/expressions, then parity, then bucket/render optimization. |
@@ -292,6 +292,44 @@ runtime-profiler at `6d2c92e`, on Linux x64 (AMD Ryzen 7 5700X, WSL2).
 
   Bundle manifest SHA-256:
   `8de3ff5b5312acf80a1a0835019ed06b82d45d818d9b7301c8adf0cd77367fa4`.
+
+### Heat/scalar alignment evidence (#171 phase 3)
+
+`e2e/maps-heat-alignment.spec.ts` (`@smoke`) renders `e2e/fixtures/heat-alignment.tsx` on
+`flatRuntime="maps"` with the Rust/WASM runtime, once with the WebGPU base renderer and once
+with the Canvas fallback. The fixture holds three Heat Layers with async rendering: a
+stable-raster density (meter radius), a viewport-raster density (pixel radius) and a scalar
+field with contours, masked by an L-shaped polygon with an off-center hole. A Point Layer marks
+the density sources and a GeoJSON Layer draws the mask's exact polygon. Each layer draws in its
+own color class, so the spec measures alignment from screenshots alone, not from the projection
+code under test:
+
+- each density peak (the centroid of surface pixels within 10% of the local maximum) must lie
+  under 3 px from its marker's centroid;
+- the masked field must cover the filled polygon's pixels with IoU above 0.9, hole included,
+  and its centroid must lie under 3 px from the polygon's.
+
+The journey measures the initial view, a pan with the pointer still held, after release, a
+wheel zoom at an off-center anchor, bearing 35°, bearing −25° with pitch 40°, and a resize
+from 960 × 540 to 760 × 640. Each step attaches the composite, vector-only and surfaces-only
+screenshots and its measurements.
+
+Measured on both backends (the values agree to 0.1 px): density peaks 0.06 to 1.7 px from their
+markers, field IoU 0.971 to 0.975 and field centroid offsets 1.0 to 1.4 px. The remaining
+offsets come from the rasters' own resolution: stable density samples are anchored grid
+cells, and the mask clips the 96 × 96 field at grid-cell resolution.
+
+**Found and fixed.** Under pitch, the stable density raster sat 9 and 14 px off its points.
+Canvas maps an image affinely, and the fixed 8 × 8 triangle mesh was far too coarse for the
+perspective across a stable raster's overscanned bounds.
+`drawCanvasGeographicRaster` now splits each cell until the affine triangles agree with the
+projection within 0.5 px, and it skips cells entirely off screen. Unpitched Mercator rasters
+keep the 8 × 8 mesh (`src/canvas-geographic-raster.test.ts`).
+
+**Observed, not changed here.** Faint seams follow the triangle edges, because each triangle's
+clip is antialiased separately; pitched views have more triangles and so more seams. The
+interpolated stable density shows its anchored sample cells as visible blocks. Neither moves
+a surface relative to points or polygons.
 
 
 ### Content-pinned Atlas tileset on Pages (#270)
