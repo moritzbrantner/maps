@@ -4,6 +4,13 @@ import type {
   MapsRuntimeSequenceHandle,
 } from "../demo/MapsRuntimeAcceptance";
 import type { MapSurfaceController } from "../src";
+import {
+  installMixedLayerWork,
+  readMixedLayerWork,
+  resetMixedLayerWork,
+  settleFrames,
+  type MixedLayerWork,
+} from "./helpers/mixed-layer-work";
 
 const VISIBLE_RASTER_TILE = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGMM2FLxnwEPYMInOXwUAACRIgKL3I8IIQAAAABJRU5ErkJggg==",
@@ -1262,4 +1269,124 @@ async function cornerPixel(page: Page, map: Locator) {
     const data = context.getImageData(12, image.height - 12, 1, 1).data;
     return [data[0]!, data[1]!, data[2]!];
   }, png.toString("base64"));
+}
+
+const NO_WORK: MixedLayerWork = {
+  aggregationQueries: 0,
+  canvasBaseRedraws: 0,
+  canvasOverlayRedraws: 0,
+  framePlans: 0,
+  freedAggregationIndexes: 0,
+  freedRenderers: 0,
+  freedRuntimes: 0,
+  gpuFrameBytes: 0,
+  gpuFrames: 0,
+  projectedCoordinates: 0,
+  projectionBatches: 0,
+  retainedEvictions: 0,
+  retainedPointSets: 0,
+  retainedPointUpdatedRecords: 0,
+  retainedPointUpdates: 0,
+  retainedPolygonSets: 0,
+  retainedPolygonUpdatedRecords: 0,
+  retainedPolygonUpdates: 0,
+  retainedUploadBytes: 0,
+  tileUploads: 0,
+};
+
+// #170 Fast: actual JS → WASM crossings and Canvas draws on the mixed-layer acceptance.
+for (const backend of ["wgpu", "canvas2d"] as const) {
+  test(`hover repaints only the overlay and unrelated commits do no runtime work (${backend}) @smoke`, async ({
+    page,
+  }, info) => {
+    if (backend === "canvas2d") {
+      await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+    }
+    const { interaction, map, overlay } = await openSequences(page);
+    await expect(map.locator('canvas[data-flat-runtime="maps"]')).toHaveAttribute(
+      "data-map-base-renderer",
+      backend,
+    );
+    await expect(overlay).toHaveAttribute("data-map-overlay-backend", backend);
+    await installMixedLayerWork(page);
+    await settleFrames(page);
+    const phases: Record<string, MixedLayerWork> = {};
+    const record = async (name: string, action: () => Promise<unknown>) => {
+      await resetMixedLayerWork(page);
+      await action();
+      await settleFrames(page);
+      phases[name] = await readMixedLayerWork(page);
+      return phases[name];
+    };
+
+    expect(await record("idle", async () => {})).toEqual(NO_WORK);
+
+    const camera = await record("camera", () =>
+      page.evaluate(() =>
+        window.mapsRuntimeSequences!.controller()!.setViewState({ center: [13.2, 52.4], zoom: 6 }),
+      ),
+    );
+    // A camera-only change plans one frame and re-projects the screen path once, but keeps
+    // every prepared source, index, retained group and runtime resource.
+    expect(camera.framePlans).toBeGreaterThanOrEqual(1);
+    expect(camera.projectionBatches).toBe(1);
+    expect(camera.aggregationQueries).toBe(1);
+    expect({
+      evictions: camera.retainedEvictions,
+      freed: camera.freedRuntimes + camera.freedRenderers + camera.freedAggregationIndexes,
+      retainedWrites:
+        camera.retainedPointSets +
+        camera.retainedPointUpdates +
+        camera.retainedPolygonSets +
+        camera.retainedPolygonUpdates,
+    }).toEqual({ evictions: 0, freed: 0, retainedWrites: 0 });
+
+    // Hover changes only the application overlay's presentation: one repaint, with no
+    // camera plan, projection, aggregation, base-map redraw or resource rebuild.
+    const hoverOnly = (work: MixedLayerWork) => ({
+      ...work,
+      canvasOverlayRedraws: 0,
+      gpuFrameBytes: 0,
+      gpuFrames: 0,
+    });
+    const flowFrom = await projectAcceptanceCoordinate(page, [11.8, 52]);
+    const flowTo = await projectAcceptanceCoordinate(page, [12.8, 52]);
+    const bounds = (await overlay.boundingBox())!;
+    const hovers = [
+      await record("hover-flow", async () => {
+        await page.mouse.move(
+          bounds.x + (flowFrom.x + flowTo.x) / 2,
+          bounds.y + (flowFrom.y + flowTo.y) / 2,
+        );
+        await expect(interaction).toHaveText("flow:hover:acceptance-flow");
+      }),
+      await record("hover-point", async () => {
+        await moveToCoordinate(page, [13.405, 52.52]);
+        await expect(interaction).toHaveText("point:hover:acceptance-berlin");
+      }),
+    ];
+    for (const hover of hovers) {
+      expect(hoverOnly(hover)).toEqual(NO_WORK);
+      if (backend === "wgpu") {
+        expect(hover.gpuFrames).toBe(1);
+      } else {
+        expect([hover.canvasOverlayRedraws, hover.gpuFrames]).toEqual([1, 0]);
+      }
+    }
+
+    // React commits the Map Layers do not depend on reach no runtime, renderer or draw.
+    expect(
+      await record("unrelated-commits", async () => {
+        for (let commit = 0; commit < 5; commit += 1) {
+          await page.evaluate(() => window.mapsRuntimeSequences!.commitUnrelated());
+        }
+        await expect(page.getByTestId("maps-runtime-unrelated-commits")).toHaveText("5");
+      }),
+    ).toEqual(NO_WORK);
+
+    await info.attach(`mixed-layer-work-${backend}`, {
+      body: JSON.stringify(phases, null, 2),
+      contentType: "application/json",
+    });
+  });
 }

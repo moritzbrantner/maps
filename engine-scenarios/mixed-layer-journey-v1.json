@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "mixed-layer-journey-v1",
+  "description": "#170 Fast: the public flatRuntime=\"maps\" Map View with an embedded raster base, a Cluster Layer, a Flow Layer, a GeoJSON polygon and a Point Layer with anchored Map UI (demo/MapsRuntimeAcceptance.tsx, sequences mode).",
+  "fixture": {
+    "page": "/demo-reference/?e2e=1&acceptance=maps-runtime-sequences",
+    "layers": ["cluster", "flow", "polygon", "point"],
+    "primitives": 7,
+    "build": "vite production build of demo-reference with the built dist/wasm package"
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "initialCamera": { "longitude": 13.405, "latitude": 52.52, "zoom": 6 },
+  "journey": [
+    { "phase": "camera", "operations": ["drag 160x48 px in 12 steps", "3 wheel steps of -120", "setViewState back to the initial camera"] },
+    { "phase": "hover", "operations": ["3 rounds over flow, point, cluster and an empty pixel"] },
+    { "phase": "select", "operations": ["click point, Escape", "click polygon, Escape", "click flow, Escape"] },
+    { "phase": "unrelated-commits", "operations": ["20 flushSync commits of state no Map Layer depends on"] },
+    { "phase": "teardown", "operations": ["3 unmount/remount cycles of the Map View"] }
+  ],
+  "observations": [
+    "per-phase-wasm-crossings",
+    "per-phase-canvas-redraws",
+    "retained-and-frame-upload-bytes",
+    "pointer-to-interaction-latency",
+    "long-tasks",
+    "frame-intervals",
+    "js-heap-after-gc"
+  ],
+  "runtimePhases": ["camera", "hover", "select", "unrelated-commits", "teardown"]
+}

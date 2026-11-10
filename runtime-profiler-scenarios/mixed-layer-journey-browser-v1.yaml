@@ -1,0 +1,19 @@
+schema_version: runtime-profiler/scenario/v1
+id: maps-mixed-layer-journey-v1
+target:
+  type: browser-journey
+  module: scripts/profile-mixed-layer-journey.ts
+  working_directory: ..
+  inherit_env:
+    - HOME
+    - MAPS_MIXED_LAYER_OBSERVATION
+    - PATH
+    - PLAYWRIGHT_BROWSERS_PATH
+    - TMPDIR
+    - XDG_CACHE_HOME
+run:
+  warmup_iterations: 0
+  measurement_iterations: 1
+  timeout_seconds: 300
+collectors:
+  - browser-chromium

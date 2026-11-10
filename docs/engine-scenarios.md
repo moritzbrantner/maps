@@ -216,6 +216,25 @@ Runtime phases:
 - glyph upload;
 - rendering.
 
+### `mixed-layer-journey-v1`
+
+Purpose: profile the whole first-party Map View composition (#170 Fast), not camera math alone.
+
+Fixture: the public `MapView flatRuntime="maps"` acceptance page
+(`demo/MapsRuntimeAcceptance.tsx`, sequences mode). It uses an embedded raster base, a
+Cluster Layer, a Flow Layer, a GeoJSON polygon, a Point Layer and anchored Map UI, at a
+fixed 1280x720 viewport. The page passes identity-stable layer inputs. Map Layers
+re-prepare any input whose identity changes, so stable inputs are what let the evidence
+separate unrelated commits from real data changes.
+
+Journey: drag, wheel and programmatic camera; repeated hover over flow, point and empty
+map; select point, polygon and flow; 20 unrelated React commits; three unmount and
+remount cycles.
+
+Evidence: per-phase JS → WASM crossings and Canvas redraws, plus retained and frame
+upload bytes. Also pointer → Map UI interaction latency, long tasks, rAF intervals and
+JS heap after GC. See [the evidence contract](engine-evidence.md#mixed-layer-journey-evidence-170).
+
 ## Constrained-runtime browser evidence
 
 `e2e/maps-runtime.spec.ts` exercises device loss on the real Rust/WASM + WebGPU
