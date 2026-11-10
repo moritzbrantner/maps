@@ -42,6 +42,7 @@ import type { MapScreenInteractionState, MapScreenRenderFrame } from "./map-scre
 import {
   MapsOverlayLayers,
   type MapsOverlayLayersController,
+  type MapsOverlayPopupSource,
   type MapsOverlayRetainedPoints,
   type MapsProjectCoordinate,
 } from "./maps-overlay-layers";
@@ -235,12 +236,24 @@ export function MapsMapView({
   }, []);
 
   /** Closes feature overlays whose Map Feature is no longer rendered. */
-  const retireFeatureOverlays = useCallback((isRendered: (overlayKey: string) => boolean) => {
-    const keep = <TOverlay extends { overlayKey?: string } | null>(overlay: TOverlay) =>
-      overlay?.overlayKey === undefined || isRendered(overlay.overlayKey) ? overlay : null;
-    setPopup(keep);
-    setContextMenu(keep);
-  }, []);
+  const retireFeatureOverlays = useCallback(
+    (
+      isRendered: (overlayKey: string) => boolean,
+      latestPopup?: (overlayKey: string) => MapsOverlayPopupSource | undefined,
+    ) => {
+      const keep = <TOverlay extends { overlayKey?: string } | null>(overlay: TOverlay) =>
+        overlay?.overlayKey === undefined || isRendered(overlay.overlayKey) ? overlay : null;
+      setPopup((overlay) => {
+        const kept = keep(overlay);
+        const latest = kept?.overlayKey === undefined ? undefined : latestPopup?.(kept.overlayKey);
+        return kept && latest && (latest.render !== kept.render || latest.feature !== kept.feature)
+          ? { ...kept, feature: latest.feature, render: latest.render }
+          : kept;
+      });
+      setContextMenu(keep);
+    },
+    [],
+  );
 
   const handleBackgroundClick = useCallback(() => {
     blockedHoverPositionRef.current = null;

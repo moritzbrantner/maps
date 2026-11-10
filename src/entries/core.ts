@@ -238,3 +238,16 @@ export {
   type MapsPlaceSearchResult,
   type MapsPlaceSearchUnavailableReason,
 } from "../maps-place-search";
+export {
+  getHistoricalMapFeatureDateOptions,
+  getHistoricalMapFeaturePeriodAt,
+  isHistoricalMapFeatureApplicable,
+  isHistoricalMapFeaturePeriodActive,
+  resolveHistoricalMapFeatureName,
+  type HistoricalMapFeatureDate,
+  type HistoricalMapFeatureDateOption,
+  type HistoricalMapFeatureName,
+  type HistoricalMapFeaturePeriod,
+  type HistoricalMapFeatureRecord,
+  type ResolvedHistoricalMapFeatureName,
+} from "../historical-map-features";

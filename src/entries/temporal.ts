@@ -57,6 +57,27 @@ export {
   useMapScopedTimelineSnapshot,
   type MapScopedTimelineControlsProps,
 } from "../map-scoped-timeline-react";
+export {
+  getHistoricalMapFeatureDateOptions,
+  getHistoricalMapFeaturePeriodAt,
+  isHistoricalMapFeatureApplicable,
+  isHistoricalMapFeaturePeriodActive,
+  resolveHistoricalMapFeatureName,
+  type HistoricalMapFeatureDate,
+  type HistoricalMapFeatureDateOption,
+  type HistoricalMapFeatureName,
+  type HistoricalMapFeaturePeriod,
+  type HistoricalMapFeatureRecord,
+  type ResolvedHistoricalMapFeatureName,
+} from "../historical-map-features";
+export {
+  HistoricalMapFeatureContextPanel,
+  useHistoricalMapFeatureSelection,
+  type HistoricalMapFeatureContext,
+  type HistoricalMapFeatureContextPanelProps,
+  type HistoricalMapFeatureSelection,
+  type UseHistoricalMapFeatureSelectionOptions,
+} from "../historical-selection-react";
 export { TemporalClusteredMap, type TemporalClusteredMapProps } from "../temporal-map";
 export {
   TemporalHeatMap,

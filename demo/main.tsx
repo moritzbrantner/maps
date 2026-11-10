@@ -20,6 +20,7 @@ import { MapsClusterRaceAcceptance } from "./MapsClusterRaceAcceptance";
 import { MapsOrientedRuntimeAcceptance } from "./MapsOrientedRuntimeAcceptance";
 import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
 import { MapsTemporalRuntimeAcceptance } from "./MapsTemporalRuntimeAcceptance";
+import { MapsHistoricalRuntimeAcceptance } from "./MapsHistoricalRuntimeAcceptance";
 import {
   markRustRuntimeLoaded,
   markRustRuntimeLoading,
@@ -84,6 +85,8 @@ async function bootstrap() {
     );
   } else if (acceptanceMode === "maps-runtime-temporal") {
     content = <MapsTemporalRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-historical") {
+    content = <MapsHistoricalRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-oriented") {
     content = <MapsOrientedRuntimeAcceptance />;
   }

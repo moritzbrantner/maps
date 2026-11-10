@@ -64,6 +64,54 @@ ignored when a `timeline` is supplied.
 static Map Layers such as `GeoJsonLayer` go in as children and stay retained while only the
 time changes.
 
+## Historical Map Feature selection
+
+`useHistoricalMapFeatureSelection({ features, locale, timeline })` validates Map Feature
+selection against the same Map-Scoped Timeline clock the Map Layers sample (Maps Decision
+Atlas 1.14, 1.16, 1.18 and 1.20). The application supplies one
+`HistoricalMapFeatureRecord` per historical Map Feature: its applicable `periods`
+(start-inclusive, end-exclusive), date-specific `names` with the attested `original` form and
+established `localized` forms, a `modernName`, `attribution` and the `supportedDates` a viewer
+may return to. Maps never infers periods, names, translations or successors.
+
+```tsx
+const selection = useHistoricalMapFeatureSelection({ features: records, locale, timeline: clock });
+
+<MapView flatRuntime="maps" mapStyle={style}>
+  <GeoJsonLayer
+    featureCollection={placesValidAt(selection.activeTime)}
+    hoveredFeatureId={selection.hoveredFeatureId}
+    isFeatureInteractive={(feature) => selection.isFeatureApplicable(feature.id)}
+    onHoveredFeatureIdChange={selection.onHoveredFeatureIdChange}
+    onSelectedFeatureIdChange={selection.onSelectedFeatureIdChange}
+    renderFeaturePopup={(feature) => selection.getFeatureName(feature.id)?.text}
+    selectedFeatureId={selection.selectedFeatureId}
+  />
+</MapView>
+<HistoricalMapFeatureContextPanel selection={selection} />
+```
+
+- In the render in which the sampled `activeTime` leaves a selected feature's period, the
+  selection, hover and anchored popup clear, and its details are retained as
+  `selection.retainedContext`. `HistoricalMapFeatureContextPanel` shows them detached from the
+  map, labelled **Out of period**, with the date and period they refer to and the current map
+  date. Picks of out-of-period features are ignored.
+- Nothing reselects the feature automatically: not a successor, and not the timeline moving
+  back into its period (the panel then says it applies at the map date but is not selected).
+  A new applicable selection replaces the context; **Dismiss** closes it.
+- The panel's mini-timeline lists the feature's supported dates. Dates the map's timeline
+  cannot reach, or that its `timeStep` would snap out of the feature's period, are disabled
+  with the reason. Activating a date pauses and seeks the one clock and reselects the feature
+  once the map samples that date; with application-controlled time it waits for that time, and
+  a different time arriving first cancels the reselection.
+- `resolveHistoricalMapFeatureName(record, time, locale)` gives the date-appropriate name in
+  the viewer's language, or the attested original form flagged `sourceFormFallback`. Changing
+  `locale` relabels without changing the date or the selection. The pure helpers are also
+  exported from `@moritzbrantner/maps/core`.
+- Derive the layer's geometry from the same `activeTime`, so the out-of-period geometry and its
+  popup leave the map together. A retained popup re-renders with the layer's latest
+  `renderFeaturePopup` and feature, so a supported rename updates an open popup.
+
 ## GeoJSON Timeline Transitions
 
 `getGeoJsonTimelineFeatureCollectionAtTime(...)` applies timeline keyframes to

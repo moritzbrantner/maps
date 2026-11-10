@@ -17,6 +17,16 @@
 
 ### Minor Changes
 
+- Historical Map Feature selection (#170 phase D, Decisions 1.14/1.16/1.18/1.20).
+  `useHistoricalMapFeatureSelection()` validates selection and hover against the one
+  Map-Scoped Timeline clock: leaving a feature's period clears its selection, hover and popup
+  and retains its dated details, shown by `HistoricalMapFeatureContextPanel` as **out of
+  period** with a mini-timeline of its supported dates. Only an explicit mini-timeline date
+  seeks the clock and reselects the feature. `resolveHistoricalMapFeatureName()` and the other
+  pure helpers give date- and language-appropriate names from consumer-supplied records, also
+  from `@moritzbrantner/maps/core`.
+- On `flatRuntime="maps"`, an open feature popup now re-renders with its layer's latest
+  `renderFeaturePopup` and feature instead of the click-time ones.
 - One public Map-Scoped Timeline clock (#172). `createMapScopedTimelineClock()` owns the
   authoritative time, play/pause, seeking, snapping, looping and the single frame loop that
   advances it; `setControlledTime()` hands ownership of the time to the application, whose
