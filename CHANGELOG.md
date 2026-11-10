@@ -25,7 +25,7 @@
   seeks the clock and reselects the feature. `resolveHistoricalMapFeatureName()` and the other
   pure helpers give date- and language-appropriate names from consumer-supplied records, also
   from `@moritzbrantner/maps/core`.
-- On `flatRuntime="maps"`, an open feature popup now re-renders with its layer's latest
+- On `flatRuntime="maps"`, an open (non-cluster) feature popup now re-renders with its layer's latest
   `renderFeaturePopup` and feature instead of the click-time ones.
 - One public Map-Scoped Timeline clock (#172). `createMapScopedTimelineClock()` owns the
   authoritative time, play/pause, seeking, snapping, looping and the single frame loop that
