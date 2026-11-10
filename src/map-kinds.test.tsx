@@ -1082,6 +1082,149 @@ describe("@moritzbrantner/maps additional map kinds", () => {
     ).toBe(polygon);
   });
 
+  test("closes a flat point popup when its point leaves the layer or is deselected", async () => {
+    const points = [
+      { id: "store-1", label: "Store 1", latitude: 40, longitude: -74 },
+      { id: "store-2", label: "Store 2", latitude: 41, longitude: -73 },
+    ];
+    const renderMap = (visible: typeof points, selectedFeatureId: string | null) => (
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Retiring point popups"
+        showAttributionControl={false}
+      >
+        <PointLayer
+          points={visible}
+          renderFeaturePopup={(feature) => `Popup ${feature.point.label}`}
+          selectedFeatureId={selectedFeatureId}
+        />
+      </MapView>
+    );
+    const { rerender } = render(renderMap(points, null));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Retiring point popups").getAttribute("data-map-ready")).toBe(
+        "true",
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const clickMarker = async (index: number) => {
+      const markers = flatMock
+        .getLayerGroups()[0]!
+        .layers.filter((layer) => hasLayerClassName(layer, "mb-maps__point-marker"));
+
+      await act(async () => {
+        markers[index]?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+      });
+    };
+
+    // A controlled selection that selected the popup's point and then clears closes it.
+    await clickMarker(0);
+    expect(screen.getByText("Popup Store 1")).toBeTruthy();
+    await act(async () => {
+      rerender(renderMap(points, "store-1"));
+    });
+    expect(screen.getByText("Popup Store 1")).toBeTruthy();
+    await act(async () => {
+      rerender(renderMap(points, null));
+    });
+    expect(screen.queryByText("Popup Store 1")).toBeNull();
+
+    // A popup whose point is no longer in the layer closes; another point's popup stays.
+    await clickMarker(1);
+    expect(screen.getByText("Popup Store 2")).toBeTruthy();
+    await act(async () => {
+      rerender(renderMap([points[1]!], null));
+    });
+    expect(screen.getByText("Popup Store 2")).toBeTruthy();
+    await act(async () => {
+      rerender(renderMap([points[0]!], null));
+    });
+    expect(screen.queryByText("Popup Store 2")).toBeNull();
+  });
+
+  test("clears flat GeoJSON hover and popup when the feature leaves the layer", async () => {
+    const onHoveredFeatureIdChange = vi.fn();
+    const zone = (id: string, west: number) => ({
+      geometry: {
+        coordinates: [
+          [
+            [west, 39],
+            [west + 2, 39],
+            [west + 2, 41],
+            [west, 41],
+            [west, 39],
+          ],
+        ],
+        type: "Polygon" as const,
+      },
+      id,
+      properties: { label: `Zone ${id}` },
+      type: "Feature" as const,
+    });
+    const renderMap = (ids: string[]) => (
+      <MapView
+        defaultViewState={{ center: [-74, 40], zoom: 5 }}
+        fitToData={false}
+        mapLabel="Retiring GeoJSON overlays"
+        showAttributionControl={false}
+      >
+        <GeoJsonLayer
+          featureCollection={{
+            features: ids.map((id, index) => zone(id, -75 + index * 3)),
+            type: "FeatureCollection",
+          }}
+          onHoveredFeatureIdChange={onHoveredFeatureIdChange}
+          renderFeaturePopup={(feature) => `Popup ${String(feature.properties.label)}`}
+          renderFeatureTooltip={(feature) => `Tooltip ${String(feature.properties.label)}`}
+        />
+      </MapView>
+    );
+    const { rerender } = render(renderMap(["a", "b"]));
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Retiring GeoJSON overlays").getAttribute("data-map-ready"),
+      ).toBe("true");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const polygons = flatMock
+      .getLayerGroups()[0]!
+      .layers.filter((layer) => hasLayerClassName(layer, "mb-maps__geojson-feature"));
+
+    await act(async () => {
+      polygons[0]?.handlers.get("click")?.[0]?.({ containerPoint: { x: 120, y: 160 } });
+    });
+    await act(async () => {
+      polygons[1]?.handlers.get("mouseover")?.[0]?.({ containerPoint: { x: 220, y: 160 } });
+    });
+    expect(screen.getByText("Popup Zone a")).toBeTruthy();
+    expect(screen.getByText("Tooltip Zone b")).toBeTruthy();
+
+    // The hovered feature leaves: MapLibre fires no `mouseleave` for a removed layer.
+    await act(async () => {
+      rerender(renderMap(["a"]));
+    });
+    expect(screen.getByText("Popup Zone a")).toBeTruthy();
+    expect(screen.queryByText("Tooltip Zone b")).toBeNull();
+    expect(onHoveredFeatureIdChange).toHaveBeenLastCalledWith(
+      null,
+      expect.objectContaining({ source: "clear" }),
+    );
+
+    await act(async () => {
+      rerender(renderMap([]));
+    });
+    expect(screen.queryByText("Popup Zone a")).toBeNull();
+  });
+
   test("clears flat cluster hover tooltip on click", async () => {
     render(
       <ClusteredMap

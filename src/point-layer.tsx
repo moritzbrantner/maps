@@ -3,6 +3,7 @@
 import { useContext, useDeferredValue, useEffect, useId, useMemo, useRef } from "react";
 
 import { type IndexedMapPoint, type MapPoint, type MapPointFilter } from "./aggregation";
+import { useFlatFeatureOverlayRetirement } from "./flat-feature-overlay-retirement";
 import { escapeHtml, joinClassNames, toLatLng, type MapViewportProps } from "./map-display";
 import type { MapFeatureInteractionProps } from "./map-interaction";
 import { MapSurfaceContext } from "./map-view";
@@ -203,6 +204,30 @@ function PointFeatureLayer<
     surfaceRef.current = surface;
   });
 
+  const interactiveFeatureKeys = useMemo(
+    () => new Set(features.map((feature) => getFlatPointFeatureKey(feature, getFeatureId))),
+    [features, getFeatureId],
+  );
+  const trackPopup = useFlatFeatureOverlayRetirement({
+    clearHover: () => {
+      const currentSurface = surfaceRef.current;
+
+      if (currentSurface?.maplibreMap) {
+        currentSurface.maplibreMap.getContainer().style.cursor = "";
+      }
+      currentSurface?.handleFeatureHover(null, null, {
+        getFeatureId,
+        onFeatureHover,
+        onHoveredFeatureIdChange,
+        renderFeatureTooltip,
+      });
+    },
+    deliveredHoverKeyRef,
+    interactiveFeatureKeys,
+    selectedFeatureId,
+    surface,
+  });
+
   useEffect(() => {
     if (!isFlatSurface) {
       flatMarkerCacheRef.current.clear();
@@ -310,6 +335,7 @@ function PointFeatureLayer<
                   marker.on(
                     "click",
                     (event: { containerPoint?: { x: number; y: number } } = {}) => {
+                      if (renderFeaturePopup) trackPopup(featureKey, feature);
                       currentSurface.handleFeatureClick(
                         feature,
                         getFlatFeaturePosition(map, feature.coordinates, event),
@@ -324,6 +350,9 @@ function PointFeatureLayer<
                   );
                   marker.on("contextmenu", (event: FlatFeaturePointerEvent = {}) => {
                     suppressNativeContextMenu(event);
+                    if (renderFeaturePopup && !renderFeatureContextMenu) {
+                      trackPopup(featureKey, feature);
+                    }
                     currentSurface.handleFeatureContextMenu(
                       feature,
                       getFlatFeaturePosition(map, feature.coordinates, event),
