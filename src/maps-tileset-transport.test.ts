@@ -190,4 +190,33 @@ describe("PMTiles browser byte-range adapter", () => {
     reader.dispose();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
+
+  it("asks an XYZ host conditionally and reports a 304 with its cache metadata", async () => {
+    const seen: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const validator = new Headers(init?.headers).get("If-None-Match");
+        seen.push(validator);
+        return validator === '"v1"'
+          ? new Response(null, { status: 304, headers: { "Cache-Control": "max-age=60" } })
+          : new Response(Uint8Array.from(originalTile), {
+              headers: { ETag: '"v1"', "Cache-Control": "max-age=60" },
+            });
+      }),
+    );
+    const { transport: _archive, ...metadata } = createFixturePmtilesTileset();
+    const reader = createMapsTilesetTileReader({
+      ...metadata,
+      transport: { kind: "xyz", urlTemplate: "/tiles/{z}/{x}/{y}.mvt" },
+    });
+    const signal = new AbortController().signal;
+    const first = await reader.readTile(tile0, signal);
+    expect(first.bytes).toEqual(new Uint8Array(originalTile));
+    expect(first.http).toMatchObject({ etag: '"v1"', cacheControl: "max-age=60" });
+    const second = await reader.readTile(tile0, signal, { etag: first.http.etag });
+    expect(second).toMatchObject({ bytes: null, http: { cacheControl: "max-age=60" } });
+    expect(seen).toEqual([null, '"v1"']);
+    reader.dispose();
+  });
 });

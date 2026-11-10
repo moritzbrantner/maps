@@ -1,4 +1,10 @@
 import { createMapsTilesetTileReader } from "./maps-tileset-transport";
+import {
+  createPersistentMapsTilesetTileReader,
+  getMapsTileStore,
+  type MapsTilePersistenceOptions,
+  type MapsTilePersistenceStatus,
+} from "./maps-tile-persistence";
 import { type MapsTileset } from "./maps-tileset";
 import {
   tilesetStyleTable,
@@ -165,6 +171,8 @@ export type MapsRendererStats = Partial<MapsWgpuFrameStats> & {
     switchMs: number | null;
     state: string;
     error: string | null;
+    /** Present while this Map View opted in to `tilePersistence`. */
+    persistence?: MapsTilePersistenceStatus;
   };
 };
 
@@ -236,6 +244,11 @@ export type MapsBrowserRuntimeOptions = {
   tilesetStyle?: MapsVectorBasemapStyle;
   /** MapLibre `circle`/`symbol` layers drawn over the Tileset, supported by flatRuntime="maps" only. */
   tilesetLayers?: MapsTilesetLayers;
+  /**
+   * Opt in to keeping downloaded Tileset bytes in browser Cache Storage across sessions.
+   * Off by default: without it a Map View never writes to origin storage.
+   */
+  tilePersistence?: boolean | MapsTilePersistenceOptions;
   /**
    * The map style's `sprite` (#323): a URL whose `[@2x].json` index and `.png` sheet hold
    * the images `fill-pattern` and `line-pattern` name, for tileset layers and GeoJSON shapes alike.
@@ -651,6 +664,7 @@ export function createMapsBrowserRuntime(
       tileset: () => config.tileset,
       tilesetStyle: () => config.tilesetStyle,
       tilesetLayers: () => config.tilesetLayers,
+      tilePersistence: () => config.tilePersistence,
       sprite: () => config.sprite,
       relief: () => config.relief,
       wasmPackage,
@@ -1016,6 +1030,7 @@ export function createMapsBrowserRuntime(
     const previousTileset = config.tileset;
     const previousStyle = config.tilesetStyle;
     const previousLayers = config.tilesetLayers;
+    const previousPersistence = JSON.stringify(config.tilePersistence);
     const previousSprite = config.sprite;
     const previousRelief = config.relief;
     const previousSky = config.sky;
@@ -1039,7 +1054,8 @@ export function createMapsBrowserRuntime(
       config.tileset &&
       (previousTileset !== config.tileset ||
         previousStyle !== config.tilesetStyle ||
-        previousLayers !== config.tilesetLayers)
+        previousLayers !== config.tilesetLayers ||
+        previousPersistence !== JSON.stringify(config.tilePersistence))
     )
       updateTileset?.();
     if (
@@ -1213,6 +1229,7 @@ function createFrameSynchronizer({
   tileset,
   tilesetStyle,
   tilesetLayers,
+  tilePersistence,
   sprite,
   relief,
   wasmPackage,
@@ -1235,6 +1252,7 @@ function createFrameSynchronizer({
   tileset: () => MapsTileset | undefined;
   tilesetStyle: () => MapsVectorBasemapStyle | undefined;
   tilesetLayers: () => MapsTilesetLayers | undefined;
+  tilePersistence: () => boolean | MapsTilePersistenceOptions | undefined;
   sprite: () => string | undefined;
   relief: () => MapsRelief | undefined;
   wasmPackage?: string;
@@ -1248,7 +1266,38 @@ function createFrameSynchronizer({
   const inactive = new Map<string, Map<string, { vector: VectorResource; image: ImageBitmap }>>();
   let activeDescriptor = tileset();
   let sourceIdentity = activeDescriptor ? runtime.activateTileset(activeDescriptor) : "";
-  let tileReader = activeDescriptor ? createMapsTilesetTileReader(activeDescriptor) : null;
+  // Persistence wraps browser I/O only; Rust still names the source and schedules its tiles.
+  let persistenceKey = JSON.stringify(tilePersistence());
+  let unsubscribePersistence: (() => void) | null = null;
+  function createTileReader(descriptor: MapsTileset, identity: string) {
+    const reader = createMapsTilesetTileReader(descriptor);
+    const option = tilePersistence();
+    unsubscribePersistence?.();
+    unsubscribePersistence = null;
+    if (!option) return reader;
+    const store = getMapsTileStore();
+    store.configure(option === true ? {} : option);
+    unsubscribePersistence = store.subscribe(publishPersistenceStats);
+    return createPersistentMapsTilesetTileReader(descriptor, identity, reader, store);
+  }
+  function publishPersistenceStats() {
+    if (!unsubscribePersistence) {
+      for (const name of ["", "Hits", "Misses", "Revalidations", "Evictions", "Bytes", "Tiles"]) {
+        delete canvas.dataset[`mapTilePersistence${name}`];
+      }
+      return;
+    }
+    const status = getMapsTileStore().status();
+    canvas.dataset.mapTilePersistence = status.state;
+    canvas.dataset.mapTilePersistenceHits = String(status.hits);
+    canvas.dataset.mapTilePersistenceMisses = String(status.misses);
+    canvas.dataset.mapTilePersistenceRevalidations = String(status.revalidations);
+    canvas.dataset.mapTilePersistenceEvictions = String(status.evictions);
+    canvas.dataset.mapTilePersistenceBytes = String(status.storedBytes);
+    canvas.dataset.mapTilePersistenceTiles = String(status.storedTiles);
+  }
+  let tileReader = activeDescriptor ? createTileReader(activeDescriptor, sourceIdentity) : null;
+  publishPersistenceStats();
   let styleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
   let sourceSwitchStarted = performance.now();
   let sourceSwitchMs: number | null = null;
@@ -1474,10 +1523,14 @@ function createFrameSynchronizer({
       descriptor === activeDescriptor ? sourceIdentity : runtime.activateTileset(descriptor);
     activeDescriptor = descriptor;
     const changed = sourceIdentity !== nextIdentity;
-    if (changed || transportChanged) {
+    const nextPersistenceKey = JSON.stringify(tilePersistence());
+    const persistenceChanged = persistenceKey !== nextPersistenceKey;
+    persistenceKey = nextPersistenceKey;
+    if (changed || transportChanged || persistenceChanged) {
       // Rust validates before any in-flight browser work is cancelled.
       tileReader?.dispose();
-      tileReader = createMapsTilesetTileReader(descriptor);
+      tileReader = createTileReader(descriptor, nextIdentity);
+      publishPersistenceStats();
       for (const load of loads.values()) {
         load.abort.abort();
       }
@@ -2120,11 +2173,27 @@ function createFrameSynchronizer({
       const loadImage = descriptor
         ? (async () => {
             requests++;
-            const bytes = await reader!.fetchTile(tile, abort.signal);
-            const pixels = await decodeShortbreadTilePixels(bytes, wasmPackage);
+            let bytes = await reader!.fetchTile(tile, abort.signal);
+            let pixels: ShortbreadTilePixels;
+            try {
+              pixels = await decodeShortbreadTilePixels(bytes, wasmPackage);
+            } catch (error) {
+              // Undecodable stored bytes are discarded; the network answers once instead.
+              if (!reader!.settleTile?.(bytes, false)) throw error;
+              abort.signal.throwIfAborted();
+              bytes = await reader!.fetchTile(tile, abort.signal);
+              try {
+                pixels = await decodeShortbreadTilePixels(bytes, wasmPackage);
+              } catch (retryError) {
+                reader!.settleTile?.(bytes, false);
+                throw retryError;
+              }
+            }
             abort.signal.throwIfAborted();
             if (disposed || loads.get(tile.key) !== load || requestedIdentity !== sourceIdentity)
               throw new DOMException("Stale source tile", "AbortError");
+            // Only bytes this Map View decoded for its current source may be persisted.
+            reader!.settleTile?.(bytes, true);
             decodes++;
             vectors.set(tile.key, { bytes, pixels, tile });
             if (renderer()) {
@@ -2205,6 +2274,7 @@ function createFrameSynchronizer({
     dispose() {
       disposed = true;
       tileReader?.dispose();
+      unsubscribePersistence?.();
       for (const entries of inactive.values())
         for (const resource of entries.values()) resource.image.close();
       inactive.clear();
@@ -2245,6 +2315,9 @@ function createFrameSynchronizer({
                 switchMs: sourceSwitchMs,
                 state: canvas.dataset.mapSourceState ?? "loading",
                 error: canvas.dataset.mapBaseTileError ?? null,
+                ...(unsubscribePersistence
+                  ? { persistence: getMapsTileStore().status() }
+                  : {}),
               },
             }
           : {}),

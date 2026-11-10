@@ -60,4 +60,11 @@ export { type HeatFieldRenderMode } from "../heat-layer";
 export { FlatGeoJsonMap, type FlatGeoJsonMapProps } from "../flat-geojson-map";
 
 export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "../maps-tileset";
+export {
+  DEFAULT_MAPS_TILE_BUDGET_BYTES,
+  clearMapsDownloadedTiles,
+  getMapsTilePersistenceStatus,
+  type MapsTilePersistenceOptions,
+  type MapsTilePersistenceStatus,
+} from "../maps-tile-persistence";
 export { type MapsVectorBasemapStyle } from "../maps-tileset-style";

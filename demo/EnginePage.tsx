@@ -8,6 +8,7 @@ import type { MapsRendererStats } from "../src/maps-browser-runtime";
 import { MapPlaceSearch, describeMapsPlaceSearchResult } from "../src/map-place-search";
 import { MapView } from "../src/map-view";
 import type { MapsPlaceSearchResult } from "../src/maps-place-search";
+import { clearMapsDownloadedTiles } from "../src/maps-tile-persistence";
 import { createFixturePmtilesXyzTileset } from "../src/tileset-fixtures";
 import { atlasReleaseIndex, createAtlasTileset } from "./atlas-source";
 import { withFixturePlaceSearch } from "./place-search-fixtures";
@@ -25,6 +26,14 @@ type Telemetry = {
   cacheReuses: number;
   baseTiles: number;
   pendingTiles: number;
+  /** `off`: this source is not kept in browser storage. */
+  persistence: "off" | "idle" | "active" | "unavailable";
+  storedBytes: number;
+  storedTiles: number;
+  budgetBytes: number;
+  storedHits: number;
+  storedMisses: number;
+  storedEvictions: number;
 };
 
 const initialView: MapViewState = { center: [10.3, 50.4], zoom: 4.1 };
@@ -50,6 +59,13 @@ const initialTelemetry: Telemetry = {
   cacheReuses: 0,
   baseTiles: 0,
   pendingTiles: 0,
+  persistence: "off",
+  storedBytes: 0,
+  storedTiles: 0,
+  budgetBytes: 0,
+  storedHits: 0,
+  storedMisses: 0,
+  storedEvictions: 0,
 };
 const isAtlas = (source: SourceChoice) => source === "atlas" || source === "atlas-north";
 
@@ -154,6 +170,13 @@ export function EnginePage() {
         cacheReuses: stats.tileset?.cacheReuses ?? 0,
         baseTiles: Number(canvas.dataset.mapBaseTiles ?? 0),
         pendingTiles: Number(canvas.dataset.mapBasePendingTiles ?? 0),
+        persistence: stats.tileset?.persistence?.state ?? "off",
+        storedBytes: stats.tileset?.persistence?.storedBytes ?? 0,
+        storedTiles: stats.tileset?.persistence?.storedTiles ?? 0,
+        budgetBytes: stats.tileset?.persistence?.budgetBytes ?? 0,
+        storedHits: stats.tileset?.persistence?.hits ?? 0,
+        storedMisses: stats.tileset?.persistence?.misses ?? 0,
+        storedEvictions: stats.tileset?.persistence?.evictions ?? 0,
       };
       setTelemetry((current) =>
         (Object.keys(next) as Array<keyof Telemetry>).every((key) => current[key] === next[key])
@@ -241,6 +264,8 @@ export function EnginePage() {
           maxZoom={20}
           onMapControllerReady={onControllerReady}
           tileset={tileset}
+          // Real geography is worth keeping; synthetic fixtures always load from the network.
+          tilePersistence={isAtlas(source)}
           style={{ height: "100%", minHeight: 0 }}
         >
           <ClusterLayer
@@ -405,6 +430,17 @@ export function EnginePage() {
               <dd>{telemetry.cacheReuses}</dd>
             </div>
           </dl>
+          <div
+            className="engine-source-note"
+            data-testid="engine-downloaded-tiles"
+            data-state={telemetry.persistence}
+          >
+            <strong>Downloaded tiles</strong>
+            <span>{downloadedTilesMessage(telemetry)}</span>
+            <Button variant="outline" onClick={() => void clearMapsDownloadedTiles()}>
+              Clear downloaded tiles
+            </Button>
+          </div>
           {telemetry.error ? (
             <p role="alert" className="engine-error">
               {telemetry.error}
@@ -451,6 +487,26 @@ export function EnginePage() {
 function formatCamera(view: MapViewState): string {
   const [longitude, latitude] = view.center;
   return `${longitude.toFixed(3)}, ${latitude.toFixed(3)} · z${view.zoom.toFixed(2)}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function downloadedTilesMessage(telemetry: Telemetry): string {
+  if (telemetry.persistence === "off")
+    return "Only Atlas tiles are kept in this browser. Synthetic fixtures always load from the network.";
+  if (telemetry.persistence === "unavailable")
+    return "Browser storage is unavailable here. Tiles load from the network only.";
+  if (telemetry.persistence === "idle") return "Opening browser storage…";
+  return (
+    `${telemetry.storedTiles} tiles · ${formatBytes(telemetry.storedBytes)} of ` +
+    `${formatBytes(telemetry.budgetBytes)} kept in this browser. This visit: ` +
+    `${telemetry.storedHits} reused, ${telemetry.storedMisses} downloaded, ` +
+    `${telemetry.storedEvictions} evicted.`
+  );
 }
 
 function coverageMessage(coverage: "inside" | "outside" | "zoom"): string {

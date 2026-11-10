@@ -17,6 +17,11 @@
 
 ### Minor Changes
 
+- Opt-in tile persistence (#264). `tilePersistence` on a `flatRuntime="maps"` Map View keeps
+  downloaded Tileset MVT bytes in browser Cache Storage (about 250 MiB by default, set with
+  `budgetBytes`), so later visits reuse them. It is off by default.
+  `clearMapsDownloadedTiles()` and `getMapsTilePersistenceStatus()` clear and inspect the store.
+  See `docs/maps-tilesets.md`.
 - Scalar-field masks (#171). `maskGeoJson` on `HeatLayer`/`HeatMap` field mode,
   `createScalarFieldGrid()` and `createIdwInterpolator()` was reserved and is now applied: the
   field raster, contours and samples are clipped to the union of the mask's polygons (Polygon,
