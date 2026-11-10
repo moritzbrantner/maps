@@ -435,7 +435,9 @@ export function HistoryDemoView({
                 <option value="">None</option>
                 {visiblePolities.map((polity) => (
                   <option key={polity.properties.polityId} value={polity.properties.polityId}>
-                    {polity.properties.label}
+                    {scenarioId === "wwii-control"
+                      ? `${polity.properties.label} (${polity.properties.polityId.replace(/^control-/, "")})`
+                      : polity.properties.label}
                   </option>
                 ))}
               </select>
