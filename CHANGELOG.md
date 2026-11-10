@@ -166,6 +166,7 @@
 
 ### Patch Changes
 
+- `HeatLayer` stable-raster density surfaces now redraw when the filter, weights, radius, intensity, color ramp or points change while the camera stays inside the cached coverage. Before, the previous surface stayed on screen until the camera left the coverage or crossed a zoom bucket. This affects both `flatRuntime="maps"` and MapLibre Map Views (#171).
 - `flatRuntime="maps"` Map Views close the hover, tooltip, popup and context menu of a Map Feature that leaves the composition, report maxZoom corrections to controlled owners, and keep saved controllers inert after unmount.
 - Maps runtime camera frames no longer go through React (#343). As in MapLibre,
   `setViewState` moves the camera and renders it on the next animation frame
