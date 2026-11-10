@@ -201,6 +201,15 @@ existing public processing APIs. Pre-refactor Bun observations at `748166c` prot
 fixture, option and output equivalence; the gate retains its two warmups, eight
 measured runs, five p95 budgets, warnings and historical baseline unchanged.
 
+Kernel observation hashes cover a canonical numeric form, not raw IEEE-754 bit
+patterns: every number is rounded to nine decimal places and twelve significant
+digits before hashing, while structure, keys, strings and ordering stay exact.
+`Math.hypot` and the other libm-backed `Math` functions are not correctly rounded
+and their last bit varies with the engine, C library version and CPU, so a
+bit-exact hash is a property of one machine rather than of the kernel. The
+canonical form keeps observations comparable across runner images and local
+machines without hiding any difference of map-domain size.
+
 These are **kernel harness processes**, not browser Map Views. Profiler wall time
 includes Bun startup, imports, fixture/index setup and all repeated kernel calls;
 it cannot replace the gate's per-operation p95 or establish frame-rate/Fast
