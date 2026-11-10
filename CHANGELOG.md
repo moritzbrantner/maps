@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Minor Changes
+
+- Opt-in tile persistence (#264). `tilePersistence` on a `flatRuntime="maps"` Map View keeps
+  downloaded Tileset MVT bytes in browser Cache Storage (about 250 MiB by default, set with
+  `budgetBytes`), so later visits reuse them. It is off by default.
+  `clearMapsDownloadedTiles()` and `getMapsTilePersistenceStatus()` clear and inspect the store.
+  See `docs/maps-tilesets.md`.
+
+### Internal
+
 - Evidence tooling only, no package change: `bun run verify:engine-atlas-tileset-evidence`
   compares MapLibre GL + `pmtiles` with the first-party Map View over the same
   content-pinned Atlas archives through runtime-profiler and Moonlight (#270). Pages deploy

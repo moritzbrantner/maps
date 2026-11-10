@@ -172,6 +172,50 @@ test("real source A/B switches keep camera and overlays; out-of-coverage is expl
   await expectGeographicTiles(page, "maps-liechtenstein");
 });
 
+test("an Atlas revisit reuses downloaded tiles until they are cleared", async ({ page }) => {
+  const ranges: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith(fullArchive)) ranges.push(request.headers()["range"] ?? "");
+  });
+  await page.goto("/maps/?source=atlas&scene=liechtenstein&e2e=1");
+  await expectGeographicTiles(page, "maps-liechtenstein");
+  const panel = page.getByTestId("engine-downloaded-tiles");
+  await expect(panel).toHaveAttribute("data-state", "active");
+  await expect(panel).toContainText(/[1-9]\d* tiles · .* kept in this browser/);
+  await expect(panel).toContainText(/This visit: 0 reused, [1-9]\d* downloaded/);
+  const coldRanges = ranges.length;
+  expect(coldRanges).toBeGreaterThan(0);
+  // A later session trusts the debounced index, so reload once it names tiles.
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const cache = await caches.open("maps-tiles-v1");
+        const index = await cache.match("https://maps-tiles.invalid/v1/index");
+        return index ? ((await index.json()) as { entries: unknown[] }).entries.length : 0;
+      }),
+    )
+    .toBeGreaterThan(0);
+  await test.info().attach("atlas-downloaded-tiles.png", {
+    contentType: "image/png",
+    body: await panel.screenshot(),
+  });
+
+  ranges.length = 0;
+  await page.reload();
+  await expectGeographicTiles(page, "maps-liechtenstein");
+  await expect(panel).toContainText(/This visit: [1-9]\d* reused/);
+  expect(ranges.length).toBeLessThan(coldRanges);
+  await expect.poll(() => mapColors(page), { timeout: 20_000 }).toBeGreaterThan(3);
+
+  await page.getByRole("button", { name: "Clear downloaded tiles" }).click();
+  await expect(panel).toContainText(/^Downloaded tiles0 tiles · 0 B of /);
+
+  // Synthetic fixtures are not kept: the control says so instead of showing a store.
+  await page.getByRole("combobox", { name: "Tile source" }).selectOption("pmtiles");
+  await expect(panel).toHaveAttribute("data-state", "off");
+  await expect(panel).toContainText("Only Atlas tiles are kept in this browser");
+});
+
 test.describe("mobile", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 

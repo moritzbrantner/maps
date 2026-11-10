@@ -91,7 +91,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. |
 | Heat/scalar surfaces | Existing product capability | Partial (#171: deterministic density/scalar fixtures and retained-vs-uncached differential oracles; scalar-field polygon masks with holes clip the raster, contours and samples at grid-cell resolution, with mask boundary/hole fixtures and a masked-field oracle; browser alignment evidence is pending) | Needs first-party performance pass | The oracle found and fixed stale stable-raster reuse after filter/weight/radius/style/data changes. The masked-field oracle found and fixed async field reuse after the mask was replaced. Next: work/invalidation counters, browser alignment evidence, then Fast evidence (#171). |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
-| MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. |
+| MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
 | Style-spec-compatible vector layers/expressions | Not complete | Not complete | Not started | Develop background/fill/line/circle/raster + filters/expressions, then parity, then bucket/render optimization. |
 | Labels, icons and collision placement | Not complete | Not complete | Not started | Develop the cartography model first; correctness includes shaping/collision/stability; optimize only afterward. |
 | MapLibre responsibility retirement | Partial | Evidence-gated | Evidence-gated | Remove each responsibility only after its first-party replacement passes all three gates. |
@@ -179,6 +179,38 @@ Follow-up executable repair `4b8eda5eca95196fafba56b4ea61f998544ece36`:
   `2440c4b5e2cc8bb8992adb364e2961c21eb48e9b2bf34dfc475cb600e8945971`.
   The existing #268.Q1 decision remains open; no ceiling was changed and the
   feature is not declared complete or mergeable.
+
+### Opt-in raw-tile persistence (#264)
+
+Phase 1 of #264 (owner-approved split): `tilePersistence` keeps raw MVT bytes in
+Cache Storage behind the first-party tileset reader. The contract is in
+[Maps Tilesets](maps-tilesets.md#opt-in-tile-persistence-264).
+
+- **Developed.** The public Map View opts in; the Maps engine page keeps Atlas
+  tiles and shows status with a **Clear downloaded tiles** action
+  ([control screenshot](evidence/tile-persistence-control.png), captured from a
+  local Pages build on a revisit of the Liechtenstein Atlas). Rust remains the
+  only scheduler and source-identity authority; no Rust code changed.
+- **Correct.** `src/maps-tile-persistence.test.ts` (16 tests) covers the freshness
+  policy, canonical keys, later-session reuse with byte identity, revisions,
+  cancelled/rejected bytes, `no-store`, 304 revalidation, expiry without a
+  reachable server, LRU eviction, unavailable/denied storage, refused quota,
+  truncated and undecodable entries, concurrent reads, clearing and orphan
+  removal. `e2e/maps-tile-persistence.spec.ts` (13 Chromium cases, both renderers
+  for cold/reload/style) drives the real Map View against the committed MVT and
+  PMTiles fixtures: opt-in default, cold then reload with zero tile requests and
+  identical pixels and bytes, style change, unreachable host with stored versus
+  uncached tiles, clear, source/revision/URL-refresh keys, ETag revalidation,
+  `no-store`, expired-and-unreachable, malformed network bytes, corrupt stored
+  bytes, a late response for an abandoned source, world copies/overzoom, denied
+  storage, refused quota and eviction. `e2e-hosted/atlas-pages.spec.ts` adds an
+  Atlas revisit and clear on the Pages build. Concurrent requests for one tile and
+  truncated entries are covered by the unit tests only. Executed results are
+  recorded in the owning PR.
+- **Fast.** Not started. No HTTP-only versus persistent comparison has been
+  measured, so no benefit over browser HTTP caching is claimed. The profiler
+  scenarios and measured network/startup/storage evidence are phase 2 and keep
+  #264 open.
 
 ### Mixed-layer Map View composition (#170)
 
