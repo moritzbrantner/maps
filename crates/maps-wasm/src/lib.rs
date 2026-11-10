@@ -362,6 +362,50 @@ pub fn decode_shortbread_tile_pixels_for_js(bytes: &[u8], size: u32) -> Result<J
     encode_json_compatible(&tile)
 }
 
+/// Tileset QA (#276): what one MVT payload contains, decoded by the runtime MVT decoder.
+#[wasm_bindgen(js_name = inspectMvtTile)]
+pub fn inspect_mvt_tile_for_js(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    encode_json_compatible(&maps_core::inspect_mvt_tile(bytes).map_err(to_js_error)?)
+}
+
+/// Tileset QA (#276): declared coverage against addressed tiles, packed as `z, x, y` triples.
+#[wasm_bindgen(js_name = auditTilesetCoverage)]
+pub fn audit_tileset_coverage_for_js(
+    bounds: &[f64],
+    min_zoom: u8,
+    max_zoom: u8,
+    addressed: &[u32],
+    sample_limit: u32,
+    max_expected: u32,
+) -> Result<JsValue, JsValue> {
+    let bounds: [f64; 4] = bounds
+        .try_into()
+        .map_err(|_| to_js_error("coverage bounds need west, south, east, north"))?;
+    let (triples, remainder) = addressed.as_chunks::<3>();
+    if !remainder.is_empty() {
+        return Err(to_js_error("addressed tiles need z, x, y triples"));
+    }
+    let addressed = triples
+        .iter()
+        .map(|&[z, x, y]| {
+            u8::try_from(z)
+                .ok()
+                .and_then(|z| TileId::new(z, x, y))
+                .ok_or_else(|| to_js_error("addressed tile is outside its zoom pyramid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let audit = maps_core::audit_tileset_coverage(
+        bounds,
+        min_zoom,
+        max_zoom,
+        &addressed,
+        sample_limit as usize,
+        max_expected,
+    )
+    .map_err(to_js_error)?;
+    encode_json_compatible(&audit)
+}
+
 /// Normalizes native map points using the Maps-owned Rust contract.
 #[wasm_bindgen(js_name = normalizeMapPoints)]
 pub fn normalize_map_points_for_js(points: JsValue) -> Result<JsValue, JsValue> {

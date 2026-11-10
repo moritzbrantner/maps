@@ -189,23 +189,30 @@ impl MapsTileset {
 
     #[must_use]
     pub fn covers(&self, tile: TileId) -> bool {
-        let dimension = 2_f64.powi(i32::from(tile.z));
-        let west = f64::from(tile.x) / dimension * 360.0 - 180.0;
-        let east = (f64::from(tile.x) + 1.0) / dimension * 360.0 - 180.0;
-        let latitude = |y: f64| {
-            ((std::f64::consts::PI * (1.0 - 2.0 * y / dimension)).sinh())
-                .atan()
-                .to_degrees()
-        };
-        let north = latitude(f64::from(tile.y));
-        let south = latitude(f64::from(tile.y) + 1.0);
-        let [w, s, e, n] = self.bounds;
-        south < n
-            && north > s
-            && if w < e {
-                west < e && east > w
-            } else {
-                east > w || west < e
-            }
+        tile_intersects_bounds(self.bounds, tile)
     }
+}
+
+/// Whether a canonical tile intersects `[west, south, east, north]` coverage bounds.
+/// `west > east` denotes antimeridian coverage. The one coverage rule for runtime and QA.
+#[must_use]
+pub(crate) fn tile_intersects_bounds(bounds: [f64; 4], tile: TileId) -> bool {
+    let dimension = 2_f64.powi(i32::from(tile.z));
+    let west = f64::from(tile.x) / dimension * 360.0 - 180.0;
+    let east = (f64::from(tile.x) + 1.0) / dimension * 360.0 - 180.0;
+    let latitude = |y: f64| {
+        ((std::f64::consts::PI * (1.0 - 2.0 * y / dimension)).sinh())
+            .atan()
+            .to_degrees()
+    };
+    let north = latitude(f64::from(tile.y));
+    let south = latitude(f64::from(tile.y) + 1.0);
+    let [w, s, e, n] = bounds;
+    south < n
+        && north > s
+        && if w < e {
+            west < e && east > w
+        } else {
+            east > w || west < e
+        }
 }

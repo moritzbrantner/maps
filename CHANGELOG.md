@@ -16,6 +16,11 @@
   compares MapLibre GL + `pmtiles` with the first-party Map View over the same
   content-pinned Atlas archives through runtime-profiler and Moonlight (#270). Pages deploy
   builds publish the outcome at `/maps/evidence/atlas-tileset-runtime.json`.
+- Tileset integrity QA, tooling only (#276 part 1): `bun run qa:tileset` audits a PMTiles
+  archive against its manifest (identity, header, metadata, directory, coverage, decoded
+  tile content, pinned `go-pmtiles verify`) and writes a `maps-tileset-qa-v1` artifact with
+  `passed`/`failed`/`inconclusive` checks. `bun run verify:tileset-qa` gates the committed
+  fixtures in CI. See `docs/maps-tilesets.md`.
 
 ## 0.2.0
 

@@ -180,6 +180,40 @@ Follow-up executable repair `4b8eda5eca95196fafba56b4ea61f998544ece36`:
   The existing #268.Q1 decision remains open; no ceiling was changed and the
   feature is not declared complete or mergeable.
 
+### Tileset integrity QA (#276, part 1 of 3)
+
+The owner split #276 into three PRs. Part 1 is the archive/manifest integrity audit
+with its `maps-tileset-qa-v1` artifact and CLI, described in
+[Versioned Maps Tilesets](maps-tilesets.md#tileset-integrity-qa-276-part-1). Revision
+A/B comparison with the Inspector view (part 2) and seam QA (part 3) are not developed.
+
+- **Developed:** `bun run qa:tileset` audits a manifest and a PMTiles archive through
+  the upstream `pmtiles` reader, the Map View's manifest/header/metadata rules and the
+  Rust kernel `maps-core::tileset_qa` (runtime MVT decoder and coverage rule, via WASM).
+- **Correct:** nine Rust kernel tests and 29 integration cases against the built WASM
+  module (`bun run verify:tileset-qa`). Expected results come from archives written by
+  a test-only PMTiles/MVT writer, or from how the committed fixtures were generated.
+  The published Liechtenstein archive is an opt-in case that runs when it has been
+  fetched. **Pinned `go-pmtiles verify` runs only in the CI `Tileset QA` job**; a run
+  without it reports `inconclusive`, never `passed`. No browser path exists for part 1,
+  so there is no browser evidence.
+- **Fast:** measured, with no earlier implementation to compare against. Five runs each
+  on Linux x64 (WSL2), Bun 1.4.4, WASM SHA-256
+  `dbc64ee647ee7e7896e73d77021a5a6369f98e49c11fb7298c86e5a82021a714`, over the
+  2,730,127-byte Liechtenstein archive (203 addressed tiles):
+
+  | Mode | Range reads | Bytes read | Checks, median | Peak process RSS |
+  | --- | --- | --- | --- | --- |
+  | `sampled` (32 tiles) | 34 | 560,286 (20.5 %) | 39 ms (38–43) | 87–90 MB |
+  | `full` (203 tiles) | 205 | 2,730,127 (100 %) | 117 ms (110–122) | 98–100 MB |
+
+  Hashing the archive for the identity check streams the whole file once in both modes
+  (about 9 ms here) and is not in the range-read columns. RSS is the whole Bun process
+  including the WASM module, not QA allocations alone. Budgets bound the directory scan
+  (250,000 addressed tiles sampled, 4,000,000 full) and the decoded tiles (32 sampled,
+  20,000 full); beyond them a check is `inconclusive`. No archive larger than this one
+  has been measured.
+
 ### Opt-in raw-tile persistence (#264)
 
 Phase 1 of #264 (owner-approved split): `tilePersistence` keeps raw MVT bytes in
