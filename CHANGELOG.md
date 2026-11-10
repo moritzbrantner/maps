@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.2.0
+
+First release that ships the first-party Flat Map runtime: `MapView flatRuntime="maps"` and
+the built Rust/WASM runtime (`dist/wasm`) are in the published package, so a consumer can pin
+this version with a frozen lockfile and needs no Rust or `wasm-bindgen` toolchain to install
+it. MapLibre stays the default `flatRuntime`.
+
 ### Breaking Changes
 
 - The root entry no longer exports `EditableGeoJsonMap` or the GeoJSON
