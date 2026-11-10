@@ -24,6 +24,14 @@ it. MapLibre stays the default `flatRuntime`.
 
 ### Minor Changes
 
+- Scalar-field masks (#171). `maskGeoJson` on `HeatLayer`/`HeatMap` field mode,
+  `createScalarFieldGrid()` and `createIdwInterpolator()` was reserved and is now applied: the
+  field raster, contours and samples are clipped to the union of the mask's polygons (Polygon,
+  MultiPolygon, GeometryCollection, Feature or FeatureCollection), and polygon holes are
+  excluded. Clipping is per grid cell center; an inferred value domain covers only cells inside
+  the mask. `null`/`undefined` leaves the field unclipped. An async field layer
+  (`fieldAsyncRender`) now rebuilds its field when the mask is replaced instead of keeping the
+  previous clip.
 - Historical Map Feature selection (#170 phase D, Decisions 1.14/1.16/1.18/1.20).
   `useHistoricalMapFeatureSelection()` validates selection and hover against the one
   Map-Scoped Timeline clock: leaving a feature's period clears its selection, hover and popup

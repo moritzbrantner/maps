@@ -104,6 +104,11 @@ export type HeatLayerProps<TProperties = Record<string, unknown>> =
     interpolationMaxDistanceMeters?: HeatFieldOptions<TProperties>["interpolationMaxDistanceMeters"];
     interpolationPower?: HeatFieldOptions<TProperties>["interpolationPower"];
     layerId?: string;
+    /**
+     * Field mode only: clips the scalar field raster and its contours to polygonal GeoJSON.
+     * Holes are excluded. See `HeatFieldOptions["maskGeoJson"]`. Pass a stable reference; a new
+     * object rebuilds the field.
+     */
     maskGeoJson?: HeatFieldMaskGeoJson | null;
     maxWeight?: number;
     points: readonly MapPoint<TProperties>[];
