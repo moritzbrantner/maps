@@ -195,6 +195,80 @@ The two committed `public/search-indexes/*-r1.json` artifacts are hand-authored
 synthetic fixtures for the Engine Page's synthetic sources; the Liechtenstein
 Atlas has no index until that producer publishes one.
 
+## Tileset integrity QA (#276, part 1)
+
+`bun run qa:tileset` audits one PMTiles archive against its manifest before the
+revision is adopted, and writes a bounded, deterministic `maps-tileset-qa-v1`
+JSON artifact:
+
+```sh
+bun run qa:tileset -- --known showcase-pmtiles-v1
+bun run qa:tileset -- --manifest tileset.json --archive tiles.pmtiles --mode full --output qa.json
+```
+
+A manifest file is a Maps Tileset manifest, optionally with
+`archiveRef: { "sha256": "…", "bytes": … }`. `--known` names an archive from
+`scripts/tileset-qa/known.ts`: the two committed fixtures and the two Atlas
+archives (fetch those first with `bun scripts/fetch-atlas-tiles.ts`). The exit
+status is `0` passed, `1` failed, `2` inconclusive, `3` usage or runtime error.
+The command needs the built Rust/WASM module (`bun run build:wasm`); there is no
+JavaScript fallback.
+
+It is not a second archive reader or decoder. The upstream `pmtiles` reader does
+archive I/O. The manifest validator and the header/metadata rules are the Map
+View's own (`src/maps-tileset.ts`, `src/maps-tileset-transport.ts`). Rust
+(`maps-core::tileset_qa`, through WASM) decodes sampled tiles with
+`decode_mvt_layers` and derives required coverage from the same tile/bounds rule
+the runtime uses to request tiles. Recipe and provenance authority stays with
+Asset Tooling.
+
+| Check | Fails when | Inconclusive when |
+| --- | --- | --- |
+| `manifest` | the manifest is not valid Maps Tileset metadata | — |
+| `archive-identity` | the archive SHA-256 or byte length differs from `archiveRef` or a `sha256:<hex>` data revision | nothing pins the archive bytes |
+| `archive-header` | the archive is unreadable, or its PMTiles v3 header conflicts with the manifest (type, compression, zoom range, bounds) | — |
+| `archive-metadata` | `vector_layers`, `mapsSchema` or zoom metadata conflict with the manifest | — |
+| `archive-directory` | header tile counts disagree with the directory, or an entry is zero-length or points past the end of the archive | the directory addresses more tiles than the budget |
+| `upstream-verify` | pinned `go-pmtiles` 1.31.2 `verify` fails | it did not run, or another version ran |
+| `tile-coverage` | a tile inside the declared bounds and zoom range is absent, or a tile lies outside the declared zoom range | the declared coverage exceeds the budget |
+| `tile-content` | an inspected tile is unreadable, empty, oversized, undecodable, repeats a layer, or carries an undeclared source layer | a `full` scan could not decode every tile |
+
+Warnings do not fail a check: tiles outside the declared bounds, featureless
+tiles, properties absent from the archive's `vector_layers` fields, and declared
+layers that no tile carries. The overall status is `failed` if any check failed,
+otherwise `inconclusive` if any check is inconclusive, otherwise `passed`. A
+check that could not run is never reported as passed. Set `PMTILES_CLI` (or
+`--pmtiles-cli`) to the pinned binary; without it the result is at best
+`inconclusive`.
+
+The default `sampled` mode reads the directory and decodes 32 tiles chosen by a
+seeded, per-zoom sample (`--seed`, `--sample`). `--mode full` decodes every
+addressed tile up to its budget. Each finding carries an exact count and at most
+16 tile references. The artifact records the source ID and revision, archive
+SHA-256, check version, tool versions, coverage per zoom, observed source layers
+with feature-ID and property-key counts, and the byte length and SHA-256 of each
+inspected tile. It contains no timestamps or paths, so the same inputs reproduce
+it byte for byte.
+
+Missing tiles are an error because the Map View fails closed on them. Both
+published Atlas archives are sparse this way: the Liechtenstein archive addresses
+203 of the 244 tiles its bounds and zoom 10–14 require (41 missing, among them
+`14/8623/5754`), and the northern variant 89 of 123. Their identity, header,
+metadata, directory and content checks pass. The committed
+`fixture-pmtiles-v1` archive is deliberately sparse (3 of 5 tiles missing) and
+`showcase-pmtiles-v1` is complete.
+
+`bun run verify:tileset-qa` is the gate. CI builds the WASM module, installs the
+digest-pinned `go-pmtiles`, and requires the committed fixtures to reproduce
+`scripts/tileset-qa/expected/*.json` exactly. Its other cases use tiny archives
+written by a test-only PMTiles/MVT writer, so each expected result follows from
+the archive's construction: schema drift, changed bytes, missing and
+out-of-range tiles, antimeridian bounds, malformed and truncated archives,
+undecodable tiles, budgets and cancellation.
+
+Not delivered yet (#276 parts 2 and 3): revision A/B comparison with the
+Inspector view, and tile seam QA.
+
 ## Runtime lifetime
 
 Rust retains the existing canonical `TileId(z,x,y)`, scheduler, load concurrency,

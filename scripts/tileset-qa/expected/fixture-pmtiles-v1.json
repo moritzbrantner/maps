@@ -1,0 +1,209 @@
+{
+  "schema": "maps-tileset-qa-v1",
+  "checkVersion": "1.0.0",
+  "fixtureId": "fixture-pmtiles-v1",
+  "status": "failed",
+  "mode": "sampled",
+  "seed": 1,
+  "limits": {
+    "sampleTiles": 32,
+    "maxContentTiles": 32,
+    "maxAddressedTiles": 250000,
+    "maxExpectedTiles": 250000,
+    "tilesPerFinding": 16,
+    "reportedTiles": 64
+  },
+  "source": {
+    "sourceId": "fixture-pmtiles",
+    "dataRevision": "1",
+    "schema": {
+      "id": "shortbread",
+      "version": "1.0",
+      "sourceLayers": ["water_polygons", "land", "streets"]
+    },
+    "bounds": [-180, -85.0511287798066, 180, 85.0511287798066],
+    "minZoom": 0,
+    "maxZoom": 1,
+    "attribution": "Maps deterministic fixture · CC0",
+    "license": "CC0-1.0",
+    "provenance": "scripts/create-pmtiles-fixture.mjs; synthetic CC0 Shortbread geometry"
+  },
+  "archive": {
+    "name": "fixture-pmtiles-v1.pmtiles",
+    "bytes": 91906,
+    "sha256": "26ac9ae8e322ba7e81ef1304d69e56ab55e9488348dfead315ca17d81712cf37",
+    "expectedSha256": "26ac9ae8e322ba7e81ef1304d69e56ab55e9488348dfead315ca17d81712cf37",
+    "expectedBytes": 91906,
+    "header": {
+      "specVersion": 3,
+      "tileType": 1,
+      "tileCompression": 2,
+      "internalCompression": 2,
+      "minZoom": 0,
+      "maxZoom": 1,
+      "bounds": [-180, -85.0511288, 180, 85.0511288],
+      "addressedTiles": 2,
+      "tileEntries": 2,
+      "tileContents": 2
+    }
+  },
+  "tools": {
+    "pmtilesReader": "4.5.0",
+    "upstreamVerify": {
+      "tool": "go-pmtiles",
+      "version": "1.31.2"
+    }
+  },
+  "checks": [
+    {
+      "id": "manifest",
+      "status": "passed",
+      "summary": "manifest is valid Maps Tileset metadata"
+    },
+    {
+      "id": "archive-identity",
+      "status": "passed",
+      "summary": "archive bytes compared with declared SHA-256 26ac9ae8e322ba7e81ef1304d69e56ab55e9488348dfead315ca17d81712cf37"
+    },
+    {
+      "id": "archive-header",
+      "status": "passed",
+      "summary": "PMTiles v3 header compared with the manifest"
+    },
+    {
+      "id": "archive-metadata",
+      "status": "passed",
+      "summary": "archive JSON metadata compared with the manifest"
+    },
+    {
+      "id": "archive-directory",
+      "status": "passed",
+      "summary": "2 addressed tiles in 2 entries"
+    },
+    {
+      "id": "upstream-verify",
+      "status": "passed",
+      "summary": "go-pmtiles 1.31.2 verify passed"
+    },
+    {
+      "id": "tile-coverage",
+      "status": "failed",
+      "summary": "2 of 5 required tiles present, 3 missing"
+    },
+    {
+      "id": "tile-content",
+      "status": "passed",
+      "summary": "2 of 2 inspected tiles decoded (2 addressed)"
+    }
+  ],
+  "findings": [
+    {
+      "check": "tile-coverage",
+      "code": "missing-tile",
+      "severity": "error",
+      "message": "tile inside the declared bounds and zoom range is not in the archive; the Map View fails closed on it",
+      "count": 3,
+      "tiles": [
+        {
+          "z": 1,
+          "x": 0,
+          "y": 1
+        },
+        {
+          "z": 1,
+          "x": 1,
+          "y": 0
+        },
+        {
+          "z": 1,
+          "x": 1,
+          "y": 1
+        }
+      ]
+    }
+  ],
+  "coverage": {
+    "expected": 5,
+    "covered": 2,
+    "missing": 3,
+    "outside": 0,
+    "outOfZoomRange": 0,
+    "addressed": 2,
+    "byZoom": [
+      {
+        "zoom": 0,
+        "expected": 1,
+        "covered": 1,
+        "missing": 0,
+        "outside": 0
+      },
+      {
+        "zoom": 1,
+        "expected": 4,
+        "covered": 1,
+        "missing": 3,
+        "outside": 0
+      }
+    ]
+  },
+  "content": {
+    "addressedTiles": 2,
+    "inspectedTiles": 2,
+    "layers": [
+      {
+        "name": "land",
+        "declared": true,
+        "tiles": 2,
+        "features": 2,
+        "points": 0,
+        "lines": 0,
+        "polygons": 2,
+        "featuresWithId": 0,
+        "extents": [4096],
+        "propertyKeys": ["kind"]
+      },
+      {
+        "name": "streets",
+        "declared": true,
+        "tiles": 2,
+        "features": 256,
+        "points": 0,
+        "lines": 256,
+        "polygons": 0,
+        "featuresWithId": 0,
+        "extents": [4096],
+        "propertyKeys": []
+      },
+      {
+        "name": "water_polygons",
+        "declared": true,
+        "tiles": 2,
+        "features": 2,
+        "points": 0,
+        "lines": 0,
+        "polygons": 2,
+        "featuresWithId": 0,
+        "extents": [4096],
+        "propertyKeys": []
+      }
+    ],
+    "tiles": [
+      {
+        "z": 0,
+        "x": 0,
+        "y": 0,
+        "bytes": 67200,
+        "sha256": "8e541a713f5be6d9aee5df87b0111360aa4667b03924b6e64c3c8d0adfad665f",
+        "features": 130
+      },
+      {
+        "z": 1,
+        "x": 0,
+        "y": 0,
+        "bytes": 67200,
+        "sha256": "c49974dc6696388b22503962c01dc5c08636d749ba3cc77ad9f32f96ad8e784f",
+        "features": 130
+      }
+    ]
+  }
+}

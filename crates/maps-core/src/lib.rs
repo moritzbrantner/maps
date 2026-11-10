@@ -19,9 +19,14 @@ mod sky;
 pub mod symbol;
 pub mod terrain;
 mod tileset;
+mod tileset_qa;
 mod vector_bucket;
 mod vector_tile;
 pub use tileset::{MapsTileset, TilesetObservation, TilesetSchema, TilesetTransport};
+pub use tileset_qa::{
+    MvtLayerInspection, MvtTileInspection, TILESET_QA_MAX_PROPERTY_KEYS, TilesetCoverageAudit,
+    TilesetCoverageError, TilesetZoomCoverage, audit_tileset_coverage, inspect_mvt_tile,
+};
 
 use std::collections::BTreeMap;
 

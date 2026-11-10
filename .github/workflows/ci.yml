@@ -67,7 +67,7 @@ jobs:
                   "browser-smoke", "runtime-evidence",
               ])
           if not browser:
-              skipped.extend(["build-package", "browser-validation", "oracle"])
+              skipped.extend(["build-package", "browser-validation", "oracle", "tileset-qa"])
           if not security:
               skipped.append("dependency-audit")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
@@ -504,6 +504,55 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  # Tileset QA (#276): the Rust/WASM kernel and the pinned upstream validator audit the
+  # committed PMTiles fixtures; each artifact must reproduce its committed expectation.
+  tileset-qa:
+    needs:
+      - changes
+      - build-package
+    if: ${{ needs.changes.outputs.browser == 'true' }}
+    name: Tileset QA
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build-package.outputs.source_sha }}
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Consume verified browser package
+        uses: moritzbrantner/reusable-workflows/.github/actions/consume-build-artifact@5e9fe1ab1fd5c8d91900a621bf8daabf879012a7
+        with:
+          producer_run_id: ${{ needs.build-package.outputs.producer_run_id }}
+          receipt_artifact_name: ${{ needs.build-package.outputs.receipt_artifact_name }}
+          artifact_name: ${{ needs.build-package.outputs.artifact_name }}
+          artifact_digest: ${{ needs.build-package.outputs.artifact_digest }}
+          source_sha: ${{ needs.build-package.outputs.source_sha }}
+          artifact_key: ${{ needs.build-package.outputs.artifact_key }}
+          identity_digest: ${{ needs.build-package.outputs.identity_digest }}
+          destination_path: .artifacts/maps-browser-package
+          github_token: ${{ github.token }}
+      - name: Install pinned go-pmtiles
+        run: bash scripts/install-go-pmtiles-ci.sh "$RUNNER_TEMP/go-pmtiles/pmtiles"
+      - name: Audit committed tilesets
+        env:
+          MAPS_QA_WASM_DIR: .artifacts/maps-browser-package/public/wasm
+          MAPS_QA_REQUIRE_UPSTREAM: "1"
+        run: PMTILES_CLI="$RUNNER_TEMP/go-pmtiles/pmtiles" bun run verify:tileset-qa
+
   dependency-audit:
     needs: changes
     if: ${{ needs.changes.outputs.security == 'true' }}
@@ -541,11 +590,12 @@ jobs:
       - runtime-evidence
       - browser-validation
       - oracle
+      - tileset-qa
       - dependency-audit
     runs-on: ubuntu-26.04
     steps:
       - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
         with:
           needs: ${{ toJSON(needs) }}
-          required: '["changes", "fast-validation", "rust-validation", "git-install-validation", "build-package", "wasm-package-validation", "package-validation", "browser-smoke", "runtime-evidence", "browser-validation", "oracle", "dependency-audit"]'
+          required: '["changes", "fast-validation", "rust-validation", "git-install-validation", "build-package", "wasm-package-validation", "package-validation", "browser-smoke", "runtime-evidence", "browser-validation", "oracle", "tileset-qa", "dependency-audit"]'
           allow-skipped: ${{ needs.changes.outputs.allow-skipped || '[]' }}
