@@ -11,6 +11,12 @@ import {
   type MapSurfaceController,
   type TemporalMapTrack,
 } from ".";
+import {
+  getMapsAggregationRuntimeStatus,
+  resetMapsAggregationRuntimeForTests,
+  setMapsAggregationWasmRuntimeForTests,
+} from "./aggregation-runtime";
+import { createGridAggregationRuntimeForTests } from "./test-aggregation-runtime";
 import { createManualTimelineScheduler } from "./test-timeline-scheduler";
 
 const flatMock = vi.hoisted(() => {
@@ -874,8 +880,8 @@ function renderedPointMarkers() {
     }));
 }
 
-function expectedPointMarkers(time: number) {
-  return naiveSample(PARITY_TRACKS, time).map((sample) => ({
+function expectedPointMarkers(time: number, tracks: readonly TemporalMapTrack[] = PARITY_TRACKS) {
+  return naiveSample(tracks, time).map((sample) => ({
     latitude: expect.closeTo(sample.latitude, 9),
     longitude: expect.closeTo(sample.longitude, 9),
     selected: sample.id === PARITY_SELECTED_ID,
@@ -1043,5 +1049,121 @@ describe("Map-Scoped Timeline parity (#172)", () => {
     );
 
     expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe("40");
+  });
+});
+
+describe("Map-Scoped Timeline source changes and stale work (#172)", () => {
+  // The selected track survives with new keyframes, one track leaves and one is admitted.
+  const REPLACEMENT_TRACKS: TemporalMapTrack[] = [
+    {
+      frames: [
+        { latitude: 5, longitude: 5, time: 10 },
+        { latitude: 25, longitude: 45, time: 90 },
+      ],
+      id: "track-d",
+    },
+    {
+      frames: [
+        { latitude: -30, longitude: -60, time: 30 },
+        { latitude: -40, longitude: -80, time: 80 },
+      ],
+      id: "track-b",
+    },
+  ];
+  const SHORT_TRACKS: TemporalMapTrack[] = [
+    {
+      frames: [
+        { latitude: 12, longitude: 34, time: 0 },
+        { latitude: 14, longitude: 38, time: 30 },
+      ],
+      id: "track-b",
+    },
+  ];
+
+  function timelineMap(clock: MapScopedTimelineClock, tracks: readonly TemporalMapTrack[]) {
+    return (
+      <TemporalClusteredMap
+        fitToData={false}
+        mapLabel="Source change timeline"
+        selectedFeatureId={PARITY_SELECTED_ID}
+        showAttributionControl={false}
+        showPlaybackControls={false}
+        timeline={clock}
+        tracks={tracks}
+      />
+    );
+  }
+
+  test("replacing the source keeps the map-scoped time, the playback state and the selection", async () => {
+    const frames = createManualTimelineScheduler();
+    const clock = createMapScopedTimelineClock({ loop: false, playbackRate: 10, scheduler: frames.scheduler });
+    // Another temporal Map Layer on the same clock with a shorter range.
+    clock.registerTimeRange({ end: 40, start: 0 });
+
+    const { rerender } = render(timelineMap(clock, PARITY_TRACKS));
+    const observe = (tracks: readonly TemporalMapTrack[], time: number) =>
+      waitFor(() => {
+        expect(clock.getSnapshot().activeTime).toBe(time);
+        expect(renderedPointMarkers()).toEqual(expectedPointMarkers(time, tracks));
+      });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Source change timeline").getAttribute("data-map-ready")).toBe("true");
+    });
+    act(() => clock.seek(47.5));
+    await observe(PARITY_TRACKS, 47.5);
+    expect(renderedPointMarkers().filter((marker) => marker.selected)).toHaveLength(1);
+
+    // Same time, new source: the surviving selected track is sampled from its new keyframes.
+    act(() => clock.play());
+    rerender(timelineMap(clock, REPLACEMENT_TRACKS));
+    await observe(REPLACEMENT_TRACKS, 47.5);
+    expect(clock.getSnapshot()).toMatchObject({ isPlaying: true, timeRange: { end: 90, start: 0 } });
+    expect(renderedPointMarkers()).toEqual([
+      expect.objectContaining({ selected: false }),
+      expect.objectContaining({ selected: true }),
+    ]);
+
+    // Playback continues over the new source from that time.
+    act(() => frames.frame(0));
+    act(() => frames.frame(250));
+    await observe(REPLACEMENT_TRACKS, 50);
+    act(() => clock.pause());
+
+    // A source that ends earlier is sampled at the end of the merged range...
+    rerender(timelineMap(clock, SHORT_TRACKS));
+    await observe(SHORT_TRACKS, 40);
+    // ...an empty source draws nothing, and the earlier source returns at the kept time.
+    rerender(timelineMap(clock, []));
+    await waitFor(() => {
+      expect(renderedPointMarkers()).toEqual([]);
+    });
+    rerender(timelineMap(clock, REPLACEMENT_TRACKS));
+    await observe(REPLACEMENT_TRACKS, 50);
+  });
+
+  test("an aggregation runtime that loads after seeks renders the newest time only", async () => {
+    resetMapsAggregationRuntimeForTests();
+
+    try {
+      const clock = createMapScopedTimelineClock();
+
+      render(timelineMap(clock, PARITY_TRACKS));
+      act(() => clock.seek(20));
+      act(() => clock.seek(72.5));
+      act(() => clock.seek(35));
+
+      // Still loading: no aggregated output for any of the requested times.
+      expect(getMapsAggregationRuntimeStatus()).toBe("loading");
+      expect(renderedPointMarkers()).toEqual([]);
+
+      act(() => setMapsAggregationWasmRuntimeForTests(createGridAggregationRuntimeForTests()));
+
+      await waitFor(() => {
+        expect(renderedPointMarkers()).toEqual(expectedPointMarkers(35));
+      });
+    } finally {
+      setMapsAggregationWasmRuntimeForTests(null);
+    }
   });
 });
