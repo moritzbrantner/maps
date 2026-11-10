@@ -259,3 +259,51 @@ runtime-profiler at `6d2c92e`, on Linux x64 (AMD Ryzen 7 5700X, WSL2).
   Bundle manifest SHA-256:
   `8de3ff5b5312acf80a1a0835019ed06b82d45d818d9b7301c8adf0cd77367fa4`.
 
+
+### Content-pinned Atlas tileset on Pages (#270)
+
+**Developed** and **Correct** were delivered earlier: #362 published the pinned
+Liechtenstein archives with source selection, attribution and fail-closed coverage on
+the first-party Pages Map View, #371 fixed the zoom-out overflow, and
+`e2e-hosted/atlas-pages.spec.ts` covers them on the hosted build.
+
+**Fast** now has its matched evidence path,
+[`maps-atlas-tileset-v1`](engine-evidence.md#atlas-tileset-journey-evidence-270):
+MapLibre GL 6.16 + `pmtiles` 4.5 against the first-party Map View over the same
+archives, interleaved, evaluated by Moonlight with the owner-approved viability policy
+(≥ 5 samples, complete candidate execution, runtime score ≥ 75). Every Pages deploy
+build runs it and publishes the outcome at `/maps/evidence/atlas-tileset-runtime.json`.
+**The Fast gate counts as measured only from such a published deploy-build run. Until
+one exists it is unavailable, not passed.**
+
+One local capture exists so far. It is advisory and is not that run. Executed at
+`2ca24c67519b50247ff38b96905c0e03bb2c72aa` (clean tree), WASM SHA-256
+`3ab3375046534cab14a2e5b4dc9c2875814a4e2287b3ec0aa539bcede83bb2c6`, Chromium headless
+shell 158.0.8127.18, Playwright 1.65.0, Node 24.19.0, runtime-profiler `6d2c92e` and
+Moonlight `b580327`, on Linux x64 (WSL2). Ten measured journeys per side over two
+rounds:
+
+- **Moonlight:** passed both rounds with runtime score 99 and 99; browser bundles
+  `comparable`. The score rates driver-process wall time (median 2,653 ms reference,
+  2,543 ms candidate in round 1) and driver RSS (median 106,956 KiB reference,
+  109,752 KiB candidate). The wall time includes Chromium launch and the RSS excludes
+  Chromium, so the score cannot rank the renderers.
+- **Journey medians (reference → candidate):** first useful map 612 → 361 ms; warm
+  revisit 136 → 24 ms; source A → B ready 234 → 101 ms; source B → A ready
+  200 → **440 ms**.
+- **Transfer:** the candidate made 89 range requests for 1,750,372 bytes, the reference
+  57 for 1,517,785 bytes. Every response was HTTP 206. Neither side re-read the archive
+  on the warm revisit; the candidate's return to source A made no request and reused
+  76 retained resources.
+- **Renderer main thread (one trace each):** candidate 1,214 ms of top-level tasks
+  with one 371 ms long task; reference 318 ms and no long task. MapLibre decodes in
+  workers, the candidate on the main thread.
+- **Candidate work and memory:** 85 Rust decodes; 85 retained tiles, 91,640,111
+  RGBA + MVT lower-bound bytes. The backend was Canvas2D, so there are no GPU buffers.
+- **Unavailable:** browser heap and GPU memory (#76), Rust decode and bucket-build
+  timings, frame time during camera motion, and the WebGPU backend.
+
+The slower return to source A, the larger transfer and the main-thread long task are
+observations to act on, not regressions against an earlier Maps revision. `evaluation.json`
+SHA-256 of this capture:
+`9120ee97c1a9995e0f421b59309fbfb647f760385a3aa74cb15e96969e776a9a`.
