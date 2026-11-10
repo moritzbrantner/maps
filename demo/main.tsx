@@ -19,6 +19,7 @@ import { App } from "./App";
 import { MapsClusterRaceAcceptance } from "./MapsClusterRaceAcceptance";
 import { MapsOrientedRuntimeAcceptance } from "./MapsOrientedRuntimeAcceptance";
 import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
+import { MapsTemporalRuntimeAcceptance } from "./MapsTemporalRuntimeAcceptance";
 import {
   markRustRuntimeLoaded,
   markRustRuntimeLoading,
@@ -81,6 +82,8 @@ async function bootstrap() {
         rasterTileUrl="https://tiles.example.test/{z}/{x}/{y}.png"
       />
     );
+  } else if (acceptanceMode === "maps-runtime-temporal") {
+    content = <MapsTemporalRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-oriented") {
     content = <MapsOrientedRuntimeAcceptance />;
   }

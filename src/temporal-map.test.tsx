@@ -3,11 +3,15 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   ClusteredMap,
+  createMapScopedTimelineClock,
+  MapScopedTimelineControls,
   TemporalClusteredMap,
   TemporalHeatMap,
+  type MapScopedTimelineClock,
   type MapSurfaceController,
   type TemporalMapTrack,
 } from ".";
+import { createManualTimelineScheduler } from "./test-timeline-scheduler";
 
 const flatMock = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
@@ -787,5 +791,257 @@ describe("@moritzbrantner/maps TemporalClusteredMap", () => {
 
     expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe("0");
     expect(screen.getAllByText("Minute 0").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * #172 Correct: an independent, deliberately straightforward sampler. It shares no code with
+ * the prepared playback index: a linear scan over each track's sorted valid keyframes.
+ */
+function naiveSample(tracks: readonly TemporalMapTrack[], time: number) {
+  const samples: Array<{ id: string; latitude: number; longitude: number }> = [];
+
+  tracks.forEach((track, trackIndex) => {
+    const frames = track.frames
+      .filter((frame) => [frame.time, frame.latitude, frame.longitude].every(Number.isFinite))
+      .slice()
+      .sort((left, right) => left.time - right.time);
+    let previous: (typeof frames)[number] | undefined;
+    let next: (typeof frames)[number] | undefined;
+
+    for (const frame of frames) {
+      if (frame.time <= time) {
+        previous = frame;
+      } else {
+        next = frame;
+        break;
+      }
+    }
+
+    if (!previous || previous.visible === false) {
+      return;
+    }
+
+    const progress = next && previous.time !== time ? (time - previous.time) / (next.time - previous.time) : 0;
+    const target = next ?? previous;
+
+    samples.push({
+      id: String(track.id ?? trackIndex),
+      latitude: previous.latitude + (target.latitude - previous.latitude) * progress,
+      longitude: previous.longitude + (target.longitude - previous.longitude) * progress,
+    });
+  });
+
+  return samples;
+}
+
+const PARITY_TRACKS: TemporalMapTrack[] = [
+  {
+    frames: [
+      { latitude: 10, longitude: 20, time: 0 },
+      { latitude: 30, longitude: 60, time: 40 },
+      { latitude: 0, longitude: 80, time: 100 },
+    ],
+    id: "track-a",
+  },
+  {
+    // Admitted at 20, removed by an invisible keyframe at 60.
+    frames: [
+      { latitude: -20, longitude: -40, time: 20 },
+      { latitude: -10, longitude: -20, time: 45 },
+      { latitude: -10, longitude: -20, time: 60, visible: false },
+    ],
+    id: "track-b",
+  },
+  {
+    // Ends early and holds its last keyframe.
+    frames: [
+      { latitude: 40, longitude: 0, time: 0 },
+      { latitude: 50, longitude: 10, time: 50 },
+    ],
+    id: "track-c",
+  },
+];
+const PARITY_SELECTED_ID = "track-b";
+
+function renderedPointMarkers() {
+  return getRenderedLayersByType("circleMarker")
+    .filter((layer) => String(layer.options?.className).includes("mb-maps__point-marker"))
+    .map((layer) => ({
+      latitude: layer.latLng![0],
+      longitude: layer.latLng![1],
+      selected: String(layer.options?.className).includes("mb-maps__feature--selected"),
+    }));
+}
+
+function expectedPointMarkers(time: number) {
+  return naiveSample(PARITY_TRACKS, time).map((sample) => ({
+    latitude: expect.closeTo(sample.latitude, 9),
+    longitude: expect.closeTo(sample.longitude, 9),
+    selected: sample.id === PARITY_SELECTED_ID,
+  }));
+}
+
+describe("Map-Scoped Timeline parity (#172)", () => {
+  // Every target is a multiple of the 2.5-unit playback step, so playback lands on it exactly.
+  const targets = [0, 12.5, 20, 35, 47.5, 60, 72.5, 100];
+  const FRAME_MS = 250;
+
+  async function renderParityMap() {
+    const frames = createManualTimelineScheduler();
+    const clock = createMapScopedTimelineClock({
+      loop: false,
+      playbackRate: 10,
+      scheduler: frames.scheduler,
+    });
+
+    render(
+      <TemporalClusteredMap
+        fitToData={false}
+        mapLabel="Parity timeline"
+        selectedFeatureId={PARITY_SELECTED_ID}
+        showAttributionControl={false}
+        timeline={clock}
+        tracks={PARITY_TRACKS}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByLabelText("Parity timeline").getAttribute("data-map-ready")).toBe("true");
+    });
+
+    let timestamp = 0;
+    const observe = async (time: number) => {
+      expect(clock.getSnapshot().activeTime).toBe(time);
+      await waitFor(() => {
+        expect(renderedPointMarkers()).toEqual(expectedPointMarkers(time));
+      });
+      return renderedPointMarkers();
+    };
+    const playTo = async (time: number) => {
+      if (!clock.getSnapshot().isPlaying) {
+        act(() => clock.play());
+        act(() => frames.frame((timestamp += FRAME_MS)));
+      }
+      while (clock.getSnapshot().time < time) {
+        act(() => frames.frame((timestamp += FRAME_MS)));
+      }
+      return observe(time);
+    };
+    const seek = (time: number) => {
+      act(() => clock.seek(time));
+      return observe(time);
+    };
+
+    return { clock, frames, playTo, seek };
+  }
+
+  test("direct seek, forward playback and backward seek with resume sample identically", async () => {
+    const { clock, frames, playTo, seek } = await renderParityMap();
+    const direct = new Map<number, ReturnType<typeof renderedPointMarkers>>();
+
+    for (const time of targets) {
+      direct.set(time, await seek(time));
+    }
+
+    // Forward playback from the start reaches every target with the directly seeked state.
+    await seek(0);
+    for (const time of targets.slice(1)) {
+      expect(await playTo(time)).toEqual(direct.get(time));
+    }
+    expect(clock.getSnapshot().isPlaying).toBe(false);
+    expect(frames.pending).toBe(false);
+
+    // Backward seek while playing, then pause, resume and play forward again.
+    await seek(0);
+    expect(await playTo(72.5)).toEqual(direct.get(72.5));
+    expect(await seek(20)).toEqual(direct.get(20));
+    act(() => clock.pause());
+    expect(await seek(12.5)).toEqual(direct.get(12.5));
+    for (const time of [20, 35, 47.5, 60]) {
+      expect(await playTo(time)).toEqual(direct.get(time));
+    }
+  });
+
+  test("TemporalClusteredMap and TemporalHeatMap sample one shared clock and frame loop", async () => {
+    const frames = createManualTimelineScheduler();
+    const clock: MapScopedTimelineClock = createMapScopedTimelineClock({
+      playbackRate: 10,
+      scheduler: frames.scheduler,
+    });
+
+    render(
+      <>
+        <TemporalClusteredMap
+          fitToData={false}
+          mapLabel="Shared points"
+          showAttributionControl={false}
+          showPlaybackControls={false}
+          timeline={clock}
+          tracks={PARITY_TRACKS.slice(0, 1)}
+        />
+        <TemporalHeatMap
+          fitToData={false}
+          mapLabel="Shared heat"
+          showAttributionControl={false}
+          showPlaybackControls={false}
+          timeline={clock}
+          tracks={PARITY_TRACKS.slice(1)}
+        />
+        <MapScopedTimelineControls timeline={clock} timelineLabel="Shared timeline" />
+      </>,
+    );
+
+    // The merged range spans both consumers' data.
+    expect(clock.getSnapshot().timeRange).toEqual({ end: 100, start: 0 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    const requestsBefore = frames.requests;
+    act(() => frames.frame(0));
+    act(() => frames.frame(FRAME_MS));
+    act(() => frames.frame(FRAME_MS * 2));
+
+    // One frame request per frame for both Map Views: no per-layer loop.
+    expect(frames.requests - requestsBefore).toBe(3);
+    expect(clock.getSnapshot().time).toBe(5);
+    expect((screen.getByRole("slider", { name: "Shared timeline" }) as HTMLInputElement).value).toBe("5");
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(frames.pending).toBe(false);
+    expect(clock.getSnapshot()).toMatchObject({ isPlaying: false, time: 5 });
+  });
+
+  test("application-controlled time drives the compatibility currentTime prop", async () => {
+    const onTimeChange = vi.fn();
+    const { rerender } = render(
+      <TemporalClusteredMap
+        currentTime={20}
+        mapLabel="Controlled timeline"
+        onTimeChange={onTimeChange}
+        showAttributionControl={false}
+        tracks={PARITY_TRACKS}
+      />,
+    );
+
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe("20");
+
+    fireEvent.change(screen.getByRole("slider", { name: "Timeline" }), { target: { value: "40" } });
+
+    await waitFor(() => {
+      expect(onTimeChange).toHaveBeenLastCalledWith(40);
+    });
+    // The application has not accepted the request yet, so the map keeps its time.
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe("20");
+
+    rerender(
+      <TemporalClusteredMap
+        currentTime={40}
+        mapLabel="Controlled timeline"
+        onTimeChange={onTimeChange}
+        showAttributionControl={false}
+        tracks={PARITY_TRACKS}
+      />,
+    );
+
+    expect((screen.getByRole("slider", { name: "Timeline" }) as HTMLInputElement).value).toBe("40");
   });
 });

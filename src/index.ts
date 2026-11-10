@@ -317,6 +317,18 @@ export {
   type MapMeasurementProps,
 } from "./measurement";
 export {
+  createMapScopedTimelineClock,
+  type MapScopedTimelineClock,
+  type MapScopedTimelineOptions,
+  type MapScopedTimelineScheduler,
+  type MapScopedTimelineSnapshot,
+} from "./map-scoped-timeline";
+export {
+  MapScopedTimelineControls,
+  useMapScopedTimelineSnapshot,
+  type MapScopedTimelineControlsProps,
+} from "./map-scoped-timeline-react";
+export {
   createTemporalMapPlaybackIndex,
   getTemporalMapPointsAtTime,
   getTemporalMapTimeRange,
