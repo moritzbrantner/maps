@@ -21,6 +21,7 @@ import {
   type HeatLayerProps,
 } from "./heat-layer-types";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
+import { createHeatLayerDataWork, type HeatLayerDataWork } from "./heat-layer-work";
 import { prepareHeatLayerColorRamp } from "./heat-surface";
 import { createScalarFieldGrid, type ScalarFieldGrid } from "./scalar-field";
 import {
@@ -105,6 +106,8 @@ export function MapsHeatLayerMount({
     weightMetric,
   } = props;
   const deferredPoints = useDeferredValue(points);
+  // One counter set per mounted layer; artifact builds below count into it.
+  const [work] = useState(createHeatLayerDataWork);
   const preparedHeatmapColorRamp = useMemo(
     () => prepareHeatLayerColorRamp(heatmapColorRamp),
     [heatmapColorRamp],
@@ -117,8 +120,9 @@ export function MapsHeatLayerMount({
         getWeight,
         maxWeight,
         weightMetric,
+        work,
       }),
-    [deferredPoints, filterPoint, getWeight, heatmapSurfaceMode, maxWeight, weightMetric],
+    [deferredPoints, filterPoint, getWeight, heatmapSurfaceMode, maxWeight, weightMetric, work],
   );
   const domainBoundsKey = createHeatLayerNumberArrayKey(domainBounds);
   const fieldValueDomainKey = createHeatLayerNumberArrayKey(fieldValueDomain);
@@ -142,22 +146,25 @@ export function MapsHeatLayerMount({
   const syncFieldGrid = useMemo(
     () =>
       heatmapSurfaceMode === "field" && !shouldRenderFieldAsync
-        ? createScalarFieldGrid(deferredPoints, {
-            domainBounds,
-            domainPaddingRatio,
-            fieldCellSizeMeters,
-            fieldColumns,
-            fieldRows,
-            filterPoint,
-            getValue: getValue ?? getWeight,
-            interpolationEpsilonMeters,
-            interpolationExtrapolate,
-            interpolationK,
-            interpolationMaxDistanceMeters,
-            interpolationPower,
-            maskGeoJson,
-            valueMetric: valueMetric ?? weightMetric,
-          })
+        ? countFieldGridBuild(
+            work,
+            createScalarFieldGrid(deferredPoints, {
+              domainBounds,
+              domainPaddingRatio,
+              fieldCellSizeMeters,
+              fieldColumns,
+              fieldRows,
+              filterPoint,
+              getValue: getValue ?? getWeight,
+              interpolationEpsilonMeters,
+              interpolationExtrapolate,
+              interpolationK,
+              interpolationMaxDistanceMeters,
+              interpolationPower,
+              maskGeoJson,
+              valueMetric: valueMetric ?? weightMetric,
+            }),
+          )
         : null,
     [
       deferredPoints,
@@ -179,16 +186,20 @@ export function MapsHeatLayerMount({
       shouldRenderFieldAsync,
       valueMetric,
       weightMetric,
+      work,
     ],
   );
   const syncFieldImage = useMemo(
     () =>
       syncFieldGrid && isHeatFieldRasterVisible(fieldRenderMode)
-        ? createHeatFieldImage(syncFieldGrid, {
-            colorRamp: fieldColorRamp,
-            opacity: fieldOpacity ?? heatmapOpacity,
-            valueDomain: fieldValueDomain,
-          })
+        ? countFieldImageBuild(
+            work,
+            createHeatFieldImage(syncFieldGrid, {
+              colorRamp: fieldColorRamp,
+              opacity: fieldOpacity ?? heatmapOpacity,
+              valueDomain: fieldValueDomain,
+            }),
+          )
         : null,
     [
       fieldColorRampKey,
@@ -197,16 +208,20 @@ export function MapsHeatLayerMount({
       fieldValueDomainKey,
       heatmapOpacity,
       syncFieldGrid,
+      work,
     ],
   );
   const syncFieldContourCollection = useMemo(
     () =>
       syncFieldGrid && isHeatFieldContoursVisible(fieldRenderMode)
-        ? createHeatFieldContourFeatureCollection(syncFieldGrid, {
-            levels: fieldContourLevels,
-            valueDomain: fieldValueDomain,
-            valueFormat: fieldContourValueFormat,
-          })
+        ? countFieldContourBuild(
+            work,
+            createHeatFieldContourFeatureCollection(syncFieldGrid, {
+              levels: fieldContourLevels,
+              valueDomain: fieldValueDomain,
+              valueFormat: fieldContourValueFormat,
+            }),
+          )
         : null,
     [
       fieldContourLevelsKey,
@@ -214,6 +229,7 @@ export function MapsHeatLayerMount({
       fieldRenderMode,
       fieldValueDomainKey,
       syncFieldGrid,
+      work,
     ],
   );
   const [asyncFieldArtifacts, setAsyncFieldArtifacts] = useState<HeatLayerFieldArtifacts | null>(
@@ -236,15 +252,19 @@ export function MapsHeatLayerMount({
     const requestId = (asyncFieldRequestIdRef.current += 1);
     const timeout = setTimeout(() => {
       const previousArtifacts = asyncFieldArtifactsRef.current;
-      const grid =
+      const canReuseGrid =
         previousArtifacts?.gridKey === fieldGridInputKey &&
         previousArtifacts.points === deferredPoints &&
         previousArtifacts.filterPoint === filterPoint &&
         previousArtifacts.getValue === getValue &&
         previousArtifacts.getWeight === getWeight &&
-        previousArtifacts.maskGeoJson === maskGeoJson
-          ? previousArtifacts.grid
-          : createScalarFieldGrid(deferredPoints, {
+        previousArtifacts.maskGeoJson === maskGeoJson;
+      if (canReuseGrid) work.fieldGridReuses += 1;
+      const grid = canReuseGrid
+        ? previousArtifacts.grid
+        : countFieldGridBuild(
+            work,
+            createScalarFieldGrid(deferredPoints, {
               domainBounds,
               domainPaddingRatio,
               fieldCellSizeMeters,
@@ -259,25 +279,35 @@ export function MapsHeatLayerMount({
               interpolationPower,
               maskGeoJson,
               valueMetric: valueMetric ?? weightMetric,
-            });
+            }),
+          );
       const image =
         grid && isHeatFieldRasterVisible(fieldRenderMode)
-          ? createHeatFieldImage(grid, {
-              colorRamp: fieldColorRamp,
-              opacity: fieldOpacity ?? heatmapOpacity,
-              valueDomain: fieldValueDomain,
-            })
+          ? countFieldImageBuild(
+              work,
+              createHeatFieldImage(grid, {
+                colorRamp: fieldColorRamp,
+                opacity: fieldOpacity ?? heatmapOpacity,
+                valueDomain: fieldValueDomain,
+              }),
+            )
           : null;
       const contourCollection =
         grid && isHeatFieldContoursVisible(fieldRenderMode)
-          ? createHeatFieldContourFeatureCollection(grid, {
-              levels: fieldContourLevels,
-              valueDomain: fieldValueDomain,
-              valueFormat: fieldContourValueFormat,
-            })
+          ? countFieldContourBuild(
+              work,
+              createHeatFieldContourFeatureCollection(grid, {
+                levels: fieldContourLevels,
+                valueDomain: fieldValueDomain,
+                valueFormat: fieldContourValueFormat,
+              }),
+            )
           : null;
 
-      if (asyncFieldRequestIdRef.current !== requestId) return;
+      if (asyncFieldRequestIdRef.current !== requestId) {
+        work.fieldResultsDiscarded += 1;
+        return;
+      }
 
       setAsyncFieldArtifacts({
         contourCollection,
@@ -321,6 +351,7 @@ export function MapsHeatLayerMount({
     shouldRenderFieldAsync,
     valueMetric,
     weightMetric,
+    work,
   ]);
 
   const fieldDataPointCollection = useMemo(
@@ -376,6 +407,7 @@ export function MapsHeatLayerMount({
       heatmapSurfaceMode,
       layerId,
       showDataPoints,
+      work,
     });
 
     return () => publish(layerKey, null);
@@ -410,7 +442,30 @@ export function MapsHeatLayerMount({
     preparedHeatmapColorRamp,
     publish,
     showDataPoints,
+    work,
   ]);
 
   return null;
+}
+
+function countFieldGridBuild(work: HeatLayerDataWork, grid: ScalarFieldGrid) {
+  work.fieldGridBuilds += 1;
+  work.fieldGridCells += grid.columns * grid.rows;
+  return grid;
+}
+
+function countFieldImageBuild(work: HeatLayerDataWork, image: HeatFieldImage | null) {
+  if (image) {
+    work.fieldImageBuilds += 1;
+    work.fieldImagePixels += image.width * image.height;
+  }
+  return image;
+}
+
+function countFieldContourBuild(
+  work: HeatLayerDataWork,
+  collection: HeatFieldContourFeatureCollection,
+) {
+  work.fieldContourBuilds += 1;
+  return collection;
 }

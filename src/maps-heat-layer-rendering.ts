@@ -24,9 +24,11 @@ import type {
 import {
   createHeatSurfaceRenderPlan,
   getHeatLayerSurfaceQueryBounds,
+  isHeatSurfaceCacheGeometryReusable,
   type HeatSurfaceBounds,
   type HeatSurfaceCacheMetadata,
   type HeatSurfaceRenderPlan,
+  type HeatSurfaceViewport,
 } from "./heat-surface-render-plan";
 import {
   createHeatLayerDataSurfaceDataUrl,
@@ -36,6 +38,7 @@ import {
   type HeatLayerSurfaceImage,
 } from "./heat-surface";
 import type { GeoJsonMultiLineStringGeometry } from "./temporal-geojson-types";
+import { createHeatLayerSurfaceWork, type HeatLayerSurfaceWork } from "./heat-layer-work";
 
 export type MapsHeatLayerViewport = MapsHeatLayerViewportGeometry;
 
@@ -59,6 +62,8 @@ type MapsHeatRasterResource = MapsHeatRasterRenderStep & {
 
 type MapsHeatSurfaceState = {
   metadata: HeatSurfaceCacheMetadata | null;
+  /** The descriptor whose inputs are known to produce the committed raster (`metadata`). */
+  metadataDescriptor: MapsHeatLayerDescriptor | null;
   pendingKey: string | null;
   requestId: number;
   resource: MapsHeatRasterResource | null;
@@ -67,6 +72,8 @@ type MapsHeatSurfaceState = {
 export type MapsHeatLayerRenderState = {
   fieldResource: MapsHeatRasterResource | null;
   surface: MapsHeatSurfaceState;
+  /** Camera-path work of this layer for its whole lifetime; a reset keeps counting. */
+  readonly work: HeatLayerSurfaceWork;
 };
 
 export function createMapsHeatLayerRenderState(): MapsHeatLayerRenderState {
@@ -74,10 +81,12 @@ export function createMapsHeatLayerRenderState(): MapsHeatLayerRenderState {
     fieldResource: null,
     surface: {
       metadata: null,
+      metadataDescriptor: null,
       pendingKey: null,
       requestId: 0,
       resource: null,
     },
+    work: createHeatLayerSurfaceWork(),
   };
 }
 
@@ -87,6 +96,7 @@ export function resetMapsHeatLayerRenderState(state: MapsHeatLayerRenderState) {
   revokeRasterResource(state.surface.resource);
   state.surface.resource = null;
   state.surface.metadata = null;
+  state.surface.metadataDescriptor = null;
   state.fieldResource = null;
 }
 
@@ -184,6 +194,70 @@ function prepareDensityLayerRender(
   requestRender: () => void,
 ): MapsHeatLayerPreparedRender {
   const map = createMapsHeatSurfaceViewport(viewport);
+  const raster = canReuseCommittedStableRaster(descriptor, state, map)
+    ? reuseCommittedStableRaster(descriptor, state)
+    : planHeatSurfaceRaster(descriptor, state, viewport, map, requestRender);
+  const primitives = descriptor.showDataPoints
+    ? createDataPointPrimitives(
+        descriptor,
+        queryMapsHeatLayerFeatureCollection(
+          (bounds) => descriptor.heatIndex.getFeatureCollection(bounds),
+          getMapsHeatLayerViewportBounds(viewport),
+        ),
+      )
+    : [];
+
+  return { primitives, raster };
+}
+
+/**
+ * A camera frame that stays inside the committed stable raster's geometry, with the same
+ * descriptor that produced it, has nothing to recompute: the raster is geographic, the source
+ * index is immutable and every planning input lives on the descriptor. Skipping the query and
+ * plan keeps such frames constant in the number of points (#171 phase 2).
+ */
+function canReuseCommittedStableRaster(
+  descriptor: MapsHeatLayerDescriptor,
+  state: MapsHeatLayerRenderState,
+  map: HeatSurfaceViewport,
+) {
+  const { metadata, metadataDescriptor, pendingKey, resource } = state.surface;
+
+  return (
+    metadata !== null &&
+    metadataDescriptor === descriptor &&
+    pendingKey === null &&
+    resource?.key === metadata.key &&
+    isHeatSurfaceCacheGeometryReusable({
+      intensity: descriptor.heatmapIntensity,
+      map,
+      minZoomDeltaForRebuild: descriptor.heatmapMinZoomDeltaForRebuild,
+      radius: descriptor.heatmapRadius,
+      strategy: descriptor.heatmapRenderStrategy,
+      surfaceCache: metadata,
+    })
+  );
+}
+
+function reuseCommittedStableRaster(
+  descriptor: MapsHeatLayerDescriptor,
+  state: MapsHeatLayerRenderState,
+) {
+  const resource = state.surface.resource!;
+  state.work.surfaceRasterReuses += 1;
+  resource.bounds = state.surface.metadata!.bounds;
+  resource.opacity = descriptor.heatmapOpacity;
+  resource.projection = "mercator";
+  return getReadyRaster(resource);
+}
+
+function planHeatSurfaceRaster(
+  descriptor: MapsHeatLayerDescriptor,
+  state: MapsHeatLayerRenderState,
+  viewport: MapsHeatLayerViewport,
+  map: HeatSurfaceViewport,
+  requestRender: () => void,
+) {
   const queryBounds = getHeatLayerSurfaceQueryBounds({
     intensity: descriptor.heatmapIntensity,
     map,
@@ -211,25 +285,9 @@ function prepareDensityLayerRender(
     strategy: descriptor.heatmapRenderStrategy,
     surfaceCache: state.surface.metadata,
     width: viewport.width,
+    work: state.work,
   });
-  const raster = prepareHeatSurfaceRaster(
-    plan,
-    descriptor.heatmapAsyncRender,
-    descriptor.heatmapOpacity,
-    state,
-    requestRender,
-  );
-  const primitives = descriptor.showDataPoints
-    ? createDataPointPrimitives(
-        descriptor,
-        queryMapsHeatLayerFeatureCollection(
-          (bounds) => descriptor.heatIndex.getFeatureCollection(bounds),
-          getMapsHeatLayerViewportBounds(viewport),
-        ),
-      )
-    : [];
-
-  return { primitives, raster };
+  return prepareHeatSurfaceRaster(plan, descriptor, state, requestRender);
 }
 
 function prepareFieldRaster(
@@ -242,6 +300,7 @@ function prepareFieldRaster(
 
   const key = `field|${image.width}x${image.height}|${image.bounds.join(",")}|${image.url}`;
   if (state.fieldResource?.key !== key) {
+    countRasterUpload(state.work, image.width * image.height);
     state.fieldResource = createRasterResource({
       bounds: image.bounds,
       key,
@@ -260,23 +319,30 @@ function prepareFieldRaster(
 
 function prepareHeatSurfaceRaster(
   plan: HeatSurfaceRenderPlan | null,
-  asyncRender: boolean,
-  opacity: number,
+  descriptor: MapsHeatLayerDescriptor,
   state: MapsHeatLayerRenderState,
   requestRender: () => void,
 ): MapsHeatRasterRenderStep | null {
+  const asyncRender = descriptor.heatmapAsyncRender;
+  const opacity = descriptor.heatmapOpacity;
   if (!plan) {
     state.surface.requestId += 1;
     state.surface.pendingKey = null;
     revokeRasterResource(state.surface.resource);
     state.surface.resource = null;
     state.surface.metadata = null;
+    state.surface.metadataDescriptor = null;
     return null;
   }
 
   const projection = plan.strategy === "viewport-raster" ? "screen" : "mercator";
   const current = state.surface.resource;
   if (current?.key === plan.cacheKey) {
+    state.work.surfaceRasterReuses += 1;
+    if (state.surface.pendingKey === null && state.surface.metadata?.key === plan.cacheKey) {
+      // These inputs plan exactly the committed raster.
+      state.surface.metadataDescriptor = descriptor;
+    }
     current.bounds = plan.overlayBounds;
     current.opacity = opacity;
     current.projection = projection;
@@ -287,15 +353,19 @@ function prepareHeatSurfaceRaster(
     if (state.surface.pendingKey !== plan.cacheKey) {
       const requestId = (state.surface.requestId += 1);
       state.surface.pendingKey = plan.cacheKey;
+      countRasterization(state.work, plan);
 
       createHeatSurfaceImage(plan).then((image) => {
         if (state.surface.requestId !== requestId || state.surface.pendingKey !== plan.cacheKey) {
+          state.work.surfaceResultsDiscarded += 1;
           revokeHeatSurfaceImage(image);
           return;
         }
 
         state.surface.pendingKey = null;
         state.surface.metadata = plan.cacheMetadata;
+        state.surface.metadataDescriptor = descriptor;
+        countRasterUpload(state.work, plan.width * plan.height);
         replaceSurfaceResource(
           state,
           createRasterResource({
@@ -310,6 +380,8 @@ function prepareHeatSurfaceRaster(
         );
         requestRender();
       });
+    } else {
+      state.work.surfaceRasterReuses += 1;
     }
 
     return projection === "screen" ? null : getReadyRaster(current);
@@ -317,8 +389,11 @@ function prepareHeatSurfaceRaster(
 
   state.surface.requestId += 1;
   state.surface.pendingKey = null;
+  countRasterization(state.work, plan);
   const image = createHeatSurfaceDataImage(plan);
   state.surface.metadata = plan.cacheMetadata;
+  state.surface.metadataDescriptor = descriptor;
+  countRasterUpload(state.work, plan.width * plan.height);
   const resource = createRasterResource({
     bounds: plan.overlayBounds,
     key: plan.cacheKey,
@@ -470,4 +545,14 @@ function createDataPointPrimitives(
     };
     return primitive as MapVectorRenderPrimitive<unknown>;
   });
+}
+
+function countRasterization(work: HeatLayerSurfaceWork, plan: HeatSurfaceRenderPlan) {
+  work.surfaceRasterizations += 1;
+  work.surfaceRasterPixels += plan.width * plan.height;
+}
+
+function countRasterUpload(work: HeatLayerSurfaceWork, pixels: number) {
+  work.rasterUploads += 1;
+  work.rasterUploadPixels += pixels;
 }

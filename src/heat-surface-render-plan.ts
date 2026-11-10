@@ -9,6 +9,7 @@ import {
   type HeatLayerSurfaceMode,
 } from "./heat-layer-types";
 import { clamp, roundHeatLayerCacheNumber } from "./heat-layer-utils";
+import type { HeatLayerSurfaceWork } from "./heat-layer-work";
 import type {
   HeatLayerMetricPoint,
   HeatLayerSurfaceSource,
@@ -80,6 +81,7 @@ export function createHeatSurfaceRenderPlan({
   surfaceCache,
   strategy,
   width,
+  work,
 }: {
   colorRamp: PreparedHeatLayerColorRamp;
   data: HeatLayerFeatureCollection;
@@ -94,6 +96,8 @@ export function createHeatSurfaceRenderPlan({
   surfaceCache: HeatSurfaceCacheMetadata | null;
   strategy: HeatLayerRenderStrategy;
   width: number;
+  /** Counts plans, lowered sources and signature hashing; see `HeatLayerSurfaceWork`. */
+  work?: HeatLayerSurfaceWork;
 }): HeatSurfaceRenderPlan | null {
   if (width <= 0 || height <= 0) {
     return null;
@@ -101,31 +105,37 @@ export function createHeatSurfaceRenderPlan({
 
   const resolvedStrategy = resolveHeatLayerRenderStrategy(strategy, radius);
 
-  return resolvedStrategy === "stable-raster" && isMeterHeatLayerRadius(radius)
-    ? createStableHeatSurfaceRenderPlan({
-        colorRamp,
-        data,
-        height,
-        intensity,
-        map,
-        maxRasterPixels,
-        minZoomDeltaForRebuild,
-        mode,
-        overscanRatio,
-        radius,
-        surfaceCache,
-        width,
-      })
-    : createViewportHeatSurfaceRenderPlan({
-        colorRamp,
-        data,
-        height,
-        intensity,
-        map,
-        mode,
-        radius,
-        width,
-      });
+  const plan =
+    resolvedStrategy === "stable-raster" && isMeterHeatLayerRadius(radius)
+      ? createStableHeatSurfaceRenderPlan({
+          colorRamp,
+          data,
+          height,
+          intensity,
+          map,
+          maxRasterPixels,
+          minZoomDeltaForRebuild,
+          mode,
+          overscanRatio,
+          radius,
+          surfaceCache,
+          width,
+          work,
+        })
+      : createViewportHeatSurfaceRenderPlan({
+          colorRamp,
+          data,
+          height,
+          intensity,
+          map,
+          mode,
+          radius,
+          width,
+          work,
+        });
+
+  if (plan && work) work.surfacePlans += 1;
+  return plan;
 }
 
 export function getHeatLayerSurfaceQueryBounds({
@@ -151,19 +161,52 @@ export function getHeatLayerSurfaceQueryBounds({
     return getHeatLayerPaddedBounds(map, radius, intensity);
   }
 
-  const zoomBucket = getHeatLayerZoomBucket(map.getZoom(), minZoomDeltaForRebuild);
-  const paddedBounds = getHeatLayerPaddedBounds(map, radius, intensity);
-
   if (
     surfaceCache &&
-    surfaceCache.strategy === "stable-raster" &&
-    surfaceCache.zoomBucket === zoomBucket &&
-    heatLayerBoundsContain(surfaceCache.coverageBounds, paddedBounds)
+    isHeatSurfaceCacheGeometryReusable({
+      intensity,
+      map,
+      minZoomDeltaForRebuild,
+      radius,
+      strategy,
+      surfaceCache,
+    })
   ) {
     return surfaceCache.coverageBounds;
   }
 
   return getHeatLayerStableCoverageBounds(map, radius, intensity, overscanRatio);
+}
+
+/**
+ * Whether the cached stable raster's geometry (zoom bucket and coverage) still serves this
+ * camera. Geometry only: the raster content is reusable only for identical inputs.
+ */
+export function isHeatSurfaceCacheGeometryReusable({
+  intensity,
+  map,
+  minZoomDeltaForRebuild,
+  radius,
+  strategy,
+  surfaceCache,
+}: {
+  intensity: number;
+  map: HeatSurfaceViewport;
+  minZoomDeltaForRebuild: number;
+  radius: HeatLayerRadius;
+  strategy: HeatLayerRenderStrategy;
+  surfaceCache: HeatSurfaceCacheMetadata;
+}) {
+  return (
+    resolveHeatLayerRenderStrategy(strategy, radius) === "stable-raster" &&
+    isMeterHeatLayerRadius(radius) &&
+    surfaceCache.strategy === "stable-raster" &&
+    surfaceCache.zoomBucket === getHeatLayerZoomBucket(map.getZoom(), minZoomDeltaForRebuild) &&
+    heatLayerBoundsContain(
+      surfaceCache.coverageBounds,
+      getHeatLayerPaddedBounds(map, radius, intensity),
+    )
+  );
 }
 
 function createViewportHeatSurfaceRenderPlan({
@@ -175,6 +218,7 @@ function createViewportHeatSurfaceRenderPlan({
   mode,
   radius,
   width,
+  work,
 }: {
   colorRamp: PreparedHeatLayerColorRamp;
   data: HeatLayerFeatureCollection;
@@ -184,7 +228,9 @@ function createViewportHeatSurfaceRenderPlan({
   mode: HeatLayerSurfaceMode;
   radius: HeatLayerRadius;
   width: number;
+  work?: HeatLayerSurfaceWork;
 }): HeatSurfaceRenderPlan | null {
+  if (work) work.surfaceSourcesLowered += data.features.length;
   const sources = data.features
     .map((feature) => {
       const point = map.latLngToContainerPoint(toLatLng(feature.geometry.coordinates));
@@ -216,7 +262,7 @@ function createViewportHeatSurfaceRenderPlan({
     Math.max(northWest.lng, southEast.lng),
     Math.max(northWest.lat, southEast.lat),
   ] as HeatSurfaceBounds;
-  const dataSignature = createHeatLayerSurfaceDataSignature(sources);
+  const dataSignature = createHeatLayerSurfaceDataSignature(sources, work);
   const cacheKey = createHeatLayerSurfaceCacheKey({
     colorRamp,
     dataSignature,
@@ -275,6 +321,7 @@ function createStableHeatSurfaceRenderPlan({
   radius,
   surfaceCache,
   width,
+  work,
 }: {
   colorRamp: PreparedHeatLayerColorRamp;
   data: HeatLayerFeatureCollection;
@@ -288,6 +335,7 @@ function createStableHeatSurfaceRenderPlan({
   radius: { meters: number };
   surfaceCache: HeatSurfaceCacheMetadata | null;
   width: number;
+  work?: HeatLayerSurfaceWork;
 }): HeatSurfaceRenderPlan | null {
   const zoomBucket = getHeatLayerZoomBucket(map.getZoom(), minZoomDeltaForRebuild);
 
@@ -312,6 +360,7 @@ function createStableHeatSurfaceRenderPlan({
       mode,
       radius,
       zoomBucket,
+      work,
     });
 
     if (plan?.cacheKey !== surfaceCache.key) {
@@ -356,6 +405,7 @@ function createStableHeatSurfaceRenderPlan({
     mode,
     radius,
     zoomBucket,
+    work,
   });
 }
 
@@ -368,6 +418,7 @@ function createStableHeatSurfaceRenderPlanForGeometry({
   mode,
   radius,
   zoomBucket,
+  work,
 }: {
   colorRamp: PreparedHeatLayerColorRamp;
   coverageBounds: HeatSurfaceBounds;
@@ -377,7 +428,9 @@ function createStableHeatSurfaceRenderPlanForGeometry({
   mode: HeatLayerSurfaceMode;
   radius: { meters: number };
   zoomBucket: number;
+  work?: HeatLayerSurfaceWork;
 }): HeatSurfaceRenderPlan | null {
+  if (work) work.surfaceSourcesLowered += data.features.length;
   const metricBounds = getHeatLayerMetricBounds(coverageBounds);
   const metersPerPixel = Math.max(
     (metricBounds.east - metricBounds.west) / Math.max(1, dimensions.width),
@@ -414,7 +467,7 @@ function createStableHeatSurfaceRenderPlanForGeometry({
     return null;
   }
 
-  const dataSignature = createHeatLayerSurfaceDataSignature(sources);
+  const dataSignature = createHeatLayerSurfaceDataSignature(sources, work);
   const cacheKey = createHeatLayerSurfaceCacheKey({
     colorRamp,
     dataSignature,
@@ -526,7 +579,11 @@ function createHeatLayerSurfaceCacheKey({
   ].join("|");
 }
 
-function createHeatLayerSurfaceDataSignature(sources: readonly HeatLayerSurfaceSource[]) {
+function createHeatLayerSurfaceDataSignature(
+  sources: readonly HeatLayerSurfaceSource[],
+  work: HeatLayerSurfaceWork | undefined,
+) {
+  if (work) work.surfaceSignatureSources += sources.length;
   return sources
     .map((source) =>
       [

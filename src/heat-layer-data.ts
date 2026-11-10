@@ -24,6 +24,7 @@ import {
   type HeatLayerWeightAccessor,
 } from "./heat-layer-types";
 import { roundHeatLayerCacheNumber } from "./heat-layer-utils";
+import type { HeatLayerDataWork } from "./heat-layer-work";
 
 export function isHeatFieldRasterVisible(renderMode: HeatFieldRenderMode) {
   return renderMode === "raster" || renderMode === "raster-contours";
@@ -132,6 +133,8 @@ export function createHeatLayerSourceIndex<TProperties = Record<string, unknown>
     getWeight?: HeatLayerWeightAccessor<TProperties>;
     maxWeight?: number;
     weightMetric?: string;
+    /** Counts this index's build and bounds queries. */
+    work?: HeatLayerDataWork;
   } = {},
 ) {
   const weightedPoints = points
@@ -171,12 +174,20 @@ export function createHeatLayerSourceIndex<TProperties = Record<string, unknown>
   });
   let cachedBoundsKey: string | null = null;
   let cachedFeatureCollection: HeatLayerFeatureCollection | null = null;
+  const { work } = options;
+
+  if (work) {
+    work.sourceIndexBuilds += 1;
+    work.sourceIndexPoints += features.length;
+  }
 
   return {
     getFeatureCollection(bounds: [west: number, south: number, east: number, north: number]) {
       const boundsKey = getHeatLayerBoundsCacheKey(bounds);
+      if (work) work.sourceQueries += 1;
 
       if (cachedBoundsKey === boundsKey && cachedFeatureCollection) {
+        if (work) work.sourceQueryCacheHits += 1;
         return cachedFeatureCollection;
       }
 
