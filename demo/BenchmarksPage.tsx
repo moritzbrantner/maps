@@ -27,6 +27,7 @@ import {
   type BenchmarkSummary,
 } from "./benchmark-model";
 import "./benchmarks.css";
+import { isDemoSupportedGeometry } from "./lib/geojson-features";
 
 type BenchmarkId = "maps" | "canvas2d" | "leaflet" | "maplibre";
 
@@ -593,7 +594,9 @@ function LeafletBenchmarkPreview({
         );
 
         for (const feature of featureCollection.features) {
-          if (feature.geometry.type !== "Point") continue;
+          if (!isDemoSupportedGeometry(feature.geometry) || feature.geometry.type !== "Point") {
+            continue;
+          }
           const [longitude, latitude] = feature.geometry.coordinates;
           leaflet
             .circleMarker([latitude, longitude], {

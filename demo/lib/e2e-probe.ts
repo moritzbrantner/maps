@@ -9,6 +9,7 @@ import type {
   MapPoint,
   MapSurfaceController,
   MapViewState,
+  TemporalGeoJsonGeometryFeature,
   TemporalGeoJsonGeometryFeatureCollection,
   TemporalGeoJsonSupportedGeometry,
 } from "@moritzbrantner/maps";
@@ -17,7 +18,7 @@ import { demoFlows } from "../data/demo-flows";
 import { demoGeoJsonCollection } from "../data/demo-geojson";
 import { demoPointHubs, demoPoints } from "../data/demo-points";
 import type { DemoGeoJsonProperties, DemoPointProperties, DemoView } from "../types";
-import { getDemoFeatureId } from "./geojson-features";
+import { getDemoFeatureId, isDemoSupportedGeometry } from "./geojson-features";
 
 type DemoE2EProbe = {
   activeView: () => DemoView;
@@ -139,7 +140,9 @@ export function useDemoE2EProbe({
       getMapDisplay: () => e2eControllerRef.current?.display ?? null,
       getMapProjection: () => {
         try {
-          return e2eMapRef.current?.getProjection?.().type ?? null;
+          const projectionType = e2eMapRef.current?.getProjection?.().type;
+
+          return typeof projectionType === "string" ? projectionType : null;
         } catch {
           // After a view switch the previous map is removed until the next one registers.
           return null;
@@ -158,7 +161,7 @@ export function useDemoE2EProbe({
           return null;
         }
 
-        return map.idle?.() === true || (map.loaded?.() === true && map.isMoving?.() !== true);
+        return map.loaded?.() === true && map.isMoving?.() !== true;
       },
       project: (coordinate) => {
         const point = e2eMapRef.current?.project?.(coordinate);
@@ -248,9 +251,9 @@ function getDemoFlowMidpoint(id: string): [number, number] | null {
 }
 
 function getDemoGeometryCenter(
-  geometry: TemporalGeoJsonSupportedGeometry | null,
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
 ): [number, number] | null {
-  if (!geometry) {
+  if (!isDemoSupportedGeometry(geometry)) {
     return null;
   }
 

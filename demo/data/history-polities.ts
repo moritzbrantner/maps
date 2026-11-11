@@ -10,6 +10,7 @@ import type {
 } from "@moritzbrantner/maps";
 import { interpolateTemporalGeoJsonGeometry } from "@moritzbrantner/maps";
 
+import { isDemoSupportedGeometry } from "../lib/geojson-features";
 import cshapesEuropePolityScenesFixture from "./cshapes-europe-polity-scenes.json";
 import wwiiControlScenesFixture from "./wwii-control-scenes.json";
 import {
@@ -219,7 +220,10 @@ function getInterpolatedDemoHistoricalPolityScenarioFrame(
     features: previousScene.collection.features.map((previousFeature) => {
       const nextFeature = nextById.get(previousFeature.properties?.polityId);
 
-      if (!previousFeature.geometry || !nextFeature?.geometry) {
+      if (
+        !isDemoSupportedGeometry(previousFeature.geometry) ||
+        !isDemoSupportedGeometry(nextFeature?.geometry)
+      ) {
         return {
           ...previousFeature,
           properties: {
@@ -448,7 +452,7 @@ function validateDemoHistoricalPolitySceneFeatures(
       });
     }
 
-    if (feature.geometry?.type === "Polygon") {
+    if (isPolygonLikeGeometry(feature.geometry) && feature.geometry.type === "Polygon") {
       issues.push(
         ...validateDemoHistoricalPolityPolygon(feature.geometry.coordinates, polityId, sceneYear),
       );
@@ -456,7 +460,7 @@ function validateDemoHistoricalPolitySceneFeatures(
       return issues;
     }
 
-    if (feature.geometry?.type === "MultiPolygon") {
+    if (isPolygonLikeGeometry(feature.geometry) && feature.geometry.type === "MultiPolygon") {
       issues.push(
         ...feature.geometry.coordinates.flatMap((polygon) =>
           validateDemoHistoricalPolityPolygon(polygon, polityId, sceneYear),
@@ -592,7 +596,7 @@ function fromClippingMultiPolygon(output: ClippingMultiPolygon): PolygonLikeGeom
 function normalizeClippingRing(ring: readonly (readonly number[])[]) {
   return closeRing(
     ring.map((position) => [Number(position[0]), Number(position[1])] as [number, number]),
-  ).map((position) => [position[0], position[1]]);
+  ).map((position): [number, number] => [position[0], position[1]]);
 }
 
 function closeRing(ring: readonly [number, number][]) {

@@ -16,8 +16,10 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",
-    "demo/engine-main.tsx",
-    "demo/vite-env.d.ts",
-    "demo/shortbread-tile-worker.ts"
-  ]
+    "demo/**/*.ts",
+    "demo/**/*.tsx",
+    "e2e/fixtures/*.ts",
+    "e2e/fixtures/*.tsx"
+  ],
+  "exclude": ["demo/**/*.test.ts"]
 }

@@ -14,7 +14,11 @@ import {
 } from "@moritzbrantner/maps";
 import type { MapsCanvasFlatRuntimeController } from "../src/canvas-flat-runtime";
 import { demoMapStyle } from "./data/map-style";
-import { getShortbreadBasemapStyle, useShortbreadBasemap } from "./ShortbreadBasemapLayer";
+import {
+  getShortbreadBasemapStyle,
+  useShortbreadBasemap,
+  type ShortbreadFeatureProperties,
+} from "./ShortbreadBasemapLayer";
 
 type RendererBackend = "maps" | "maplibre";
 
@@ -187,7 +191,7 @@ function createComparisonPoints(): Array<MapPoint<ComparisonPointProperties>> {
   return points;
 }
 
-function shortbreadFeatureStyle(feature: GeoJsonLayerFeature) {
+function shortbreadFeatureStyle(feature: GeoJsonLayerFeature<ShortbreadFeatureProperties>) {
   return getShortbreadBasemapStyle(feature.properties.kind, feature.properties.sourceKind);
 }
 function nonInteractiveBasemap() {

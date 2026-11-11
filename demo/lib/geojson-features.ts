@@ -7,6 +7,20 @@ import {
 
 import type { DemoGeoJsonProperties } from "../types";
 
+const DEMO_SUPPORTED_GEOMETRY_TYPES: ReadonlySet<string> = new Set<
+  TemporalGeoJsonSupportedGeometry["type"]
+>(["Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon"]);
+
+/**
+ * Narrows a GeoJSON Feature geometry to the geometry types the demo renders
+ * and edits. The demo fixtures only contain these types.
+ */
+export function isDemoSupportedGeometry(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"] | undefined,
+): geometry is TemporalGeoJsonSupportedGeometry {
+  return geometry != null && DEMO_SUPPORTED_GEOMETRY_TYPES.has(geometry.type);
+}
+
 export function getDemoGeoJsonFeature(
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
   featureId: string | null,
@@ -31,7 +45,7 @@ export function getDemoFeatureId(
 export function getDemoGeoJsonLabel(
   feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
 ) {
-  return String(feature.properties?.label ?? feature.id ?? feature.geometry.type);
+  return String(feature.properties?.label ?? feature.id ?? feature.geometry?.type);
 }
 
 export function getDemoGroupId(feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>) {
@@ -42,7 +56,11 @@ export function setDemoGroupId(
   feature: TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties>,
   groupId: string | null,
 ): TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties> {
-  const properties = {
+  if (!feature.properties) {
+    return feature;
+  }
+
+  const properties: DemoGeoJsonProperties = {
     ...feature.properties,
   };
 
@@ -80,18 +98,28 @@ export function createDemoGeoJsonDuplicate(
 ): TemporalGeoJsonGeometryFeature<DemoGeoJsonProperties> {
   return {
     ...feature,
-    geometry: moveGeoJsonGeometry(feature.geometry, 0.45, 0.28),
+    geometry: isDemoSupportedGeometry(feature.geometry)
+      ? moveGeoJsonGeometry(feature.geometry, 0.45, 0.28)
+      : feature.geometry,
     id,
-    properties: {
-      ...feature.properties,
-      groupId: groupId ?? undefined,
-      label: `${getDemoGeoJsonLabel(feature)} copy`,
-      trackId: id,
-    },
+    properties: feature.properties
+      ? {
+          ...feature.properties,
+          groupId: groupId ?? undefined,
+          label: `${getDemoGeoJsonLabel(feature)} copy`,
+          trackId: id,
+        }
+      : feature.properties,
   };
 }
 
-export function countDemoGeometryPositions(geometry: TemporalGeoJsonSupportedGeometry) {
+export function countDemoGeometryPositions(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
+): number | undefined {
+  if (!isDemoSupportedGeometry(geometry)) {
+    return undefined;
+  }
+
   switch (geometry.type) {
     case "Point":
       return 1;
@@ -109,7 +137,13 @@ export function countDemoGeometryPositions(geometry: TemporalGeoJsonSupportedGeo
   }
 }
 
-export function countDemoGeometryParts(geometry: TemporalGeoJsonSupportedGeometry) {
+export function countDemoGeometryParts(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
+): number | undefined {
+  if (!isDemoSupportedGeometry(geometry)) {
+    return undefined;
+  }
+
   switch (geometry.type) {
     case "Point":
     case "LineString":

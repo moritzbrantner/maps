@@ -1,5 +1,6 @@
 import type { MapFlow, TemporalGeoJsonGeometryFeatureCollection } from "@moritzbrantner/maps";
 
+import { isDemoSupportedGeometry } from "../lib/geojson-features";
 import type { DemoFlowGeoJsonProperties } from "../types";
 
 const demoFlowFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties> =
@@ -77,7 +78,11 @@ function createDemoFlowsFromGeoJson(
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoFlowGeoJsonProperties>,
 ): MapFlow[] {
   return collection.features.flatMap((feature, index) => {
-    if (feature.geometry?.type !== "LineString" || feature.geometry.coordinates.length < 2) {
+    if (
+      !isDemoSupportedGeometry(feature.geometry) ||
+      feature.geometry.type !== "LineString" ||
+      feature.geometry.coordinates.length < 2
+    ) {
       return [];
     }
 

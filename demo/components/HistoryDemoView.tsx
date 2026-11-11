@@ -26,7 +26,7 @@ import {
   type MapPoint,
   type MapSurfaceController,
   type MapViewState,
-  type PointLayerFeature,
+  type PointMapLayerFeature,
 } from "@moritzbrantner/maps";
 
 import { demoMapStyle } from "../data/map-style";
@@ -145,7 +145,7 @@ function formatHistoryTime(time: number, scenarioId: DemoHistoricalPolityScenari
 
 const getPolityFeatureId = (feature: GeoJsonLayerFeature<DemoHistoricalPolityProperties>) =>
   feature.properties.polityId;
-const getPlaceFeatureId = (feature: PointLayerFeature) => feature.point.id;
+const getPlaceFeatureId = (feature: PointMapLayerFeature) => feature.point.id;
 
 export function HistoryDemoView({
   onMapControllerReady,
@@ -265,15 +265,16 @@ export function HistoryDemoView({
 
     // The synthetic fixture covers a small area; frame it so its regions can be inspected.
     if (nextScenarioId === "synthetic-competing-sources") {
-      mapControllerRef.current?.fitBounds(
-        getBoundsFromGeoJson({
-          features: getDemoHistoricalPolityScenario(nextScenarioId).scenes.flatMap(
-            (scene) => scene.collection.features,
-          ),
-          type: "FeatureCollection",
-        }),
-        { padding: 52 },
-      );
+      const scenarioBounds = getBoundsFromGeoJson({
+        features: getDemoHistoricalPolityScenario(nextScenarioId).scenes.flatMap(
+          (scene) => scene.collection.features,
+        ),
+        type: "FeatureCollection",
+      });
+
+      if (scenarioBounds) {
+        mapControllerRef.current?.fitBounds(scenarioBounds, { padding: 52 });
+      }
     }
   };
 
@@ -551,11 +552,11 @@ function renderHistoryPolityTooltip(feature: GeoJsonLayerFeature<DemoHistoricalP
   return <HistoryFeatureName featureId={feature.properties.polityId} />;
 }
 
-function renderHistoryPlacePopup(feature: PointLayerFeature) {
+function renderHistoryPlacePopup(feature: PointMapLayerFeature) {
   return <HistoryFeatureDetails featureId={feature.point.id} testId="history-popup" />;
 }
 
-function renderHistoryPlaceTooltip(feature: PointLayerFeature) {
+function renderHistoryPlaceTooltip(feature: PointMapLayerFeature) {
   return <HistoryFeatureName featureId={feature.point.id} />;
 }
 

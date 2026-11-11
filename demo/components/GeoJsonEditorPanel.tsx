@@ -61,7 +61,7 @@ export function GeoJsonEditorPanel({
   const selectedGeoJsonLabel = selectedGeoJsonFeature
     ? getDemoGeoJsonLabel(selectedGeoJsonFeature)
     : "";
-  const selectedGeoJsonType = selectedGeoJsonFeature?.geometry.type ?? null;
+  const selectedGeoJsonType = selectedGeoJsonFeature?.geometry?.type ?? null;
   const selectedGeoJsonCanReshape = selectedGeoJsonType !== null && selectedGeoJsonType !== "Point";
   const selectedGeoJsonFeatures = useMemo(
     () =>
@@ -82,13 +82,17 @@ export function GeoJsonEditorPanel({
     }
 
     setEditableGeoJson((current) =>
-      updateDemoGeoJsonFeature(current, selectedGeoJsonId, (feature) => ({
-        ...feature,
-        properties: {
-          ...feature.properties,
-          label,
-        },
-      })),
+      updateDemoGeoJsonFeature(current, selectedGeoJsonId, (feature) =>
+        feature.properties
+          ? {
+              ...feature,
+              properties: {
+                ...feature.properties,
+                label,
+              },
+            }
+          : feature,
+      ),
     );
   };
   const deleteSelectedGeoJsonFeatures = () => {

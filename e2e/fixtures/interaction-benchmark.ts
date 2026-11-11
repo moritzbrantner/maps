@@ -325,7 +325,7 @@ async function mountMapLibre() {
 
 async function mountLeaflet() {
   const leafletModule = await import("leaflet");
-  const L = (leafletModule as { default?: typeof leafletModule }).default ?? leafletModule;
+  const L = (leafletModule as { default?: typeof leafletModule.default }).default ?? leafletModule;
   const map = L.map(container, { attributionControl: false, zoomControl: false }).setView(
     [initial.center[1], initial.center[0]],
     initial.zoom,
@@ -667,7 +667,7 @@ async function mountMapLibrePoints(points: ReturnType<typeof densePoints>): Prom
 /** Leaflet reference: circle markers on its Canvas renderer, no basemap. */
 async function mountLeafletPoints(points: ReturnType<typeof densePoints>): Promise<PointLane> {
   const leafletModule = await import("leaflet");
-  const L = (leafletModule as { default?: typeof leafletModule }).default ?? leafletModule;
+  const L = (leafletModule as { default?: typeof leafletModule.default }).default ?? leafletModule;
   const map = L.map(container, {
     attributionControl: false,
     fadeAnimation: false,

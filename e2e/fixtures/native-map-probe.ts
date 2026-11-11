@@ -27,7 +27,7 @@ export const probe = {
   readyCount: 0,
   samples: [] as Sample[],
   cameraCpuMs: [] as number[],
-  command: (_state: MapViewState) => {
+  command: (_state: MapViewState): void => {
     throw new Error("Map runtime not ready");
   },
   position: (): [number, number] => {

@@ -259,7 +259,7 @@ export function DemoMap({
       );
     case "temporal":
       return (
-        <TemporalClusteredMap
+        <TemporalClusteredMap<Record<string, unknown>>
           autoPlay
           fitToData={false}
           formatTimeLabel={formatDemoTimelineTime}

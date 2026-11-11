@@ -137,8 +137,6 @@ export function MapsTemporalRuntimeAcceptance() {
         mapLabel="Maps temporal runtime acceptance"
         mapStyle={{ maxZoom: 19, minZoom: 0, tileSize: 256, tiles: ACCEPTANCE_RASTER_TILE }}
         onSelectedFeatureIdChange={setSelectedId}
-        pointColor="#dc2626"
-        pointRadius={10}
         renderFeaturePopup={(feature) => (
           <span data-testid="temporal-runtime-popup">
             {feature.kind === "cluster"
