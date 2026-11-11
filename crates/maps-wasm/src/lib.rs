@@ -2,6 +2,14 @@
 //!
 //! Map semantics belong in `maps-core`. This crate only translates JavaScript
 //! values to and from that domain contract.
+//!
+//! One crate builds two capability modules (#305, `scripts/build-maps-wasm.mjs`):
+//! without features it is the WebGPU-free core module
+//! (`@moritzbrantner/maps/wasm/core`: flat runtime and camera planning, point
+//! aggregation, temporal point tracks, Shortbread/MVT decode and Tileset QA
+//! kernels); with `wgpu-base-map` it is the full renderer module
+//! (`@moritzbrantner/maps/wasm`), which adds only the WebGPU base renderer. Gate
+//! new exports behind `wgpu-base-map` only when they need the GPU device.
 
 mod engine_scenario;
 mod retained_frame;

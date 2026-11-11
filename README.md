@@ -162,6 +162,13 @@ controller?.fitPoints(points, { padding: 72 });
   clustering is available; `getMapsAggregationRuntimeStatus()` and
   `subscribeMapsAggregationRuntime()` report `idle`, `loading`, `ready` or
   `unavailable`.
+- The Maps WASM runtime ships as two modules. `@moritzbrantner/maps/wasm/core`
+  is WebGPU-free (flat runtime and camera, clustering, temporal tracks, vector
+  tile decode); `@moritzbrantner/maps/wasm` adds the WebGPU base renderer and
+  carries every core export. A `flatRuntime="maps"` Map View in a browser with
+  WebGPU loads only the full module; without WebGPU (Canvas2D) and in data-only
+  code the loaders fetch only the smaller core module. Bundlers serve both from
+  the package exports with no configuration.
 - React map entrypoints are client components and start with `"use client"`.
 - `@moritzbrantner/maps/styles.css` is compiled CSS that includes package styles
   and MapLibre GL CSS without Tailwind preflight/global reset.

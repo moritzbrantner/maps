@@ -4,7 +4,11 @@ import "@moritzbrantner/ui/component-sources.css";
 import "../styles.css";
 import "./engine.css";
 import { initializeMapsAggregationWasm } from "../src/aggregation-runtime";
-import { configureMapsWasmPackage } from "../src/aggregation-wasm";
+import {
+  configureMapsWasmPackage,
+  isMapsWebGpuAvailable,
+  preferMapsWasmRendererModule,
+} from "../src/aggregation-wasm";
 import { EnginePage } from "./EnginePage";
 
 // `?view=inspector` shows the renderer inspector (#167) on the same engine page entry.
@@ -23,9 +27,16 @@ root.render(
 );
 
 async function bootstrap() {
-  const wasmPackage = new URL(`${import.meta.env.BASE_URL}wasm/maps_wasm.js`, location.origin).href;
-  configureMapsWasmPackage(wasmPackage);
-  if (!(await initializeMapsAggregationWasm({ wasmPackage }))) {
+  const wasmUrl = (fileName: string) =>
+    new URL(`${import.meta.env.BASE_URL}wasm/${fileName}`, location.origin).href;
+  // #305: Canvas2D (no WebGPU) loads only the WebGPU-free core module; a WebGPU page loads only
+  // the full renderer module, declared before the aggregation runtime starts loading.
+  configureMapsWasmPackage({
+    core: wasmUrl("maps_wasm_core.js"),
+    renderer: wasmUrl("maps_wasm.js"),
+  });
+  if (isMapsWebGpuAvailable()) preferMapsWasmRendererModule();
+  if (!(await initializeMapsAggregationWasm())) {
     throw new Error("The Maps engine could not load. Reload to try again.");
   }
   if (inspector) {

@@ -539,3 +539,29 @@ The slower return to source A, the larger transfer and the main-thread long task
 observations to act on, not regressions against an earlier Maps revision. `evaluation.json`
 SHA-256 of this capture:
 `9120ee97c1a9995e0f421b59309fbfb647f760385a3aa74cb15e96969e776a9a`.
+
+### WASM capability modules (#305)
+
+Owner decision (2026-11-08, option A): split the WASM runtime by capability, with the
+acceptance criterion re-baselined against current main instead of the obsolete #284 sizes.
+The module contract and measurements are in [Performance](performance.md#wasm-capability-modules-305).
+
+- **Developed.** `bun run build:wasm` builds the WebGPU-free `maps_wasm_core`
+  (`@moritzbrantner/maps/wasm/core`) next to the unchanged full `maps_wasm`. Every runtime
+  loader names its capability; only the WebGPU base renderer needs the full module, and it is
+  not fetched without `navigator.gpu`. The `#343` release profile is unchanged, so no
+  rendering speed is traded for size.
+- **Correct.** The core module's exports equal the full module's minus
+  `createWgpuBaseMapRenderer`/`MapsWgpuBaseMapRenderer`, from the same `maps-core` code; every
+  Rust export added since the decision (`MapsTemporalPointIndex`, `diffMvtTiles`,
+  `tileLngLatBounds`, `checkMvtSeam`) is core. `src/aggregation-wasm.test.ts` covers module
+  resolution through the real dynamic-import boundary (core-only loading, renderer
+  preference, sharing a loading renderer module, the single-module string configuration).
+  `e2e/maps-wasm-loading.spec.ts` drives the engine page in Chromium: Canvas2D fetches only
+  the core module, WebGPU only the full module. `verify:wasm-package` checks the same with the
+  package self-references in a clean packed Vite consumer. Tileset QA runs on the core module.
+- **Fast (transfer).** On `cbe2188` a Canvas2D or data-only first Map View fetches
+  876,066 B / 329,229 B gzip of WASM instead of 1,657,910 B / 627,906 B gzip (−47.6% gzip).
+  The WebGPU path is byte-identical (SHA-256 of the full module before and after:
+  `9b11c5b236e8ae7c7688c4bf9117aa650e4527759b50413c18e93d08fbaa5143`). Instantiation and
+  first-frame timings were not profiled; only transfer is claimed.

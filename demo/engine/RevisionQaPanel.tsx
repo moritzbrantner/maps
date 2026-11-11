@@ -75,7 +75,7 @@ export async function fetchArchive(tileset: MapsTileset, signal: AbortSignal) {
 }
 
 export async function loadKernel(): Promise<TilesetQaKernel> {
-  const module = (await importMapsWasmModule()) as Partial<TilesetQaKernel>;
+  const module = (await importMapsWasmModule("core")) as Partial<TilesetQaKernel>;
   const { inspectMvtTile, auditTilesetCoverage, diffMvtTiles, checkMvtSeam, tileLngLatBounds } =
     module;
   if (

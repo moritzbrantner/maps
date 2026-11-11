@@ -73,7 +73,7 @@ export function openArchiveBytes(name: string, bytes: Uint8Array): ArchiveFile {
 }
 
 /**
- * Load the built Maps WASM module (`bun run build:wasm`). There is no JavaScript fallback:
+ * Load the built WebGPU-free Maps WASM core module (`bun run build:wasm`). There is no JavaScript fallback:
  * without the Rust kernel Tileset QA cannot run.
  */
 export async function loadTilesetQaKernel(directory?: string): Promise<TilesetQaKernel> {
@@ -85,16 +85,16 @@ export async function loadTilesetQaKernel(directory?: string): Promise<TilesetQa
   ].filter((candidate): candidate is string => Boolean(candidate));
   const found = candidates
     .map((candidate) => path.resolve(candidate))
-    .find((candidate) => existsSync(path.join(candidate, "maps_wasm.js")));
+    .find((candidate) => existsSync(path.join(candidate, "maps_wasm_core.js")));
   if (!found) {
     throw new Error(
       `Tileset QA needs the built Maps WASM module; run \`bun run build:wasm\` (looked in ${candidates.join(", ")})`,
     );
   }
-  const module = (await import(pathToFileURL(path.join(found, "maps_wasm.js")).href)) as {
+  const module = (await import(pathToFileURL(path.join(found, "maps_wasm_core.js")).href)) as {
     initSync(input: { module: Uint8Array }): unknown;
   } & Partial<TilesetQaKernel>;
-  module.initSync({ module: readFileSync(path.join(found, "maps_wasm_bg.wasm")) });
+  module.initSync({ module: readFileSync(path.join(found, "maps_wasm_core_bg.wasm")) });
   const { inspectMvtTile, auditTilesetCoverage, diffMvtTiles, checkMvtSeam, tileLngLatBounds } =
     module;
   if (

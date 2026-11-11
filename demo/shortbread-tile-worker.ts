@@ -19,7 +19,7 @@ self.addEventListener("message", (event: MessageEvent<TilePaintRequest>) => {
 
 async function paint({ id, bytes, wasmPackage }: TilePaintRequest) {
   try {
-    const wasm = await importMapsWasmModule<TileModule>(wasmPackage);
+    const wasm = await importMapsWasmModule<TileModule>("core", wasmPackage);
     const tile = wasm.decodeShortbreadTilePixels(new Uint8Array(bytes), SIZE);
     const canvas = new OffscreenCanvas(SIZE, SIZE);
     const context = canvas.getContext("2d");

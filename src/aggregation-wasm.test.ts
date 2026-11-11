@@ -5,13 +5,17 @@ import { describe, expect, test } from "vitest";
 let fixtureId = 0;
 
 // Exercise the real dynamic-import boundary, including overlapping initialization.
-function wasmPackage({ failOnce = false } = {}) {
+// Keep "." out of the fixture source: Bun picks a data URL's loader from its last extension.
+function wasmPackage({ failOnce = false, name = "module" } = {}) {
   return `data:text/javascript,${encodeURIComponent(`
     // fixture ${fixtureId++}
     let starts = 0;
     let ready = false;
+    export const moduleName = ${JSON.stringify(name)};
     export default async function initialize() {
       starts++;
+      const all = (globalThis["mapsWasmStarts"] ??= {});
+      all[moduleName] = (all[moduleName] ?? 0) + 1;
       await new Promise(resolve => setTimeout(resolve, 0));
       if (${failOnce} && starts === 1) throw new Error("initialization failed");
       ready = true;
@@ -40,7 +44,12 @@ function runLoaders(packageNames: string[], body: string): unknown {
       [
         "--eval",
         `
-    import { configureMapsWasmPackage, loadMapsAggregationWasmRuntime } from "./src/aggregation-wasm";
+    import {
+      configureMapsWasmPackage,
+      importMapsWasmModule,
+      loadMapsAggregationWasmRuntime,
+      preferMapsWasmRendererModule,
+    } from "./src/aggregation-wasm";
     import { decodeShortbreadBasemap, decodeShortbreadBasemapLines } from "./src/vector-tile-wasm";
     import { initializeMapsScalarFieldWasm } from "./src/scalar-field";
     import { loadMapsWasmKernelRuntime } from "./src/kernels/wasm-kernels";
@@ -128,5 +137,98 @@ describe("Maps WASM package loading", () => {
       failures: ["initialization failed", "initialization failed"],
       next: { lines: [], polygons: [], starts: 2 },
     });
+  });
+});
+
+// #305: the WebGPU-free core module serves Canvas2D Map Views and data-only consumers; the
+// full renderer module (a superset) serves WebGPU Map Views without also fetching the core.
+describe("Maps WASM capability modules", () => {
+  const split = () => [wasmPackage({ name: "core" }), wasmPackage({ name: "renderer" })];
+
+  test("core loaders fetch only the core module from a split configuration", () => {
+    const result = runLoaders(
+      split(),
+      `
+      configureMapsWasmPackage({ core: first, renderer: second });
+      const [aggregation, tileResult, scalar] = await Promise.all([
+        loadMapsAggregationWasmRuntime(),
+        decodeShortbreadBasemap(bytes, tile),
+        initializeMapsScalarFieldWasm(),
+      ]);
+      const module = await importMapsWasmModule("core");
+      console.log(JSON.stringify({
+        aggregation: typeof aggregation.createIndex,
+        module: module.moduleName,
+        scalar,
+        starts: globalThis.mapsWasmStarts,
+        tile: tileResult,
+      }));
+    `,
+    );
+    expect(result).toEqual({
+      aggregation: "function",
+      module: "core",
+      scalar: true,
+      starts: { core: 1 },
+      tile: { lines: [], polygons: [], starts: 1 },
+    });
+  });
+
+  test("a WebGPU page that prefers the renderer module fetches only that module", () => {
+    const result = runLoaders(
+      split(),
+      `
+      configureMapsWasmPackage({ core: first, renderer: second });
+      preferMapsWasmRendererModule();
+      const [, tileResult, renderer] = await Promise.all([
+        loadMapsAggregationWasmRuntime(),
+        decodeShortbreadBasemap(bytes, tile),
+        importMapsWasmModule("renderer"),
+      ]);
+      console.log(JSON.stringify({
+        renderer: renderer.moduleName,
+        starts: globalThis.mapsWasmStarts,
+        tile: tileResult,
+      }));
+    `,
+    );
+    expect(result).toEqual({
+      renderer: "renderer",
+      starts: { renderer: 1 },
+      tile: { lines: [], polygons: [], starts: 1 },
+    });
+  });
+
+  test("core loaders share a renderer module that is already loading", () => {
+    const result = runLoaders(
+      split(),
+      `
+      configureMapsWasmPackage({ core: first, renderer: second });
+      const renderer = importMapsWasmModule("renderer");
+      const core = await importMapsWasmModule("core");
+      console.log(JSON.stringify({
+        core: core.moduleName,
+        same: core === (await renderer),
+        starts: globalThis.mapsWasmStarts,
+      }));
+    `,
+    );
+    expect(result).toEqual({ core: "renderer", same: true, starts: { renderer: 1 } });
+  });
+
+  test("a single configured module still serves every loader", () => {
+    const result = runLoaders(
+      [wasmPackage({ name: "full" })],
+      `
+      configureMapsWasmPackage(first);
+      const core = await importMapsWasmModule("core");
+      const renderer = await importMapsWasmModule("renderer");
+      console.log(JSON.stringify({
+        modules: [core.moduleName, renderer.moduleName],
+        starts: globalThis.mapsWasmStarts,
+      }));
+    `,
+    );
+    expect(result).toEqual({ modules: ["full", "full"], starts: { full: 1 } });
   });
 });

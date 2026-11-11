@@ -4,6 +4,16 @@
 
 ### Minor Changes
 
+- The Maps WASM runtime is split by capability (#305). The new
+  `@moritzbrantner/maps/wasm/core` export is a WebGPU-free module (flat runtime and camera
+  planning, clustering, temporal tracks, Shortbread/MVT decode and Tileset QA kernels) of
+  876,066 bytes (about 329 KB gzip), against 1,657,910 bytes (about 628 KB gzip) for the full
+  `@moritzbrantner/maps/wasm` module. Canvas2D Map Views (no WebGPU) and data-only consumers
+  now fetch only the core module, about 48% less WASM transfer. A WebGPU Map View still fetches
+  only the unchanged full module, which carries every core export. Bundlers need no
+  configuration. An explicit `wasmPackage` URL still names one full module for that loader.
+  `initializeMapsScalarFieldWasm()` without an argument now resolves its module like the
+  other loaders instead of always using the full package self-reference.
 - Competing-source context for historical Map Features (#231 phase C, Atlas Decision 1.12).
   `HistoricalMapFeatureRecord.reconstructions` names the one boundary reconstruction an
   application chose to draw per period, with its source, evidence status, uncertainty and

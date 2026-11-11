@@ -13,7 +13,7 @@ export async function loadMapsWasmKernelRuntime(packageName?: string): Promise<M
     throw new Error("No public WASM kernel package configured.");
   }
 
-  const wasmModule = await importMapsWasmModule<MapsKernelsWasmModule>(packageName);
+  const wasmModule = await importMapsWasmModule<MapsKernelsWasmModule>("core", packageName);
 
   return {
     backend: "wasm",

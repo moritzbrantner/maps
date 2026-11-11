@@ -25,6 +25,37 @@ unpacked size, entry count, and stylesheet budgets live in
 sizes are measured and reported there but are not blocking ceilings (#268);
 reducing them belongs to the loading strategy.
 
+### WASM capability modules (#305)
+
+One `bun run build:wasm` emits two modules from the `maps-wasm` crate with the
+same speed-first release profile (#343):
+
+| Module | Export | Contents | Used by |
+| --- | --- | --- | --- |
+| `maps_wasm_core` | `@moritzbrantner/maps/wasm/core` | flat runtime and camera planning, aggregation, temporal tracks, Shortbread/MVT decode, Tileset QA kernels | Canvas2D Map Views (no WebGPU), data-only loaders, Tileset QA |
+| `maps_wasm` | `@moritzbrantner/maps/wasm` | every core export plus the WebGPU base renderer (`wgpu-base-map`) | WebGPU Map Views |
+
+Every runtime loader goes through `importMapsWasmModule(capability, …)`. Only
+the WebGPU base renderer asks for `renderer`; it is not fetched at all when
+`navigator.gpu` is missing. A `flatRuntime="maps"` Map View in a WebGPU browser
+declares the renderer module before any loader starts, so the flat runtime,
+clustering and the other core loaders share that one module and the page never
+fetches both. A core loader that starts after the renderer module also reuses
+it. A string module URL (`configureMapsWasmPackage(url)` or a loader's
+`wasmPackage`) keeps naming one full module for every loader.
+
+Measured on `cbe2188` (`bun run build:package`, gzip -9):
+
+| First Map View transfer | Before | After |
+| --- | ---: | ---: |
+| Canvas2D or data-only: WASM | 1,657,910 B (627,906 gzip) | 876,066 B (329,229 gzip), −47.6% gzip |
+| Canvas2D or data-only: wasm-bindgen glue | 140,682 B (20,524 gzip) | 54,168 B (7,936 gzip) |
+| WebGPU: WASM | 1,657,910 B (627,906 gzip) | unchanged, byte-identical |
+
+The npm package carries both modules, so its compressed size grows; browser
+transfer, not the tarball, is what this split reduces. `verify:package-size`
+reports both runtime sizes.
+
 `scripts/analyze-bundles.mjs` stores hash-insensitive bundle baselines. Entry
 files are keyed as `entry:<fileName>`, while emitted chunks are keyed by sorted
 entrypoint owner group and size rank, such as

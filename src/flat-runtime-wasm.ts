@@ -196,7 +196,7 @@ export async function loadMapsFlatRasterRuntime(
   config: MapsFlatRasterRuntimeConfig,
   packageName?: string,
 ): Promise<MapsFlatRasterRuntime> {
-  const wasmModule = await importMapsWasmModule<MapsFlatRasterWasmModule>(packageName);
+  const wasmModule = await importMapsWasmModule<MapsFlatRasterWasmModule>("core", packageName);
   const Constructor = wasmModule.MapsFlatRasterRuntime;
 
   if (!Constructor) {

@@ -2,13 +2,41 @@ import { beforeEach, expect, test, vi } from "vitest";
 
 import { loadMapsWgpuBaseMapRenderer } from "./wgpu-base-map-wasm";
 
-const wasm = vi.hoisted(() => ({ createRenderer: vi.fn() }));
+const wasm = vi.hoisted(() => ({
+  createRenderer: vi.fn(),
+  importModule: vi.fn(),
+  webGpu: true,
+}));
 // The real adapter owns the canvas; only the external WASM/device edge is replaced.
 vi.mock("./aggregation-wasm", () => ({
-  importMapsWasmModule: async () => ({ createWgpuBaseMapRenderer: wasm.createRenderer }),
+  importMapsWasmModule: wasm.importModule,
+  isMapsWebGpuAvailable: () => wasm.webGpu,
 }));
 
-beforeEach(() => wasm.createRenderer.mockReset());
+beforeEach(() => {
+  wasm.createRenderer.mockReset();
+  wasm.importModule.mockReset();
+  wasm.importModule.mockImplementation(async () => ({
+    createWgpuBaseMapRenderer: wasm.createRenderer,
+  }));
+  wasm.webGpu = true;
+});
+
+test("without WebGPU the renderer module is never fetched and the host falls back", async () => {
+  const canvas = document.createElement("canvas");
+  wasm.webGpu = false;
+
+  await expect(loadMapsWgpuBaseMapRenderer(canvas)).rejects.toThrow("WebGPU is unavailable");
+
+  expect(wasm.importModule).not.toHaveBeenCalled();
+  expect(canvas.style.opacity).toBe("0");
+});
+
+test("the renderer loads the full renderer module", async () => {
+  wasm.createRenderer.mockResolvedValueOnce(device());
+  await loadMapsWgpuBaseMapRenderer(document.createElement("canvas"), "/wasm/maps_wasm.js");
+  expect(wasm.importModule).toHaveBeenCalledWith("renderer", "/wasm/maps_wasm.js");
+});
 
 function device() {
   return {

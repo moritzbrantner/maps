@@ -1,4 +1,8 @@
-import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
+import {
+  importMapsWasmModule,
+  isMapsWebGpuAvailable,
+  type MapsWasmModuleBase,
+} from "./aggregation-wasm";
 import type {
   MapsFlatRasterFrame,
   MapsFlatRasterSky,
@@ -271,7 +275,13 @@ export async function loadMapsWgpuBaseMapRenderer(
   canvas.style.opacity = "0";
 
   try {
-    const wasmModule = await importMapsWasmModule<MapsWgpuBaseMapWasmModule>(packageName);
+    // The renderer module is only fetched where its sole backend exists (#305): without WebGPU
+    // the Map View draws through Canvas2D on the smaller core module.
+    if (!isMapsWebGpuAvailable()) throw new Error("WebGPU is unavailable in this browser.");
+    const wasmModule = await importMapsWasmModule<MapsWgpuBaseMapWasmModule>(
+      "renderer",
+      packageName,
+    );
     const createRenderer = wasmModule.createWgpuBaseMapRenderer;
 
     if (!createRenderer) {
