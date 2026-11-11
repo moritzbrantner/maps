@@ -53,8 +53,8 @@ type RunState =
 export type RevisionQaFocus = TilesetDiffTileRef & { reason: string };
 
 /** The whole archive is fetched once and hashed; tiles are then range-read from memory. */
-async function fetchArchive(tileset: MapsTileset, signal: AbortSignal) {
-  if (tileset.transport.kind !== "pmtiles") throw new Error("revision diff needs PMTiles archives");
+export async function fetchArchive(tileset: MapsTileset, signal: AbortSignal) {
+  if (tileset.transport.kind !== "pmtiles") throw new Error("Tileset QA needs PMTiles archives");
   const url = tileset.transport.url;
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
@@ -74,16 +74,24 @@ async function fetchArchive(tileset: MapsTileset, signal: AbortSignal) {
   };
 }
 
-async function loadKernel(): Promise<TilesetQaKernel> {
+export async function loadKernel(): Promise<TilesetQaKernel> {
   const module = (await importMapsWasmModule()) as Partial<TilesetQaKernel>;
-  const { inspectMvtTile, auditTilesetCoverage, diffMvtTiles, tileLngLatBounds } = module;
-  if (!inspectMvtTile || !auditTilesetCoverage || !diffMvtTiles || !tileLngLatBounds) {
+  const { inspectMvtTile, auditTilesetCoverage, diffMvtTiles, checkMvtSeam, tileLngLatBounds } =
+    module;
+  if (
+    !inspectMvtTile ||
+    !auditTilesetCoverage ||
+    !diffMvtTiles ||
+    !checkMvtSeam ||
+    !tileLngLatBounds
+  ) {
     throw new Error("the loaded Maps WASM module predates Tileset QA");
   }
   return {
     inspectMvtTile,
     auditTilesetCoverage,
     diffMvtTiles,
+    checkMvtSeam,
     tileLngLatBounds,
   };
 }

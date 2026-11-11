@@ -125,8 +125,65 @@ export type TilesetQaKernel = {
   ): TilesetCoverageAudit;
   /** Revision diff of one tile (`maps-core::tileset_diff`); throws on an undecodable side. */
   diffMvtTiles(base: Uint8Array, candidate: Uint8Array, sampleLimit: number): MvtTileDiff;
+  /**
+   * Seam continuity of two adjacent tiles (`maps-core::tileset_seam`); `second` lies `edge` of
+   * `first`. Throws on an undecodable side or an invalid tolerance.
+   */
+  checkMvtSeam(
+    first: Uint8Array,
+    second: Uint8Array,
+    edge: MvtSeamEdge,
+    slackUnits: number,
+    offsetWindowUnits: number,
+    sampleLimit: number,
+  ): MvtSeam;
   /** `[west, south, east, north]` of a canonical tile. */
   tileLngLatBounds(z: number, x: number, y: number): Float64Array | number[];
+};
+
+export type MvtSeamEdge = "east" | "antimeridian" | "south";
+export type MvtSeamCounts = {
+  lineCrossings: number;
+  lineSlackUsed: number;
+  lineInterrupted: number;
+  lineDuplicated: number;
+  lineOffset: number;
+  polygonGroups: number;
+  polygonSlackUsed: number;
+  polygonMismatches: number;
+};
+export type MvtSeamFindingKind =
+  | "line-interrupted"
+  | "line-duplicated"
+  | "line-offset"
+  | "polygon-edge-mismatch";
+export type MvtSeamSide = "first" | "second";
+export type MvtSeamFinding = {
+  kind: MvtSeamFindingKind;
+  layer: string;
+  geometryType: "line" | "polygon";
+  side: MvtSeamSide | null;
+  strip: MvtSeamSide | null;
+  along: [number, number];
+  distanceUnits: number;
+  properties: Record<string, unknown>;
+};
+export type MvtSeamLayer = {
+  name: string;
+  firstExtent: number | null;
+  secondExtent: number | null;
+  firstBuffer: number | null;
+  secondBuffer: number | null;
+  firstLineEvents: number;
+  secondLineEvents: number;
+  counts: MvtSeamCounts;
+};
+export type MvtSeam = {
+  edge: MvtSeamEdge;
+  counts: MvtSeamCounts;
+  layers: MvtSeamLayer[];
+  findings: MvtSeamFinding[];
+  findingsTruncated: boolean;
 };
 
 export type MvtDiffCounts = {

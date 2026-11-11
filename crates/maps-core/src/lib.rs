@@ -24,6 +24,7 @@ pub mod terrain;
 mod tileset;
 mod tileset_diff;
 mod tileset_qa;
+mod tileset_seam;
 mod vector_bucket;
 mod vector_tile;
 pub use temporal::{
@@ -40,6 +41,11 @@ pub use tileset_diff::{
 pub use tileset_qa::{
     MvtLayerInspection, MvtTileInspection, TILESET_QA_MAX_PROPERTY_KEYS, TilesetCoverageAudit,
     TilesetCoverageError, TilesetZoomCoverage, audit_tileset_coverage, inspect_mvt_tile,
+};
+pub use tileset_seam::{
+    MvtSeam, MvtSeamCounts, MvtSeamEdge, MvtSeamError, MvtSeamFinding, MvtSeamFindingKind,
+    MvtSeamLayer, MvtSeamSide, MvtSeamTolerance, TILESET_SEAM_MAX_FINDING_PROPERTIES,
+    check_mvt_seam,
 };
 
 use std::collections::BTreeMap;

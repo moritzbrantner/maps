@@ -448,6 +448,39 @@ pub fn diff_mvt_tiles_for_js(
     )
 }
 
+/// Tileset QA (#276): seam continuity across the shared edge of two adjacent tiles. `edge` is
+/// `"east"`, `"antimeridian"` (the eastern neighbour across it) or `"south"`: where the second
+/// tile lies relative to the first.
+#[wasm_bindgen(js_name = checkMvtSeam)]
+pub fn check_mvt_seam_for_js(
+    first: &[u8],
+    second: &[u8],
+    edge: &str,
+    slack_units: f64,
+    offset_window_units: f64,
+    sample_limit: u32,
+) -> Result<JsValue, JsValue> {
+    let edge = match edge {
+        "east" => maps_core::MvtSeamEdge::East,
+        "antimeridian" => maps_core::MvtSeamEdge::Antimeridian,
+        "south" => maps_core::MvtSeamEdge::South,
+        _ => return Err(to_js_error("seam edge must be east, antimeridian or south")),
+    };
+    encode_json_compatible(
+        &maps_core::check_mvt_seam(
+            first,
+            second,
+            edge,
+            maps_core::MvtSeamTolerance {
+                slack_units,
+                offset_window_units,
+            },
+            sample_limit as usize,
+        )
+        .map_err(to_js_error)?,
+    )
+}
+
 /// Tileset QA (#276): `[west, south, east, north]` of a canonical Web Mercator tile.
 #[wasm_bindgen(js_name = tileLngLatBounds)]
 pub fn tile_lng_lat_bounds_for_js(z: u8, x: u32, y: u32) -> Result<Vec<f64>, JsValue> {

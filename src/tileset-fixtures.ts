@@ -70,3 +70,23 @@ export function createFixtureRevisionTileset(revision: "r1" | "r2", baseUrl = "/
       "scripts/tileset-revision-fixture.mjs; synthetic CC0 revisions of one source, not geographic data",
   };
 }
+
+/**
+ * One seeded synthetic world cut into tiles for Tile seam QA (#276): `clean` keeps every seam
+ * continuous (64-unit buffer), `defects` breaks four on purpose (clipped at the tile edge). See
+ * `scripts/tileset-seam-fixture.mjs`.
+ */
+export function createFixtureSeamsTileset(
+  variant: "clean" | "defects",
+  baseUrl = "/",
+): MapsTileset {
+  return {
+    ...createFixtureTileset("a", variant, baseUrl),
+    sourceId: "fixture-seams",
+    maxZoom: 1,
+    attribution: "Maps tile seam fixture · CC0",
+    transport: { kind: "pmtiles", url: `${baseUrl}tilesets/fixture-seams-${variant}.pmtiles` },
+    provenance:
+      "scripts/tileset-seam-fixture.mjs; one seeded synthetic CC0 world cut into tiles, not geographic data",
+  };
+}

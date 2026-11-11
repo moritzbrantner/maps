@@ -10,6 +10,10 @@
 //   bun scripts/tileset-qa.ts diff --base-manifest a.json --base-archive a.pmtiles \
 //     --candidate-manifest b.json --candidate-archive b.pmtiles
 //
+// Seams: lines and polygons across the shared edges of adjacent tiles (`maps-tileset-seams-v1`).
+//   bun scripts/tileset-qa.ts seams --known fixture-seams-defects
+//   bun scripts/tileset-qa.ts seams --manifest tileset.json --archive tiles.pmtiles --mode full
+//
 // A manifest file is a Maps Tileset manifest, optionally with `archiveRef: { sha256, bytes }`.
 // Exit status: 0 passed, 1 failed, 2 inconclusive, 3 usage or runtime error.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -28,6 +32,12 @@ import {
   type TilesetDiffArtifact,
   type TilesetDiffLimits,
 } from "./tileset-qa/diff.ts";
+import {
+  runTilesetSeams,
+  type TilesetSeamsArtifact,
+  type TilesetSeamsLimits,
+  type TilesetSeamsTolerance,
+} from "./tileset-qa/seams.ts";
 import { knownComparisons, knownTilesets } from "./tileset-qa/known.ts";
 import {
   loadTilesetQaKernel,
@@ -49,6 +59,10 @@ export type TilesetQaMeasurement = {
 
 export type TilesetQaRun = { artifact: TilesetQaArtifact; measurement: TilesetQaMeasurement };
 export type TilesetDiffRun = { artifact: TilesetDiffArtifact; measurement: TilesetQaMeasurement };
+export type TilesetSeamsRun = {
+  artifact: TilesetSeamsArtifact;
+  measurement: TilesetQaMeasurement;
+};
 
 type ArchiveTarget = {
   manifest: unknown;
@@ -149,6 +163,50 @@ export async function compareArchives(options: {
   }
 }
 
+/** Check the seams of one archive; it is hashed by streaming, then range-read. */
+export async function checkSeams(
+  options: Pick<ArchiveTarget, "manifest" | "archive" | "fixtureId"> & {
+    mode?: TilesetQaMode;
+    seed?: number;
+    limits?: Partial<TilesetSeamsLimits>;
+    tolerance?: Partial<TilesetSeamsTolerance>;
+    wasmDirectory?: string;
+    signal?: AbortSignal;
+  },
+): Promise<TilesetSeamsRun> {
+  const kernel = await loadTilesetQaKernel(options.wasmDirectory);
+  const opened = performance.now();
+  const archive = await openArchiveFile(options.archive);
+  const hashed = performance.now();
+  try {
+    const artifact = await runTilesetSeams({
+      manifest: options.manifest,
+      archive,
+      kernel,
+      pmtilesReaderVersion: pmtilesReaderVersion(),
+      fixtureId: options.fixtureId ?? null,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(options.seed === undefined ? {} : { seed: options.seed }),
+      ...(options.limits ? { limits: options.limits } : {}),
+      ...(options.tolerance ? { tolerance: options.tolerance } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    return {
+      artifact,
+      measurement: {
+        hashMs: hashed - opened,
+        checksMs: performance.now() - hashed,
+        rangeReads: archive.io.reads,
+        rangeBytes: archive.io.bytes,
+        archiveBytes: archive.bytes,
+        peakRssBytes: process.resourceUsage().maxRSS * 1024,
+      },
+    };
+  } finally {
+    await archive.close();
+  }
+}
+
 /** A known fixture's manifest, archive path and content pin. */
 export function knownTarget(fixtureId: string): ArchiveTarget | null {
   const known = knownTilesets.find((entry) => entry.fixtureId === fixtureId);
@@ -187,7 +245,10 @@ function usage(message: string): never {
       `       bun scripts/tileset-qa.ts diff (--comparison <id> | --base-known <id> --candidate-known <id>\n` +
       `  | --base-manifest <json> --base-archive <pmtiles> --candidate-manifest <json> --candidate-archive <pmtiles>)\n` +
       `  [--mode sampled|full] [--seed <n>] [--sample <n>] [--output <json>] [--measure] [--wasm <dir>]\n` +
-      `known: ${knownTilesets.map((known) => known.fixtureId).join(", ")}\n` +
+      `       bun scripts/tileset-qa.ts seams (--known <fixture-id> | --manifest <json> --archive <pmtiles>)\n` +
+      `  [--mode sampled|full] [--seed <n>] [--sample <n>] [--slack <units>] [--offset-window <units>]\n` +
+      `  [--output <json>] [--measure] [--wasm <dir>]\n` +
+      `known:${knownTilesets.map((known) => known.fixtureId).join(", ")}\n` +
       `comparisons: ${knownComparisons.map((known) => known.comparisonId).join(", ")}`,
   );
   process.exit(3);
@@ -239,10 +300,14 @@ if (import.meta.main) {
       measure: { type: "boolean" },
       "pmtiles-cli": { type: "string" },
       wasm: { type: "string" },
+      slack: { type: "string" },
+      "offset-window": { type: "string" },
     },
   });
   const command = positionals[0] ?? "audit";
-  if (command !== "audit" && command !== "diff") usage(`unknown command ${command}`);
+  if (command !== "audit" && command !== "diff" && command !== "seams") {
+    usage(`unknown command ${command}`);
+  }
   if (values.mode !== undefined && values.mode !== "sampled" && values.mode !== "full") {
     usage("--mode must be sampled or full");
   }
@@ -267,8 +332,41 @@ if (import.meta.main) {
     if (values.measure) console.error(JSON.stringify(measurement));
     process.exit(status === "passed" ? 0 : status === "failed" ? 1 : 2);
   };
+  const units = (name: "slack" | "offset-window") => {
+    const value = values[name];
+    if (value === undefined) return undefined;
+    if (!/^\d+(\.\d+)?$/.test(value)) usage(`--${name} must be a non-negative number`);
+    return Number(value);
+  };
   try {
-    if (command === "diff") {
+    if (command === "seams") {
+      let target: ArchiveTarget | null;
+      if (values.known) {
+        target = knownTarget(values.known);
+        if (!target) usage(`unknown fixture ${values.known}`);
+      } else if (values.manifest && values.archive) {
+        target = readManifestFile(values.manifest, values.archive);
+      } else {
+        usage("name a known fixture, or a manifest and an archive");
+      }
+      const slackUnits = units("slack");
+      const offsetWindowUnits = units("offset-window");
+      const { artifact, measurement } = await checkSeams({
+        manifest: target.manifest,
+        archive: target.archive,
+        fixtureId: target.fixtureId ?? null,
+        ...(values.mode ? { mode: values.mode as TilesetQaMode } : {}),
+        ...(seed === undefined ? {} : { seed }),
+        ...(sampleTiles === undefined ? {} : { limits: { samplePairs: sampleTiles } }),
+        ...(values.wasm ? { wasmDirectory: values.wasm } : {}),
+        tolerance: {
+          ...(slackUnits === undefined ? {} : { slackUnits }),
+          ...(offsetWindowUnits === undefined ? {} : { offsetWindowUnits }),
+        },
+      });
+      report(artifact, `Tileset seams ${path.basename(target.archive)}:`);
+      emit(artifact, measurement, artifact.status);
+    } else if (command === "diff") {
       let base: ArchiveTarget | null;
       let candidate: ArchiveTarget | null;
       let comparisonId: string | null = null;
