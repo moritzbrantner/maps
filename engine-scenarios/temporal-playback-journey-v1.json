@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "temporal-playback-journey-v1",
+  "description": "#172 Fast: the public TemporalClusteredMap on flatRuntime=\"maps\" sampling 2,000 moving tracks from one shared Map-Scoped Timeline over a static GeoJSON region grid, with the public timeline controls (e2e/fixtures/temporal-playback-journey.tsx).",
+  "fixture": {
+    "page": "/e2e/fixtures/temporal-playback-journey.html",
+    "layers": ["static-regions", "moving-points"],
+    "tracks": {
+      "generator": "europe-courier-tracks-v1",
+      "trackCount": 2000,
+      "keyframesPerTrack": 24,
+      "timeRange": [0, 1000],
+      "admittedLate": "every tenth track",
+      "removedEarly": "every tenth track, offset five, with an invisible final keyframe",
+      "gaps": "every seventh track, offset three, with an invisible middle keyframe",
+      "sampler": "Rust/WASM MapsTemporalPointIndex once ready"
+    },
+    "staticRegions": { "generator": "static-region-grid-v1", "polygons": 48 },
+    "clock": { "shared": true, "playbackRate": 50, "loop": true },
+    "build": "vite production build of the fixture with the built dist/wasm package"
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "initialCamera": { "bearing": 0, "center": [10, 50], "pitch": 0, "zoom": 4.4 },
+  "journey": [
+    { "phase": "load", "operations": ["navigate until the Map View is presented and Rust samples the tracks"] },
+    { "phase": "idle", "operations": ["60 paused animation frames"] },
+    { "phase": "playback", "operations": ["play for 180 animation frames", "pause"] },
+    { "phase": "seek", "operations": ["8 clock seeks, each awaited until sampled and presented"] },
+    { "phase": "scrub", "operations": ["drag the public timeline slider end to end in 40 pointer moves"] },
+    { "phase": "camera-pan-paused", "operations": ["drag the Map View 240x80 px in 24 steps"] },
+    { "phase": "camera-pan-playing", "operations": ["play", "the same drag", "pause"] },
+    { "phase": "source-replace", "operations": ["3 track source replacements, each awaited until sampled and presented"] },
+    { "phase": "unrelated-commits", "operations": ["20 unrelated React commits"] },
+    { "phase": "teardown", "operations": ["3 unmount/remount cycles of the Map View on the same clock"] }
+  ],
+  "observations": [
+    "per-phase-temporal-work",
+    "per-phase-runtime-work",
+    "bridge-bytes",
+    "frame-intervals",
+    "long-tasks",
+    "slow-input-events",
+    "input-to-presented-latency",
+    "js-heap-after-gc"
+  ],
+  "runtimePhases": [
+    "idle",
+    "playback",
+    "seek",
+    "scrub",
+    "camera-pan-paused",
+    "camera-pan-playing",
+    "source-replace",
+    "unrelated-commits",
+    "teardown"
+  ]
+}

@@ -7,22 +7,26 @@
 // (per-phase frame intervals, long tasks, heat/scalar work, input → presented-surface latency
 // and JS heap) to MAPS_HEAT_SCALAR_OBSERVATION when that path is set.
 
-import { spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { createServer, type Server } from "node:http";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 
 import type { HeatLayerWorkTotals } from "../src/heat-layer-work.ts";
+import {
+  buildFixtureSite,
+  createHeapSampler,
+  installJourneyTiming,
+  readJourneyTiming,
+  resetJourneyTiming,
+  serveStatic,
+  summarize,
+  summarizeLongTasks,
+  type HeapSample,
+  type Summary,
+} from "./browser-journey-support.ts";
 
 const rootDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -35,21 +39,12 @@ const scenario = JSON.parse(
   ),
 );
 const FIXTURE = "e2e/fixtures/heat-scalar-journey.html";
-const viteEntry = path.join(rootDir, "node_modules", "vite", "bin", "vite.js");
-const BUILD_TIMEOUT_MS = 180_000;
 const STAGE_TIMEOUT_MS = 30_000;
 const SEEKS = [10, 9, 8, 7, 6, 5];
 const FIELD_UPDATES = [1, 2, 3, 4, 5, 6];
 const STYLE_VARIANTS = [1, 0, 1, 0];
 const TEARDOWN_CYCLES = 3;
 const ORIENT_FRAMES = 60;
-
-type Summary = {
-  count: number;
-  max: number | null;
-  p50: number | null;
-  p95: number | null;
-};
 
 type WorkDelta = {
   data: Record<string, number>;
@@ -90,11 +85,6 @@ declare global {
       totals(): HeatLayerWorkTotals;
       updateField(step: number): void;
     };
-    heatScalarTiming?: {
-      frames: number[];
-      longTasks: { duration: number; startTime: number }[];
-      reset(): void;
-    };
   }
 }
 
@@ -105,7 +95,7 @@ export async function run({ page }: { page: Page }) {
   let server: Server | undefined;
   try {
     const outDir = path.join(tempRoot, "site");
-    buildJourneySite(tempRoot, outDir);
+    buildFixtureSite(tempRoot, outDir, FIXTURE);
     server = await serveStatic(outDir);
     const address = server.address();
     if (!address || typeof address === "string")
@@ -125,103 +115,15 @@ export async function run({ page }: { page: Page }) {
   }
 }
 
-/** A production build of the journey fixture, served with the built WASM package. */
-function buildJourneySite(tempRoot: string, outDir: string) {
-  const config = path.join(tempRoot, "vite.heat-scalar.config.mjs");
-  writeFileSync(
-    config,
-    `import base from ${JSON.stringify(path.join(rootDir, "vite.config.ts"))};
-export default {
-  ...base,
-  configFile: false,
-  root: ${JSON.stringify(rootDir)},
-  logLevel: "warn",
-  build: {
-    ...base.build,
-    emptyOutDir: true,
-    outDir: ${JSON.stringify(outDir)},
-    rollupOptions: { input: { journey: ${JSON.stringify(path.join(rootDir, FIXTURE))} } },
-  },
-};
-`,
-  );
-  const result = spawnSync("bun", [viteEntry, "build", "--config", config], {
-    cwd: rootDir,
-    encoding: "utf8",
-    timeout: BUILD_TIMEOUT_MS,
-  });
-  if (result.error || result.status !== 0) {
-    throw new Error(
-      `journey build failed\n${result.error ?? ""}\n${result.stdout}\n${result.stderr}`,
-    );
-  }
-  // The measured package is the built dist/wasm artifact, never a stale public/ copy.
-  mkdirSync(path.join(outDir, "wasm"), { recursive: true });
-  for (const file of ["maps_wasm.js", "maps_wasm_bg.wasm"]) {
-    copyFileSync(
-      path.join(rootDir, "dist", "wasm", file),
-      path.join(outDir, "wasm", file),
-    );
-  }
-}
-
-const CONTENT_TYPES: Record<string, string> = {
-  ".css": "text/css",
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".json": "application/json",
-  ".wasm": "application/wasm",
-};
-
-function serveStatic(directory: string) {
-  const server = createServer((request, response) => {
-    const pathname = decodeURIComponent(
-      new URL(request.url ?? "/", "http://local").pathname,
-    );
-    const file = path.join(directory, pathname);
-    if (!file.startsWith(directory)) {
-      response.writeHead(403).end();
-      return;
-    }
-    try {
-      const body = readFileSync(file);
-      response.writeHead(200, {
-        "content-type":
-          CONTENT_TYPES[path.extname(file)] ?? "application/octet-stream",
-      });
-      response.end(body);
-    } catch {
-      response.writeHead(404).end();
-    }
-  });
-  return new Promise<Server>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve(server));
-  });
-}
-
-type Heap = (
-  label: string,
-) => Promise<{ jsHeapUsedBytes: number | null; label: string }>;
+type Heap = (label: string) => Promise<HeapSample>;
 
 type Lane = "control" | "heat";
 
 async function profileJourney(page: Page, origin: string) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Performance.enable");
-  const heap: Heap = async (label) => {
-    await cdp.send("HeapProfiler.collectGarbage");
-    const { metrics } = (await cdp.send("Performance.getMetrics")) as {
-      metrics: { name: string; value: number }[];
-    };
-    const used = metrics.find(
-      (metric) => metric.name === "JSHeapUsedSize",
-    )?.value;
-    return { label, jsHeapUsedBytes: typeof used === "number" ? used : null };
-  };
+  const heap: Heap = await createHeapSampler(page);
 
   // Long tasks from navigation on, so page load and the first surfaces are attributed too.
-  await page.addInitScript(installTiming);
+  await page.addInitScript(installJourneyTiming);
   // The control lane is the same Map View without its Heat Layers: the camera phases of the two
   // lanes differ only by the heat/scalar surfaces.
   const control = await profileLane(page, origin, "control", heap);
@@ -283,7 +185,7 @@ async function profileLane(page: Page, origin: string, lane: Lane, heap: Heap) {
     );
   await ready(0);
   const load = await page.evaluate(() => ({
-    longTasks: window.heatScalarTiming!.longTasks,
+    longTasks: window.mapsJourneyTiming!.longTasks.map((task) => task.duration),
     presentedMs: performance.now(),
     work: window.heatScalarJourney.totals(),
   }));
@@ -299,7 +201,7 @@ async function profileLane(page: Page, origin: string, lane: Lane, heap: Heap) {
     action: (commits: Commit[]) => Promise<unknown>,
   ) => {
     const before = await totals(page);
-    await page.evaluate(() => window.heatScalarTiming!.reset());
+    await resetJourneyTiming(page);
     const started = await page.evaluate((label) => {
       performance.mark(`${label}:start`);
       return performance.now();
@@ -314,21 +216,12 @@ async function profileLane(page: Page, origin: string, lane: Lane, heap: Heap) {
       },
       { label: `maps:heat-scalar:${lane}:${name}`, start: started },
     );
-    const timing = await page.evaluate(() => ({
-      frames: window.heatScalarTiming!.frames,
-      longTasks: window.heatScalarTiming!.longTasks.map(
-        (task) => task.duration,
-      ),
-    }));
+    const { frameIntervalsMs, longTasks } = await readJourneyTiming(page);
     phases[name] = {
       commits,
       durationMs,
-      frameIntervalsMs: summarize(timing.frames),
-      longTasks: {
-        count: timing.longTasks.length,
-        maxMs: Math.max(0, ...timing.longTasks),
-        totalMs: timing.longTasks.reduce((sum, value) => sum + value, 0),
-      },
+      frameIntervalsMs,
+      longTasks,
       work: delta(before, await totals(page)),
     };
   };
@@ -467,11 +360,7 @@ async function profileLane(page: Page, origin: string, lane: Lane, heap: Heap) {
   return {
     backend,
     load: {
-      longTasks: {
-        count: load.longTasks.length,
-        maxMs: Math.max(0, ...load.longTasks.map((task) => task.duration)),
-        totalMs: load.longTasks.reduce((sum, task) => sum + task.duration, 0),
-      },
+      longTasks: summarizeLongTasks(load.longTasks),
       // From navigation start until the Map View (heat lane: both surfaces) is presented.
       presentedMs: load.presentedMs,
       work: load.work,
@@ -627,47 +516,3 @@ function settleFrames(page: Page, frames = 4) {
   );
 }
 
-/** rAF intervals and long tasks, in-page from navigation on. */
-function installTiming() {
-  const timing = {
-    frames: [] as number[],
-    longTasks: [] as { duration: number; startTime: number }[],
-    reset() {
-      timing.frames = [];
-      timing.longTasks = [];
-    },
-  };
-  window.heatScalarTiming = timing;
-  let previous: number | null = null;
-  const tick = (now: number) => {
-    if (previous !== null) timing.frames.push(now - previous);
-    previous = now;
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-  try {
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        timing.longTasks.push({
-          duration: entry.duration,
-          startTime: entry.startTime,
-        });
-      }
-    }).observe({ buffered: true, type: "longtask" });
-  } catch {
-    // Long-task timing is unavailable; the profiler trace still records them.
-  }
-}
-
-function summarize(values: number[]): Summary {
-  if (values.length === 0) return { count: 0, max: null, p50: null, p95: null };
-  const sorted = [...values].sort((a, b) => a - b);
-  const at = (q: number) =>
-    sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
-  return {
-    count: sorted.length,
-    max: sorted.at(-1)!,
-    p50: at(0.5),
-    p95: at(0.95),
-  };
-}

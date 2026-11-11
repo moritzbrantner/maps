@@ -16,7 +16,7 @@ import { mergeTemporalMapTimeRanges } from "./temporal-core";
 import { createTemporalMapPlaybackIndex, type TemporalMapTrack } from "./temporal-points";
 import {
   ensureMapsTemporalWasm,
-  getMapsTemporalRuntimeVersion,
+  getMapsTemporalWasmRuntime,
   subscribeMapsTemporalRuntime,
 } from "./temporal-points-wasm";
 import { createTemporalMapTracksFromGeoJson, type TemporalGeoJsonTrackOptions } from "./temporal-geojson";
@@ -66,18 +66,20 @@ export function useTemporalMapState<TProperties extends Record<string, unknown>>
   );
   // Rust samples moving tracks once its runtime is ready; until then the TypeScript reference
   // samples the same positions, so the rebuild on a runtime change is not observable.
-  const temporalRuntimeVersion = useSyncExternalStore(
+  // Only the installed runtime selects the authority: status changes that leave it in place
+  // (idle → loading → unavailable) must not re-prepare the tracks (#172 phase E).
+  const temporalRuntime = useSyncExternalStore(
     subscribeMapsTemporalRuntime,
-    getMapsTemporalRuntimeVersion,
-    getMapsTemporalRuntimeVersion,
+    getMapsTemporalWasmRuntime,
+    getMapsTemporalWasmRuntime,
   );
   useEffect(() => {
     void ensureMapsTemporalWasm();
   }, []);
   const playbackIndex = useMemo(
-    // The runtime version selects the sampling authority.
+    // The installed runtime selects the sampling authority.
     () => createTemporalMapPlaybackIndex(resolvedTracks),
-    [resolvedTracks, temporalRuntimeVersion],
+    [resolvedTracks, temporalRuntime],
   );
   const overlaySource = useMemo(
     () =>
@@ -110,15 +112,21 @@ export function useTemporalMapState<TProperties extends Record<string, unknown>>
     [overlayPlaybackIndex, playbackIndex],
   );
   const { clock, snapshot } = useBoundMapScopedTimeline(timeline, timeRange, compatibility);
-  const { activeTime } = snapshot;
-  const hasData = timeRange !== null;
+  // A shared clock has no time range until this map's range is registered (after the first
+  // render, e.g. on a remount); its `activeTime` is then a placeholder, not the map-scoped
+  // time, so nothing is sampled until the clock has a range (#172 phase E).
+  const sampledTime =
+    timeRange !== null && snapshot.timeRange !== null ? snapshot.activeTime : null;
   const points = useMemo(
-    () => (hasData ? playbackIndex.getPointsAtTime(activeTime) : []),
-    [activeTime, hasData, playbackIndex],
+    () => (sampledTime === null ? [] : playbackIndex.getPointsAtTime(sampledTime)),
+    [playbackIndex, sampledTime],
   );
   const geoJsonOverlayCollection = useMemo(
-    () => overlayPlaybackIndex?.getFeatureCollectionAtTime(activeTime) ?? null,
-    [activeTime, overlayPlaybackIndex],
+    () =>
+      sampledTime === null
+        ? null
+        : (overlayPlaybackIndex?.getFeatureCollectionAtTime(sampledTime) ?? null),
+    [overlayPlaybackIndex, sampledTime],
   );
 
   return { clock, geoJsonOverlayCollection, points, resolvedTracks, snapshot };
