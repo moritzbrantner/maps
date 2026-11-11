@@ -23,6 +23,9 @@ try {
     "dist/wasm/maps_wasm.js",
     "dist/wasm/maps_wasm.d.ts",
     "dist/wasm/maps_wasm_bg.wasm",
+    "dist/wasm/maps_wasm_core.js",
+    "dist/wasm/maps_wasm_core.d.ts",
+    "dist/wasm/maps_wasm_core_bg.wasm",
   ];
 
   for (const requiredFile of requiredFiles) {
@@ -116,7 +119,10 @@ const DEFAULT_OPTIONS = {
 const CLUSTER_CENTROID_TOLERANCE_DEGREES = 2e-5;
 let maxClusterCentroidDeviationDegrees = 0;
 
-window.mapsWasmEvidence = (async () => {
+// "?map-only" loads just the Map View, so its WASM module requests can be observed (#305).
+window.mapsWasmEvidence = new URLSearchParams(location.search).has("map-only")
+  ? null
+  : (async () => {
   await init();
 
   const canonical = [
@@ -637,6 +643,57 @@ function roundTiming(value) {
     console.log(
       `Packed first-party Map View ready (base renderer: ${await baseCanvas.getAttribute("data-map-base-renderer")}).`,
     );
+
+    // #305: the default package self-references split by capability. Without WebGPU the Map View
+    // fetches only the WebGPU-free core module; with WebGPU only the full renderer module.
+    for (const webGpu of [false, true]) {
+      const context = await browser.newContext();
+      try {
+        if (!webGpu) {
+          await context.addInitScript(() =>
+            Object.defineProperty(navigator, "gpu", { value: undefined }),
+          );
+        }
+        const loadingPage = await context.newPage();
+        const modules = new Set();
+        const errors = [];
+        loadingPage.on("pageerror", (error) => errors.push(String(error)));
+        loadingPage.on("request", (request) => {
+          const match = /\/(maps_wasm(?:_core)?_bg)[^/]*\.wasm(?:\?|$)/.exec(request.url());
+          if (match) modules.add(match[1]);
+        });
+        await loadingPage.goto("http://127.0.0.1:4187/?map-only");
+        await loadingPage.locator('[data-map-runtime="maps"][data-map-ready="true"]').waitFor();
+        await loadingPage.waitForFunction(() =>
+          /^(wgpu|canvas2d)$/.test(
+            document.querySelector('canvas[data-flat-runtime="maps"]')?.dataset.mapBaseRenderer ??
+              "",
+          ),
+        );
+        const renderer = await loadingPage
+          .locator('canvas[data-flat-runtime="maps"]')
+          .getAttribute("data-map-base-renderer");
+        // Headless Chromium may not expose WebGPU at all; the page's own probe decides.
+        const gpuExposed = await loadingPage.evaluate(() => navigator.gpu != null);
+        const expected = gpuExposed ? "maps_wasm_bg" : "maps_wasm_core_bg";
+        if ([...modules].join(",") !== expected) {
+          throw new Error(
+            `packed Map View (WebGPU ${gpuExposed ? "exposed" : "hidden"}) fetched [${[...modules].join(", ")}], expected only ${expected}`,
+          );
+        }
+        if (!webGpu && renderer !== "canvas2d") {
+          throw new Error(`packed Map View without WebGPU rendered with ${renderer}`);
+        }
+        if (errors.length > 0) {
+          throw new Error(`packed Map View reported errors:\n${errors.join("\n")}`);
+        }
+        console.log(
+          `Packed Map View (WebGPU ${gpuExposed ? "exposed" : "hidden"}) fetched only ${expected} (base renderer: ${renderer}).`,
+        );
+      } finally {
+        await context.close();
+      }
+    }
   } finally {
     await browser.close();
   }

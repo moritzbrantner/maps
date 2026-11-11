@@ -69,7 +69,7 @@ export function initializeMapsTemporalWasm(packageName?: string): Promise<boolea
     setTemporalRuntimeState(temporalRuntime, "loading");
   }
 
-  const initialization = importMapsWasmModule<MapsTemporalWasmModule>(packageName).then(
+  const initialization = importMapsWasmModule<MapsTemporalWasmModule>("core", packageName).then(
     (wasmModule) => {
       const Constructor = wasmModule.MapsTemporalPointIndex;
 

@@ -1,5 +1,5 @@
 import type { IndexedMapPoint, MapPoint, MapPointFilter } from "./aggregation";
-import { DEFAULT_MAPS_WASM_PACKAGE, importMapsWasmModule } from "./aggregation-wasm";
+import { importMapsWasmModule, type MapsWasmPackage } from "./aggregation-wasm";
 import { createScalarFieldMask, type ScalarFieldMask } from "./scalar-field-mask";
 
 const EARTH_RADIUS_METERS = 6_371_008.8;
@@ -136,13 +136,13 @@ let installedScalarFieldLoadAttempt = 0;
  * directly since it started). A failed attempt never replaces an installed runtime; it records
  * its load error only while no runtime is installed and it is the newest attempt.
  */
-export async function initializeMapsScalarFieldWasm(packageName = DEFAULT_MAPS_WASM_PACKAGE) {
+export async function initializeMapsScalarFieldWasm(packageName?: MapsWasmPackage) {
   const attempt = ++latestScalarFieldLoadAttempt;
   const epoch = scalarFieldInstallEpoch;
   let runtime: MapsScalarFieldWasmRuntime;
 
   try {
-    const wasmModule = await importMapsWasmModule<MapsScalarFieldWasmModule>(packageName);
+    const wasmModule = await importMapsWasmModule<MapsScalarFieldWasmModule>("core", packageName);
     const createGrid = wasmModule.createScalarFieldGrid;
 
     if (!createGrid) {

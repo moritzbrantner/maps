@@ -28,6 +28,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
+      "@moritzbrantner/maps/wasm/core": fileURLToPath(
+        new URL("./src/maps-wasm-unbuilt.ts", import.meta.url),
+      ),
       "@moritzbrantner/maps/wasm": fileURLToPath(
         new URL("./src/maps-wasm-unbuilt.ts", import.meta.url),
       ),

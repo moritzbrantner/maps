@@ -82,7 +82,7 @@ type WasmModule = {
     };
   };
 };
-const wasm = await importMapsWasmModule<WasmModule>();
+const wasm = await importMapsWasmModule<WasmModule>("core");
 await wasm.default();
 const runtimePrototype = wasm.MapsFlatRasterRuntime.prototype;
 const originalFrame = runtimePrototype.framePacked;

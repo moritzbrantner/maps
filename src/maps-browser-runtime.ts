@@ -12,6 +12,7 @@ import {
   type MapsVectorBasemapStyle,
 } from "./maps-tileset-style";
 import { decodeShortbreadTilePixels } from "./vector-tile-wasm";
+import { isMapsWebGpuAvailable, preferMapsWasmRendererModule } from "./aggregation-wasm";
 import { paintShortbreadTile } from "./shortbread-tile-paint";
 import type { ShortbreadTilePixels } from "./shortbread-tile-pixels";
 import { createMapsPointerGesture } from "./canvas-flat-gesture";
@@ -320,6 +321,10 @@ export function createMapsBrowserRuntime(
   const tileImageLoader = options.createTileImageLoader?.();
   const maxBounds = config.maxBounds ? ([...config.maxBounds] as MapBounds) : undefined;
   const wasmPackage = config.wasmPackage;
+  // A WebGPU Map View loads the full renderer module; declare it before any loader starts so
+  // the flat runtime and other core loaders share that one module instead of also fetching
+  // the core module (#305). Without WebGPU every loader uses the smaller core module.
+  if (isMapsWebGpuAvailable()) preferMapsWasmRendererModule();
   const renderMargin = normalizeRenderMargin(config.renderMargin);
   const surfaceTranslation = { x: 0, y: 0 };
   let cancelled = false;

@@ -65,6 +65,10 @@
       "types": "./dist/wasm/maps_wasm.d.ts",
       "import": "./dist/wasm/maps_wasm.js"
     },
+    "./wasm/core": {
+      "types": "./dist/wasm/maps_wasm_core.d.ts",
+      "import": "./dist/wasm/maps_wasm_core.js"
+    },
     "./package.json": "./package.json",
     "./maplibre.css": "./maplibre.css",
     "./styles.css": "./styles.css",

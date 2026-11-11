@@ -28,8 +28,11 @@ vi.mock("./aggregation-wasm", async (importOriginal) => {
 
   return {
     ...actual,
-    importMapsWasmModule: (packageName?: string) => {
-      if (!wasmImports.controlled) return actual.importMapsWasmModule(packageName);
+    importMapsWasmModule: (
+      capability: import("./aggregation-wasm").MapsWasmCapability,
+      packageName?: string,
+    ) => {
+      if (!wasmImports.controlled) return actual.importMapsWasmModule(capability, packageName);
       return new Promise((resolve, reject) => {
         wasmImports.queued.push({ reject, resolve });
       });

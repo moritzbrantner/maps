@@ -112,7 +112,7 @@ export type TilesetCoverageAudit = {
   outOfZoomRangeTiles: [number, number, number][];
 };
 
-/** The Rust/WASM kernel. The built `maps_wasm` module satisfies this shape directly. */
+/** The Rust/WASM kernel. The built WebGPU-free `maps_wasm_core` module (and the full `maps_wasm` module) satisfy this shape directly. */
 export type TilesetQaKernel = {
   inspectMvtTile(bytes: Uint8Array): MvtTileInspection;
   auditTilesetCoverage(

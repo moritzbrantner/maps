@@ -58,7 +58,7 @@ try {
   collectTargets(manifest.main, targets);
   collectTargets(manifest.types, targets);
   collectTargets(manifest.exports, targets);
-  targets.push("./dist/wasm/maps_wasm_bg.wasm");
+  targets.push("./dist/wasm/maps_wasm_bg.wasm", "./dist/wasm/maps_wasm_core_bg.wasm");
 
   const missing = targets
     .map((target) => (target.includes("*") ? path.dirname(target) : target))

@@ -84,7 +84,7 @@ export async function observeNativeMap() {
       ): number;
       };
     };
-  }>();
+  }>("renderer");
   await wasm.default();
   const runtime = wasm.MapsFlatRasterRuntime.prototype;
   const originalFrame = runtime.framePacked;

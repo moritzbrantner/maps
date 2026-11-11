@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseNpmPackResult } from "./npm-pack-result.ts";
@@ -32,11 +34,16 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // #172 phase E adds the moving-track work counters (`src/temporal-work.ts`, kept by every
 // prepared playback index): +1,514 bytes of JavaScript and declarations, measured against
 // main; the budget grows by the same amount.
+// #305 re-measures main cbe2188: 1,069,958 bytes without the WASM runtime (#415, #427 and #428
+// had grown it past the budget unnoticed; package validation runs on dispatch only). The
+// WebGPU-free core module then adds its wasm-bindgen glue and declarations (54,168 + 10,857 +
+// 4,687 bytes) and the capability loaders and docs 1,559 bytes: 1,141,229 bytes, 4 more entries.
+// Both WASM binaries stay report-only (#268) and are excluded here.
 const budgets = {
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSizeWithoutWasm: 1_057_861,
+  unpackedSizeWithoutWasm: 1_141_500,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
@@ -64,11 +71,13 @@ const stylesheet = files.find((file) => file.path === "styles.css");
 const fullStylesheet = files.find((file) => file.path === "styles.full.css");
 const mapLibreStylesheet = files.find((file) => file.path === "maplibre.css");
 const wasmRuntime = files.find((file) => file.path === "dist/wasm/maps_wasm_bg.wasm");
+const wasmCoreRuntime = files.find((file) => file.path === "dist/wasm/maps_wasm_core_bg.wasm");
 const requiredFiles = [
   "maplibre.css",
   "styles.css",
   "styles.full.css",
   "dist/wasm/maps_wasm_bg.wasm",
+  "dist/wasm/maps_wasm_core_bg.wasm",
   "README.md",
   "package.json",
 ];
@@ -82,9 +91,11 @@ for (const filePath of requiredFiles) {
 
 checkPresent("compressed package size", packageInfo?.size);
 checkBudget(
-  "unpacked package size without the WASM runtime",
-  typeof packageInfo?.unpackedSize === "number" && typeof wasmRuntime?.size === "number"
-    ? packageInfo.unpackedSize - wasmRuntime.size
+  "unpacked package size without the WASM runtimes",
+  typeof packageInfo?.unpackedSize === "number" &&
+    typeof wasmRuntime?.size === "number" &&
+    typeof wasmCoreRuntime?.size === "number"
+    ? packageInfo.unpackedSize - wasmRuntime.size - wasmCoreRuntime.size
     : undefined,
   budgets.unpackedSizeWithoutWasm,
   "bytes",
@@ -92,7 +103,8 @@ checkBudget(
 checkBudget("package entry count", files.length, budgets.entryCount, "entries");
 checkBudget("styles.css size", stylesheet?.size, budgets.stylesheetSize, "bytes");
 checkBudget("styles.full.css size", fullStylesheet?.size, budgets.fullStylesheetSize, "bytes");
-checkPresent("Maps WASM runtime size", wasmRuntime?.size);
+checkPresent("Maps WASM renderer runtime size", wasmRuntime?.size);
+checkPresent("Maps WASM core runtime size", wasmCoreRuntime?.size);
 
 console.log("Package size summary:");
 console.log(`- compressed size: ${formatBytes(packageInfo?.size)}`);
@@ -103,7 +115,12 @@ console.log(`- full stylesheet size: ${formatBytes(fullStylesheet?.size)}`);
 console.log(
   `- MapLibre fallback stylesheet size (reported only): ${formatBytes(mapLibreStylesheet?.size)}`,
 );
-console.log(`- Maps WASM runtime size: ${formatBytes(wasmRuntime?.size)}`);
+console.log(
+  `- Maps WASM renderer runtime size (@moritzbrantner/maps/wasm, WebGPU Map Views): ${formatBytes(wasmRuntime?.size)} raw, ${formatBytes(gzipSize(wasmRuntime))} gzip`,
+);
+console.log(
+  `- Maps WASM core runtime size (@moritzbrantner/maps/wasm/core, Canvas2D and data-only): ${formatBytes(wasmCoreRuntime?.size)} raw, ${formatBytes(gzipSize(wasmCoreRuntime))} gzip`,
+);
 
 if (errors.length > 0) {
   console.error("Package size verification failed:");
@@ -127,6 +144,14 @@ function checkBudget(label, actual, max, unit) {
   if (checkPresent(label, actual) && actual > max) {
     errors.push(`${label} is ${actual} ${unit}, above budget ${max} ${unit}`);
   }
+}
+
+// Transfer size of a packed file, as a gzip -9 response (reported only, #305).
+function gzipSize(file) {
+  const filePath = file ? path.join(rootDir, file.path) : null;
+  return filePath && existsSync(filePath)
+    ? gzipSync(readFileSync(filePath), { level: 9 }).length
+    : undefined;
 }
 
 function formatBytes(value) {
