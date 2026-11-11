@@ -919,7 +919,7 @@ dependencies = [
 [[package]]
 name = "three-d-animation"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=db9a53a4aaaad28d5bd0d3fad131fc151953e989#db9a53a4aaaad28d5bd0d3fad131fc151953e989"
+source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=30dc4371666a8c20ae623c6925a39d6a86b7ab2b#30dc4371666a8c20ae623c6925a39d6a86b7ab2b"
 dependencies = [
  "three-d-core",
 ]
@@ -927,7 +927,7 @@ dependencies = [
 [[package]]
 name = "three-d-camera"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=db9a53a4aaaad28d5bd0d3fad131fc151953e989#db9a53a4aaaad28d5bd0d3fad131fc151953e989"
+source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=30dc4371666a8c20ae623c6925a39d6a86b7ab2b#30dc4371666a8c20ae623c6925a39d6a86b7ab2b"
 dependencies = [
  "three-d-animation",
  "three-d-core",
@@ -936,12 +936,12 @@ dependencies = [
 [[package]]
 name = "three-d-core"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=db9a53a4aaaad28d5bd0d3fad131fc151953e989#db9a53a4aaaad28d5bd0d3fad131fc151953e989"
+source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=30dc4371666a8c20ae623c6925a39d6a86b7ab2b#30dc4371666a8c20ae623c6925a39d6a86b7ab2b"
 
 [[package]]
 name = "three-d-projective"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=db9a53a4aaaad28d5bd0d3fad131fc151953e989#db9a53a4aaaad28d5bd0d3fad131fc151953e989"
+source = "git+https://github.com/moritzbrantner/3d-lab.git?rev=30dc4371666a8c20ae623c6925a39d6a86b7ab2b#30dc4371666a8c20ae623c6925a39d6a86b7ab2b"
 dependencies = [
  "three-d-animation",
  "three-d-core",
