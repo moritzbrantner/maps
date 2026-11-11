@@ -266,7 +266,7 @@ the archive's construction: schema drift, changed bytes, missing and
 out-of-range tiles, antimeridian bounds, malformed and truncated archives,
 undecodable tiles, budgets and cancellation.
 
-Revision comparison is part 2, below; tile seam QA is part 3.
+Revision comparison is part 2 and tile seam QA is part 3, both below.
 
 ## Tileset revision diff (#276, part 2)
 
@@ -368,7 +368,95 @@ cancellation. The Atlas cross-source case runs when the archives have been fetch
 `bun scripts/tileset-qa/measure-diff.ts` measures the cost on the Atlas archive (see
 [Feature completion](feature-completion.md)).
 
-Not delivered yet (#276 part 3): tile seam QA.
+## Tile seam QA (#276, part 3)
+
+`bun run qa:tileset -- seams` checks that lines and polygons continue across the shared edges
+of adjacent tiles in one archive, and writes a bounded, deterministic `maps-tileset-seams-v1`
+JSON artifact:
+
+```sh
+bun run qa:tileset -- seams --known fixture-seams-defects
+bun run qa:tileset -- seams --known atlas-liechtenstein --mode full
+bun run qa:tileset -- seams --manifest tileset.json --archive tiles.pmtiles --slack 4 --output seams.json
+```
+
+It reuses part 1's pieces: the upstream `pmtiles` reader, the Map View's manifest validator,
+the directory walk and the seeded per-zoom sample. Seam semantics come from the Rust kernel
+`maps-core::tileset_seam` (WASM `checkMvtSeam`), which decodes both tiles with the runtime
+`decode_mvt_layers`. Run `qa:tileset` as well: missing tiles are part 1's `tile-coverage`
+check, not seams.
+
+**Pairs.** The directory gives every edge-adjacent pair of addressed tiles at each zoom: the
+eastern and the southern neighbour. The eastern neighbour of the last column is the first
+column (`antimeridian`), and a single-tile zoom meets itself there. An edge whose neighbour is
+not addressed is counted (`edge-without-neighbour`, information) and not checked. The default
+`sampled` mode checks 32 pairs chosen by a seeded per-zoom sample; `--mode full` checks all of
+them up to 20,000. A tile is read once and reused by its neighbouring pairs.
+
+**What the kernel compares.** Each tile is examined only at the shared edge, as a fraction of
+its layer extent, so neighbours with different extents compare directly. Features are grouped
+by layer, geometry type and properties; MVT feature IDs are ignored, so a seam never asserts
+feature identity. Points have no seams.
+
+| Finding | Check | Meaning |
+| --- | --- | --- |
+| `line-interrupted` | `line-seams` | a line reaches the edge on one side only |
+| `line-duplicated` | `line-seams` | an unpaired line event coincides with another of the same side (the line is drawn twice) |
+| `line-offset` | `line-seams` | a line continues displaced beyond the tolerance, within the offset window |
+| `polygon-edge-mismatch` | `polygon-seams` | part of the edge is covered by a polygon on one side only |
+
+A line *event* is a crossing of the edge (a buffered tile) or a path end lying on it (a tile
+clipped exactly at its edge); touching the edge and turning back, or running along it, is not
+an event. Polygon coverage is even-odd over all rings, so a hole crossing the edge leaves a
+gap and winding does not matter. When a tile's layer reaches beyond its edge, the tile also
+shows the strip just inside its neighbour, and each strip is compared as both tiles see it:
+a polygon whose boundary lies exactly on the edge is not a seam. When both tiles are clipped
+at the edge, only continuity across it can be compared, so a polygon or line that genuinely
+ends exactly on such an edge is reported. Across the antimeridian only continuity is
+compared, because producers rarely wrap their buffer. Buffer corners beyond the shared edge
+belong to other pairs and are ignored.
+
+**Tolerance.** Every vertex carries ±0.5 unit of quantization; a crossing interpolated inside a
+segment scales that by the segment's slope against the edge. On top of both sides'
+uncertainty, `--slack` (default 2 units of the finer extent) absorbs per-tile simplification;
+a leftover line within `--offset-window` (default 64 units) of a counterpart is one displaced
+line rather than two interruptions. Pairs and parts that needed the slack are counted
+(`line-slack-used`, `polygon-slack-used`, information). The artifact records the tolerance,
+and per layer the extents and the smallest and largest buffer seen (0 is clipped at the edge),
+a provider characteristic rather than a defect.
+
+`line-seams` and `polygon-seams` fail on any defect. They are `inconclusive` when no pair was
+evaluated, when no line (or polygon) reaches a shared edge, and when a `full` run did not reach
+every pair. An unreadable or undecodable tile fails `pairs`. The artifact records the source ID
+and revision, archive SHA-256, check version, tolerance, pair counts per zoom, per-layer counts,
+and up to 32 defective pairs, each with both tile references and bounds, the pair bounds for
+camera focus, counts, a reason and up to 16 sampled findings with their position along the edge
+and the offset or one-sided length in units. There are no timestamps or paths.
+
+**Synthetic seams.** `public/tilesets/fixture-seams-clean.pmtiles` and `-defects.pmtiles`
+(source `fixture-seams`, z0–z1) are one seeded world from `scripts/tileset-seam-fixture.mjs`,
+cut into tiles by `scripts/create-pmtiles-fixture.mjs`. The clean cut has a 64-unit buffer and
+a 1.5-unit drift of one road within the slack; it passes. The defects cut is clipped at the
+tile edge and breaks four seams on purpose; its committed artifact
+(`scripts/tileset-qa/expected/seams-fixture-seams-defects.json`) reports one interrupted road
+(1/0/0 → 1/1/0), one duplicated road (1/0/0 ↓ 1/0/1), one road displaced by 24 units at
+1/0/1 → 1/1/1 and across the antimeridian, and the enlarged island at 1/0/1 → 1/1/1 and
+1/1/0 ↓ 1/1/1. Part 1 passes both archives.
+
+**Atlas.** A full run over the Liechtenstein archive (Planetiler, 64-unit buffers) reports no
+defect across its 336 adjacent pairs; removing two layers from one real tile is reported at
+exactly that tile's edges.
+
+**Inspector.** `/engine/?view=inspector` has a Seam QA panel (`&seams=<fixture-id>` preselects
+an archive). **Check seams** fetches the archive once and runs the same `runTilesetSeams`
+against the loaded Maps WASM module. The panel shows the checks, the counts, the tolerance and
+the defective pairs; **Show** puts the archive on the Map View and **Focus** frames both tiles
+of a pair and outlines them.
+
+`bun run verify:tileset-qa` runs the seam cases next to parts 1 and 2. Their expected results
+follow from how each archive is built, not from re-running the check (see
+[Feature completion](feature-completion.md)); `bun scripts/tileset-qa/measure-seams.ts`
+measures the cost on the Atlas archive.
 
 ## Runtime lifetime
 

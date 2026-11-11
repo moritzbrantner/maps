@@ -55,6 +55,14 @@
   comparison, shows either revision on the map and focuses a reported tile. New synthetic
   fixtures `fixture-revision-r1/r2.pmtiles`. The only package addition is two WASM exports,
   `diffMvtTiles` and `tileLngLatBounds`.
+- Tile seam QA, tooling and demo only (#276 part 3): `bun run qa:tileset -- seams` checks that
+  lines and polygons continue across the shared edges of adjacent tiles and writes a
+  `maps-tileset-seams-v1` artifact. The Rust kernel `maps-core::tileset_seam` reports
+  interrupted, duplicated and displaced lines and one-sided polygon coverage, tolerating
+  tile-local clipping, buffers, quantization and a recorded provider slack; across the
+  antimeridian only continuity is compared. The Engine inspector gains a Seam QA panel that
+  focuses a defective tile pair. New synthetic fixtures `fixture-seams-clean/defects.pmtiles`.
+  The only package addition is the WASM export `checkMvtSeam`.
 
 ## 0.2.0
 

@@ -4,6 +4,7 @@ import { createShowcaseTileset } from "../../demo/showcase-tileset.ts";
 import {
   createFixturePmtilesTileset,
   createFixtureRevisionTileset,
+  createFixtureSeamsTileset,
 } from "../../src/tileset-fixtures.ts";
 
 export type KnownTileset = {
@@ -56,6 +57,27 @@ export const knownTilesets: KnownTileset[] = [
     expectedArchive: {
       sha256: "c1db371fec86473d50c667ce87b0948dd1d0a2a9605625aea94d46edc6973b72",
       bytes: 1_129,
+    },
+    committed: true,
+  },
+  {
+    // One seeded world; scripts/tileset-seam-fixture.mjs states which seams each variant breaks.
+    fixtureId: "fixture-seams-clean",
+    manifest: createFixtureSeamsTileset("clean"),
+    archive: "public/tilesets/fixture-seams-clean.pmtiles",
+    expectedArchive: {
+      sha256: "2e0292a0a33970f51aec8152009cefe2931777c4cb161cda755940ca4a60ae0a",
+      bytes: 1_944,
+    },
+    committed: true,
+  },
+  {
+    fixtureId: "fixture-seams-defects",
+    manifest: createFixtureSeamsTileset("defects"),
+    archive: "public/tilesets/fixture-seams-defects.pmtiles",
+    expectedArchive: {
+      sha256: "b2ee0c2d7f8f1346e3a6241ee301ac9d5b40a49e9f28ae12decb1461601e9d92",
+      bytes: 1_864,
     },
     committed: true,
   },

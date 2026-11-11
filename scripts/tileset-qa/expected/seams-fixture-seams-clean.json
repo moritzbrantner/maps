@@ -1,0 +1,185 @@
+{
+  "schema": "maps-tileset-seams-v1",
+  "checkVersion": "1.0.0",
+  "fixtureId": "fixture-seams-clean",
+  "status": "passed",
+  "mode": "sampled",
+  "seed": 1,
+  "limits": {
+    "samplePairs": 32,
+    "maxPairs": 32,
+    "maxAddressedTiles": 250000,
+    "tilesPerFinding": 16,
+    "reportedPairs": 32,
+    "findingsPerPair": 16,
+    "cacheBytes": 67108864
+  },
+  "tolerance": {
+    "quantizationUnits": 0.5,
+    "slackUnits": 2,
+    "offsetWindowUnits": 64
+  },
+  "source": {
+    "sourceId": "fixture-seams",
+    "dataRevision": "clean",
+    "bounds": [
+      -180,
+      -85.0511287798066,
+      180,
+      85.0511287798066
+    ],
+    "minZoom": 0,
+    "maxZoom": 1,
+    "provenance": "scripts/tileset-seam-fixture.mjs; one seeded synthetic CC0 world cut into tiles, not geographic data",
+    "archive": {
+      "name": "fixture-seams-clean.pmtiles",
+      "bytes": 1944,
+      "sha256": "2e0292a0a33970f51aec8152009cefe2931777c4cb161cda755940ca4a60ae0a",
+      "tileCompression": 2
+    }
+  },
+  "tools": {
+    "pmtilesReader": "4.5.0"
+  },
+  "checks": [
+    {
+      "id": "archive",
+      "status": "passed",
+      "summary": "5 addressed tiles"
+    },
+    {
+      "id": "pairs",
+      "status": "passed",
+      "summary": "7 of 7 adjacent pairs checked (0 edges without a neighbour)"
+    },
+    {
+      "id": "line-seams",
+      "status": "passed",
+      "summary": "5 continuous, 0 interrupted, 0 duplicated, 0 displaced"
+    },
+    {
+      "id": "polygon-seams",
+      "status": "passed",
+      "summary": "11 polygon groups at shared edges, 0 one-sided parts beyond tolerance"
+    }
+  ],
+  "findings": [
+    {
+      "check": "line-seams",
+      "code": "line-slack-used",
+      "severity": "info",
+      "message": "line pairs that needed the provider slack beyond quantization",
+      "count": 1,
+      "tiles": []
+    },
+    {
+      "check": "polygon-seams",
+      "code": "polygon-slack-used",
+      "severity": "info",
+      "message": "one-sided polygon edge parts within the tolerance",
+      "count": 16,
+      "tiles": []
+    }
+  ],
+  "pairs": {
+    "addressedTiles": 5,
+    "adjacent": 7,
+    "east": 2,
+    "south": 2,
+    "antimeridian": 3,
+    "withoutNeighbour": 0,
+    "checked": 7,
+    "complete": true,
+    "byZoom": [
+      {
+        "zoom": 0,
+        "adjacent": 1,
+        "checked": 1
+      },
+      {
+        "zoom": 1,
+        "adjacent": 6,
+        "checked": 6
+      }
+    ]
+  },
+  "seams": {
+    "counts": {
+      "lineCrossings": 5,
+      "lineSlackUsed": 1,
+      "lineInterrupted": 0,
+      "lineDuplicated": 0,
+      "lineOffset": 0,
+      "polygonGroups": 11,
+      "polygonSlackUsed": 16,
+      "polygonMismatches": 0
+    },
+    "layers": [
+      {
+        "name": "land",
+        "pairs": 7,
+        "extents": [
+          4096
+        ],
+        "buffer": [
+          0,
+          64
+        ],
+        "counts": {
+          "lineCrossings": 0,
+          "lineSlackUsed": 0,
+          "lineInterrupted": 0,
+          "lineDuplicated": 0,
+          "lineOffset": 0,
+          "polygonGroups": 7,
+          "polygonSlackUsed": 0,
+          "polygonMismatches": 0
+        }
+      },
+      {
+        "name": "streets",
+        "pairs": 7,
+        "extents": [
+          4096
+        ],
+        "buffer": [
+          0,
+          64
+        ],
+        "counts": {
+          "lineCrossings": 5,
+          "lineSlackUsed": 1,
+          "lineInterrupted": 0,
+          "lineDuplicated": 0,
+          "lineOffset": 0,
+          "polygonGroups": 0,
+          "polygonSlackUsed": 0,
+          "polygonMismatches": 0
+        }
+      },
+      {
+        "name": "water_polygons",
+        "pairs": 7,
+        "extents": [
+          4096
+        ],
+        "buffer": [
+          0,
+          64
+        ],
+        "counts": {
+          "lineCrossings": 0,
+          "lineSlackUsed": 0,
+          "lineInterrupted": 0,
+          "lineDuplicated": 0,
+          "lineOffset": 0,
+          "polygonGroups": 4,
+          "polygonSlackUsed": 16,
+          "polygonMismatches": 0
+        }
+      }
+    ],
+    "defectivePairs": 0,
+    "reported": []
+  }
+}

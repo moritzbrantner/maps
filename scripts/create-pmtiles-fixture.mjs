@@ -10,6 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { gzipSync } from "node:zlib";
 import { createShortbreadTileFixture } from "../e2e/fixtures/shortbread-tile.mjs";
 import { createRevisionFixtureTiles } from "./tileset-revision-fixture.mjs";
+import { createSeamFixtureTiles } from "./tileset-seam-fixture.mjs";
 
 const cli = process.env.PMTILES_CLI ?? "pmtiles";
 const work = mkdtempSync(join(tmpdir(), "maps-pmtiles-fixture-"));
@@ -146,6 +147,36 @@ try {
       import.meta.url,
     );
     const converted = join(work, `revision-${revision}.pmtiles`);
+    execFileSync(cli, ["convert", mbtiles, converted], { stdio: "inherit" });
+    writeFileSync(output, readFileSync(converted));
+    execFileSync(cli, ["verify", output.pathname], { stdio: "inherit" });
+  }
+  // One seeded world cut into tiles with continuous and with deliberately broken seams (#276).
+  for (const variant of ["clean", "defects"]) {
+    const mbtiles = join(work, `seams-${variant}.mbtiles`);
+    const seamDb = new DatabaseSync(mbtiles);
+    try {
+      seamDb.exec("CREATE TABLE metadata (name TEXT, value TEXT)");
+      seamDb.exec(
+        "CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB)",
+      );
+      const insertMetadata = seamDb.prepare("INSERT INTO metadata (name, value) VALUES (?, ?)");
+      for (const [name, value] of Object.entries({
+        ...metadata,
+        name: `Maps tile seam QA fixture (${variant})`,
+        description: "Synthetic CC0 tiles of one seeded world; not geographic data",
+      })) {
+        insertMetadata.run(name, value);
+      }
+      const insertTile = seamDb.prepare("INSERT INTO tiles VALUES (?, ?, ?, ?)");
+      for (const { z, x, y, data } of createSeamFixtureTiles(variant)) {
+        insertTile.run(z, x, 2 ** z - 1 - y, gzipSync(data));
+      }
+    } finally {
+      seamDb.close();
+    }
+    const output = new URL(`../public/tilesets/fixture-seams-${variant}.pmtiles`, import.meta.url);
+    const converted = join(work, `seams-${variant}.pmtiles`);
     execFileSync(cli, ["convert", mbtiles, converted], { stdio: "inherit" });
     writeFileSync(output, readFileSync(converted));
     execFileSync(cli, ["verify", output.pathname], { stdio: "inherit" });

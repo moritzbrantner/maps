@@ -59,14 +59,15 @@ export function mvtLayer(
   features: number[][] = [mvtFeature(2, LINE_COMMANDS)],
   keys: string[] = [],
   values: string[] = [],
+  extent = 4096,
 ): number[] {
   return field(3, [
     ...field(1, text(name)),
     ...features.flatMap((feature) => field(2, feature)),
     ...keys.flatMap((key) => field(3, text(key))),
     ...values.flatMap((value) => field(4, field(1, text(value)))),
-    0x28, // extent = 4096
-    ...varint(4096),
+    0x28, // extent
+    ...varint(extent),
     0x78, // version = 2
     2,
   ]);

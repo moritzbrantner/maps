@@ -93,7 +93,7 @@ function hole(west) {
   ];
 }
 
-function encodeTile(layers) {
+export function encodeTile(layers) {
   return Buffer.concat(layers.map(([name, features]) => bytes(3, encodeLayer(name, features))));
 }
 

@@ -2,6 +2,7 @@ import { createFixtureTileset } from "../../src/tileset-fixtures";
 import { createShowcaseTileset } from "../showcase-tileset";
 import type { MapsTileset } from "../../src/maps-tileset";
 import { RevisionQaPanel, type RevisionQaFocus } from "./RevisionQaPanel";
+import { SeamQaPanel } from "./SeamQaPanel";
 import type { MapsVectorBasemapStyle } from "../../src/maps-tileset-style";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -291,6 +292,17 @@ export function EngineInspector() {
           onFocus={(tile) => {
             setQaFocus(tile);
             controllerRef.current?.fitBounds(tile.bounds, { animate: false, padding: 48 });
+          }}
+          onShow={setQaTileset}
+          shownTileset={activeTileset}
+        />
+
+        <SeamQaPanel
+          focused={qaFocus}
+          initialTarget={params.get("seams")}
+          onFocus={(pair) => {
+            setQaFocus(pair);
+            controllerRef.current?.fitBounds(pair.bounds, { animate: false, padding: 48 });
           }}
           onShow={setQaTileset}
           shownTileset={activeTileset}

@@ -186,7 +186,7 @@ Follow-up executable repair `4b8eda5eca95196fafba56b4ea61f998544ece36`:
 The owner split #276 into three PRs. Part 1 is the archive/manifest integrity audit
 with its `maps-tileset-qa-v1` artifact and CLI, described in
 [Versioned Maps Tilesets](maps-tilesets.md#tileset-integrity-qa-276-part-1). Revision
-A/B comparison with the Inspector view is part 2, below; seam QA (part 3) is not developed.
+A/B comparison with the Inspector view is part 2 and seam QA is part 3, both below.
 
 - **Developed:** `bun run qa:tileset` audits a manifest and a PMTiles archive through
   the upstream `pmtiles` reader, the Map View's manifest/header/metadata rules and the
@@ -220,7 +220,7 @@ A/B comparison with the Inspector view is part 2, below; seam QA (part 3) is not
 Part 2 compares two archives before the candidate is adopted: the `maps-tileset-diff-v1`
 artifact from `bun run qa:tileset -- diff`, and the Revision QA panel of the Engine
 inspector. See [Versioned Maps Tilesets](maps-tilesets.md#tileset-revision-diff-276-part-2).
-Seam QA (part 3) is not developed.
+Seam QA is part 3, below.
 
 - **Developed:** the CLI and the inspector run the same `runTilesetDiff` over the upstream
   `pmtiles` reader, the Map View's manifest validator and the Rust kernel
@@ -261,6 +261,56 @@ Seam QA (part 3) is not developed.
   kernel diff per tile whose bytes differ. Ordinary map preview never runs the diff. The
   inspector fetches both archives whole on an explicit **Compare revisions**; for the
   synthetic pair that is 2,067 bytes. No archive larger than the regional one has been
+  measured.
+
+### Tile seam QA (#276, part 3 of 3)
+
+Part 3 checks that lines and polygons continue across the shared edges of adjacent tiles: the
+`maps-tileset-seams-v1` artifact from `bun run qa:tileset -- seams`, and the Seam QA panel of
+the Engine inspector. See [Versioned Maps Tilesets](maps-tilesets.md#tile-seam-qa-276-part-3).
+With it all three parts of #276 are developed.
+
+- **Developed:** the CLI and the inspector run the same `runTilesetSeams` over the upstream
+  `pmtiles` reader, the Map View's manifest validator and the Rust kernel
+  `maps-core::tileset_seam` (runtime MVT decoder, via WASM `checkMvtSeam`). One seeded
+  synthetic world, cut into the committed `fixture-seams-clean` (64-unit buffer, a 1.5-unit
+  drift) and `fixture-seams-defects` (clipped at the edge, four deliberate defects), produces
+  the committed artifacts: the clean cut passes, the defects cut reports exactly the
+  interrupted, duplicated and displaced roads and the two island seams the fixture script
+  states. Part 1's integrity audit passes both archives. The inspector shows the archive on the
+  Map View and focuses a defective pair; no MapLibre instance is involved.
+- **Correct:** 11 Rust kernel tests, 13 seam cases against the built WASM module in
+  `bun run verify:tileset-qa` (67 with parts 1 and 2), and the browser smoke
+  `e2e/maps-tileset-seam-qa.spec.ts`. Expected results come from how each archive was built:
+  clipped and buffered lines, mixed clipping, slope-scaled quantization, slack and offset
+  window, touching and edge-parallel lines, attributes that change at the edge, holes crossing
+  the edge, reversed winding, buffer corners, different extents, the antimeridian (z0 meets
+  itself; unwrapped buffers), absent neighbours and absent geometry (inconclusive), budgets,
+  undecodable, raster and truncated archives, invalid manifests and cancellation. Over real
+  data, the full run over the Liechtenstein archive (336 adjacent pairs, 3,012 line
+  crossings, 1,046 polygon groups) reports no defect. A first version compared only the strip
+  inside each tile and reported 5 false polygon seams there: buildings whose wall lies exactly
+  on a tile edge (14/8625/5751 ↓ 5752); comparing each strip as both buffered tiles see it
+  removed them, and that case is now a kernel test. Removing the `streets` and `land` layers
+  from the interior tile 14/8629/5757 is detected at exactly its four edges (16 interrupted
+  lines, 36 one-sided polygon parts), with no finding elsewhere.
+- **Fast:** measured with `bun scripts/tileset-qa/measure-seams.ts` (five runs per mode) on
+  Linux x64, Bun 1.4.4, WASM SHA-256
+  `9b11c5b236e8ae7c7688c4bf9117aa650e4527759b50413c18e93d08fbaa5143`, against the
+  2,730,127-byte Liechtenstein archive (203 tiles, 336 adjacent pairs):
+
+  | Mode | Pairs | Range reads | Bytes read | Checks, median (range) | Peak process RSS |
+  | --- | --- | --- | --- | --- | --- |
+  | `sampled` | 32 | 48 | 943,580 (34.6 %) | 84 ms (80–113) | 125 MB |
+  | `full` | 336 | 204 | 2,729,669 (100 %) | 413 ms (382–449) | 125 MB |
+
+  A tile is read once and reused by its neighbouring pairs (a 64 MiB decoded-tile cache), so a
+  full run reads each tile once. Hashing streams the archive once before the checks (3–8 ms)
+  and is not in the range-read columns. RSS is the whole Bun process across both modes. The
+  map preview never runs seam QA; the inspector fetches the archive whole on an explicit
+  **Check seams** (1,864 bytes for the defects fixture). Budgets bound the directory scan
+  (250,000 addressed tiles sampled, 4,000,000 full) and the pairs (32 sampled, 20,000 full);
+  beyond them a check is `inconclusive`. No archive larger than the regional one has been
   measured.
 
 ### Opt-in raw-tile persistence (#264)
