@@ -133,6 +133,12 @@ Evidence: `crates/maps-core/tests/temporal_points.rs`, and the browser test in
 independent reference sampler over the shared edge sequence and picks Rust-sampled positions on
 `flatRuntime="maps"`.
 
+Work and Fast evidence (#172 phase E): every prepared playback index counts its preparations,
+samples, changed features and bridge bytes (`src/temporal-work.ts`), and the
+`temporal-playback-journey-v1` browser journey profiles playback, seeking, scrubbing, camera
+movement, source replacement and remounts. See
+[engine-performance.md](engine-performance.md#moving-features-on-a-map-scoped-timeline-172-phase-e).
+
 ## Historical Map Feature selection
 
 `useHistoricalMapFeatureSelection({ features, locale, timeline })` validates Map Feature

@@ -53,6 +53,12 @@ run("bun", ["run", "verify:engine-heat-scalar-evidence"], {
   label: "heat/scalar journey trace, invalidation contract and frame observations",
 });
 
+run("bun", ["run", "verify:engine-temporal-evidence"], {
+  cwd: rootDir,
+  env: { ...process.env, MAPS_TEMPORAL_EVIDENCE_DIR: path.join(evidenceRoot, "temporal") },
+  label: "temporal playback journey trace, work contract and frame observations",
+});
+
 const score = run(runtimeProfiler, [
   "score",
   "--reference",

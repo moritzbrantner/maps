@@ -235,6 +235,27 @@ Evidence: per-phase JS → WASM crossings and Canvas redraws, plus retained and 
 upload bytes. Also pointer → Map UI interaction latency, long tasks, rAF intervals and
 JS heap after GC. See [the evidence contract](engine-evidence.md#mixed-layer-journey-evidence-170).
 
+### `temporal-playback-journey-v1`
+
+Purpose: profile moving features on a Map-Scoped Timeline (#172 Fast) through the public
+temporal Convenience Map, not the sampling kernel alone.
+
+Fixture: `e2e/fixtures/temporal-playback-journey.tsx`. A `TemporalClusteredMap` on
+`flatRuntime="maps"` samples 2,000 moving tracks of 24 keyframes each
+(`europe-courier-tracks-v1`, with late admission, early removal and gaps) from one shared
+Map-Scoped Timeline clock, over a static grid of 48 GeoJSON polygons, with the public timeline
+controls, at a fixed 1280x720 viewport.
+
+Journey: paused idle frames; 180 frames of playback; 8 awaited seeks; a scrub of the timeline
+slider; a pan while paused and a pan while playing; 3 track source replacements; 20 unrelated
+React commits; three unmount and remount cycles on the same clock.
+
+Evidence: per-phase temporal work (preparations, samples, changed features, bridge bytes) and
+Map View runtime work (aggregation index rebuilds, frame plans, projections, repaints,
+static-layer writes, tile uploads), rAF intervals, long tasks, slow input events,
+input → presented latency and JS heap after GC. See
+[the evidence contract](engine-evidence.md#temporal-playback-journey-evidence-172).
+
 ## Constrained-runtime browser evidence
 
 `e2e/maps-runtime.spec.ts` exercises device loss on the real Rust/WASM + WebGPU

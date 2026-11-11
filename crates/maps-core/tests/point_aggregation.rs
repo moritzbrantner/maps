@@ -303,3 +303,29 @@ fn indexes_unwrapped_longitudes_at_their_wrapped_location() {
         ]
     );
 }
+
+#[test]
+fn an_empty_point_set_builds_an_empty_index() {
+    // A Map-Scoped Timeline sample before any track is admitted has no points (#172).
+    let mut index = PointAggregationIndex::new(Vec::new(), PointAggregationOptions::default())
+        .expect("an empty aggregation index should build");
+    let aggregation = index
+        .get_viewport_aggregation(ViewportAggregationQuery {
+            bounds: [-180.0, -85.0, 180.0, 85.0],
+            zoom: 4.0,
+        })
+        .expect("an empty viewport should aggregate");
+
+    assert!(aggregation.features.is_empty());
+    assert_eq!(aggregation.summary.visible_point_count, 0);
+}
+
+#[test]
+fn an_empty_index_has_no_clusters() {
+    let index = PointAggregationIndex::new(Vec::new(), PointAggregationOptions::default())
+        .expect("an empty aggregation index should build");
+
+    assert!(index.get_cluster_expansion_zoom(0).is_err());
+    assert!(index.get_cluster_leaves(0, 10, 0).is_err());
+    assert!(index.get_point_by_id("a").is_none());
+}

@@ -116,7 +116,9 @@ impl Error for PointAggregationError {}
 /// and validation semantics around that hierarchy.
 pub struct PointAggregationIndex {
     cluster_metric_cache: BTreeMap<usize, MapMetricRecord>,
-    index: Supercluster,
+    /// `None` for an empty point set: the hierarchy cannot be built without points, and an
+    /// empty index has no features and no clusters.
+    index: Option<Supercluster>,
     metric_keys: Vec<String>,
     point_lookup: BTreeMap<String, IndexedMapPoint>,
     source_point_count: usize,
@@ -150,10 +152,15 @@ impl PointAggregationIndex {
             .min_zoom(options.min_zoom)
             .radius(options.radius)
             .build();
-        let mut index = Supercluster::new(cluster_options);
-        index
-            .load(features)
-            .map_err(|error| PointAggregationError::new(error.to_string()))?;
+        let index = if features.is_empty() {
+            None
+        } else {
+            let mut index = Supercluster::new(cluster_options);
+            index
+                .load(features)
+                .map_err(|error| PointAggregationError::new(error.to_string()))?;
+            Some(index)
+        };
 
         Ok(Self {
             cluster_metric_cache: BTreeMap::new(),
@@ -177,10 +184,8 @@ impl PointAggregationIndex {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<IndexedMapPoint>, PointAggregationError> {
-        self.validate_cluster_id(cluster_id)?;
-
         Ok(self
-            .index
+            .cluster_index(cluster_id)?
             .get_leaves(cluster_id, limit, offset)
             .into_iter()
             .filter_map(|feature| point_id_from_feature(&feature))
@@ -193,8 +198,9 @@ impl PointAggregationIndex {
         &self,
         cluster_id: usize,
     ) -> Result<usize, PointAggregationError> {
-        self.validate_cluster_id(cluster_id)?;
-        Ok(self.index.get_cluster_expansion_zoom(cluster_id))
+        Ok(self
+            .cluster_index(cluster_id)?
+            .get_cluster_expansion_zoom(cluster_id))
     }
 
     /// Aggregates visible points and clusters for one viewport query.
@@ -204,10 +210,12 @@ impl PointAggregationIndex {
     ) -> Result<ViewportAggregation, PointAggregationError> {
         validate_query(query)?;
         let zoom = rounded_zoom(query.zoom);
-        let raw_features = self
-            .index
-            .get_clusters(query.bounds, zoom)
-            .map_err(|error| PointAggregationError::new(error.to_string()))?;
+        let raw_features = match &self.index {
+            Some(index) => index
+                .get_clusters(query.bounds, zoom)
+                .map_err(|error| PointAggregationError::new(error.to_string()))?,
+            None => Vec::new(),
+        };
         let mut seen = BTreeSet::new();
         let mut features = Vec::with_capacity(raw_features.len());
 
@@ -279,9 +287,8 @@ impl PointAggregationIndex {
             return Ok(metrics.clone());
         }
 
-        self.validate_cluster_id(cluster_id)?;
         let children = self
-            .index
+            .cluster_index(cluster_id)?
             .get_children(cluster_id)
             .map_err(|error| PointAggregationError::new(error.to_string()))?;
         let mut metrics = zero_metrics(&self.metric_keys);
@@ -305,14 +312,14 @@ impl PointAggregationIndex {
         Ok(metrics)
     }
 
-    fn validate_cluster_id(&self, cluster_id: usize) -> Result<(), PointAggregationError> {
-        if cluster_id < self.source_point_count {
-            return Err(PointAggregationError::new(format!(
+    /// The hierarchy that owns `cluster_id`; an empty index has no clusters.
+    fn cluster_index(&self, cluster_id: usize) -> Result<&Supercluster, PointAggregationError> {
+        match &self.index {
+            Some(index) if cluster_id >= self.source_point_count => Ok(index),
+            _ => Err(PointAggregationError::new(format!(
                 "invalid cluster id {cluster_id}"
-            )));
+            ))),
         }
-
-        Ok(())
     }
 }
 

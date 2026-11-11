@@ -446,6 +446,99 @@ Observed, not investigated: the first mount builds the 10,000-point density inde
 data work sets for two Heat Layers at load); remounts build it once.
 A field refresh also rebuilds the field layer's own empty density index.
 
+## Moving features on a Map-Scoped Timeline (#172 phase E)
+
+### Work counters
+
+Each prepared moving-track playback index keeps one `TemporalPlaybackWork` set
+(`src/temporal-work.ts`), on both the Rust/WASM and the TypeScript reference path: track
+preparations (and those by Rust), prepared tracks and keyframes, samples, sampled tracks,
+emitted features, changed features (admitted, removed or moved since the index's previous
+sample) and bridge bytes into and out of the Rust sampler. Aggregation index maintenance,
+static-layer writes, uploads and repaints belong to the Map View runtime and are counted by the
+browser runtime counters (`e2e/helpers/mixed-layer-work.ts`).
+
+`src/temporal-work.test.tsx` drives the shared temporal map state (`useTemporalMapState`) with a
+real Map-Scoped Timeline and asserts:
+
+| Operation | Bound |
+| --- | --- |
+| Mount, Rust runtime idle → loading → unavailable | One preparation and one sample (the authority never changed) |
+| 5 seeks | 5 samples over every track, no preparation |
+| Same time again, pause, unrelated commit | Nothing sampled or prepared |
+| 30 playback frames | One sample per advanced time, no preparation; only moving tracks are changed features |
+| Seek across an admission and back | Admitted and removed tracks count as changed features |
+| Remount on a shared clock | One preparation and one sample, at the kept time |
+| Source replacement | One preparation and one sample |
+| Rust runtime installed | One Rust preparation; keyframes cross once (32 bytes each plus 4 per track); each sample returns 48 bytes per track |
+
+**Found and fixed.**
+
+- Tracks were re-prepared (and re-sampled, and the aggregation index rebuilt) on every
+  temporal runtime *status* change, because the playback index was keyed on the runtime
+  version. Without the compiled module a mount prepared three times instead of once; in the
+  browser, idle → loading added one full TypeScript preparation of every track before Rust
+  took over. The index is now keyed on the installed runtime.
+- A map remounted on a shared clock first sampled the clock's placeholder time (`0`, reported
+  while no consumer has registered a range) and then the kept time: two samples and two
+  aggregation index rebuilds per remount, the first at a time the map never shows. Nothing is
+  sampled until the clock has a range.
+- That fix made the first frame of a remount an empty point set, which crashed the Rust
+  aggregation index (`supercluster` panics on an empty load; the release WASM traps). An empty
+  point set now builds an empty index (`crates/maps-core/tests/point_aggregation.rs`). Any
+  clustered Map Layer on `flatRuntime="maps"` with no points hit the same trap before.
+
+### Full-map playback journey
+
+`temporal-playback-journey-v1` mounts the public `TemporalClusteredMap` on
+`flatRuntime="maps"` with 2,000 moving tracks of 24 keyframes over 48 static GeoJSON regions,
+driven by one shared Map-Scoped Timeline and the public timeline controls
+([scenario](engine-scenarios.md#temporal-playback-journey-v1),
+[evidence contract](engine-evidence.md#temporal-playback-journey-evidence-172)):
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-temporal-evidence
+```
+
+Two captures at `11f30390` (clean tree), WASM SHA-256
+`fa2e032207266fa816ea12571435cdff3066bdcd91dfb075eaf9c35b41e6bc18`, runtime-profiler
+`6d2c92e`, Chromium headless shell 158.0.8127.18, Playwright 1.65.0, Node 24.16.0, Ryzen 7
+5700X, Linux x64. The pinned collector launches Chromium without WebGPU, so the Canvas fallback
+ran. Both captures gave identical work counts and frame distributions within 0.1 ms.
+
+| Phase | Frame p50 / p95 / max (ms) | Long tasks | Temporal work | Map View work |
+| --- | --- | --- | --- | --- |
+| Idle, 60 paused frames | 16.7 / 16.8 / 16.8 | 0 | none | none |
+| Playback, 180 frames | 16.7 / 16.7–16.8 / 16.8 | 0 | 179 samples (2,000 tracks each), 0 preparations, 322,200 changed features, 17.2 MB out of WASM | 179 aggregation index rebuilds and 179 repaints; no static-region write or tile upload |
+| 8 awaited seeks | 16.7 / 16.7 / 16.8 | 0 | 8 samples, 0 preparations | 8 rebuilds and repaints |
+| Scrub, 40 slider moves | 16.7 / 16.7–16.8 / 16.8 | 0 | 39 samples, 0 preparations | 39 rebuilds and repaints |
+| Pan, paused | 16.7 / 16.7 / 16.7–16.8 | 0 | none | 55 frame plans, 42 aggregation queries, no rebuild |
+| Pan, playing | 16.7 / 16.7–16.8 / 16.8 | 0 | 36 samples, 0 preparations | 36 rebuilds, 79 queries, 48 frame plans |
+| 3 source replacements | 16.7 / 16.7 / 16.7–16.8 | 0 | 3 Rust preparations (48,000 keyframes, 1.5 MB into WASM each), 3 samples | 3 rebuilds |
+| 20 unrelated commits | 16.7 / 16.7 / 16.7–16.8 | 0 | none | 1 frame plan and repaint |
+| 3 remounts | 16.7 / 16.7 / 16.7 | 0 | 3 Rust preparations, 3 samples | runtime rebuilt per remount; 2 aggregation indexes each (the empty first frame, then the tracks) |
+
+- **Rust sampling crossings:** 267–268 measured `temporal-sample` crossings, 90.5–90.7 ms in
+  total, longest 0.6 ms: about 0.34 ms per sample of 2,000 tracks.
+- **Input → presented** (8 seeks, 3 source replacements): p50 30.0 ms, p95 30.3 ms (the
+  sample, the repaint on the next frame, plus one frame). Slow input events (Event Timing,
+  ≥ 16 ms) during scrubbing and panning: 24 and 20 entries, each 24–32 ms.
+- **Load:** 238 / 190 ms to a presented Map View with Rust sampling; two preparations (the
+  TypeScript reference, then Rust once ready); one 61 ms long task in capture A, none in B.
+- **JS heap after forced GC:** 12.8 MB ready, 14.2 MB after the journey, 13.3 MB across three
+  unmounts (the page keeps both track sources), 14.0 MB remounted. GPU, WASM linear and total
+  browser memory are unavailable.
+
+Every time change rebuilds the Rust aggregation index over all emitted points: clustering
+depends on every position, so this is the declared required work, not an incremental
+promise. Camera frames and unrelated commits neither prepare nor sample, and no phase rewrote
+the static regions or re-uploaded tiles.
+
+**Not a Fast verdict.** Every phase stayed inside the frame budget with no long task at 2,000
+tracks on the Canvas fallback. No reference implementation or parent revision runs this
+journey, so the comparison is unavailable; WebGPU timing and larger track counts are not
+measured.
+
 ## Evidence tooling repair — September 30
 
 The build now copies its optimized WASM and matching glue to `public/wasm`, so
