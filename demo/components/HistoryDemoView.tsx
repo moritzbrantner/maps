@@ -1,10 +1,19 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { Button } from "@moritzbrantner/ui";
 import {
   GeoJsonLayer,
   HistoricalMapFeatureContextPanel,
+  HistoricalMapFeatureReconstructionDetails,
   MapView,
   PointLayer,
   createMapScopedTimelineClock,
@@ -12,6 +21,7 @@ import {
   useHistoricalMapFeatureSelection,
   useMapScopedTimelineSnapshot,
   type GeoJsonLayerFeature,
+  type HistoricalMapFeatureReconstruction,
   type HistoricalMapFeatureSelection,
   type MapPoint,
   type MapSurfaceController,
@@ -223,6 +233,15 @@ export function HistoryDemoView({
       ? selection.selectedFeatureId
       : "";
 
+  const mapControllerRef = useRef<MapSurfaceController | null>(null);
+  const handleMapControllerReady = useCallback(
+    (controller: MapSurfaceController) => {
+      mapControllerRef.current = controller;
+      onMapControllerReady?.(controller);
+    },
+    [onMapControllerReady],
+  );
+
   useEffect(() => () => clock.dispose(), [clock]);
 
   const seek = (time: number) => {
@@ -243,6 +262,19 @@ export function HistoryDemoView({
     clock.setOptions(options);
     clock.seek(options.timeRange.start);
     setScenarioId(nextScenarioId);
+
+    // The synthetic fixture covers a small area; frame it so its regions can be inspected.
+    if (nextScenarioId === "synthetic-competing-sources") {
+      mapControllerRef.current?.fitBounds(
+        getBoundsFromGeoJson({
+          features: getDemoHistoricalPolityScenario(nextScenarioId).scenes.flatMap(
+            (scene) => scene.collection.features,
+          ),
+          type: "FeatureCollection",
+        }),
+        { padding: 52 },
+      );
+    }
   };
 
   return (
@@ -255,7 +287,7 @@ export function HistoryDemoView({
             fitBoundsPadding={52}
             mapLabel="European polity history"
             mapStyle={demoMapStyle}
-            onMapControllerReady={onMapControllerReady}
+            onMapControllerReady={handleMapControllerReady}
             onMapReady={onMapReady}
             onViewStateChange={onViewStateChange}
             style={{ minHeight: 620 }}
@@ -360,6 +392,7 @@ export function HistoryDemoView({
               <HistoryRetainedDetails
                 contextTime={context.contextTime}
                 featureId={context.featureId}
+                hasReconstruction={context.reconstruction !== null}
               />
             )}
             selection={selection}
@@ -591,20 +624,42 @@ function HistoryFeatureDetails({ featureId, testId }: { featureId: string; testI
       {name?.sourceFormFallback ? (
         <span>No established form in this language; showing the dataset&apos;s form.</span>
       ) : null}
-      <HistoryPolityProvenance properties={polity.properties} scenarioId={scenarioId} />
+      <HistoryPolityProvenance
+        formatTime={formatTime}
+        properties={polity.properties}
+        reconstruction={selection.getFeatureReconstruction(featureId)}
+        scenarioId={scenarioId}
+      />
     </div>
   );
 }
 
 /** Documentary-versus-illustrative disclosure of a selected boundary (Decision 1.3). */
 function HistoryPolityProvenance({
+  formatTime,
   properties,
+  reconstruction,
   scenarioId,
 }: {
+  formatTime?: (time: number) => string;
   properties: DemoHistoricalPolityProperties;
+  /** The consumer-chosen reconstruction with attributed alternatives (Decision 1.12), if any. */
+  reconstruction?: HistoricalMapFeatureReconstruction | null;
   scenarioId: DemoHistoricalPolityScenarioId;
 }) {
   const status = getDemoHistoricalPolityBoundaryStatus(properties, scenarioId);
+
+  if (reconstruction) {
+    return (
+      <>
+        <span>{historicalPolityRegionLabels[properties.region]} region</span>
+        <HistoricalMapFeatureReconstructionDetails
+          formatTime={formatTime}
+          reconstruction={reconstruction}
+        />
+      </>
+    );
+  }
 
   return (
     <>
@@ -623,9 +678,12 @@ function HistoryPolityProvenance({
 function HistoryRetainedDetails({
   contextTime,
   featureId,
+  hasReconstruction,
 }: {
   contextTime: number;
   featureId: string;
+  /** The panel already shows the chosen reconstruction and its alternatives. */
+  hasReconstruction: boolean;
 }) {
   const details = useContext(HistoryDetailsContext);
 
@@ -652,7 +710,11 @@ function HistoryRetainedDetails({
       <span>
         Source snapshot {getDemoHistoricalPolitySceneForYear(contextTime, details.scenarioId).label}
       </span>
-      <HistoryPolityProvenance properties={properties} scenarioId={details.scenarioId} />
+      {hasReconstruction ? (
+        <span>{historicalPolityRegionLabels[properties.region]} region</span>
+      ) : (
+        <HistoryPolityProvenance properties={properties} scenarioId={details.scenarioId} />
+      )}
     </p>
   );
 }

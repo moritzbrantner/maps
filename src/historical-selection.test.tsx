@@ -1,12 +1,14 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import {
   createMapScopedTimelineClock,
   getHistoricalMapFeatureDateOptions,
   HistoricalMapFeatureContextPanel,
+  HistoricalMapFeatureReconstructionDetails,
   isHistoricalMapFeatureApplicable,
   resolveHistoricalMapFeatureName,
+  resolveHistoricalMapFeatureReconstruction,
   useHistoricalMapFeatureSelection,
   type HistoricalMapFeatureRecord,
   type MapScopedTimelineClock,
@@ -264,5 +266,146 @@ describe("useHistoricalMapFeatureSelection (Decisions 1.14/1.16/1.18/1.20)", () 
     expect(screen.getByRole("region", { name: "Historical context" }).textContent).toContain("No established form in this language; showing the attested original form.",
     );
     expect(clock.getSnapshot().activeTime).toBe(1905);
+  });
+});
+
+/**
+ * A synthetic disputed boundary: one chosen reconstruction per period, with attributed
+ * alternative interpretations. Invented test data, not historical evidence.
+ */
+const BORDERLAND: HistoricalMapFeatureRecord = {
+  id: "borderland",
+  names: [{ original: { language: "en", text: "Borderland" }, start: 1800 }],
+  periods: [{ end: 1900, start: 1800 }],
+  reconstructions: [
+    {
+      alternatives: [
+        {
+          attribution: "Synthetic Chronicle B",
+          disagreement: "Places the eastern boundary at the river.",
+          evidence: "A synthetic tax roll.",
+          limitations: "Copied decades later.",
+        },
+        {
+          attribution: "Synthetic Atlas C",
+          disagreement: "Omits the northern valley.",
+        },
+      ],
+      attribution: "Synthetic Survey A",
+      end: 1850,
+      label: "1800–1849",
+      limitations: "Coastline simplified.",
+      start: 1800,
+      status: "reconstructed",
+      uncertainty: "Eastern edge uncertain by about 20 km.",
+    },
+    {
+      attribution: "Synthetic Treaty Map D",
+      end: 1900,
+      start: 1850,
+      status: "documentary",
+    },
+  ],
+};
+
+function ReconstructionHarness({ clock }: { clock: MapScopedTimelineClock }) {
+  const selection = useHistoricalMapFeatureSelection({
+    features: [BORDERLAND],
+    timeline: clock,
+  });
+  const reconstruction = selection.selectedFeatureId
+    ? selection.getFeatureReconstruction(selection.selectedFeatureId)
+    : null;
+
+  return (
+    <>
+      {selection.isFeatureApplicable("borderland") ? (
+        <button onClick={() => selection.selectFeature("borderland")} type="button">
+          Borderland
+        </button>
+      ) : null}
+      {reconstruction ? (
+        <div data-testid="selected-details">
+          <HistoricalMapFeatureReconstructionDetails reconstruction={reconstruction} />
+        </div>
+      ) : null}
+      <HistoricalMapFeatureContextPanel selection={selection} />
+    </>
+  );
+}
+
+describe("competing-source reconstruction context (Decision 1.12)", () => {
+  test("resolves the one chosen reconstruction for the date, never a blend of alternatives", () => {
+    expect(resolveHistoricalMapFeatureReconstruction(BORDERLAND, 1820)).toMatchObject({
+      attribution: "Synthetic Survey A",
+      status: "reconstructed",
+    });
+    expect(resolveHistoricalMapFeatureReconstruction(BORDERLAND, 1850)).toMatchObject({
+      attribution: "Synthetic Treaty Map D",
+      status: "documentary",
+    });
+    expect(resolveHistoricalMapFeatureReconstruction(BORDERLAND, 1900)).toBeNull();
+    expect(
+      resolveHistoricalMapFeatureReconstruction({ id: "x", periods: [{ start: 0 }] }, 10),
+    ).toBeNull();
+  });
+
+  test("selected details attribute the drawn boundary and explain alternatives accessibly", () => {
+    const clock = createMapScopedTimelineClock({
+      defaultTime: 1820,
+      timeRange: { end: 1920, start: 1800 },
+    });
+    render(<ReconstructionHarness clock={clock} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Borderland" }));
+    const details = within(screen.getByTestId("selected-details")).getByRole("region", {
+      name: "Boundary source",
+    });
+    expect(details.textContent).toContain("Reconstructed boundary");
+    expect(details.textContent).toContain("Boundary sourceSynthetic Survey A");
+    expect(details.textContent).toContain("Reconstruction for1800–1849");
+    expect(details.textContent).toContain("UncertaintyEastern edge uncertain by about 20 km.");
+    expect(details.textContent).toContain("LimitationsCoastline simplified.");
+
+    // The disagreement is a keyboard-reachable disclosure, attributed per alternative.
+    const summary = within(details).getByText("2 competing interpretations (not drawn)");
+    expect(summary.tagName).toBe("SUMMARY");
+    const alternatives = details.querySelectorAll("[data-historical-alternative]");
+    expect(alternatives).toHaveLength(2);
+    expect(alternatives[0]!.textContent).toContain("Synthetic Chronicle B");
+    expect(alternatives[0]!.textContent).toContain("Places the eastern boundary at the river.");
+    expect(alternatives[0]!.textContent).toContain("Evidence: A synthetic tax roll.");
+    expect(alternatives[0]!.textContent).toContain("Limitations: Copied decades later.");
+    expect(alternatives[1]!.textContent).toContain("Synthetic Atlas C");
+
+    // Seeking changes the attribution with the chosen reconstruction; no stale alternatives.
+    act(() => clock.seek(1860));
+    const later = within(screen.getByTestId("selected-details")).getByRole("region", {
+      name: "Boundary source",
+    });
+    expect(later.textContent).toContain("Documentary boundary");
+    expect(later.textContent).toContain("Synthetic Treaty Map D");
+    expect(later.querySelector("details")).toBeNull();
+  });
+
+  test("retained out-of-period context keeps the attribution of the date it refers to", () => {
+    const clock = createMapScopedTimelineClock({
+      defaultTime: 1820,
+      timeRange: { end: 1920, start: 1800 },
+    });
+    render(<ReconstructionHarness clock={clock} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Borderland" }));
+    act(() => clock.seek(1840));
+    act(() => clock.seek(1910));
+
+    expect(screen.queryByTestId("selected-details")).toBeNull();
+    const panel = screen.getByRole("region", { name: "Historical context" });
+    expect(panel.textContent).toContain("Out of period");
+    const source = within(panel).getByRole("region", {
+      name: "Boundary source",
+    });
+    expect(source.textContent).toContain("Synthetic Survey A");
+    expect(source.textContent).toContain("2 competing interpretations (not drawn)");
   });
 });
