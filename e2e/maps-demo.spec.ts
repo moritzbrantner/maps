@@ -1,6 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 import { inflateSync } from "node:zlib";
 
+// Mobile screenshots capture the whole flowing <main>, so text metrics decide
+// the image height. Pin a font present both locally and on the CI runner
+// (where the demo's Inter/system-ui stack falls back to DejaVu Sans) so the
+// @mobile baselines render identically everywhere (#410).
+const mobileScreenshotFontPin = `
+  *, *::before, *::after {
+    font-family: "DejaVu Sans", sans-serif !important;
+  }
+`;
+
 const benignConsolePatterns = [
   /Failed to load resource: net::ERR_ABORTED/,
   /Could not compile fragment shader/,
@@ -413,6 +423,7 @@ test("Mobile layout does not overflow horizontally @mobile", async ({ page }) =>
       .flat-tile-pane {
         opacity: 0 !important;
       }
+      ${mobileScreenshotFontPin}
     `,
   });
   await openView(page, "Clusters");
@@ -469,11 +480,18 @@ for (const view of ["Editor", "Globe", "Heat", "Timeline"] as const) {
         .mb-maps {
           background: #eef2f7 !important;
         }
+        ${mobileScreenshotFontPin}
       `,
     });
 
     await openView(page, view, { clickMethod: "keyboard" });
     await expect(page.getByRole("tab", { name: view })).toHaveAttribute("aria-selected", "true");
+    if (view === "Timeline") {
+      // Freeze playback at its first frame so the baseline does not depend on elapsed time.
+      await page.getByRole("button", { name: "Pause" }).click();
+      await page.getByRole("button", { name: "Start" }).click();
+      await expect(page.locator(".mb-temporal-map__current-time")).toHaveText("08:00");
+    }
     await expect(page.locator("main")).toHaveScreenshot(`${view.toLowerCase()}-mobile.png`);
   });
 }
