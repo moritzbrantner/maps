@@ -12,6 +12,12 @@ import { interpolateTemporalGeoJsonGeometry } from "@moritzbrantner/maps";
 
 import cshapesEuropePolityScenesFixture from "./cshapes-europe-polity-scenes.json";
 import wwiiControlScenesFixture from "./wwii-control-scenes.json";
+import {
+  demoCompetingSourcesCaveat,
+  demoCompetingSourcesReconstructions,
+  demoCompetingSourcesRegions,
+  demoCompetingSourcesScenes,
+} from "./history-competing-sources";
 
 export type DemoHistoricalPolityRegion =
   | "atlantic"
@@ -21,7 +27,7 @@ export type DemoHistoricalPolityRegion =
   | "southern"
   | "ottoman";
 
-export type DemoHistoricalPolityPrecision = "source-derived";
+export type DemoHistoricalPolityPrecision = "source-derived" | "synthetic";
 
 export type DemoHistoricalPolityProperties = {
   controlArea?: number;
@@ -31,7 +37,7 @@ export type DemoHistoricalPolityProperties = {
   precision: DemoHistoricalPolityPrecision;
   region: DemoHistoricalPolityRegion;
   sceneYear: number;
-  source: "CShapes-Europe";
+  source: "CShapes-Europe" | "Synthetic fixture";
   sourceFrom: number;
   sourceId: number;
   sourceStatus: "independent";
@@ -51,7 +57,10 @@ type DemoHistoricalPolityScene = {
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties>;
 };
 
-export type DemoHistoricalPolityScenarioId = "european-states" | "wwii-control";
+export type DemoHistoricalPolityScenarioId =
+  | "european-states"
+  | "wwii-control"
+  | "synthetic-competing-sources";
 
 export type DemoHistoricalPolityScenario = {
   caveat: string;
@@ -92,7 +101,50 @@ export const demoHistoricalPolityScenarios: DemoHistoricalPolityScenario[] = [
     label: "WWII control",
     scenes: wwiiControlScenes.scenes,
   },
+  {
+    caveat: demoCompetingSourcesCaveat,
+    id: "synthetic-competing-sources",
+    label: "Competing sources (synthetic)",
+    scenes: buildDemoCompetingSourcesScenes(),
+  },
 ];
+
+/** Synthetic scenes in the History scene shape; never CShapes-derived (ADR 0005). */
+function buildDemoCompetingSourcesScenes(): DemoHistoricalPolityScene[] {
+  const labels = new Map(
+    demoCompetingSourcesRegions.map((region) => [region.polityId, region.label]),
+  );
+
+  return demoCompetingSourcesScenes.map((scene, sceneIndex) => {
+    const nextYear = demoCompetingSourcesScenes[sceneIndex + 1]?.year ?? scene.year;
+
+    return {
+      collection: {
+        features: scene.regions.map((region, regionIndex) => ({
+          geometry: { coordinates: [region.ring], type: "Polygon" as const },
+          id: `${region.polityId}-${scene.year}`,
+          properties: {
+            kind: "historical-polity" as const,
+            label: labels.get(region.polityId) ?? region.polityId,
+            polityId: region.polityId,
+            precision: "synthetic" as const,
+            region: regionIndex === 0 ? ("southern" as const) : ("central" as const),
+            sceneYear: scene.year,
+            source: "Synthetic fixture" as const,
+            sourceFrom: scene.year,
+            sourceId: 0,
+            sourceStatus: "independent" as const,
+            sourceTo: nextYear,
+          },
+          type: "Feature" as const,
+        })),
+        type: "FeatureCollection" as const,
+      },
+      label: scene.label,
+      year: scene.year,
+    };
+  });
+}
 
 export const demoHistoricalPolityScenes: DemoHistoricalPolityScene[] =
   getDemoHistoricalPolityScenario("european-states").scenes;
@@ -124,7 +176,7 @@ export function getDemoHistoricalPolitySceneForYear(
   scenarioId: DemoHistoricalPolityScenarioId = "european-states",
 ) {
   const scenes = getDemoHistoricalPolityScenario(scenarioId).scenes;
-  const timelineYear = scenarioId === "european-states" ? Math.floor(year) : year;
+  const timelineYear = scenarioId === "wwii-control" ? year : Math.floor(year);
   const clampedYear = clamp(timelineYear, scenes[0]!.year, scenes.at(-1)!.year);
   const nextSceneIndex = scenes.findIndex((scene) => scene.year > clampedYear);
 
@@ -237,6 +289,15 @@ export function getDemoHistoricalPolityBoundaryStatus(
     };
   }
 
+  if (scenarioId === "synthetic-competing-sources") {
+    return {
+      kind: "illustrative",
+      label: "Synthetic boundary fixture",
+      limitation: "Invented to demonstrate source presentation; not historical evidence.",
+      source: "Synthetic fixture",
+    };
+  }
+
   return {
     kind: "source-derived",
     label: "Source-derived boundary",
@@ -259,7 +320,9 @@ export function getDemoHistoricalPolityRecords(
   const attribution =
     scenarioId === "wwii-control"
       ? "CShapes-Europe outlines with illustrative control clipping"
-      : "CShapes-Europe (demo snapshot)";
+      : scenarioId === "synthetic-competing-sources"
+        ? "Synthetic fixture (illustrative, not a source)"
+        : "CShapes-Europe (demo snapshot)";
   const records = new Map<
     string,
     HistoricalMapFeatureRecord & {
@@ -323,6 +386,13 @@ export function getDemoHistoricalPolityRecords(
 
   return [...records.values()].map((record) => ({
     ...record,
+    // Only the synthetic scenario supplies chosen reconstructions with alternatives (1.12);
+    // the CShapes-derived scenarios keep their ADR 0005 status disclosure unchanged.
+    ...(scenarioId === "synthetic-competing-sources"
+      ? {
+          reconstructions: demoCompetingSourcesReconstructions[record.id] ?? [],
+        }
+      : {}),
     periods: record.periods.map((period) => ({
       ...period,
       label:

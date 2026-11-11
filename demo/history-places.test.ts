@@ -3,7 +3,9 @@ import { describe, expect, test } from "vitest";
 import {
   getHistoricalMapFeatureDateOptions,
   isHistoricalMapFeatureApplicable,
+  isHistoricalMapFeaturePeriodActive,
   resolveHistoricalMapFeatureName,
+  resolveHistoricalMapFeatureReconstruction,
 } from "@moritzbrantner/maps";
 
 import {
@@ -219,5 +221,67 @@ describe("History polity selection records (#231 phase A)", () => {
     expect(
       getDemoHistoricalPolityBoundaryStatus({ sourceFrom: 1938, sourceTo: 1944 }, "wwii-control"),
     ).toMatchObject({ kind: "illustrative", label: "Illustrative boundary" });
+  });
+});
+
+describe("History competing-sources fixture (#231 phase C, Decision 1.12)", () => {
+  const scenarioId = "synthetic-competing-sources" as const;
+
+  test("every drawn region has exactly one chosen reconstruction at every probed date", () => {
+    const scenario = getDemoHistoricalPolityScenario(scenarioId);
+    const records = getDemoHistoricalPolityRecords(scenarioId);
+
+    expect(scenario.label).toBe("Competing sources (synthetic)");
+    expect(scenario.caveat).toMatch(/Synthetic fixture.*Not historical evidence/);
+
+    for (const time of [1950, 1875, 1850, 1925, 1899, 1900, 1949]) {
+      const drawn = getDemoHistoricalPolitySceneForYear(time, scenarioId).collection.features;
+
+      // One polygon per region: alternatives are never drawn as extra geometry.
+      expect(new Set(drawn.map((feature) => feature.properties!.polityId)).size).toBe(drawn.length);
+
+      for (const feature of drawn) {
+        const polity = records.find((candidate) => candidate.id === feature.properties!.polityId)!;
+        const matching = (polity.reconstructions ?? []).filter((reconstruction) =>
+          isHistoricalMapFeaturePeriodActive(reconstruction, time),
+        );
+
+        expect(matching, `${polity.id} at ${time}`).toHaveLength(1);
+        expect(resolveHistoricalMapFeatureReconstruction(polity, time)).toBe(matching[0]);
+      }
+    }
+  });
+
+  test("attribution follows the date and alternatives are attributed, synthetic and geometry-free", () => {
+    const borderland = getDemoHistoricalPolityRecords(scenarioId).find(
+      (polity) => polity.id === "synthetic-borderland",
+    )!;
+    const early = resolveHistoricalMapFeatureReconstruction(borderland, 1875)!;
+    const late = resolveHistoricalMapFeatureReconstruction(borderland, 1925)!;
+
+    expect(early.status).toBe("reconstructed");
+    expect(early.alternatives).toHaveLength(2);
+    expect(late.status).toBe("documentary");
+    expect(late.alternatives).toBeUndefined();
+    expect(isHistoricalMapFeatureApplicable(borderland, 1950)).toBe(false);
+
+    for (const reconstruction of [early, late]) {
+      expect(reconstruction.attribution).toMatch(/synthetic source invented for this demo/);
+    }
+
+    for (const alternative of early.alternatives!) {
+      expect(alternative.attribution).toMatch(/synthetic source invented for this demo/);
+      expect(Object.keys(alternative).sort()).toEqual(
+        ["attribution", "disagreement", "evidence", "limitations"].sort(),
+      );
+    }
+  });
+
+  test("CShapes-derived scenarios supply no reconstructions or alternatives (ADR 0005 unchanged)", () => {
+    for (const id of ["european-states", "wwii-control"] as const) {
+      for (const polity of getDemoHistoricalPolityRecords(id)) {
+        expect(polity.reconstructions).toBeUndefined();
+      }
+    }
   });
 });

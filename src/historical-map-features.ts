@@ -25,6 +25,50 @@ export type HistoricalMapFeatureName = HistoricalMapFeaturePeriod & {
   original: { language?: string; script?: string; text: string };
 };
 
+/**
+ * What kind of evidence a chosen boundary reconstruction rests on (Decision 1.3):
+ * `documentary` follows a contemporary record; `reconstructed` is a scholarly reconstruction;
+ * `approximate` is a deliberately coarse outline; `illustrative` is invented for explanation.
+ */
+export type HistoricalBoundaryEvidenceStatus =
+  | "approximate"
+  | "documentary"
+  | "illustrative"
+  | "reconstructed";
+
+/**
+ * A credible competing interpretation of a boundary, explained in words only (Decision 1.12).
+ * It deliberately has no geometry: Maps never draws, overlays or switches to alternatives.
+ */
+export type HistoricalAlternativeInterpretation = {
+  /** Who holds this interpretation, in the consumer's words. */
+  attribution: string;
+  /** The meaningful disagreement with the chosen reconstruction. */
+  disagreement: string;
+  /** What the alternative rests on. */
+  evidence?: string;
+  /** Known weaknesses or limits of the alternative. */
+  limitations?: string;
+};
+
+/**
+ * The one boundary reconstruction a consumer chose to draw for a period of a historical Map
+ * Feature, with its source, evidence status and uncertainty, plus attributed explanations of
+ * credible alternatives (Decisions 1.3 and 1.12). The consumer, not Maps, chooses the
+ * reconstruction and writes the disagreement text.
+ */
+export type HistoricalMapFeatureReconstruction = HistoricalMapFeaturePeriod & {
+  /** Attributed explanations of credible competing reconstructions. */
+  alternatives?: readonly HistoricalAlternativeInterpretation[];
+  /** The source of the drawn boundary. */
+  attribution: string;
+  /** Known limits of the drawn boundary. */
+  limitations?: string;
+  status: HistoricalBoundaryEvidenceStatus;
+  /** How uncertain the drawn boundary is, in the consumer's words. */
+  uncertainty?: string;
+};
+
 /** A date to which a viewer may navigate to revisit a historical Map Feature. */
 export type HistoricalMapFeatureDate = { label?: string; time: number };
 
@@ -42,6 +86,11 @@ export type HistoricalMapFeatureRecord = {
   names?: readonly HistoricalMapFeatureName[];
   /** Evidence-backed periods in which the feature applies. */
   periods: readonly HistoricalMapFeaturePeriod[];
+  /**
+   * The chosen boundary reconstruction per period, with its source status and attributed
+   * alternatives (Decision 1.12). Only the geometry the layer draws is ever shown.
+   */
+  reconstructions?: readonly HistoricalMapFeatureReconstruction[];
   /** Evidence-backed dates offered on the out-of-period mini-timeline (Decision 1.16). */
   supportedDates?: readonly HistoricalMapFeatureDate[];
 };
@@ -102,6 +151,21 @@ export function resolveHistoricalMapFeatureName(
     sourceFormFallback: Boolean(locale) && !localized,
     text: localized ? localized.text : name.original.text,
   };
+}
+
+/**
+ * The chosen boundary reconstruction of `record` that applies at `time` (Decision 1.12), or
+ * `null` when the consumer supplies none for that date.
+ */
+export function resolveHistoricalMapFeatureReconstruction(
+  record: HistoricalMapFeatureRecord,
+  time: number,
+): HistoricalMapFeatureReconstruction | null {
+  return (
+    record.reconstructions?.find((reconstruction) =>
+      isHistoricalMapFeaturePeriodActive(reconstruction, time),
+    ) ?? null
+  );
 }
 
 function findLocalizedName(localized: HistoricalMapFeatureName["localized"], locale: string) {

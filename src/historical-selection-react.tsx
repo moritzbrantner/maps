@@ -7,8 +7,11 @@ import {
   getHistoricalMapFeaturePeriodAt,
   isHistoricalMapFeatureApplicable,
   resolveHistoricalMapFeatureName,
+  resolveHistoricalMapFeatureReconstruction,
+  type HistoricalBoundaryEvidenceStatus,
   type HistoricalMapFeatureDateOption,
   type HistoricalMapFeaturePeriod,
+  type HistoricalMapFeatureReconstruction,
   type HistoricalMapFeatureRecord,
   type ResolvedHistoricalMapFeatureName,
 } from "./historical-map-features";
@@ -31,6 +34,8 @@ export type HistoricalMapFeatureContext<TFeature = unknown> = {
   name: ResolvedHistoricalMapFeatureName | null;
   /** The period `contextTime` falls in. */
   period: HistoricalMapFeaturePeriod | null;
+  /** The chosen boundary reconstruction at `contextTime`, with its attribution (Decision 1.12). */
+  reconstruction: HistoricalMapFeatureReconstruction | null;
   record: HistoricalMapFeatureRecord | undefined;
 };
 
@@ -52,6 +57,8 @@ export type HistoricalMapFeatureSelection<TFeature = unknown> = {
   getContextDateOptions(): HistoricalMapFeatureDateOption[];
   /** The date-appropriate name of a feature at the current map date. */
   getFeatureName(featureId: string): ResolvedHistoricalMapFeatureName | null;
+  /** The chosen boundary reconstruction of a feature at the current map date (Decision 1.12). */
+  getFeatureReconstruction(featureId: string): HistoricalMapFeatureReconstruction | null;
   hoveredFeatureId: string | null;
   isFeatureApplicable(featureId: string): boolean;
   /**
@@ -230,6 +237,9 @@ export function useHistoricalMapFeatureSelection<TFeature = unknown>({
       period: retainedRecord
         ? getHistoricalMapFeaturePeriodAt(retainedRecord, retained.lastApplicableTime)
         : null,
+      reconstruction: retainedRecord
+        ? resolveHistoricalMapFeatureReconstruction(retainedRecord, retained.lastApplicableTime)
+        : null,
       record: retainedRecord,
     };
   }, [current.retained, locale, retainedRecord]);
@@ -241,6 +251,10 @@ export function useHistoricalMapFeatureSelection<TFeature = unknown>({
     getFeatureName: (featureId) => {
       const record = records.get(featureId);
       return record ? resolveHistoricalMapFeatureName(record, activeTime, locale) : null;
+    },
+    getFeatureReconstruction: (featureId) => {
+      const record = records.get(featureId);
+      return record ? resolveHistoricalMapFeatureReconstruction(record, activeTime) : null;
     },
     hoveredFeatureId: current.hoveredId,
     isFeatureApplicable: (featureId) => applies(featureId, activeTime),
@@ -315,6 +329,86 @@ function formatPeriod(period: HistoricalMapFeaturePeriod, formatTime: (time: num
     : `${formatTime(period.start)} – ${formatTime(period.end)}`;
 }
 
+const boundaryStatusLabels: Record<HistoricalBoundaryEvidenceStatus, string> = {
+  approximate: "Approximate boundary",
+  documentary: "Documentary boundary",
+  illustrative: "Illustrative boundary",
+  reconstructed: "Reconstructed boundary",
+};
+
+export type HistoricalMapFeatureReconstructionDetailsProps = {
+  formatTime?: (time: number) => string;
+  reconstruction: HistoricalMapFeatureReconstruction;
+};
+
+/**
+ * The source of the one boundary reconstruction a consumer chose to draw, with its evidence
+ * status, uncertainty and an expandable, attributed explanation of credible alternatives
+ * (Decisions 1.3 and 1.12). Alternatives are explained in words only and never drawn, so
+ * the map never suggests a blended or unanimous boundary.
+ */
+export function HistoricalMapFeatureReconstructionDetails({
+  formatTime = defaultFormatTime,
+  reconstruction,
+}: HistoricalMapFeatureReconstructionDetailsProps) {
+  const alternatives = reconstruction.alternatives ?? [];
+
+  return (
+    <section
+      aria-label="Boundary source"
+      className="maps-historical-reconstruction"
+      data-historical-reconstruction-status={reconstruction.status}
+    >
+      <dl className="maps-historical-reconstruction__facts">
+        <dt>Boundary</dt>
+        <dd>{boundaryStatusLabels[reconstruction.status]}</dd>
+        <dt>Boundary source</dt>
+        <dd>{reconstruction.attribution}</dd>
+        <dt>Reconstruction for</dt>
+        <dd>{formatPeriod(reconstruction, formatTime)}</dd>
+        {reconstruction.uncertainty ? (
+          <>
+            <dt>Uncertainty</dt>
+            <dd>{reconstruction.uncertainty}</dd>
+          </>
+        ) : null}
+        {reconstruction.limitations ? (
+          <>
+            <dt>Limitations</dt>
+            <dd>{reconstruction.limitations}</dd>
+          </>
+        ) : null}
+      </dl>
+      {alternatives.length > 0 ? (
+        <details
+          className="maps-historical-reconstruction__alternatives"
+          data-historical-alternatives={alternatives.length}
+        >
+          <summary>
+            {alternatives.length === 1
+              ? "1 competing interpretation (not drawn)"
+              : `${alternatives.length} competing interpretations (not drawn)`}
+          </summary>
+          <p>
+            The map draws only the reconstruction above. Sources disagree about this boundary; the
+            alternatives are explained here and are not shown on the map.
+          </p>
+          <ul>
+            {alternatives.map((alternative, index) => (
+              <li data-historical-alternative={index} key={index}>
+                <strong>{alternative.attribution}</strong>
+                <p>{alternative.disagreement}</p>
+                {alternative.evidence ? <p>Evidence: {alternative.evidence}</p> : null}
+                {alternative.limitations ? <p>Limitations: {alternative.limitations}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
 /**
  * The detached out-of-period context surface (Decision 1.14) with its contextual
  * mini-timeline (Decision 1.16). It is not anchored to map geometry: the feature no longer
@@ -382,6 +476,12 @@ export function HistoricalMapFeatureContextPanel<TFeature = unknown>({
           </>
         ) : null}
       </dl>
+      {context.reconstruction ? (
+        <HistoricalMapFeatureReconstructionDetails
+          formatTime={formatTime}
+          reconstruction={context.reconstruction}
+        />
+      ) : null}
       {renderDetails?.(context)}
       {options.length > 0 ? (
         <nav aria-label="Supported dates" className="maps-historical-context__mini-timeline">

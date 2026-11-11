@@ -183,6 +183,18 @@ const selection = useHistoricalMapFeatureSelection({ features: records, locale, 
   the viewer's language, or the attested original form flagged `sourceFormFallback`. Changing
   `locale` relabels without changing the date or the selection. The pure helpers are also
   exported from `@moritzbrantner/maps/core`.
+- Competing sources (Decision 1.12): a record's `reconstructions` name, per period, the **one**
+  boundary reconstruction the application chose to draw, with its `attribution`, evidence
+  `status` (`documentary`, `reconstructed`, `approximate` or `illustrative`), `uncertainty`,
+  `limitations` and attributed `alternatives` (`attribution`, `disagreement`, `evidence`,
+  `limitations`). Alternatives carry no geometry: Maps never draws, overlays or switches to
+  them, and the application decides which reconstruction to use and writes the disagreement
+  text. `selection.getFeatureReconstruction(id)` and
+  `resolveHistoricalMapFeatureReconstruction(record, time)` give the reconstruction at a date;
+  `HistoricalMapFeatureReconstructionDetails` presents it with an expandable, keyboard-reachable
+  list of alternatives marked "not drawn". The retained out-of-period context shows the
+  reconstruction of the date it refers to. Where no defensible reconstruction exists, draw no
+  polygon rather than inventing one.
 - Derive the layer's geometry from the same `activeTime`, so the out-of-period geometry and its
   popup leave the map together. A retained popup re-renders with the layer's latest
   `renderFeaturePopup` and feature, so a supported rename updates an open popup.

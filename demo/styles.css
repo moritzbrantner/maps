@@ -744,6 +744,10 @@ select {
   gap: 8px;
 }
 
+.demo-history-scenarios > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .demo-history-epoch-buttons {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1013,4 +1017,43 @@ select {
   .demo-tab {
     width: 100%;
   }
+}
+
+/* #231 phase C: the chosen boundary reconstruction and its attributed alternatives. */
+.maps-historical-reconstruction {
+  display: grid;
+  gap: 6px;
+  max-width: 320px;
+}
+
+.maps-historical-reconstruction__facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 0;
+}
+
+.maps-historical-reconstruction__facts dt {
+  color: #526170;
+}
+
+.maps-historical-reconstruction__facts dd {
+  margin: 0;
+}
+
+.maps-historical-reconstruction__alternatives summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: #9a3412;
+}
+
+.maps-historical-reconstruction__alternatives p {
+  margin: 4px 0 0;
+}
+
+.maps-historical-reconstruction__alternatives ul {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0 0;
+  padding-left: 16px;
 }

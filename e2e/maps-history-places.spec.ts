@@ -274,3 +274,122 @@ test("History polity selection discloses its source status and never follows a s
     ),
   ).toBeVisible();
 });
+
+// #231 phase C (Decision 1.12): a synthetic scenario supplies one chosen reconstruction per
+// region plus attributed alternatives. Only the chosen geometry is drawn.
+const SYNTHETIC_BORDERLAND_INTERIOR: [number, number] = [7.5, 47.2];
+// Inside Sample Upland in 1850, but claimed for Sample Borderland by the synthetic Chronicle B.
+const ALTERNATIVE_CLAIM_AREA: [number, number] = [10.5, 47.2];
+
+/** How many distinct polygons the Map Layer fills, in the viewport or under one coordinate. */
+async function renderedPolygonCount(page: Page, coordinate?: [number, number]) {
+  return page.evaluate((lngLat) => {
+    type RenderedFeature = {
+      id?: number | string;
+      layer?: { id?: string };
+      source?: string;
+    };
+    const map = (
+      window as Window & {
+        __mbMapsDemoMap?: {
+          project(coordinate: [number, number]): { x: number; y: number };
+          queryRenderedFeatures(point?: [number, number]): RenderedFeature[];
+        };
+      }
+    ).__mbMapsDemoMap!;
+    const point = lngLat ? map.project(lngLat) : null;
+    const features = point
+      ? map.queryRenderedFeatures([point.x, point.y])
+      : map.queryRenderedFeatures();
+
+    // Map Layer polygon fills; the basemap draws from its own demo-* sources.
+    return new Set(
+      features
+        .filter(
+          (feature) =>
+            feature.source?.startsWith("mb-maps") && feature.layer?.id?.endsWith(":fill"),
+        )
+        .map((feature) => String(feature.id)),
+    ).size;
+  }, coordinate ?? null);
+}
+
+test("History competing sources draw one chosen reconstruction and explain attributed alternatives @smoke", async ({
+  page,
+}) => {
+  await openHistory(page);
+
+  const popup = page.getByTestId("history-popup");
+  const selected = page.getByRole("region", { name: "Selected feature" });
+  const context = page.getByRole("region", { name: "Historical context" });
+  const politySelect = page.getByRole("combobox", {
+    name: "Select a polity at this date",
+  });
+
+  await page.getByRole("button", { name: "Show Competing sources (synthetic)" }).click();
+  await expect(activeYear(page)).toHaveText("1850 AD");
+  await expect(page.getByText(/^Synthetic fixture: these regions/)).toBeVisible();
+  await expect(placeLabels(page)).toHaveCount(0);
+
+  // Exactly the chosen geometry: two regions, and the area an alternative claims belongs to
+  // the region the chosen reconstruction draws there. No phantom competing polygon.
+  await expect.poll(() => renderedPolygonCount(page)).toBe(2);
+  await expect.poll(() => renderedPolygonCount(page, ALTERNATIVE_CLAIM_AREA)).toBe(1);
+  await click(page, ALTERNATIVE_CLAIM_AREA);
+  await expect(popup).toContainText("Sample Upland (synthetic)");
+  await expect(popup.getByRole("region", { name: "Boundary source" })).toContainText(
+    "Approximate boundary",
+  );
+
+  // Pointer inspection: source, status, uncertainty, and a keyboard-reachable disclosure.
+  await click(page, SYNTHETIC_BORDERLAND_INTERIOR);
+  await expect(popup).toContainText("Sample Borderland (synthetic)");
+  const source = popup.getByRole("region", { name: "Boundary source" });
+  await expect(source).toContainText("Reconstructed boundary");
+  await expect(source).toContainText(
+    "Illustrative Survey A (synthetic source invented for this demo)",
+  );
+  await expect(source).toContainText("Eastern edge uncertain by about one degree (invented).");
+  const disclosure = source.getByText("2 competing interpretations (not drawn)");
+  await disclosure.focus();
+  await page.keyboard.press("Enter");
+  await expect(source.getByText("Illustrative Chronicle B", { exact: false })).toBeVisible();
+  await expect(source).toContainText(
+    "along the river, inside the area drawn here as Sample Upland",
+  );
+  await expect(source).toContainText("Evidence: An invented toll register naming river crossings.");
+  await expect(source).toContainText("Illustrative Atlas C");
+
+  // Zooming keeps the attribution and still draws only the chosen regions.
+  const position = await clientPosition(page, SYNTHETIC_BORDERLAND_INTERIOR);
+  await page.mouse.move(position.x, position.y);
+  await page.mouse.wheel(0, -400);
+  await expect(selected).toContainText("Illustrative Survey A");
+  await expect.poll(() => renderedPolygonCount(page, ALTERNATIVE_CLAIM_AREA)).toBe(1);
+
+  // Seeking to the next held snapshot switches to its chosen reconstruction and attribution;
+  // the earlier alternatives do not linger.
+  await seek(page, 1925);
+  await expect(selected).toContainText("Documentary boundary");
+  await expect(selected).toContainText("Illustrative Treaty Map D");
+  await expect(selected).not.toContainText("competing interpretation");
+  await expect(selected).not.toContainText("Illustrative Survey A");
+
+  // Out of period, the retained context keeps the attribution of the date it refers to.
+  await seek(page, 1950);
+  await expect(popup).toHaveCount(0);
+  await expect(politySelect).toHaveValue("");
+  await expect(context).toContainText("Out of period");
+  await expect(context).toContainText("Details refer to1925 AD");
+  const retainedSource = context.getByRole("region", {
+    name: "Boundary source",
+  });
+  await expect(retainedSource).toContainText("Documentary boundary");
+  await expect(retainedSource).toContainText("Illustrative Treaty Map D");
+  await expect.poll(() => renderedPolygonCount(page)).toBe(1);
+
+  // Keyboard selection of the approximate region discloses its own source.
+  await politySelect.selectOption("synthetic-upland");
+  await expect(selected).toContainText("Approximate boundary");
+  await expect(selected).toContainText("Illustrative Gazetteer E");
+});

@@ -4,6 +4,15 @@
 
 ### Minor Changes
 
+- Competing-source context for historical Map Features (#231 phase C, Atlas Decision 1.12).
+  `HistoricalMapFeatureRecord.reconstructions` names the one boundary reconstruction an
+  application chose to draw per period, with its source, evidence status, uncertainty and
+  attributed alternative interpretations that have no geometry. New:
+  `resolveHistoricalMapFeatureReconstruction`, `selection.getFeatureReconstruction` and
+  `HistoricalMapFeatureReconstructionDetails`; `HistoricalMapFeatureContextPanel` shows the
+  reconstruction of the date a retained context refers to. The History demo gains a
+  "Competing sources (synthetic)" scenario with an explicitly invented fixture; the
+  CShapes-Europe scenarios are unchanged (ADR 0005).
 - Opt-in tile persistence (#264). `tilePersistence` on a `flatRuntime="maps"` Map View keeps
   downloaded Tileset MVT bytes in browser Cache Storage (about 250 MiB by default, set with
   `budgetBytes`), so later visits reuse them. It is off by default.
