@@ -17,8 +17,9 @@ For a commit-pinned Git dependency, list `@moritzbrantner/maps` in your app's
 `trustedDependencies` so Bun runs its `prepare` script. That script builds JS,
 CSS, and the WASM runtime from the pinned source. The install environment needs
 stable Rust with the `wasm32-unknown-unknown` target and `wasm-bindgen` 0.2.129.
-Binaryen is installed as part of the build dependencies. The repository's
-`nix develop` shell supplies the pinned tooling. Missing tooling fails the
+Binaryen is installed as part of the build dependencies. On Linux,
+`bash scripts/install-wasm-bindgen-ci.sh` installs the checksum-verified
+`wasm-bindgen` CLI. Missing tooling fails the
 install instead of producing an incomplete package. Ordinary checkout installs
 and packing existing build output do not run this build.
 

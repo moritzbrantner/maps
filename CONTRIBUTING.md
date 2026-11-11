@@ -8,8 +8,10 @@
   target when changing Maps-owned Rust computation. `rust-toolchain.toml`
   selects the `stable` channel.
 - `wasm-bindgen-cli` `0.2.129` when building or verifying the distributable
-  Maps WASM artifact:
+  Maps WASM artifact. On Linux, `bash scripts/install-wasm-bindgen-ci.sh`
+  installs the checksum-verified precompiled CLI that CI uses; elsewhere use
   `cargo install wasm-bindgen-cli --version 0.2.129 --locked`.
+- Node 24, matching CI.
 - Playwright Chromium installed with
   `bunx playwright install --with-deps chromium` when running browser or packed
   WASM package tests locally.
@@ -188,15 +190,3 @@ filenames change.
 
 Update `CHANGELOG.md`, ensure `bun run verify:release` passes, and publish via
 the existing tag or workflow process.
-
-
-## Nix Development Environment
-
-Linux development can use the repository-local tool environment:
-
-```sh
-nix develop
-bun install --frozen-lockfile
-```
-
-The shell provides Bun 1.4.3, wasm-bindgen CLI 0.2.129, Binaryen/`wasm-opt`, Node 24, and the Rustup proxy. `rust-toolchain.toml` remains the Rust compiler/target authority, while `bun.lock` and `Cargo.lock` remain the dependency authorities. Existing verification commands are unchanged; for example, `bun run verify:agent`, `bun run verify:rust`, and `bun run verify:fast`.

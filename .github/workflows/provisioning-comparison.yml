@@ -1,8 +1,9 @@
 name: Maps Provisioning Comparison
 
-# Optional issue #211 experiment: conventional Ubuntu, Ubuntu + locked Nix and a
-# prebuilt digest-pinned agent image run the identical Rust/WASM task on the
-# same hosted runner class. Manual only; never a required check.
+# Optional issue #211 experiment: conventional Ubuntu and a prebuilt
+# digest-pinned agent image run the identical Rust/WASM task on the same hosted
+# runner class. (The locked Nix variant was retired on 2026-11-11.) Manual only;
+# never a required check.
 on:
   workflow_dispatch:
     inputs:
@@ -61,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [ubuntu, nix, container]
+        variant: [ubuntu, container]
         sample: ${{ fromJSON(inputs.samples) }}
     uses: ./.github/workflows/provisioning-sample.yml
     with:
@@ -78,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [ubuntu, nix, container]
+        variant: [ubuntu, container]
     uses: ./.github/workflows/provisioning-sample.yml
     with:
       variant: ${{ matrix.variant }}
@@ -94,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [ubuntu, nix, container]
+        variant: [ubuntu, container]
         sample: ${{ fromJSON(inputs.samples) }}
     uses: ./.github/workflows/provisioning-sample.yml
     with:
@@ -116,7 +117,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          for variant in ubuntu nix container; do
+          for variant in ubuntu container; do
             gh cache delete --repo "$GITHUB_REPOSITORY" \
               "maps-provisioning-${variant}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" || true
           done

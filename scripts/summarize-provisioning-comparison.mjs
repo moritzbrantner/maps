@@ -16,13 +16,13 @@ const median = (values) => {
 
 const VERIFY = "Execute identical Rust and WASM verification";
 const INSTALL = "Install identical package dependencies";
-const RESTORE = /^(Restore persisted caches|Import persisted Nix store paths)$/;
+const RESTORE = /^Restore persisted caches$/;
 const PROVISION =
-  /^(Conventional .*|Install Nix|Activate locked Nix CLI environment|Download prebuilt agent image|Load digest-verified agent image)$/;
+  /^(Conventional .*|Download prebuilt agent image|Load digest-verified agent image)$/;
 
 /** Classifies one hosted job of the comparison into a timed sample. */
 export function summarizeJob(job) {
-  const match = /(ubuntu|nix|container) (cold|prime|warm) (\d+)$/.exec(job.name);
+  const match = /(ubuntu|container) (cold|prime|warm) (\d+)$/.exec(job.name);
   if (!match) return undefined;
   const steps = job.steps ?? [];
   const sum = (predicate) =>

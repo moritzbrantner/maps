@@ -3,8 +3,11 @@
 The CI caller preserves the repository's validation commands and required
 `merge-ready` check. It changes where work executes:
 
-- Rust format, Clippy, native tests and the WASM-target check run in the Nix job.
-- Clean Git-source acceptance runs independently in the same Nix environment.
+- Rust format, Clippy, native tests and the WASM-target check run in the Rust
+  Validation job, provisioned conventionally: the Rust toolchain action
+  (matching `rust-toolchain.toml`), `setup-bun` from `packageManager`,
+  `setup-node` 24 and the checksum-verified wasm-bindgen installer.
+- Clean Git-source acceptance runs independently with the same provisioning.
   Its real install, frozen reinstall, stale-stylesheet rebuild and installed-WASM
   runtime proof remain unchanged. This job never consumes a prepared Maps
   artifact. Its only Actions cache contains downloaded Cargo registry/Git inputs,
@@ -90,7 +93,8 @@ cost. This CI timing comparison is not a Maps runtime-profiler/Moonlight verdict
 
 ## Provisioning
 
-Conventional Ubuntu, the locked Nix shell and a prebuilt agent image are
-compared by the manual `Maps Provisioning Comparison` workflow; see
+Conventional Ubuntu provisioning and a prebuilt agent image are compared by the
+manual `Maps Provisioning Comparison` workflow. The locked Nix shell was retired
+on 2026-11-11; see
 [provisioning-comparison.md](provisioning-comparison.md) for method, results,
 rollback and the current recommendation.
