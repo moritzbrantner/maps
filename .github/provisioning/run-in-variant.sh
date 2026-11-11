@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs one task command for a provisioning-comparison variant (issue #211).
-# Host variants (ubuntu, nix) run it directly; the container variant runs it in
+# The host variant (ubuntu) runs it directly; the container variant runs it in
 # the prebuilt agent image as the runner user, mounting the checkout and the
 # same persisted cache directories the host variants use.
 set -euo pipefail

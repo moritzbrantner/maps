@@ -13,22 +13,17 @@ test("verified CLI bootstrap is valid Bash", () => {
   execFileSync("bash", ["-n", installerPath], { stdio: "pipe" });
 });
 
-test("verified CLI hashes remain aligned with the pinned Nix flake", () => {
-  const flake = read("flake.nix");
-  const wasmAssets = flake.split("wasmBindgenAsset =")[1]?.split("wasmBindgen =")[0];
-  assert.ok(wasmAssets, "wasmBindgenAsset must remain in flake.nix");
-
-  const expectedDigests = [...wasmAssets.matchAll(/hash = "sha256-([^"]+)"/g)]
-    .map((match) => {
-      assert.ok(match[1]);
-      return Buffer.from(match[1], "base64").toString("hex");
-    });
+test("verified CLI pins one release and a SHA-256 digest per supported host", () => {
   const installer = read("scripts/install-wasm-bindgen-ci.sh");
-  const declaredDigests = [...installer.matchAll(/^\s+digest=([a-f0-9]{64})$/gm)]
+  assert.match(installer, /^version=\d+\.\d+\.\d+$/m);
+  const pinned = [...installer.matchAll(/^\s+target=(\S+)\n\s+digest=([a-f0-9]{64})$/gm)]
     .map((match) => match[1]);
 
-  assert.equal(expectedDigests.length, 2, "expected x86_64 and aarch64 pinned hashes");
-  assert.deepEqual(declaredDigests, expectedDigests);
+  assert.deepEqual(
+    pinned,
+    ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"],
+    "expected x86_64 and aarch64 pinned digests",
+  );
   assert.match(installer, /sha256sum --check --status/);
   assert.match(installer, /export PATH="\$install_dir:\$PATH"/);
   assert.match(installer, /printf '%s\\n' "\$install_dir" >> "\$GITHUB_PATH"/);
@@ -65,7 +60,7 @@ test("parallel Git installation remains required and independent of prepared art
   const summary = ci.split("  merge-ready:\n")[1];
   assert.ok(gitInstall);
   assert.ok(summary);
-  assert.match(gitInstall, /nix develop --command bash/);
+  assert.match(gitInstall, /bash scripts\/install-wasm-bindgen-ci\.sh/);
   assert.match(gitInstall, /bun run verify:git-install/);
   assert.doesNotMatch(gitInstall, /prebuilt_|consume-build-artifact|target\n/);
   assert.match(summary, /- git-install-validation/);

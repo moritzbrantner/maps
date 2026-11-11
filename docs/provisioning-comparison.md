@@ -9,34 +9,35 @@ Nix shells optional, and measure a container candidate before adopting one.
 This page records that measurement and the resulting recommendation. It is
 CI-timing evidence, not a Maps runtime-profiler or Moonlight verdict.
 
+**Nix retired (2026-11-11).** The owner ended the Nix experiment ("You can
+remove nix as far as I'm concerned, that experiment is over"). `flake.nix` and
+`flake.lock` were removed, Rust Validation and Git Install Validation in
+`ci.yml` now use the conventional provisioning below with unchanged task
+commands, and the comparison workflow runs only the `ubuntu` and `container`
+variants. The Nix measurements below are kept as historical evidence.
+
 ## Local fresh-checkout setup
 
-Either path uses the same lockfiles and the same validation commands.
-
-Conventional (any Linux/macOS host):
+Conventional (any Linux/macOS host), using the same lockfiles and validation
+commands as CI:
 
 1. Install Rust with rustup. `rust-toolchain.toml` selects the channel,
    components and the `wasm32-unknown-unknown` target.
 2. Install Bun at the `packageManager` version in `package.json` and Node 24.
 3. Run `bash scripts/install-wasm-bindgen-ci.sh` for the checksum-verified
-   wasm-bindgen CLI (its digests mirror `flake.nix`), or install
+   wasm-bindgen CLI (the script's pinned digests are the authority), or install
    wasm-bindgen-cli 0.2.129 yourself.
 4. Run `bun install --frozen-lockfile`, then `bun run verify:agent` or
    `bun run verify:rust`.
 
-Nix (Linux): run `nix develop`, then the same `bun install --frozen-lockfile`
-and verification commands; see [CONTRIBUTING](../CONTRIBUTING.md#nix-development-environment).
-The shell provides only tools. `rust-toolchain.toml`, `bun.lock` and
-`Cargo.lock` stay authoritative.
-
 ## Rollback path
 
-Nothing here changed a required check. Rust Validation and Git Install
-Validation in `ci.yml` keep using the locked Nix shell, as before. To stop using
-Nix in a job, replace its `Install Nix` and `nix develop --command` steps with the
-conventional steps from `.github/workflows/provisioning-sample.yml` (Rust
-toolchain action, `setup-bun`, `setup-node`, `scripts/install-wasm-bindgen-ci.sh`).
-The task commands do not change. To drop the experiment, delete
+Rust Validation and Git Install Validation in `ci.yml` use the same
+conventional steps as the `ubuntu` variant in
+`.github/workflows/provisioning-sample.yml` (Rust toolchain action, `setup-bun`,
+`setup-node`, `scripts/install-wasm-bindgen-ci.sh`). Restoring Nix would mean
+reverting the 2026-11-11 retirement change and needs a new owner decision. To
+drop the experiment, delete
 `provisioning-comparison.yml`, `provisioning-sample.yml`, `.github/provisioning/`
 and the summary script with its test. No package, registry entry or persistent
 cache outlives a run: the image artifact expires after one day and the run's
@@ -44,12 +45,14 @@ caches are deleted by its last job.
 
 ## Method
 
-`Maps Provisioning Comparison` (manual `workflow_dispatch`, never required) runs
-three variants of one task on fresh GitHub-hosted `ubuntu-26.04` runners:
+`Maps Provisioning Comparison` (manual `workflow_dispatch`, never required) ran
+three variants of one task on fresh GitHub-hosted `ubuntu-26.04` runners. Since
+2026-11-11 it runs only `ubuntu` and `container`:
 
 - **ubuntu**: Rust toolchain action, `setup-bun` from `package.json`,
   `setup-node` 24 and the verified wasm-bindgen installer.
-- **nix**: `NixOS/nix-installer-action`, then the locked `nix develop` shell.
+- **nix** (retired 2026-11-11): `NixOS/nix-installer-action`, then the locked
+  `nix develop` shell.
 - **container**: an image built once per run from
   `.github/provisioning/agent-image.Dockerfile`. Its base is pinned by digest. It
   takes Rust from `rust-toolchain.toml`, Bun from `packageManager`, Node 24 and
@@ -81,7 +84,7 @@ The image therefore travels as a one-day run artifact, and each sample checks it
 content-addressed image ID after `docker load`. Artifact download and load stand
 in for a registry pull. A real registry pull was **not measured**.
 
-## Results (2026-11-08)
+## Results (2026-11-08, historical; includes the retired Nix variant)
 
 Run [42441346269](https://github.com/moritzbrantner/maps/actions/runs/42441346269):
 33/33 jobs succeeded, with five cold and five warm samples per variant plus one
@@ -150,17 +153,16 @@ Readings:
   as the baseline for agent tasks and new CI jobs. It was fastest to the first
   test, cold and warm, and adds no authority beyond the lockfiles,
   `rust-toolchain.toml` and `packageManager`.
-- Retain the locked Nix shell as an optional local environment and in the two
-  existing required jobs. It costs about 20 s of startup per job and showed no
-  throughput or reliability advantage. Moving those jobs to conventional
-  provisioning would change required-check provisioning, so it is left to a
-  separate, owner-approved change. Do not cache the Nix store in Actions.
+- ~~Retain the locked Nix shell as an optional local environment and in the two
+  existing required jobs.~~ Superseded 2026-11-11: the owner retired Nix. It
+  cost about 20 s of startup per job and showed no throughput or reliability
+  advantage; both required jobs now use conventional provisioning. Shortly
+  before retirement, Rust Validation also failed on a transient
+  `cache.nixos.org` download error.
 - **Do not adopt the prebuilt agent container.** It lost on startup, total time
   and runner time in both cache states, and it adds a 556 MB artifact or
   registry package plus image maintenance. Revisit only if registry pulls are
   available and an agent platform reuses images across tasks.
-- Align the flake's Bun (1.4.3) with `packageManager` (1.4.4) on its next update.
-  Node patch versions also differ between `nixpkgs` and `setup-node`.
 
 ## Not measured (inconclusive)
 
