@@ -47,6 +47,12 @@ run("bun", ["run", "verify:engine-mixed-layer-evidence"], {
   label: "mixed-layer journey trace and Maps work observations",
 });
 
+run("bun", ["run", "verify:engine-heat-scalar-evidence"], {
+  cwd: rootDir,
+  env: { ...process.env, MAPS_HEAT_SCALAR_EVIDENCE_DIR: path.join(evidenceRoot, "heat-scalar") },
+  label: "heat/scalar journey trace, invalidation contract and frame observations",
+});
+
 const score = run(runtimeProfiler, [
   "score",
   "--reference",

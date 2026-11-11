@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "heat-scalar-journey-v1",
+  "description": "#171 Fast: the public flatRuntime=\"maps\" Map View with the heat-map-density-index-v1 density and the scalar-field-grid-v1 field (masked, with contours) next to a GeoJSON polygon and a Point Layer (e2e/fixtures/heat-scalar-journey.tsx).",
+  "fixture": {
+    "page": "/e2e/fixtures/heat-scalar-journey.html",
+    "layers": ["scalar-field", "density", "polygon", "point"],
+    "density": {
+      "generator": "berlin-phyllotaxis-demand-v1",
+      "pointCount": 10000,
+      "weightMetric": "demand",
+      "strategy": "stable-raster",
+      "radius": { "meters": 50000 },
+      "asyncRender": true
+    },
+    "field": {
+      "generator": "europe-temperature-observations-v1",
+      "columns": 320,
+      "rows": 200,
+      "domainBounds": [-25, 34, 35, 66],
+      "interpolationK": 10,
+      "interpolationPower": 2,
+      "mask": "polygon with one hole",
+      "renderMode": "raster-contours",
+      "contourLevels": [16, 20, 24, 28],
+      "asyncRender": true
+    },
+    "build": "vite production build of the fixture with the built dist/wasm package"
+  },
+  "lanes": {
+    "control": "the same Map View without its Heat Layers (?heat=0): camera-pan, camera-zoom, camera-orient, resize and teardown",
+    "heat": "the full journey"
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "initialCamera": { "bearing": 0, "center": [8, 50], "pitch": 0, "zoom": 3.4 },
+  "journey": [
+    { "phase": "load", "operations": ["navigate until both heat surfaces are decoded and drawn"] },
+    { "phase": "camera-pan", "operations": ["drag 220x90 px in 20 steps"] },
+    { "phase": "camera-zoom", "operations": ["3 wheel steps of -240 toward Berlin"] },
+    { "phase": "camera-orient", "operations": ["60 animation frames to bearing 35 and pitch 40 and 60 back", "setViewState to the initial camera"] },
+    { "phase": "resize", "operations": ["1280x720 to 1024x640", "back to 1280x720"] },
+    { "phase": "density-seek", "operations": ["6 density filter seeks, each awaited until its surface is presented"] },
+    { "phase": "field-update", "operations": ["6 field data refreshes, each awaited until its surface is presented"] },
+    { "phase": "style", "operations": ["4 color ramp changes of both layers, each awaited"] },
+    { "phase": "superseded-bursts", "operations": ["6 density seeks on consecutive frames", "6 field refreshes on consecutive frames"] },
+    { "phase": "teardown", "operations": ["3 unmount/remount cycles of the Map View"] }
+  ],
+  "observations": [
+    "per-phase-heat-scalar-work",
+    "raster-draws-and-triangles",
+    "frame-intervals",
+    "long-tasks",
+    "input-to-presented-surface-latency",
+    "superseded-async-results",
+    "js-heap-after-gc"
+  ],
+  "runtimePhases": [
+    "camera-pan",
+    "camera-zoom",
+    "camera-orient",
+    "resize",
+    "density-seek",
+    "field-update",
+    "style",
+    "superseded-bursts",
+    "teardown"
+  ]
+}

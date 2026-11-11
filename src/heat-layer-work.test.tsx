@@ -3,7 +3,11 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import type { MapPoint } from "./aggregation";
 import type { HeatLayerProps } from "./heat-layer-types";
-import type { HeatLayerDataWork, HeatLayerSurfaceWork } from "./heat-layer-work";
+import {
+  observeHeatLayerWork,
+  type HeatLayerDataWork,
+  type HeatLayerSurfaceWork,
+} from "./heat-layer-work";
 import type { MapsHeatLayerViewportGeometry } from "./maps-heat-layer-bounds";
 import { MapsHeatLayerMount } from "./maps-heat-layer-mount";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
@@ -207,6 +211,29 @@ describe("heat/scalar work counters", () => {
 
     expect(camera.work.surfaceRasterizations).toBe(2);
   });
+
+  test("an installed observation totals the work of every layer and render state created after it", async () => {
+    const observation = observeHeatLayerWork();
+    const before = observation.totals();
+    const density = await mountHeatLayer({ heatmapAsyncRender: false, points: createPoints(200) });
+    const field = await mountHeatLayer(FIELD_PROPS);
+    const densityCamera = createCamera(density.descriptor());
+    const fieldCamera = createCamera(field.descriptor());
+    densityCamera.frame(BASE_VIEW);
+    fieldCamera.frame(BASE_VIEW);
+
+    const after = observation.totals();
+    expect(after.layers - before.layers).toBe(2);
+    expect(after.renderStates - before.renderStates).toBe(2);
+    expect(after.data.sourceIndexBuilds - before.data.sourceIndexBuilds).toBe(
+      density.descriptor().work.sourceIndexBuilds + field.descriptor().work.sourceIndexBuilds,
+    );
+    expect(after.data.fieldGridBuilds - before.data.fieldGridBuilds).toBe(1);
+    expect(after.surface.rasterUploads - before.surface.rasterUploads).toBe(
+      densityCamera.work.rasterUploads + fieldCamera.work.rasterUploads,
+    );
+    expect(after.surface.rasterUploads - before.surface.rasterUploads).toBe(2);
+  });
 });
 
 /* -------------------------------- harness --------------------------------- */
@@ -309,6 +336,9 @@ function zeroData(): HeatLayerDataWork {
 
 function zeroSurface(): HeatLayerSurfaceWork {
   return {
+    rasterDrawTriangles: 0,
+    rasterDraws: 0,
+    rasterImagesDecoded: 0,
     rasterUploadPixels: 0,
     rasterUploads: 0,
     surfacePlans: 0,

@@ -23,6 +23,7 @@ type RasterTriangle = readonly [RasterVertex, RasterVertex, RasterVertex];
 const TRANSFORM_EPSILON = 1e-7;
 const MAX_MERCATOR_LATITUDE = 85.05112878;
 
+/** Draws a geographic raster as affine triangles and returns how many triangles it drew. */
 export function drawCanvasGeographicRaster({
   bounds,
   context,
@@ -41,7 +42,7 @@ export function drawCanvasGeographicRaster({
   project: CanvasGeographicRasterProject;
   subdivisions?: number;
   verticalScale?: CanvasGeographicRasterVerticalScale;
-}) {
+}): number {
   if (
     image.width <= 0 ||
     image.height <= 0 ||
@@ -51,7 +52,7 @@ export function drawCanvasGeographicRaster({
     subdivisions < 1 ||
     subdivisions > 32
   ) {
-    return false;
+    return 0;
   }
 
   const vertexAt = (u: number, v: number): RasterVertex | null => {
@@ -82,9 +83,9 @@ export function drawCanvasGeographicRaster({
 
   context.save();
   context.globalAlpha = clamp(opacity, 0, 1);
-  let drawn = false;
+  let drawn = 0;
   const drawTriangle = (triangle: RasterTriangle) => {
-    drawn = drawRasterTriangle(context, image, triangle, devicePixelRatio) || drawn;
+    if (drawRasterTriangle(context, image, triangle, devicePixelRatio)) drawn += 1;
   };
 
   for (let row = 0; row < subdivisions; row += 1) {
@@ -100,7 +101,7 @@ export function drawCanvasGeographicRaster({
           v0: row / subdivisions,
           v1: (row + 1) / subdivisions,
         },
-        0,
+        { u: 0, v: 0 },
         vertexAt,
         view,
         drawTriangle,
@@ -136,7 +137,7 @@ type RasterCell = {
 
 function drawRasterCell(
   cell: RasterCell,
-  depth: number,
+  depth: { u: number; v: number },
   vertexAt: (u: number, v: number) => RasterVertex | null,
   view: { height: number; width: number },
   drawTriangle: (triangle: RasterTriangle) => void,
@@ -147,7 +148,9 @@ function drawRasterCell(
   const complete = corners.every((corner) => corner !== null);
   if (complete && isCellOffScreen(corners as RasterVertex[], view)) return;
 
-  if (depth < MAX_CELL_SPLIT_DEPTH) {
+  const canSplitU = depth.u < MAX_CELL_SPLIT_DEPTH;
+  const canSplitV = depth.v < MAX_CELL_SPLIT_DEPTH;
+  if (canSplitU || canSplitV) {
     const uMid = (u0 + u1) / 2;
     const vMid = (v0 + v1) / 2;
     const top = vertexAt(uMid, v0);
@@ -155,24 +158,67 @@ function drawRasterCell(
     const left = vertexAt(u0, vMid);
     const right = vertexAt(u1, vMid);
     const center = vertexAt(uMid, vMid);
-    const split =
+    // Perspective bends a cell mostly along one axis; split only the axis whose edges bend, so
+    // the mesh does not multiply triangles along an axis that is already affine.
+    const bentU =
       !complete ||
       exceedsAffineError(top, topLeft!, topRight!) ||
-      exceedsAffineError(bottom, bottomLeft!, bottomRight!) ||
+      exceedsAffineError(bottom, bottomLeft!, bottomRight!);
+    const bentV =
+      !complete ||
       exceedsAffineError(left, topLeft!, bottomLeft!) ||
-      exceedsAffineError(right, topRight!, bottomRight!) ||
-      // The center of the two triangles' shared diagonal.
-      exceedsAffineError(center, topRight!, bottomLeft!);
+      exceedsAffineError(right, topRight!, bottomRight!);
+    // The center of the two triangles' shared diagonal: a twist neither edge pair shows.
+    const twisted = complete && exceedsAffineError(center, topRight!, bottomLeft!);
+    const splitU = canSplitU && (bentU || (twisted && !bentV));
+    const splitV = canSplitV && (bentV || (twisted && !bentU));
 
-    if (split) {
+    if (splitU && splitV) {
+      const next = { u: depth.u + 1, v: depth.v + 1 };
       for (const child of [
         { bottomLeft: left, bottomRight: center, topLeft, topRight: top, u0, u1: uMid, v0, v1: vMid },
         { bottomLeft: center, bottomRight: right, topLeft: top, topRight, u0: uMid, u1, v0, v1: vMid },
         { bottomLeft, bottomRight: bottom, topLeft: left, topRight: center, u0, u1: uMid, v0: vMid, v1 },
         { bottomLeft: bottom, bottomRight, topLeft: center, topRight: right, u0: uMid, u1, v0: vMid, v1 },
       ]) {
-        drawRasterCell(child, depth + 1, vertexAt, view, drawTriangle);
+        drawRasterCell(child, next, vertexAt, view, drawTriangle);
       }
+      return;
+    }
+    if (splitU) {
+      const next = { u: depth.u + 1, v: depth.v };
+      drawRasterCell(
+        { bottomLeft, bottomRight: bottom, topLeft, topRight: top, u0, u1: uMid, v0, v1 },
+        next,
+        vertexAt,
+        view,
+        drawTriangle,
+      );
+      drawRasterCell(
+        { bottomLeft: bottom, bottomRight, topLeft: top, topRight, u0: uMid, u1, v0, v1 },
+        next,
+        vertexAt,
+        view,
+        drawTriangle,
+      );
+      return;
+    }
+    if (splitV) {
+      const next = { u: depth.u, v: depth.v + 1 };
+      drawRasterCell(
+        { bottomLeft: left, bottomRight: right, topLeft, topRight, u0, u1, v0, v1: vMid },
+        next,
+        vertexAt,
+        view,
+        drawTriangle,
+      );
+      drawRasterCell(
+        { bottomLeft, bottomRight, topLeft: left, topRight: right, u0, u1, v0: vMid, v1 },
+        next,
+        vertexAt,
+        view,
+        drawTriangle,
+      );
       return;
     }
   }

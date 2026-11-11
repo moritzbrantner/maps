@@ -353,8 +353,98 @@ whenever an input changes. The retained-vs-uncached oracle
 These are work counts, not frame-time evidence. They are not yet part of the root
 `performance:work` contract, which collects Cargo evidence only. No WASM bridge is involved
 while TypeScript is the authority, so bridge bytes are reported as not applicable rather
-than zero. Full-map frame distribution, stalls, memory and async latency are still missing
-for heat/scalar (#171 phase 5).
+than zero. The full-map frame distribution, stalls, memory and async latency are measured by
+the journey below.
+
+## Heat/scalar full-map journey (#171 phase 5)
+
+`heat-scalar-journey-v1` mounts the canonical kernel workloads in one public
+`flatRuntime="maps"` Map View (`e2e/fixtures/heat-scalar-journey.tsx`): the
+`heat-map-density-index-v1` density (10,000 demand-weighted points, default meter radius,
+stable raster, async) and the `scalar-field-grid-v1` field (320 × 200 cells, K = 10,
+power 2, async), clipped by a polygon mask with a hole and traced into contours, next to a
+GeoJSON polygon and a Point Layer. Both use the same generators
+(`e2e/fixtures/heat-scalar-workloads.ts`). A control lane mounts the same Map View without
+the Heat Layers, so the camera phases of the two lanes differ only by the heat surfaces.
+The capture path is described in
+[engine-evidence.md](engine-evidence.md#heatscalar-journey-evidence-171):
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-heat-scalar-evidence
+```
+
+The surface work counters gained `rasterDraws`, `rasterDrawTriangles` (the clipped affine
+triangles those draws submit to Canvas) and `rasterImagesDecoded`. The journey reads them
+through `observeHeatLayerWork()`, an evidence-only registry that retains nothing unless a
+page installs it. `e2e/maps-heat-scalar-journey.spec.ts` asserts the same invalidation
+contract on every browser run.
+
+Two captures at `fa172da91bacb2a00321f4a9955f4afb76e7665c` (clean tree), WASM SHA-256
+`30ce7958b07d0710c2d146ecb51f67d240981def1399ae2a2fa9c6598b75ab1b`, runtime-profiler
+`6d2c92e`, Chromium headless shell 158.0.8127.18, Playwright 1.65.0, Node 24.16.0, Ryzen 7
+5700X, Linux x64. The pinned collector launches Chromium without WebGPU, so both lanes ran
+the Canvas fallback with software rasterization. Frame intervals are `requestAnimationFrame`
+intervals; long tasks come from the in-page observer. Values are capture A / capture B.
+
+| Phase | Control frame p95 / max (ms) | Heat frame p95 / max (ms) | Heat long tasks (count, total) | Heat work |
+| --- | --- | --- | --- | --- |
+| Pan (drag, 20 steps) | 16.7 / 16.8 | 16.7 / 16.8 | 0 | 96 raster draws, 10,070 / 9,890 triangles; no rasterization or upload |
+| Wheel zoom (3 steps) | 16.8 / 16.8 | 49.9 / 50.0, 33.4 / 50.1 | 0 | 8 density rasterizations, 7 superseded and discarded, 1 upload |
+| Bearing 35° + pitch 40° (120 frames) | 83.3 / 83.4 | 216.6 / 216.7 | 119, 18.1 s / 17.9 s (longest 216 ms) | 245 draws, 258,488 / 264,866 triangles, 1 rasterization |
+| Resize 1024 × 640 and back | 16.8 / 16.8 | 16.7 / 16.8 | 0 | 8 draws, 986 triangles; nothing rebuilt |
+| 6 density seeks | — | 16.7 / 33.4, 16.8 / 33.4 | 0 | 6 index builds (42,507 points) and rasterizations; no field work |
+| 6 field refreshes | — | 33.4 / 66.6, 16.8 / 33.4 | 0 | 6 grids (64,000 cells each), images and contours; no density points re-indexed |
+| 4 color ramp changes | — | 16.8 / 33.4 | 0 | 4 field images from the retained grid (4 grid reuses), 4 density rasterizations |
+| Superseded bursts | — | 33.4 / 50.0, 16.8 / 50.0 | 0 | 5 superseded density rasters discarded; only the last commits |
+
+No camera phase rebuilt a density index, scalar-field grid, field image or contour set.
+
+- **Input → presented surface** (18 awaited commits: until the new raster is decoded, plus
+  one animation frame): p50 98.2 / 83.2 ms, p95 181.7 / 165.5 ms. Density seeks 65 to
+  111 ms, field refreshes 80 to 130 ms, ramp changes of both layers 115 to 182 ms. The latency
+  includes the deliberate async deferral, React commits, image decoding and frame waits.
+- **Page load to both surfaces presented:** 293 / 277 ms (control lane: 156 / 122 ms to a
+  ready Map View). No long task in either lane.
+- **JS heap after forced GC:** heat lane 9.2 MB ready, 13.1 MB after the journey, 6.4 to
+  6.5 MB across three unmounts and 10.5 MB after remount. Control lane 4.7 MB ready and 5.3 to
+  5.4 MB unmounted. Unmounting releases the journey's retained surfaces. GPU, WASM linear and
+  total browser memory are unavailable.
+
+**Measured bottleneck: geographic rasters under pitch.** Canvas maps an image only affinely,
+so a raster under a pitched camera is drawn as clipped affine triangles split until they
+follow the projection within 0.5 px (#171 phase 3). Pitched frames drew about 2,100 triangles
+for two rasters, which added about 80 ms per frame over the control lane (heat p50 133 ms
+against 67 ms). A CPU profile of that phase attributes it to Canvas work (`drawImage`, clip,
+`save`/`restore` and native rasterization) and to per-vertex WASM projection; no heat/scalar
+computation runs in it. An experiment with a 2 px error limit cut the triangles by 70 % but
+the added long-task time only from 10.3 s to 5.8 s, still far over the frame budget, at the
+cost of the 0.5 px alignment; it was not adopted.
+
+**Changed here:** `drawCanvasGeographicRaster` now splits only the axis whose edges bend.
+Unpitched field frames are latitude-linear only along rows, so their columns stay whole: the
+pan phase draws 10,070 triangles instead of 19,976 and the resize phase 986 instead of 1,946,
+at the same 0.5 px limit (`src/canvas-geographic-raster.test.ts`; the phase 3 alignment
+spec passes on both backends). Pitched frames are bent along both axes and barely change
+(258,488 against 275,380 triangles).
+
+**Not Fast yet.** Unpitched navigation, resize and every data and style change stay within
+the frame budget with no long task. Pitched navigation over heat surfaces does not, and the
+control lane shows that pitched Canvas frames exceed it on this backend even without heat.
+No reference implementation or parent revision runs this journey, so the comparison is
+unavailable and this evidence is descriptive, not a Fast verdict.
+
+**Conditional Rust authority (phase 4): not justified.** The audit found these
+computations in TypeScript: the density source index (weights, filter, normalization), surface
+lowering and rasterization, the scalar IDW grid with mask clipping, the field image and contour
+tracing. In the representative journey none of them produced a long task: each data change
+re-indexed up to 10,000 points or re-interpolated 64,000 cells inside the frame budget. The
+only measured bottleneck is pixel submission in the Canvas overlay, which a Rust kernel would
+not move. TypeScript therefore stays the computational authority (owner decision of
+2026-11-08: measurement-first, no speculative kernels).
+
+Observed, not investigated: the first mount builds the 10,000-point density index twice (three
+data work sets for two Heat Layers at load); remounts build it once.
+A field refresh also rebuilds the field layer's own empty density index.
 
 ## Evidence tooling repair — September 30
 
