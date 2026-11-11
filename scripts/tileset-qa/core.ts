@@ -17,8 +17,8 @@ import {
   MAX_DECODED_TILE_BYTES,
   validateArchiveHeader,
   validateArchiveMetadata,
-} from "../../src/maps-tileset-transport.ts";
-import { validateMapsTilesetMetadata, type MapsTilesetMetadata } from "../../src/maps-tileset.ts";
+} from "../../src/maps-tileset-transport";
+import { validateMapsTilesetMetadata, type MapsTilesetMetadata } from "../../src/maps-tileset";
 
 export const TILESET_QA_SCHEMA = "maps-tileset-qa-v1";
 /** Bump when a check's meaning changes; artifacts of different versions are not comparable. */
@@ -123,6 +123,59 @@ export type TilesetQaKernel = {
     sampleLimit: number,
     maxExpected: number,
   ): TilesetCoverageAudit;
+  /** Revision diff of one tile (`maps-core::tileset_diff`); throws on an undecodable side. */
+  diffMvtTiles(base: Uint8Array, candidate: Uint8Array, sampleLimit: number): MvtTileDiff;
+  /** `[west, south, east, north]` of a canonical tile. */
+  tileLngLatBounds(z: number, x: number, y: number): Float64Array | number[];
+};
+
+export type MvtDiffCounts = {
+  unchanged: number;
+  added: number;
+  removed: number;
+  changed: number;
+  ambiguous: number;
+  unmatchedAdded: number;
+  unmatchedRemoved: number;
+};
+export type MvtFeatureChangeKind =
+  | "added"
+  | "removed"
+  | "changed"
+  | "ambiguous"
+  | "unmatched-added"
+  | "unmatched-removed";
+export type MvtFeatureChange = {
+  kind: MvtFeatureChangeKind;
+  layer: string;
+  geometryType: "point" | "line" | "polygon";
+  id: number | null;
+  baseBounds: [number, number, number, number] | null;
+  candidateBounds: [number, number, number, number] | null;
+  geometryChanged: boolean;
+  propertiesChanged: boolean;
+  properties: Record<string, unknown>;
+};
+export type MvtLayerDiff = {
+  name: string;
+  presence: "both" | "added" | "removed";
+  baseExtent: number | null;
+  candidateExtent: number | null;
+  comparable: boolean;
+  baseFeatures: number;
+  candidateFeatures: number;
+  baseFeaturesWithId: number;
+  candidateFeaturesWithId: number;
+  counts: MvtDiffCounts;
+  propertyKeysAdded: string[];
+  propertyKeysRemoved: string[];
+};
+export type MvtTileDiff = {
+  equal: boolean;
+  counts: MvtDiffCounts;
+  layers: MvtLayerDiff[];
+  changes: MvtFeatureChange[];
+  changesTruncated: boolean;
 };
 
 export type TilesetQaUpstreamVerify = {
@@ -239,7 +292,7 @@ const CHECK_ORDER: TilesetQaCheckId[] = [
 ];
 const SHA256 = /^[0-9a-f]{64}$/;
 
-function describe(error: unknown): string {
+export function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -255,7 +308,7 @@ function mulberry32(seed: number): () => number {
 }
 
 /** Seeded choice of `count` tile indices, taken zoom by zoom so every level is represented. */
-function sampleTileIndices(tiles: Uint32Array, count: number, seed: number): number[] {
+export function sampleTileIndices(tiles: Uint32Array, count: number, seed: number): number[] {
   const total = tiles.length / 3;
   if (total <= count) return Array.from({ length: total }, (_, index) => index);
   const byZoom = new Map<number, number[]>();
@@ -284,12 +337,12 @@ function sampleTileIndices(tiles: Uint32Array, count: number, seed: number): num
   return chosen.sort((a, b) => a - b);
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-type Directory = {
+export type Directory = {
   tiles: Uint32Array;
   tileEntries: number;
   exceeded: boolean;
@@ -300,11 +353,11 @@ type Directory = {
 };
 
 /** Enumerate addressed tiles from the root and leaf directories; no tile bytes are read. */
-async function readDirectory(
+export async function readDirectory(
   pmtiles: PMTiles,
   header: Header,
   archiveBytes: number,
-  limits: TilesetQaLimits,
+  limits: Pick<TilesetQaLimits, "maxAddressedTiles" | "tilesPerFinding">,
   signal: AbortSignal | undefined,
 ): Promise<Directory> {
   const packed: number[] = [];

@@ -186,7 +186,7 @@ Follow-up executable repair `4b8eda5eca95196fafba56b4ea61f998544ece36`:
 The owner split #276 into three PRs. Part 1 is the archive/manifest integrity audit
 with its `maps-tileset-qa-v1` artifact and CLI, described in
 [Versioned Maps Tilesets](maps-tilesets.md#tileset-integrity-qa-276-part-1). Revision
-A/B comparison with the Inspector view (part 2) and seam QA (part 3) are not developed.
+A/B comparison with the Inspector view is part 2, below; seam QA (part 3) is not developed.
 
 - **Developed:** `bun run qa:tileset` audits a manifest and a PMTiles archive through
   the upstream `pmtiles` reader, the Map View's manifest/header/metadata rules and the
@@ -214,6 +214,54 @@ A/B comparison with the Inspector view (part 2) and seam QA (part 3) are not dev
   (250,000 addressed tiles sampled, 4,000,000 full) and the decoded tiles (32 sampled,
   20,000 full); beyond them a check is `inconclusive`. No archive larger than this one
   has been measured.
+
+### Tileset revision diff (#276, part 2 of 3)
+
+Part 2 compares two archives before the candidate is adopted: the `maps-tileset-diff-v1`
+artifact from `bun run qa:tileset -- diff`, and the Revision QA panel of the Engine
+inspector. See [Versioned Maps Tilesets](maps-tilesets.md#tileset-revision-diff-276-part-2).
+Seam QA (part 3) is not developed.
+
+- **Developed:** the CLI and the inspector run the same `runTilesetDiff` over the upstream
+  `pmtiles` reader, the Map View's manifest validator and the Rust kernel
+  `maps-core::tileset_diff` (runtime MVT decoder, via WASM). The synthetic revisions
+  `fixture-revision-r1/r2` (a swapped road, a widened polygon hole, a lost tile and an
+  identical tile) produce the committed diff. A revision compared with itself has no
+  differences. The inspector shows either revision on the Map View and focuses a reported
+  tile; no MapLibre instance is involved.
+- **Correct:** nine Rust kernel tests, 21 diff cases against the built WASM module in
+  `bun run verify:tileset-qa` (52 with part 1), and the browser smoke
+  `e2e/maps-tileset-revision-qa.spec.ts`. Expected results come from how each archive was
+  built: the fixture script states the r1/r2 differences, and the other cases use part 1's
+  test-only PMTiles/MVT writer. They cover equal and reordered bytes, another tile
+  compression, IDs present, absent and repeated, a split feature, reversed winding, schema
+  and property drift, changed attribution, antimeridian coverage, cross-source pairs, a
+  reused revision label, malformed archives, undecodable tiles, budgets and cancellation.
+  Over real data, rewriting each Liechtenstein tile with its layers in reverse order changes
+  the bytes of 168 tiles; all 168 decode as equal (`reencoded`), with no false difference. The
+  smoke test shows the candidate r2 failing closed on the tile the diff reports as lost.
+- **Fast:** measured with `bun scripts/tileset-qa/measure-diff.ts` (five runs per case) on
+  Linux x64, Bun 1.4.4, WASM SHA-256
+  `3269b3736a569820b9f04c8fdd52b4a827e6c113e42775003acfd1e06f9571cb`, against the
+  2,730,127-byte Liechtenstein archive (203 tiles). "Re-encoded" is that archive rewritten
+  uncompressed with each tile's layers reversed (3,972,766 bytes), so every tile with more
+  than one layer differs in bytes but not in features and goes through the kernel:
+
+  | Case | Tiles compared | Range reads | Bytes read | Checks, median (range) | Peak process RSS |
+  | --- | --- | --- | --- | --- | --- |
+  | identical bytes | 0 | 2 | 32,768 | 0.8 ms (0.7–4.7) | 101 MB |
+  | re-encoded, `sampled` | 32 | 66 | 1,383,579 | 41 ms (40–62) | 149 MB |
+  | re-encoded, `full` | 203 | 408 | 6,716,823 | 181 ms (178–182) | 162 MB |
+  | cross-source (north variant) | 0 | 2 | 32,768 | 1.1 ms (0.7–2.2) | 167 MB |
+
+  Hashing streams both archives once before the checks (3–5 ms here) and is not in the
+  range-read columns. RSS is the whole Bun process across all cases in one run, so it
+  only grows; it is an upper bound, not the cost of one case. An unchanged revision costs
+  two directory reads; a changed one costs two tile reads per compared tile plus one
+  kernel diff per tile whose bytes differ. Ordinary map preview never runs the diff. The
+  inspector fetches both archives whole on an explicit **Compare revisions**; for the
+  synthetic pair that is 2,067 bytes. No archive larger than the regional one has been
+  measured.
 
 ### Opt-in raw-tile persistence (#264)
 

@@ -311,6 +311,7 @@ fn last_index(zoom: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mvt_test_writer::{feature, layer};
 
     fn tile(z: u8, x: u32, y: u32) -> TileId {
         TileId::new(z, x, y).unwrap()
@@ -403,59 +404,6 @@ mod tests {
             audit_tileset_coverage(WORLD, 0, 0, &[TileId { z: 1, x: 2, y: 0 }], 2, 10),
             Err(TilesetCoverageError::InvalidTile)
         );
-    }
-
-    /// Minimal MVT writer for tests; independent of the decoder under test.
-    fn varint(mut value: u64, out: &mut Vec<u8>) {
-        while value >= 0x80 {
-            out.push((value as u8) | 0x80);
-            value >>= 7;
-        }
-        out.push(value as u8);
-    }
-    fn field(number: u64, payload: &[u8]) -> Vec<u8> {
-        let mut out = Vec::new();
-        varint(number << 3 | 2, &mut out);
-        varint(payload.len() as u64, &mut out);
-        out.extend_from_slice(payload);
-        out
-    }
-    fn scalar(number: u64, value: u64) -> Vec<u8> {
-        let mut out = Vec::new();
-        varint(number << 3, &mut out);
-        varint(value, &mut out);
-        out
-    }
-    fn feature(id: Option<u64>, geometry_type: u64, commands: &[u32], tags: &[u32]) -> Vec<u8> {
-        let packed = |values: &[u32]| {
-            let mut out = Vec::new();
-            for value in values {
-                varint(u64::from(*value), &mut out);
-            }
-            out
-        };
-        let mut out = Vec::new();
-        if let Some(id) = id {
-            out.extend(scalar(1, id));
-        }
-        out.extend(field(2, &packed(tags)));
-        out.extend(scalar(3, geometry_type));
-        out.extend(field(4, &packed(commands)));
-        out
-    }
-    fn layer(name: &str, features: &[Vec<u8>], keys: &[&str], values: &[&str]) -> Vec<u8> {
-        let mut out = field(1, name.as_bytes());
-        for feature in features {
-            out.extend(field(2, feature));
-        }
-        for key in keys {
-            out.extend(field(3, key.as_bytes()));
-        }
-        for value in values {
-            out.extend(field(4, &field(1, value.as_bytes())));
-        }
-        out.extend(scalar(5, 4096));
-        field(3, &out)
     }
 
     // MoveTo(1) 10,10 · LineTo(1) 20,0  →  command integers 9, zigzag(10)=20 …

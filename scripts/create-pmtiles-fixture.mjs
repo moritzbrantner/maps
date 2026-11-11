@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gzipSync } from "node:zlib";
 import { createShortbreadTileFixture } from "../e2e/fixtures/shortbread-tile.mjs";
+import { createRevisionFixtureTiles } from "./tileset-revision-fixture.mjs";
 
 const cli = process.env.PMTILES_CLI ?? "pmtiles";
 const work = mkdtempSync(join(tmpdir(), "maps-pmtiles-fixture-"));
@@ -116,6 +117,39 @@ try {
   });
   writeFileSync(showcaseArchive, readFileSync(join(work, "showcase.pmtiles")));
   execFileSync(cli, ["verify", showcaseArchive.pathname], { stdio: "inherit" });
+  // Two revisions of one source for the Tileset revision diff (#276).
+  for (const revision of ["r1", "r2"]) {
+    const mbtiles = join(work, `revision-${revision}.mbtiles`);
+    const revisionDb = new DatabaseSync(mbtiles);
+    try {
+      revisionDb.exec("CREATE TABLE metadata (name TEXT, value TEXT)");
+      revisionDb.exec(
+        "CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB)",
+      );
+      const insertMetadata = revisionDb.prepare("INSERT INTO metadata (name, value) VALUES (?, ?)");
+      for (const [name, value] of Object.entries({
+        ...metadata,
+        name: `Maps tileset revision diff fixture ${revision}`,
+        description: "Synthetic CC0 revisions of one source; not geographic data",
+      })) {
+        insertMetadata.run(name, value);
+      }
+      const insertTile = revisionDb.prepare("INSERT INTO tiles VALUES (?, ?, ?, ?)");
+      for (const { z, x, y, data } of createRevisionFixtureTiles(revision)) {
+        insertTile.run(z, x, 2 ** z - 1 - y, gzipSync(data));
+      }
+    } finally {
+      revisionDb.close();
+    }
+    const output = new URL(
+      `../public/tilesets/fixture-revision-${revision}.pmtiles`,
+      import.meta.url,
+    );
+    const converted = join(work, `revision-${revision}.pmtiles`);
+    execFileSync(cli, ["convert", mbtiles, converted], { stdio: "inherit" });
+    writeFileSync(output, readFileSync(converted));
+    execFileSync(cli, ["verify", output.pathname], { stdio: "inherit" });
+  }
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

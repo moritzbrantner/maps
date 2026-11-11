@@ -1,7 +1,10 @@
 // Archives Tileset QA knows by fixture ID: manifest, archive location and content pin.
 import { atlasReleaseIndex } from "../../demo/atlas-source.ts";
 import { createShowcaseTileset } from "../../demo/showcase-tileset.ts";
-import { createFixturePmtilesTileset } from "../../src/tileset-fixtures.ts";
+import {
+  createFixturePmtilesTileset,
+  createFixtureRevisionTileset,
+} from "../../src/tileset-fixtures.ts";
 
 export type KnownTileset = {
   fixtureId: string;
@@ -35,6 +38,27 @@ export const knownTilesets: KnownTileset[] = [
     },
     committed: true,
   },
+  {
+    // Two revisions of one source; scripts/tileset-revision-fixture.mjs states their differences.
+    fixtureId: "fixture-revision-r1",
+    manifest: createFixtureRevisionTileset("r1"),
+    archive: "public/tilesets/fixture-revision-r1.pmtiles",
+    expectedArchive: {
+      sha256: "59dab2efd3e55f1cfb324fd79d63fb75f49dc01a6bcff9ef68f4f8c12e7ca83b",
+      bytes: 938,
+    },
+    committed: true,
+  },
+  {
+    fixtureId: "fixture-revision-r2",
+    manifest: createFixtureRevisionTileset("r2"),
+    archive: "public/tilesets/fixture-revision-r2.pmtiles",
+    expectedArchive: {
+      sha256: "c1db371fec86473d50c667ce87b0948dd1d0a2a9605625aea94d46edc6973b72",
+      bytes: 1_129,
+    },
+    committed: true,
+  },
   ...atlasReleaseIndex.tilesets.map(({ archiveRef, ...manifest }) => ({
     fixtureId: `atlas-${manifest.sourceId.replace(/^maps-/, "")}`,
     manifest,
@@ -42,4 +66,29 @@ export const knownTilesets: KnownTileset[] = [
     expectedArchive: { sha256: archiveRef.sha256, bytes: archiveRef.bytes },
     committed: false,
   })),
+];
+
+export type KnownComparison = {
+  comparisonId: string;
+  base: string;
+  candidate: string;
+  /** Committed comparisons reproduce `expected/<comparisonId>.json` in CI. */
+  committed: boolean;
+};
+
+/** Archive pairs Tileset revision diff knows by comparison ID. */
+export const knownComparisons: KnownComparison[] = [
+  {
+    comparisonId: "fixture-revision-r1-r2",
+    base: "fixture-revision-r1",
+    candidate: "fixture-revision-r2",
+    committed: true,
+  },
+  {
+    // Different source IDs: a cross-source coverage comparison, never feature identity.
+    comparisonId: "atlas-liechtenstein-north-coverage",
+    base: "atlas-liechtenstein",
+    candidate: "atlas-liechtenstein-north",
+    committed: false,
+  },
 ];

@@ -1,5 +1,7 @@
 import { createFixtureTileset } from "../../src/tileset-fixtures";
 import { createShowcaseTileset } from "../showcase-tileset";
+import type { MapsTileset } from "../../src/maps-tileset";
+import { RevisionQaPanel, type RevisionQaFocus } from "./RevisionQaPanel";
 import type { MapsVectorBasemapStyle } from "../../src/maps-tileset-style";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -58,7 +60,10 @@ export function EngineInspector() {
           ? "a"
           : "pmtiles",
   );
-  const activeTileset = useMemo(
+  // A revision shown from Revision QA replaces the chosen source until the next choice.
+  const [qaTileset, setQaTileset] = useState<MapsTileset | null>(null);
+  const [qaFocus, setQaFocus] = useState<RevisionQaFocus | null>(null);
+  const chosenTileset = useMemo(
     () =>
       sourceChoice === "pmtiles"
         ? createShowcaseTileset(import.meta.env.BASE_URL)
@@ -69,6 +74,7 @@ export function EngineInspector() {
             : undefined,
     [sourceChoice],
   );
+  const activeTileset = qaTileset ?? chosenTileset;
   const initialView = useMemo(() => readInitialView(params), [params]);
   const [controller, setController] = useState<InspectorController | null>(null);
   const controllerRef = useRef<InspectorController | null>(null);
@@ -179,6 +185,19 @@ export function EngineInspector() {
               layerId="shortbread-basemap"
             />
           ) : null}
+          {qaFocus ? (
+            <GeoJsonLayer
+              featureCollection={tileOutline(qaFocus)}
+              isFeatureInteractive={nonInteractive}
+              layerId="revision-qa-focus"
+              lineColor="#d92d20"
+              lineWidth={3}
+              polygonFillColor="#d92d20"
+              polygonFillOpacity={0.08}
+              polygonStrokeColor="#d92d20"
+              polygonStrokeWidth={3}
+            />
+          ) : null}
         </MapView>
       </main>
 
@@ -202,7 +221,10 @@ export function EngineInspector() {
           <select
             aria-label="Tile source"
             value={sourceChoice}
-            onChange={(event) => setSourceChoice(event.target.value)}
+            onChange={(event) => {
+              setQaTileset(null);
+              setSourceChoice(event.target.value);
+            }}
           >
             <option value="pmtiles">Maps synthetic PMTiles v3</option>
             <option value="a">Fixture A</option>
@@ -262,6 +284,17 @@ export function EngineInspector() {
             </p>
           ) : null}
         </section>
+
+        <RevisionQaPanel
+          focused={qaFocus}
+          initialComparison={params.get("qa")}
+          onFocus={(tile) => {
+            setQaFocus(tile);
+            controllerRef.current?.fitBounds(tile.bounds, { animate: false, padding: 48 });
+          }}
+          onShow={setQaTileset}
+          shownTileset={activeTileset}
+        />
 
         <section aria-labelledby="inspector-frames">
           <h2 id="inspector-frames">Frame cadence</h2>
@@ -707,4 +740,31 @@ function formatCount(value: number | undefined) {
 
 function nonInteractive() {
   return false;
+}
+
+/** The focused tile's outline, from the bounds the Rust tile rule reported. */
+function tileOutline(tile: RevisionQaFocus) {
+  const [west, south, east, north] = tile.bounds;
+  return {
+    type: "FeatureCollection" as const,
+    features: [
+      {
+        type: "Feature" as const,
+        id: `${tile.z}/${tile.x}/${tile.y}`,
+        properties: {},
+        geometry: {
+          type: "Polygon" as const,
+          coordinates: [
+            [
+              [west, south],
+              [east, south],
+              [east, north],
+              [west, north],
+              [west, south],
+            ],
+          ],
+        },
+      },
+    ],
+  };
 }

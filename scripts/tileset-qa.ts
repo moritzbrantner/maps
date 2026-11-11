@@ -1,8 +1,14 @@
-// Tileset integrity QA CLI (#276). Audits one PMTiles archive against its manifest and
-// writes the `maps-tileset-qa-v1` artifact.
+// Tileset QA CLI (#276).
 //
+// Integrity: audits one PMTiles archive against its manifest (`maps-tileset-qa-v1`).
 //   bun scripts/tileset-qa.ts --known showcase-pmtiles-v1
 //   bun scripts/tileset-qa.ts --manifest tileset.json --archive tiles.pmtiles --mode full
+//
+// Revision diff: compares a base and a candidate archive (`maps-tileset-diff-v1`).
+//   bun scripts/tileset-qa.ts diff --comparison fixture-revision-r1-r2
+//   bun scripts/tileset-qa.ts diff --base-known fixture-revision-r1 --candidate-known fixture-revision-r2
+//   bun scripts/tileset-qa.ts diff --base-manifest a.json --base-archive a.pmtiles \
+//     --candidate-manifest b.json --candidate-archive b.pmtiles
 //
 // A manifest file is a Maps Tileset manifest, optionally with `archiveRef: { sha256, bytes }`.
 // Exit status: 0 passed, 1 failed, 2 inconclusive, 3 usage or runtime error.
@@ -17,7 +23,12 @@ import {
   type TilesetQaLimits,
   type TilesetQaMode,
 } from "./tileset-qa/core.ts";
-import { knownTilesets } from "./tileset-qa/known.ts";
+import {
+  runTilesetDiff,
+  type TilesetDiffArtifact,
+  type TilesetDiffLimits,
+} from "./tileset-qa/diff.ts";
+import { knownComparisons, knownTilesets } from "./tileset-qa/known.ts";
 import {
   loadTilesetQaKernel,
   openArchiveFile,
@@ -26,31 +37,36 @@ import {
   runUpstreamVerify,
 } from "./tileset-qa/node.ts";
 
-export type TilesetQaRun = {
-  artifact: TilesetQaArtifact;
-  /** Fast evidence of this run; never part of the deterministic artifact. */
-  measurement: {
-    hashMs: number;
-    checksMs: number;
-    rangeReads: number;
-    rangeBytes: number;
-    archiveBytes: number;
-    peakRssBytes: number;
-  };
+/** Fast evidence of a run; never part of the deterministic artifact. */
+export type TilesetQaMeasurement = {
+  hashMs: number;
+  checksMs: number;
+  rangeReads: number;
+  rangeBytes: number;
+  archiveBytes: number;
+  peakRssBytes: number;
 };
 
-export async function auditArchive(options: {
+export type TilesetQaRun = { artifact: TilesetQaArtifact; measurement: TilesetQaMeasurement };
+export type TilesetDiffRun = { artifact: TilesetDiffArtifact; measurement: TilesetQaMeasurement };
+
+type ArchiveTarget = {
   manifest: unknown;
   archive: string;
   expectedArchive?: { sha256: string; bytes?: number } | null;
   fixtureId?: string | null;
-  mode?: TilesetQaMode;
-  seed?: number;
-  limits?: Partial<TilesetQaLimits>;
-  pmtilesCli?: string;
-  wasmDirectory?: string;
-  signal?: AbortSignal;
-}): Promise<TilesetQaRun> {
+};
+
+export async function auditArchive(
+  options: ArchiveTarget & {
+    mode?: TilesetQaMode;
+    seed?: number;
+    limits?: Partial<TilesetQaLimits>;
+    pmtilesCli?: string;
+    wasmDirectory?: string;
+    signal?: AbortSignal;
+  },
+): Promise<TilesetQaRun> {
   const kernel = await loadTilesetQaKernel(options.wasmDirectory);
   const opened = performance.now();
   const archive = await openArchiveFile(options.archive);
@@ -85,21 +101,137 @@ export async function auditArchive(options: {
   }
 }
 
+/** Compare two archives. Neither is loaded whole: each is hashed by streaming, then range-read. */
+export async function compareArchives(options: {
+  base: Pick<ArchiveTarget, "manifest" | "archive">;
+  candidate: Pick<ArchiveTarget, "manifest" | "archive">;
+  comparisonId?: string | null;
+  mode?: TilesetQaMode;
+  seed?: number;
+  limits?: Partial<TilesetDiffLimits>;
+  wasmDirectory?: string;
+  signal?: AbortSignal;
+}): Promise<TilesetDiffRun> {
+  const kernel = await loadTilesetQaKernel(options.wasmDirectory);
+  const opened = performance.now();
+  const base = await openArchiveFile(options.base.archive);
+  try {
+    const candidate = await openArchiveFile(options.candidate.archive);
+    const hashed = performance.now();
+    try {
+      const artifact = await runTilesetDiff({
+        base: { manifest: options.base.manifest, archive: base },
+        candidate: { manifest: options.candidate.manifest, archive: candidate },
+        kernel,
+        pmtilesReaderVersion: pmtilesReaderVersion(),
+        comparisonId: options.comparisonId ?? null,
+        ...(options.mode ? { mode: options.mode } : {}),
+        ...(options.seed === undefined ? {} : { seed: options.seed }),
+        ...(options.limits ? { limits: options.limits } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      return {
+        artifact,
+        measurement: {
+          hashMs: hashed - opened,
+          checksMs: performance.now() - hashed,
+          rangeReads: base.io.reads + candidate.io.reads,
+          rangeBytes: base.io.bytes + candidate.io.bytes,
+          archiveBytes: base.bytes + candidate.bytes,
+          peakRssBytes: process.resourceUsage().maxRSS * 1024,
+        },
+      };
+    } finally {
+      await candidate.close();
+    }
+  } finally {
+    await base.close();
+  }
+}
+
+/** A known fixture's manifest, archive path and content pin. */
+export function knownTarget(fixtureId: string): ArchiveTarget | null {
+  const known = knownTilesets.find((entry) => entry.fixtureId === fixtureId);
+  return known
+    ? {
+        manifest: known.manifest,
+        archive: path.join(repositoryRoot, known.archive),
+        expectedArchive: known.expectedArchive,
+        fixtureId: known.fixtureId,
+      }
+    : null;
+}
+
+function readManifestFile(file: string, archive: string): ArchiveTarget {
+  const { archiveRef, ...manifest } = JSON.parse(readFileSync(file, "utf8")) as {
+    archiveRef?: { sha256?: unknown; bytes?: unknown };
+  };
+  return {
+    manifest,
+    archive,
+    expectedArchive:
+      typeof archiveRef?.sha256 === "string"
+        ? {
+            sha256: archiveRef.sha256,
+            ...(typeof archiveRef.bytes === "number" ? { bytes: archiveRef.bytes } : {}),
+          }
+        : null,
+  };
+}
+
 function usage(message: string): never {
   console.error(
     `${message}\nusage: bun scripts/tileset-qa.ts (--known <fixture-id> | --manifest <json> --archive <pmtiles>)\n` +
       `  [--mode sampled|full] [--seed <n>] [--sample <n>] [--output <json>] [--measure]\n` +
-      `  [--pmtiles-cli <path>] [--wasm <dir>]\nknown: ${knownTilesets.map((known) => known.fixtureId).join(", ")}`,
+      `  [--pmtiles-cli <path>] [--wasm <dir>]\n` +
+      `       bun scripts/tileset-qa.ts diff (--comparison <id> | --base-known <id> --candidate-known <id>\n` +
+      `  | --base-manifest <json> --base-archive <pmtiles> --candidate-manifest <json> --candidate-archive <pmtiles>)\n` +
+      `  [--mode sampled|full] [--seed <n>] [--sample <n>] [--output <json>] [--measure] [--wasm <dir>]\n` +
+      `known: ${knownTilesets.map((known) => known.fixtureId).join(", ")}\n` +
+      `comparisons: ${knownComparisons.map((known) => known.comparisonId).join(", ")}`,
   );
   process.exit(3);
 }
 
+type Reported = {
+  status: string;
+  checks: { status: string; id: string; summary: string }[];
+  findings: {
+    severity: string;
+    code: string;
+    count: number;
+    message: string;
+    tiles: { z: number; x: number; y: number }[];
+  }[];
+};
+
+function report(artifact: Reported, label: string) {
+  for (const check of artifact.checks) {
+    console.error(`${check.status.padEnd(12)} ${check.id}: ${check.summary}`);
+  }
+  for (const finding of artifact.findings) {
+    const tiles = finding.tiles.map((tile) => `${tile.z}/${tile.x}/${tile.y}`).join(" ");
+    console.error(
+      `  ${finding.severity} ${finding.code} ×${finding.count}: ${finding.message}${tiles ? ` [${tiles}]` : ""}`,
+    );
+  }
+  console.error(`${label} ${artifact.status}`);
+}
+
 if (import.meta.main) {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
     options: {
       known: { type: "string" },
       manifest: { type: "string" },
       archive: { type: "string" },
+      comparison: { type: "string" },
+      "base-known": { type: "string" },
+      "candidate-known": { type: "string" },
+      "base-manifest": { type: "string" },
+      "base-archive": { type: "string" },
+      "candidate-manifest": { type: "string" },
+      "candidate-archive": { type: "string" },
       mode: { type: "string" },
       seed: { type: "string" },
       sample: { type: "string" },
@@ -109,6 +241,8 @@ if (import.meta.main) {
       wasm: { type: "string" },
     },
   });
+  const command = positionals[0] ?? "audit";
+  if (command !== "audit" && command !== "diff") usage(`unknown command ${command}`);
   if (values.mode !== undefined && values.mode !== "sampled" && values.mode !== "full") {
     usage("--mode must be sampled or full");
   }
@@ -118,61 +252,73 @@ if (import.meta.main) {
     if (!/^\d+$/.test(value)) usage(`--${name} must be a non-negative integer`);
     return Number(value);
   };
-  let target: Parameters<typeof auditArchive>[0];
-  if (values.known) {
-    const known = knownTilesets.find((entry) => entry.fixtureId === values.known);
-    if (!known) usage(`unknown fixture ${values.known}`);
-    target = {
-      manifest: known.manifest,
-      archive: path.join(repositoryRoot, known.archive),
-      expectedArchive: known.expectedArchive,
-      fixtureId: known.fixtureId,
-    };
-  } else if (values.manifest && values.archive) {
-    const manifest = JSON.parse(readFileSync(values.manifest, "utf8")) as {
-      archiveRef?: { sha256?: unknown; bytes?: unknown };
-    };
-    const { archiveRef, ...metadata } = manifest;
-    target = {
-      manifest: metadata,
-      archive: values.archive,
-      expectedArchive:
-        typeof archiveRef?.sha256 === "string"
-          ? {
-              sha256: archiveRef.sha256,
-              ...(typeof archiveRef.bytes === "number" ? { bytes: archiveRef.bytes } : {}),
-            }
-          : null,
-    };
-  } else {
-    usage("name a known fixture, or a manifest and an archive");
-  }
   const seed = count("seed");
   const sampleTiles = count("sample");
-  try {
-    const { artifact, measurement } = await auditArchive({
-      ...target,
-      ...(values.mode ? { mode: values.mode as TilesetQaMode } : {}),
-      ...(seed === undefined ? {} : { seed }),
-      ...(sampleTiles === undefined ? {} : { limits: { sampleTiles } }),
-      ...(values["pmtiles-cli"] ? { pmtilesCli: values["pmtiles-cli"] } : {}),
-      ...(values.wasm ? { wasmDirectory: values.wasm } : {}),
-    });
+  const common = {
+    ...(values.mode ? { mode: values.mode as TilesetQaMode } : {}),
+    ...(seed === undefined ? {} : { seed }),
+    ...(sampleTiles === undefined ? {} : { limits: { sampleTiles } }),
+    ...(values.wasm ? { wasmDirectory: values.wasm } : {}),
+  };
+  const emit = (artifact: object, measurement: TilesetQaMeasurement, status: string) => {
     const json = `${JSON.stringify(artifact, null, 2)}\n`;
     if (values.output) writeFileSync(values.output, json);
     else process.stdout.write(json);
-    for (const check of artifact.checks) {
-      console.error(`${check.status.padEnd(12)} ${check.id}: ${check.summary}`);
-    }
-    for (const finding of artifact.findings) {
-      const tiles = finding.tiles.map((tile) => `${tile.z}/${tile.x}/${tile.y}`).join(" ");
-      console.error(
-        `  ${finding.severity} ${finding.code} ×${finding.count}: ${finding.message}${tiles ? ` [${tiles}]` : ""}`,
-      );
-    }
-    console.error(`Tileset QA ${artifact.status}: ${artifact.archive.name}`);
     if (values.measure) console.error(JSON.stringify(measurement));
-    process.exit(artifact.status === "passed" ? 0 : artifact.status === "failed" ? 1 : 2);
+    process.exit(status === "passed" ? 0 : status === "failed" ? 1 : 2);
+  };
+  try {
+    if (command === "diff") {
+      let base: ArchiveTarget | null;
+      let candidate: ArchiveTarget | null;
+      let comparisonId: string | null = null;
+      if (values.comparison) {
+        const known = knownComparisons.find((entry) => entry.comparisonId === values.comparison);
+        if (!known) usage(`unknown comparison ${values.comparison}`);
+        comparisonId = known.comparisonId;
+        base = knownTarget(known.base);
+        candidate = knownTarget(known.candidate);
+      } else if (values["base-known"] && values["candidate-known"]) {
+        base = knownTarget(values["base-known"]);
+        candidate = knownTarget(values["candidate-known"]);
+      } else if (
+        values["base-manifest"] &&
+        values["base-archive"] &&
+        values["candidate-manifest"] &&
+        values["candidate-archive"]
+      ) {
+        base = readManifestFile(values["base-manifest"], values["base-archive"]);
+        candidate = readManifestFile(values["candidate-manifest"], values["candidate-archive"]);
+      } else {
+        usage("name a comparison, two known fixtures, or two manifests and archives");
+      }
+      if (!base || !candidate) usage("unknown fixture");
+      const { artifact, measurement } = await compareArchives({
+        base,
+        candidate,
+        comparisonId,
+        ...common,
+      });
+      report(artifact, `Tileset revision diff (${artifact.relation ?? "unpaired"})`);
+      emit(artifact, measurement, artifact.status);
+    } else {
+      let target: ArchiveTarget | null;
+      if (values.known) {
+        target = knownTarget(values.known);
+        if (!target) usage(`unknown fixture ${values.known}`);
+      } else if (values.manifest && values.archive) {
+        target = readManifestFile(values.manifest, values.archive);
+      } else {
+        usage("name a known fixture, or a manifest and an archive");
+      }
+      const { artifact, measurement } = await auditArchive({
+        ...target,
+        ...common,
+        ...(values["pmtiles-cli"] ? { pmtilesCli: values["pmtiles-cli"] } : {}),
+      });
+      report(artifact, `Tileset QA ${artifact.archive.name}:`);
+      emit(artifact, measurement, artifact.status);
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exit(3);
