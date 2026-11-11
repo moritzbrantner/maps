@@ -443,7 +443,8 @@ jobs:
         cp -R .artifacts/maps-browser-package/ci-browser-dependencies/ui node_modules/@moritzbrantner/ui/dist
         cp -R .artifacts/maps-browser-package/ci-browser-dependencies/timeline-editor node_modules/@moritzbrantner/timeline-editor/dist
         cp -R .artifacts/maps-browser-package/ci-browser-dependencies/editor-core node_modules/@moenarch/editor-core/dist
-        bun run test:browser -- --project=chromium --workers=1 '${{ matrix.selection }}'
+        # mobile-chromium (#410) keeps the @mobile screenshot baselines from going stale unnoticed.
+        bun run test:browser -- --project=chromium --project=mobile-chromium --workers=1 '${{ matrix.selection }}'
       install_playwright: true
       install_playwright_browsers: chromium
       # One software GPU worker per runner; shards do not contend for the same CPU.
