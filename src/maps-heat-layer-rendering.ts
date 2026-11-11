@@ -47,6 +47,8 @@ export type MapsHeatRasterRenderStep = {
   image: HTMLImageElement;
   opacity: number;
   projection: "latitude" | "mercator" | "screen";
+  /** The work counters of the render state that owns this raster; its draws count into them. */
+  work: HeatLayerSurfaceWork;
 };
 
 export type MapsHeatLayerPreparedRender = {
@@ -133,6 +135,7 @@ export function drawMapsHeatRaster(
   viewport: MapsHeatLayerViewport,
   devicePixelRatio: number,
 ) {
+  raster.work.rasterDraws += 1;
   if (raster.projection === "screen") {
     context.save();
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
@@ -142,7 +145,7 @@ export function drawMapsHeatRaster(
     return true;
   }
 
-  return drawCanvasGeographicRaster({
+  const triangles = drawCanvasGeographicRaster({
     bounds: raster.bounds,
     context,
     devicePixelRatio,
@@ -151,6 +154,8 @@ export function drawMapsHeatRaster(
     project: (coordinate) => projectMapsHeatLayerCoordinate(viewport, coordinate),
     verticalScale: raster.projection,
   });
+  raster.work.rasterDrawTriangles += triangles;
+  return triangles > 0;
 }
 
 function prepareFieldLayerRender(
@@ -300,15 +305,16 @@ function prepareFieldRaster(
 
   const key = `field|${image.width}x${image.height}|${image.bounds.join(",")}|${image.url}`;
   if (state.fieldResource?.key !== key) {
-    countRasterUpload(state.work, image.width * image.height);
     state.fieldResource = createRasterResource({
       bounds: image.bounds,
       key,
       objectUrl: false,
       opacity: descriptor.fieldOpacity,
+      pixels: image.width * image.height,
       projection: "latitude",
       requestRender,
       url: image.url,
+      work: state.work,
     });
   } else {
     state.fieldResource.opacity = descriptor.fieldOpacity;
@@ -365,7 +371,6 @@ function prepareHeatSurfaceRaster(
         state.surface.pendingKey = null;
         state.surface.metadata = plan.cacheMetadata;
         state.surface.metadataDescriptor = descriptor;
-        countRasterUpload(state.work, plan.width * plan.height);
         replaceSurfaceResource(
           state,
           createRasterResource({
@@ -373,9 +378,11 @@ function prepareHeatSurfaceRaster(
             key: plan.cacheKey,
             objectUrl: image.objectUrl,
             opacity,
+            pixels: plan.width * plan.height,
             projection,
             requestRender,
             url: image.url,
+            work: state.work,
           }),
         );
         requestRender();
@@ -393,15 +400,16 @@ function prepareHeatSurfaceRaster(
   const image = createHeatSurfaceDataImage(plan);
   state.surface.metadata = plan.cacheMetadata;
   state.surface.metadataDescriptor = descriptor;
-  countRasterUpload(state.work, plan.width * plan.height);
   const resource = createRasterResource({
     bounds: plan.overlayBounds,
     key: plan.cacheKey,
     objectUrl: image.objectUrl,
     opacity,
+    pixels: plan.width * plan.height,
     projection,
     requestRender,
     url: image.url,
+    work: state.work,
   });
   replaceSurfaceResource(state, resource);
   return getReadyRaster(resource);
@@ -428,18 +436,25 @@ function createRasterResource({
   key,
   objectUrl,
   opacity,
+  pixels,
   projection,
   requestRender,
   url,
+  work,
 }: {
   bounds: HeatSurfaceBounds;
   key: string;
   objectUrl: boolean;
   opacity: number;
+  /** Pixels of the raster handed to the pixel backend, for the upload counters. */
+  pixels: number;
   projection: MapsHeatRasterRenderStep["projection"];
   requestRender: () => void;
   url: string;
+  work: HeatLayerSurfaceWork;
 }): MapsHeatRasterResource {
+  work.rasterUploads += 1;
+  work.rasterUploadPixels += pixels;
   const image = new Image();
   const resource: MapsHeatRasterResource = {
     bounds,
@@ -449,9 +464,13 @@ function createRasterResource({
     opacity,
     projection,
     url,
+    work,
   };
   image.decoding = "async";
-  image.onload = requestRender;
+  image.onload = () => {
+    work.rasterImagesDecoded += 1;
+    requestRender();
+  };
   image.onerror = requestRender;
   image.src = url;
   return resource;
@@ -550,9 +569,4 @@ function createDataPointPrimitives(
 function countRasterization(work: HeatLayerSurfaceWork, plan: HeatSurfaceRenderPlan) {
   work.surfaceRasterizations += 1;
   work.surfaceRasterPixels += plan.width * plan.height;
-}
-
-function countRasterUpload(work: HeatLayerSurfaceWork, pixels: number) {
-  work.rasterUploads += 1;
-  work.rasterUploadPixels += pixels;
 }

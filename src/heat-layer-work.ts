@@ -59,9 +59,81 @@ export type HeatLayerSurfaceWork = {
   rasterUploads: number;
   /** Pixels of those uploads. */
   rasterUploadPixels: number;
+  /** Uploaded raster images that finished decoding and became drawable. */
+  rasterImagesDecoded: number;
+  /** Heat rasters drawn into the overlay (one per visible raster per presented frame). */
+  rasterDraws: number;
+  /**
+   * Clipped affine triangles those draws submitted to Canvas. Geographic rasters are split until
+   * the triangles follow the projection; screen-space rasters draw with one image call and none.
+   */
+  rasterDrawTriangles: number;
 };
 
+/** Running totals of every heat/scalar work set registered while observation is installed. */
+export type HeatLayerWorkTotals = {
+  data: HeatLayerDataWork;
+  /** Mounted layers whose work is included (cumulative, unmounted layers stay counted). */
+  layers: number;
+  /** Render states whose work is included (cumulative). */
+  renderStates: number;
+  surface: HeatLayerSurfaceWork;
+};
+
+export type HeatLayerWorkObservation = {
+  totals(): HeatLayerWorkTotals;
+};
+
+type HeatLayerWorkRegistry = {
+  data: HeatLayerDataWork[];
+  surface: HeatLayerSurfaceWork[];
+};
+
+let registry: HeatLayerWorkRegistry | null = null;
+
+/**
+ * Evidence-only observation for browser journeys (#171 phase 5): once installed, every work set
+ * created afterwards is registered, so a page can read the totals without reaching into the Map
+ * View. Nothing is registered (and nothing is retained) unless a page installs it; it is not
+ * part of the public package API.
+ */
+export function observeHeatLayerWork(): HeatLayerWorkObservation {
+  const observed = (registry ??= { data: [], surface: [] });
+  return {
+    totals() {
+      const data = emptyDataWork();
+      const surface = emptySurfaceWork();
+      for (const work of observed.data) addWork(data, work);
+      for (const work of observed.surface) addWork(surface, work);
+      return {
+        data,
+        layers: observed.data.length,
+        renderStates: observed.surface.length,
+        surface,
+      };
+    },
+  };
+}
+
+function addWork<T extends Record<keyof T, number>>(total: T, work: T) {
+  for (const key of Object.keys(total) as (keyof T)[]) {
+    (total[key] as number) += work[key];
+  }
+}
+
 export function createHeatLayerDataWork(): HeatLayerDataWork {
+  const work = emptyDataWork();
+  registry?.data.push(work);
+  return work;
+}
+
+export function createHeatLayerSurfaceWork(): HeatLayerSurfaceWork {
+  const work = emptySurfaceWork();
+  registry?.surface.push(work);
+  return work;
+}
+
+function emptyDataWork(): HeatLayerDataWork {
   return {
     fieldContourBuilds: 0,
     fieldGridBuilds: 0,
@@ -77,8 +149,11 @@ export function createHeatLayerDataWork(): HeatLayerDataWork {
   };
 }
 
-export function createHeatLayerSurfaceWork(): HeatLayerSurfaceWork {
+function emptySurfaceWork(): HeatLayerSurfaceWork {
   return {
+    rasterDrawTriangles: 0,
+    rasterDraws: 0,
+    rasterImagesDecoded: 0,
     rasterUploadPixels: 0,
     rasterUploads: 0,
     surfacePlans: 0,

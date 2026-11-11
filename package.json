@@ -112,6 +112,7 @@
     "verify:engine-camera": "bun run build:wasm && bun run verify:engine-camera:prepared",
     "verify:engine-browser-evidence": "node ./scripts/verify-engine-browser-evidence.ts",
     "verify:engine-mixed-layer-evidence": "node ./scripts/verify-engine-mixed-layer-evidence.ts",
+    "verify:engine-heat-scalar-evidence": "node ./scripts/verify-engine-heat-scalar-evidence.ts",
     "verify:engine-atlas-tileset-evidence": "node ./scripts/verify-engine-atlas-tileset-evidence.ts",
     "qa:tileset": "bun ./scripts/tileset-qa.ts",
     "verify:tileset-qa": "vitest run --config vitest.tileset-qa.config.ts",

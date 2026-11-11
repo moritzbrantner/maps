@@ -8,6 +8,10 @@ import {
   interpolateGeoJsonTransitionPlan,
 } from "../src/geojson-transition.ts";
 import { createScalarFieldGrid } from "../src/scalar-field.ts";
+import {
+  createBerlinPhyllotaxisDemandPoints,
+  createEuropeTemperatureObservations,
+} from "../e2e/fixtures/heat-scalar-workloads.ts";
 
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
@@ -73,7 +77,7 @@ export function prepareKernelScenario(id) {
       break;
     }
     case "europe-temperature-observations-v1": {
-      const points = createTemperaturePoints();
+      const points = createEuropeTemperatureObservations();
       metadata = { cells: fixture.columns * fixture.rows, points: points.length };
       run = () =>
         createScalarFieldGrid(points, {
@@ -84,7 +88,7 @@ export function prepareKernelScenario(id) {
       break;
     }
     case "berlin-phyllotaxis-demand-v1": {
-      const points = createMapPoints(fixture.pointCount);
+      const points = createBerlinPhyllotaxisDemandPoints(fixture.pointCount);
       metadata = { pointCount: points.length };
       run = () =>
         createHeatMapDensityIndex(points, fixture.options).getFeatureCollection(fixture.query);
@@ -247,46 +251,4 @@ function createRing(count, radius, offsetX, offsetY) {
   coordinates.push([...coordinates[0]]);
 
   return coordinates;
-}
-
-function createTemperaturePoints() {
-  return [
-    temperaturePoint("reykjavik", 64.1466, -21.9426, 14.3),
-    temperaturePoint("dublin", 53.3498, -6.2603, 15.8),
-    temperaturePoint("london", 51.5072, -0.1276, 18.5),
-    temperaturePoint("paris", 48.8566, 2.3522, 20.9),
-    temperaturePoint("berlin", 52.52, 13.405, 21.5),
-    temperaturePoint("madrid", 40.4168, -3.7038, 28.6),
-    temperaturePoint("rome", 41.9028, 12.4964, 29.4),
-    temperaturePoint("warsaw", 52.2297, 21.0122, 22.4),
-    temperaturePoint("athens", 37.9838, 23.7275, 31.2),
-    temperaturePoint("stockholm", 59.3293, 18.0686, 17.1),
-  ];
-}
-
-function temperaturePoint(id, latitude, longitude, temperature) {
-  return {
-    id,
-    latitude,
-    longitude,
-    metrics: {
-      temperature,
-    },
-  };
-}
-
-function createMapPoints(count) {
-  return Array.from({ length: count }, (_, index) => {
-    const angle = index * 2.399963229728653;
-    const radius = Math.sqrt(index / count);
-
-    return {
-      id: `point-${index}`,
-      latitude: 52.52 + Math.sin(angle) * radius * 4,
-      longitude: 13.405 + Math.cos(angle) * radius * 6,
-      metrics: {
-        demand: 1 + (index % 17),
-      },
-    };
-  });
 }

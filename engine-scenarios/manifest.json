@@ -37,6 +37,23 @@
       "runtimePhases": ["camera", "hover", "select", "unrelated-commits", "teardown"]
     },
     {
+      "id": "heat-scalar-journey-v1",
+      "family": "map-view-composition",
+      "reference": "none",
+      "capabilities": ["browser"],
+      "runtimePhases": [
+        "camera-pan",
+        "camera-zoom",
+        "camera-orient",
+        "resize",
+        "density-seek",
+        "field-update",
+        "style",
+        "superseded-bursts",
+        "teardown"
+      ]
+    },
+    {
       "id": "temporal-geojson-indexed-playback-v1",
       "family": "temporal-kernel",
       "reference": "legacy-kernel-observations-at-748166c",

@@ -137,7 +137,7 @@ describe("drawCanvasGeographicRaster", () => {
   test("keeps the 8 × 8 mesh where the raster is already affine on screen", () => {
     const { drawn, triangles } = draw(flat, "mercator");
 
-    expect(drawn).toBe(true);
+    expect(drawn).toBe(triangles.length);
     expect(triangles).toHaveLength(8 * 8 * 2);
     expect(maxMisplacement(triangles, flat, "mercator")).toBeLessThan(0.01);
   });
@@ -156,6 +156,20 @@ describe("drawCanvasGeographicRaster", () => {
     expect(maxMisplacement(triangles, flat, "latitude")).toBeLessThan(1);
   });
 
+  test("splits only the bent axis: latitude rows split, longitude columns stay whole", () => {
+    const { triangles } = draw(flat, "latitude");
+    // Longitude is linear on screen, so no column is split (#171 phase 5: splitting both axes
+    // doubled the triangles drawn for every unpitched field frame).
+    const columnWidth = (flat([BOUNDS[2], 50])!.x - flat([BOUNDS[0], 50])!.x) / 8;
+    const spans = triangles.map(({ clip }) => {
+      const xs = clip.map(([x]) => x);
+      return Math.max(...xs) - Math.min(...xs);
+    });
+
+    expect(triangles.length).toBeGreaterThan(8 * 8 * 2);
+    for (const span of spans) expect(span).toBeCloseTo(columnWidth, 6);
+  });
+
   test("neither splits nor draws cells entirely off screen", () => {
     const offscreen: CanvasGeographicRasterProject = (coordinate) => {
       const point = pitched(coordinate);
@@ -163,7 +177,7 @@ describe("drawCanvasGeographicRaster", () => {
     };
     const { drawn, triangles } = draw(offscreen, "mercator");
 
-    expect(drawn).toBe(false);
+    expect(drawn).toBe(0);
     expect(triangles).toHaveLength(0);
   });
 });
