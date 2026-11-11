@@ -54,6 +54,14 @@ export function drawCanvasGeographicRaster({
     return false;
   }
 
+  const vertexAt = (u: number, v: number): RasterVertex | null => {
+    const latitude = interpolateLatitude(bounds[1], bounds[3], v, verticalScale);
+    const longitude = bounds[0] + (bounds[2] - bounds[0]) * u;
+    const screen = project([longitude, latitude]);
+    return isFinitePoint(screen)
+      ? { sourceX: image.width * u, sourceY: image.height * v, x: screen.x, y: screen.y }
+      : null;
+  };
   const rowLength = subdivisions + 1;
   const vertices: Array<RasterVertex | null> = Array.from(
     { length: rowLength * rowLength },
@@ -61,58 +69,139 @@ export function drawCanvasGeographicRaster({
   );
 
   for (let row = 0; row <= subdivisions; row += 1) {
-    const v = row / subdivisions;
-    const latitude = interpolateLatitude(bounds[1], bounds[3], v, verticalScale);
-
     for (let column = 0; column <= subdivisions; column += 1) {
-      const u = column / subdivisions;
-      const longitude = bounds[0] + (bounds[2] - bounds[0]) * u;
-      const screen = project([longitude, latitude]);
-      vertices[row * rowLength + column] = isFinitePoint(screen)
-        ? {
-            sourceX: image.width * u,
-            sourceY: image.height * v,
-            x: screen.x,
-            y: screen.y,
-          }
-        : null;
+      vertices[row * rowLength + column] = vertexAt(column / subdivisions, row / subdivisions);
     }
   }
+
+  const canvas = context.canvas as HTMLCanvasElement | undefined;
+  const view = {
+    height: canvas ? canvas.height / devicePixelRatio : Number.POSITIVE_INFINITY,
+    width: canvas ? canvas.width / devicePixelRatio : Number.POSITIVE_INFINITY,
+  };
 
   context.save();
   context.globalAlpha = clamp(opacity, 0, 1);
   let drawn = false;
+  const drawTriangle = (triangle: RasterTriangle) => {
+    drawn = drawRasterTriangle(context, image, triangle, devicePixelRatio) || drawn;
+  };
 
   for (let row = 0; row < subdivisions; row += 1) {
     for (let column = 0; column < subdivisions; column += 1) {
-      const topLeft = vertices[row * rowLength + column];
-      const topRight = vertices[row * rowLength + column + 1];
-      const bottomLeft = vertices[(row + 1) * rowLength + column];
-      const bottomRight = vertices[(row + 1) * rowLength + column + 1];
-
-      if (topLeft && bottomLeft && topRight) {
-        drawn =
-          drawRasterTriangle(
-            context,
-            image,
-            [topLeft, bottomLeft, topRight],
-            devicePixelRatio,
-          ) || drawn;
-      }
-      if (topRight && bottomLeft && bottomRight) {
-        drawn =
-          drawRasterTriangle(
-            context,
-            image,
-            [topRight, bottomLeft, bottomRight],
-            devicePixelRatio,
-          ) || drawn;
-      }
+      drawRasterCell(
+        {
+          bottomLeft: vertices[(row + 1) * rowLength + column]!,
+          bottomRight: vertices[(row + 1) * rowLength + column + 1]!,
+          topLeft: vertices[row * rowLength + column]!,
+          topRight: vertices[row * rowLength + column + 1]!,
+          u0: column / subdivisions,
+          u1: (column + 1) / subdivisions,
+          v0: row / subdivisions,
+          v1: (row + 1) / subdivisions,
+        },
+        0,
+        vertexAt,
+        view,
+        drawTriangle,
+      );
     }
   }
 
   context.restore();
   return drawn;
+}
+
+/**
+ * Canvas can only map an image affinely, but a geographic raster's screen image is not affine:
+ * latitude rows are not linear in Mercator, and a pitched camera adds perspective. Each cell is
+ * split until the affine triangles agree with the projection within `MAX_AFFINE_ERROR_PX` at
+ * the cell's center and edge midpoints, so the raster stays aligned with geometry projected
+ * point by point (#171 phase 3: under pitch a fixed 8 × 8 mesh misplaced a stable density
+ * raster by up to 14 px). Cells entirely off screen are neither split nor drawn.
+ */
+const MAX_AFFINE_ERROR_PX = 0.5;
+const MAX_CELL_SPLIT_DEPTH = 5;
+
+type RasterCell = {
+  bottomLeft: RasterVertex | null;
+  bottomRight: RasterVertex | null;
+  topLeft: RasterVertex | null;
+  topRight: RasterVertex | null;
+  u0: number;
+  u1: number;
+  v0: number;
+  v1: number;
+};
+
+function drawRasterCell(
+  cell: RasterCell,
+  depth: number,
+  vertexAt: (u: number, v: number) => RasterVertex | null,
+  view: { height: number; width: number },
+  drawTriangle: (triangle: RasterTriangle) => void,
+) {
+  const { bottomLeft, bottomRight, topLeft, topRight, u0, u1, v0, v1 } = cell;
+  const corners = [topLeft, topRight, bottomLeft, bottomRight];
+  if (corners.every((corner) => corner === null)) return;
+  const complete = corners.every((corner) => corner !== null);
+  if (complete && isCellOffScreen(corners as RasterVertex[], view)) return;
+
+  if (depth < MAX_CELL_SPLIT_DEPTH) {
+    const uMid = (u0 + u1) / 2;
+    const vMid = (v0 + v1) / 2;
+    const top = vertexAt(uMid, v0);
+    const bottom = vertexAt(uMid, v1);
+    const left = vertexAt(u0, vMid);
+    const right = vertexAt(u1, vMid);
+    const center = vertexAt(uMid, vMid);
+    const split =
+      !complete ||
+      exceedsAffineError(top, topLeft!, topRight!) ||
+      exceedsAffineError(bottom, bottomLeft!, bottomRight!) ||
+      exceedsAffineError(left, topLeft!, bottomLeft!) ||
+      exceedsAffineError(right, topRight!, bottomRight!) ||
+      // The center of the two triangles' shared diagonal.
+      exceedsAffineError(center, topRight!, bottomLeft!);
+
+    if (split) {
+      for (const child of [
+        { bottomLeft: left, bottomRight: center, topLeft, topRight: top, u0, u1: uMid, v0, v1: vMid },
+        { bottomLeft: center, bottomRight: right, topLeft: top, topRight, u0: uMid, u1, v0, v1: vMid },
+        { bottomLeft, bottomRight: bottom, topLeft: left, topRight: center, u0, u1: uMid, v0: vMid, v1 },
+        { bottomLeft: bottom, bottomRight, topLeft: center, topRight: right, u0: uMid, u1, v0: vMid, v1 },
+      ]) {
+        drawRasterCell(child, depth + 1, vertexAt, view, drawTriangle);
+      }
+      return;
+    }
+  }
+
+  if (topLeft && bottomLeft && topRight) drawTriangle([topLeft, bottomLeft, topRight]);
+  if (topRight && bottomLeft && bottomRight) drawTriangle([topRight, bottomLeft, bottomRight]);
+}
+
+function exceedsAffineError(
+  midpoint: RasterVertex | null,
+  start: RasterVertex,
+  end: RasterVertex,
+) {
+  return (
+    midpoint === null ||
+    Math.hypot(midpoint.x - (start.x + end.x) / 2, midpoint.y - (start.y + end.y) / 2) >
+      MAX_AFFINE_ERROR_PX
+  );
+}
+
+function isCellOffScreen(corners: RasterVertex[], view: { height: number; width: number }) {
+  const xs = corners.map((corner) => corner.x);
+  const ys = corners.map((corner) => corner.y);
+  return (
+    Math.max(...xs) < 0 ||
+    Math.min(...xs) > view.width ||
+    Math.max(...ys) < 0 ||
+    Math.min(...ys) > view.height
+  );
 }
 
 function drawRasterTriangle(
