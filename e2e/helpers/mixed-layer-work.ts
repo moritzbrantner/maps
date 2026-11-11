@@ -38,6 +38,8 @@ export type MixedLayerWork = {
   /** Canvas surface redraws, by Map View role. */
   canvasBaseRedraws: number;
   canvasOverlayRedraws: number;
+  /** `MapsTemporalPointIndex.sample`: Rust/WASM moving-track samples (#172). */
+  temporalSamples: number;
 };
 
 type WasmClass = { prototype: Record<string, unknown> };
@@ -67,6 +69,7 @@ export async function installMixedLayerWork(page: Page, options: { measure?: boo
       retainedPolygonUpdatedRecords: 0,
       retainedPolygonUpdates: 0,
       retainedUploadBytes: 0,
+      temporalSamples: 0,
       tileUploads: 0,
     });
     if (global.mapsMixedLayerWork) {
@@ -145,6 +148,7 @@ export async function installMixedLayerWork(page: Page, options: { measure?: boo
     wrap(renderer, "free", null, (c) => c.freedRenderers!++);
     wrap(aggregation, "getViewportAggregation", "aggregation-query", (c) => c.aggregationQueries!++);
     wrap(aggregation, "free", null, (c) => c.freedAggregationIndexes!++);
+    wrap(wasm.MapsTemporalPointIndex, "sample", "temporal-sample", (c) => c.temporalSamples!++);
     // The Canvas base paints its whole surface with one fillRect per frame; the
     // application overlay clears its surface once per redraw.
     const context = CanvasRenderingContext2D.prototype;

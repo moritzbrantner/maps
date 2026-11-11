@@ -54,6 +54,23 @@
       ]
     },
     {
+      "id": "temporal-playback-journey-v1",
+      "family": "map-view-composition",
+      "reference": "none",
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": [
+        "idle",
+        "playback",
+        "seek",
+        "scrub",
+        "camera-pan-paused",
+        "camera-pan-playing",
+        "source-replace",
+        "unrelated-commits",
+        "teardown"
+      ]
+    },
+    {
       "id": "temporal-geojson-indexed-playback-v1",
       "family": "temporal-kernel",
       "reference": "legacy-kernel-observations-at-748166c",

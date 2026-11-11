@@ -18,6 +18,14 @@
   `getMapsTemporalRuntimeStatus()`. Temporal GeoJSON geometry sampling is unchanged (owned by
   #173). See "Temporal computation authority" in `docs/timeline.md`.
 
+### Patch Changes
+
+- A clustered Map Layer with no points no longer crashes the Rust/WASM aggregation index; it
+  builds an empty index (#172 phase E).
+- Temporal Convenience Maps no longer re-prepare their tracks when the WASM runtime only
+  changes its loading status, and a map remounted on a shared Map-Scoped Timeline samples the
+  kept time once instead of first sampling the clock's placeholder time (#172 phase E).
+
 ### Internal
 
 - Evidence tooling only, no package change: `bun run verify:engine-atlas-tileset-evidence`

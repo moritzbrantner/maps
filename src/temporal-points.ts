@@ -9,6 +9,12 @@ import {
   type TemporalMapTimeRange,
 } from "./temporal-core";
 import { getMapsTemporalWasmRuntime, type MapsTemporalWasmRuntime } from "./temporal-points-wasm";
+import {
+  attachTemporalPlaybackWork,
+  createTemporalChangeTracker,
+  createTemporalPlaybackWork,
+  getTemporalPlaybackWork,
+} from "./temporal-work";
 
 export type TemporalMapKeyframe<TProperties = Record<string, unknown>> = {
   latitude: number;
@@ -87,7 +93,10 @@ export function createTemporalMapPlaybackIndex<TProperties = Record<string, unkn
   if (runtime) {
     // Playback indexes have no public dispose: the generated WASM binding frees the Rust index
     // once it is garbage collected.
-    const { dispose: _dispose, ...index } = createWasmTemporalMapPlaybackIndex(runtime, tracks);
+    const prepared = createWasmTemporalMapPlaybackIndex(runtime, tracks);
+    const { dispose: _dispose, ...index } = prepared;
+    const work = getTemporalPlaybackWork(prepared);
+    if (work) attachTemporalPlaybackWork(index, work);
     return index;
   }
 
@@ -128,8 +137,17 @@ function createWasmTemporalMapPlaybackIndex<TProperties>(
   const range = rustIndex.timeRange();
   const timeRange = range.length === 2 ? { end: range[1]!, start: range[0]! } : null;
   let disposed = false;
+  const work = createTemporalPlaybackWork();
+  const changes = createTemporalChangeTracker(sourceTracks.length);
 
-  return {
+  work.trackPreparations += 1;
+  work.rustTrackPreparations += 1;
+  work.preparedTracks += sourceTracks.length;
+  work.preparedKeyframes += keyframeCount;
+  work.bridgeBytesToWasm += keyframes.byteLength + frameCounts.byteLength;
+  work.bridgeBytesFromWasm += range.byteLength;
+
+  const index: TemporalMapPlaybackIndex<TProperties> & { dispose(): void } = {
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -147,11 +165,20 @@ function createWasmTemporalMapPlaybackIndex<TProperties>(
       const samples = rustIndex.sample(time);
       const points: Array<MapPoint<TProperties>> = [];
 
+      work.samples += 1;
+      work.sampledTracks += sourceTracks.length;
+      work.bridgeBytesFromWasm += samples.byteLength;
+
       sourceTracks.forEach(({ frames, track }, trackIndex) => {
         const sample = trackIndex * TEMPORAL_SAMPLE_STRIDE;
         const kind = samples[sample];
+        const isPresent = kind === 1 || kind === 2;
 
-        if (kind !== 1 && kind !== 2) {
+        if (changes.observe(trackIndex, isPresent, samples[sample + 4]!, samples[sample + 5]!)) {
+          work.changedFeatures += 1;
+        }
+
+        if (!isPresent) {
           return;
         }
 
@@ -175,12 +202,16 @@ function createWasmTemporalMapPlaybackIndex<TProperties>(
         });
       });
 
+      work.emittedFeatures += points.length;
       return points;
     },
     getTimeRange() {
       return timeRange;
     },
   };
+
+  attachTemporalPlaybackWork(index, work);
+  return index;
 }
 
 function numberOrNaN(value: unknown) {
@@ -192,8 +223,14 @@ function createReferenceTemporalMapPlaybackIndex<TProperties>(
 ): TemporalMapPlaybackIndex<TProperties> {
   const preparedTracks = tracks.map(prepareTemporalMapTrack);
   const timeRange = getTemporalTrackTimeRange(preparedTracks);
+  const work = createTemporalPlaybackWork();
+  const changes = createTemporalChangeTracker(preparedTracks.length);
 
-  return {
+  work.trackPreparations += 1;
+  work.preparedTracks += preparedTracks.length;
+  work.preparedKeyframes += tracks.reduce((count, track) => count + track.frames.length, 0);
+
+  const index: TemporalMapPlaybackIndex<TProperties> = {
     getPointsAtTime(time) {
       if (!Number.isFinite(time)) {
         return [];
@@ -201,20 +238,33 @@ function createReferenceTemporalMapPlaybackIndex<TProperties>(
 
       const points: Array<MapPoint<TProperties>> = [];
 
+      work.samples += 1;
+      work.sampledTracks += preparedTracks.length;
+
       for (const track of preparedTracks) {
         const point = resolvePreparedTrackAtTime(track, time);
+
+        if (
+          changes.observe(track.index, point !== null, point?.longitude ?? 0, point?.latitude ?? 0)
+        ) {
+          work.changedFeatures += 1;
+        }
 
         if (point) {
           points.push(point);
         }
       }
 
+      work.emittedFeatures += points.length;
       return points;
     },
     getTimeRange() {
       return timeRange;
     },
   };
+
+  attachTemporalPlaybackWork(index, work);
+  return index;
 }
 
 function resolveTrackAtTime<TProperties>(

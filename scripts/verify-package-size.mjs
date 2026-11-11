@@ -29,11 +29,14 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // temporal runtime loader and its exports): +9,192 bytes unpacked without the WASM runtime
 // (+4,516 generated WASM bindings, +4,676 JavaScript, declarations and changelog), so the
 // budget grows by the same amount.
+// #172 phase E adds the moving-track work counters (`src/temporal-work.ts`, kept by every
+// prepared playback index): +1,514 bytes of JavaScript and declarations, measured against
+// main; the budget grows by the same amount.
 const budgets = {
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSizeWithoutWasm: 1_056_347,
+  unpackedSizeWithoutWasm: 1_057_861,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
