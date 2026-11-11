@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The release identity and SHA-256 digests mirror the existing pinned flake.nix.
+# This script is the authority for the wasm-bindgen CLI release identity and its
+# pinned SHA-256 digests; keep the version aligned with Cargo.lock's wasm-bindgen.
 version=0.2.129
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)
@@ -24,7 +25,7 @@ archive="$working_dir/wasm-bindgen.tar.gz"
 url="https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}/wasm-bindgen-${version}-${target}.tar.gz"
 curl --fail --location --silent --show-error --retry 3 "$url" --output "$archive"
 printf '%s  %s\n' "$digest" "$archive" | sha256sum --check --status || {
-  echo "wasm-bindgen release checksum did not match the pinned flake.nix digest" >&2
+  echo "wasm-bindgen release checksum did not match the pinned digest" >&2
   exit 1
 }
 tar -xzf "$archive" -C "$working_dir"

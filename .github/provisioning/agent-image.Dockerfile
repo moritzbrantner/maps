@@ -3,8 +3,8 @@
 # - the base is the digest-pinned Ubuntu release matching the hosted runner;
 # - Rust comes from rust-toolchain.toml through rustup;
 # - Bun comes from package.json `packageManager`;
-# - wasm-bindgen comes from the checksum-verified CI installer (mirrors flake.nix);
-# - Node uses the same major line as the locked Nix shell.
+# - wasm-bindgen comes from the checksum-verified CI installer;
+# - Node uses the same major line (24) as the hosted CI jobs.
 # Application dependencies are never baked in: bun.lock and Cargo.lock stay
 # authoritative at task time.
 FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c

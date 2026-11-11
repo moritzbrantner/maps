@@ -53,16 +53,15 @@ test("summary separates provisioning, cache, install and verification time", () 
   });
   const { samples, markdown } = summarizeJobs([
     {
-      name: "Warm (nix, 1) / nix warm 1",
+      name: "Warm (container, 1) / container warm 1",
       conclusion: "success",
       html_url: "https://example.invalid/1",
       started_at: at(0),
       completed_at: at(100),
       steps: [
-        step("Install Nix", 1, 5),
-        step("Restore persisted caches", 5, 15),
-        step("Import persisted Nix store paths", 15, 20),
-        step("Activate locked Nix CLI environment", 20, 30),
+        step("Download prebuilt agent image", 1, 5),
+        step("Load digest-verified agent image", 5, 15),
+        step("Restore persisted caches", 15, 30),
         step("Install identical package dependencies", 30, 40),
         step("Execute identical Rust and WASM verification", 40, 95),
       ],
@@ -73,7 +72,7 @@ test("summary separates provisioning, cache, install and verification time", () 
   assert.deepEqual(
     { ...samples[0], url: undefined },
     {
-      variant: "nix",
+      variant: "container",
       mode: "warm",
       sample: 1,
       conclusion: "success",
@@ -86,5 +85,18 @@ test("summary separates provisioning, cache, install and verification time", () 
       verification: 55,
     },
   );
-  assert.match(markdown, /\| nix \| warm \| 1\/1 \| 100 s \| 40 s \| 14 s \| 15 s \| 10 s \| 55 s \| 100 s \| 2 \|/);
+  assert.match(markdown, /\| container \| warm \| 1\/1 \| 100 s \| 40 s \| 14 s \| 15 s \| 10 s \| 55 s \| 100 s \| 2 \|/);
+});
+
+test("the retired Nix variant is not provisioned anywhere", () => {
+  const comparison = read(".github/workflows/provisioning-comparison.yml");
+  assert.equal([...comparison.matchAll(/variant: \[ubuntu, container\]/g)].length, 3);
+  for (const path of [
+    ".github/workflows/ci.yml",
+    ".github/workflows/provisioning-comparison.yml",
+    ".github/workflows/provisioning-sample.yml",
+  ]) {
+    assert.doesNotMatch(read(path), /nix-installer-action|nix develop|flake\.lock/, path);
+  }
+  assert.equal(summarizeJobs([{ name: "Warm (nix, 1) / nix warm 1", steps: [] }]).samples.length, 0);
 });
