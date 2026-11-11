@@ -97,8 +97,6 @@ function TemporalPlaybackJourney() {
           onMapControllerReady={(controller) => {
             window.temporalJourney.controller = controller;
           }}
-          pointColor="#dc2626"
-          pointRadius={4}
           showPlaybackControls={false}
           style={{ height: 600, width: 1280 }}
           timeline={clock}

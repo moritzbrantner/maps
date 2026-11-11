@@ -2,20 +2,14 @@ import type { GeoJsonLayerFeature } from "@moritzbrantner/maps";
 
 import { demoTimelineGeoJsonCollection, formatDemoTimelineTime } from "../data/demo-timeline";
 import { countDemoGeometryParts, countDemoGeometryPositions } from "../lib/geojson-features";
-import type { DemoGeoJsonProperties } from "../types";
 
-export function renderDemoTimelineGeoJsonTooltip(
-  feature: GeoJsonLayerFeature<DemoGeoJsonProperties>,
-) {
+export function renderDemoTimelineGeoJsonTooltip(feature: GeoJsonLayerFeature) {
   const properties = readDemoTimelineOutputProperties(feature);
 
   return `${properties.label} (${feature.geometry.type})`;
 }
 
-export function renderDemoTimelineGeoJsonPopup(
-  feature: GeoJsonLayerFeature<DemoGeoJsonProperties>,
-  activeTime: number,
-) {
+export function renderDemoTimelineGeoJsonPopup(feature: GeoJsonLayerFeature, activeTime: number) {
   const properties = readDemoTimelineOutputProperties(feature);
   const interpolation = getDemoTimelineInterpolationInfo(properties.trackId, activeTime);
 
@@ -34,11 +28,8 @@ export function renderDemoTimelineGeoJsonPopup(
   );
 }
 
-function readDemoTimelineOutputProperties(feature: GeoJsonLayerFeature<DemoGeoJsonProperties>) {
-  const properties = feature.properties as DemoGeoJsonProperties & {
-    temporalLabel?: unknown;
-    temporalTrackId?: unknown;
-  };
+function readDemoTimelineOutputProperties(feature: GeoJsonLayerFeature) {
+  const properties: Record<string, unknown> = feature.properties;
 
   return {
     label: String(properties.temporalLabel ?? properties.label ?? feature.id),
@@ -130,9 +121,7 @@ function findPreviousDemoTimelineFrameIndex(frames: Array<{ time: number }>, act
   return -1;
 }
 
-export function getDemoTimelineGeographyStyle(feature: {
-  properties: Partial<DemoGeoJsonProperties>;
-}) {
+export function getDemoTimelineGeographyStyle(feature: { properties: Record<string, unknown> }) {
   switch (feature.properties.kind) {
     case "checkpoint":
       return {

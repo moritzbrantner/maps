@@ -1,5 +1,10 @@
-import type { MapPoint, TemporalGeoJsonGeometryFeatureCollection } from "@moritzbrantner/maps";
+import type {
+  MapBounds,
+  MapPoint,
+  TemporalGeoJsonGeometryFeatureCollection,
+} from "@moritzbrantner/maps";
 
+import { isDemoSupportedGeometry } from "../lib/geojson-features";
 import type { DemoPointGeoJsonProperties, DemoPointProperties } from "../types";
 
 const demoPointFeatureCollection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties> =
@@ -100,7 +105,7 @@ export const demoTemperaturePoints: Array<MapPoint<DemoPointProperties>> = [
   temperaturePoint("minsk", "Minsk", "East", 53.9006, 27.559, 19.6),
   temperaturePoint("valletta", "Valletta", "South", 35.8989, 14.5146, 28.2),
 ];
-export const demoTemperatureDomainBounds = [-25, 34, 35, 66] as const;
+export const demoTemperatureDomainBounds: MapBounds = [-25, 34, 35, 66];
 export const demoTemperatureValueDomain = [12, 34] as const;
 export const demoTemperatureFieldColorRamp = [
   [0, "#1d4ed8"],
@@ -142,7 +147,7 @@ function createDemoPointsFromGeoJson(
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoPointGeoJsonProperties>,
 ): Array<MapPoint<DemoPointProperties>> {
   return collection.features.flatMap((feature, index) => {
-    if (feature.geometry?.type !== "Point") {
+    if (!isDemoSupportedGeometry(feature.geometry) || feature.geometry.type !== "Point") {
       return [];
     }
 

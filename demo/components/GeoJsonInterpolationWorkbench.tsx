@@ -9,6 +9,7 @@ import {
   getTemporalGeoJsonFeatureCollectionAtTime,
   interpolateGeoJsonTransitionPlan,
   type GeoJsonTopologyStrategy,
+  type TemporalGeoJsonGeometryFeatureCollection,
   type TemporalGeoJsonInterpolationStrategy,
 } from "@moritzbrantner/maps";
 
@@ -77,7 +78,7 @@ export function GeoJsonInterpolationWorkbench({
       : ([0, 0] as [number, number]);
   const progressTime = progress / 100;
   const canConstrainToLandmass = isDemoPolygonLikeGeometryType(geometryType);
-  const rawInterpolatedCollection = useMemo(() => {
+  const rawInterpolatedCollection = useMemo<TemporalGeoJsonGeometryFeatureCollection>(() => {
     if (topologyPair) {
       if (progressTime <= 0) {
         return topologyPair.start;
@@ -160,7 +161,12 @@ export function GeoJsonInterpolationWorkbench({
     setSelectedHandleIndex(0);
   };
   const updateSelectedPosition = (axis: 0 | 1, value: number) => {
-    if (!geometryPair || !selectedHandle || !Number.isFinite(value)) {
+    if (
+      example.kind === "topology" ||
+      !geometryPair ||
+      !selectedHandle ||
+      !Number.isFinite(value)
+    ) {
       return;
     }
 

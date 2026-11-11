@@ -316,7 +316,7 @@ function TrendChart({
   const showMarkers = runs.length <= 30;
   const labels = placeEndLabels(
     series.map((entry) => {
-      const lastIndex = entry.values.findLastIndex((value) => value !== null);
+      const lastIndex = findLastNonNullIndex(entry.values);
       return { entry, lastIndex, y: y(entry.values[lastIndex]!) };
     }),
   );
@@ -487,6 +487,16 @@ function findResult(run: BenchmarkRun, engine: string, basemap: string, scenario
         result.scenario === scenario,
     ) ?? null
   );
+}
+
+function findLastNonNullIndex(values: readonly (number | null)[]) {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (values[index] !== null) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function niceCeiling(value: number) {

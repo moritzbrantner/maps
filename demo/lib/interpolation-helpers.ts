@@ -11,6 +11,7 @@ import type {
   DemoInterpolationGeometryType,
   DemoInterpolationHandle,
 } from "../types";
+import { isDemoSupportedGeometry } from "./geojson-features";
 
 export function createDemoInterpolationFeatureCollection(
   kind: string,
@@ -75,7 +76,7 @@ export function getDemoInterpolationConstraintLayerStyle() {
 }
 
 export function getDemoInterpolationPreviewLayerStyle(
-  feature: GeoJsonLayerFeature<DemoGeoJsonProperties>,
+  feature: GeoJsonLayerFeature,
   geometryType: DemoInterpolationGeometryType,
 ) {
   const transitionKind = readDemoTransitionKind(feature.properties);
@@ -128,14 +129,16 @@ export function getDemoInterpolationPreviewLayerStyle(
   return getDemoInterpolationLayerStyle("preview", geometryType);
 }
 
-export function constrainDemoInterpolationCollection(
-  collection: TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties>,
+export function constrainDemoInterpolationCollection<TProperties extends Record<string, unknown>>(
+  collection: TemporalGeoJsonGeometryFeatureCollection<TProperties>,
   constraint: GeoJsonPolygonConstraint,
-): TemporalGeoJsonGeometryFeatureCollection<DemoGeoJsonProperties> {
+): TemporalGeoJsonGeometryFeatureCollection<TProperties> {
   return {
     ...collection,
     features: collection.features.flatMap((feature) => {
-      const constrainedGeometry = constrainGeoJsonGeometryToPolygon(feature.geometry, constraint);
+      const constrainedGeometry = isDemoSupportedGeometry(feature.geometry)
+        ? constrainGeoJsonGeometryToPolygon(feature.geometry, constraint)
+        : null;
 
       return constrainedGeometry
         ? [
