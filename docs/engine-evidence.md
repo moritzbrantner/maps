@@ -154,6 +154,45 @@ Limits:
   records comparison and Moonlight as `unavailable`. This evidence is descriptive, not a
   Fast verdict.
 
+## Heat/scalar journey evidence (#171)
+
+`runtime-profiler-scenarios/heat-scalar-journey-browser-v1.yaml` captures the canonical
+`heat-scalar-journey-v1` through the same `browser-chromium` collector. Its Maps-owned
+journey, `scripts/profile-heat-scalar-journey.ts`, builds `e2e/fixtures/heat-scalar-journey.html`
+for production, serves it with the built `dist/wasm` package and drives the public Map View
+in two lanes: the heat lane, and a control lane (`?heat=0`) with the same Map View without its
+Heat Layers. It writes a Maps observation (`maps.heat-scalar-journey-observation/v1`) next
+to the immutable bundle. `verify:engine-runtime-evidence` runs it as
+`verify:engine-heat-scalar-evidence`, under `heat-scalar/` in the existing artifact:
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-heat-scalar-evidence
+```
+
+Per phase and lane the observation records `requestAnimationFrame` intervals, long tasks and
+the heat/scalar work counters (`src/heat-layer-work.ts`, read through the evidence-only
+`observeHeatLayerWork()` registry): index, grid, image, contour and raster builds, reuses,
+discarded async results, uploads, decoded images, raster draws and their Canvas triangles.
+Data and style phases also record input → presented-surface latency: from the input until
+the new raster is decoded, plus one animation frame. JS heap is sampled after forced GC.
+
+The verifier fails when evidence is missing or the invalidation contract is broken: the
+control lane must do no heat work, camera and resize phases must rebuild no index, grid,
+image or contours, density seeks must not touch the field, field refreshes must not
+re-index density points, and ramp changes must reuse the retained grid. It writes
+`evaluation.json` with the heat lane against the control lane per camera phase.
+
+Limits:
+
+- The pinned collector launches Chromium without WebGPU flags, so both lanes measure the
+  Canvas fallback. Heat rasters are drawn by the Canvas overlay on both backends.
+- The control lane isolates the cost of the heat surfaces; it is not a reference
+  implementation. No reference or parent revision runs this journey, so `evaluation.json`
+  records comparison and Moonlight as `unavailable`. This evidence is descriptive, not a Fast
+  verdict.
+- GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
+  No WASM bridge carries heat/scalar data while TypeScript is the authority.
+
 ## Comparability
 
 Runtime evidence may only be compared when runtime-profiler considers it strictly comparable. Missing or incomparable evidence is not reinterpreted as success by Maps or Moonlight.

@@ -89,7 +89,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
 | GeoJSON polygon fills/strokes and holes | Yes | Yes (#161: WebGPU matches the Canvas oracle) | In progress | Polygons are GPU-retained (#196): Rust lowers rings once and camera frames upload nothing. Frames that mix polygons, lines and points keep them retained as point and shape groups in one painter order (#195). Deterministic work contracts (#189, `performance:work`) hold camera pan and zoom/bearing at 100/1k/10k polygons to zero geometry rebuilds and uploads, in-place shape updates (`updateRetainedPolygons`) to work linear in the changed shapes only, and dataset replacement to declared linear work. |
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. |
-| Heat/scalar surfaces | Existing product capability | Partial (#171: deterministic density/scalar fixtures and retained-vs-uncached differential oracles; scalar-field polygon masks with holes clip the raster, contours and samples at grid-cell resolution, with mask boundary/hole fixtures and a masked-field oracle; browser alignment evidence on both pixel backends, see [below](#heatscalar-alignment-evidence-171-phase-3)) | In progress (#171 phase 2: deterministic work counters; no frame-time evidence yet) | The oracle found and fixed stale stable-raster reuse after filter/weight/radius/style/data changes. The masked-field oracle found and fixed async field reuse after the mask was replaced. Work counters (`src/heat-layer-work.ts`, asserted in `src/heat-layer-work.test.tsx`) separate source-index, interpolation-grid, field-image, contour and raster work, cache hits and raster uploads. Camera frames inside a stable density raster or over a scalar field now do no per-point work; the per-frame source lowering and signature hashing that the stale-reuse fix had introduced (16,000 of each for 32 frames at 500 points) is gone. Bridge bytes are not applicable while TypeScript is the authority. Browser alignment evidence found and fixed stable-raster misplacement under pitch (up to 14 px). Next: full-map Fast evidence (#171). |
+| Heat/scalar surfaces | Existing product capability | Partial (#171: deterministic density/scalar fixtures and retained-vs-uncached differential oracles; scalar-field polygon masks with holes clip the raster, contours and samples at grid-cell resolution, with mask boundary/hole fixtures and a masked-field oracle; browser alignment evidence on both pixel backends, see [below](#heatscalar-alignment-evidence-171-phase-3)) | In progress (#171 phase 5: full-map journey `heat-scalar-journey-v1` measured, see [below](#heatscalar-fast-evidence-171-phase-5); unpitched navigation, resize and data/style changes stay in the frame budget, pitched navigation over heat surfaces does not; no reference comparison, so no Fast verdict) | The oracle found and fixed stale stable-raster reuse after filter/weight/radius/style/data changes. The masked-field oracle found and fixed async field reuse after the mask was replaced. Work counters (`src/heat-layer-work.ts`, asserted in `src/heat-layer-work.test.tsx`) separate source-index, interpolation-grid, field-image, contour and raster work, cache hits and raster uploads. Camera frames inside a stable density raster or over a scalar field now do no per-point work; the per-frame source lowering and signature hashing that the stale-reuse fix had introduced (16,000 of each for 32 frames at 500 points) is gone. Bridge bytes are not applicable while TypeScript is the authority. Browser alignment evidence found and fixed stable-raster misplacement under pitch (up to 14 px). The full-map journey measured no long task from any heat/scalar computation, so the conditional Rust authority migration is not justified and TypeScript stays the authority. Next: the pitched Canvas raster draw (about 2,100 clipped triangles and +80 ms per pitched frame), an owner decision between a GPU raster path and accepting the Canvas limit. |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
 | Style-spec-compatible vector layers/expressions | Not complete | Not complete | Not started | Develop background/fill/line/circle/raster + filters/expressions, then parity, then bucket/render optimization. |
@@ -331,6 +331,33 @@ clip is antialiased separately; pitched views have more triangles and so more se
 interpolated stable density shows its anchored sample cells as visible blocks. Neither moves
 a surface relative to points or polygons.
 
+
+### Heat/scalar Fast evidence (#171 phase 5)
+
+`heat-scalar-journey-v1` mounts the canonical `heat-map-density-index-v1` density (10,000
+weighted points) and `scalar-field-grid-v1` field (320 × 200 cells, masked with a hole,
+with contours) in one `flatRuntime="maps"` Map View with a Point Layer and a GeoJSON polygon,
+and measures every phase against a control lane without the Heat Layers
+([evidence contract](engine-evidence.md#heatscalar-journey-evidence-171), [measurements](engine-performance.md#heatscalar-full-map-journey-171-phase-5)).
+Two captures at `fa172da` on the Canvas fallback:
+
+- **Within the frame budget, no long task:** pan (frame p95 16.7 ms, as the control lane),
+  resize, six density seeks, six field refreshes, four ramp changes and superseded bursts.
+  Wheel zoom re-rasterizes the stable density (p95 33 to 50 ms, no long task).
+- **Input → presented surface:** p50 83 to 98 ms, p95 166 to 182 ms over 18 awaited commits.
+- **Over budget:** bearing 35° with pitch 40°. Heat frames p50 133 ms and p95 217 ms against
+  the control lane's 67 and 83 ms: about 2,100 clipped Canvas triangles per frame for two
+  rasters. The control lane is over budget on this backend too.
+- **Invalidation:** camera and resize phases rebuilt no index, grid, image or contours; data
+  and style changes rebuilt only their dependents (asserted by the verifier and by
+  `e2e/maps-heat-scalar-journey.spec.ts`).
+- **Memory:** JS heap 9.2 MB ready, 13.1 MB after the journey, 6.4 to 6.5 MB across three
+  unmounts; GPU and WASM memory are unavailable.
+
+The per-axis raster mesh halved the triangles of unpitched frames. Rust authority was not
+justified: no heat/scalar computation produced a long task, and the bottleneck is Canvas
+pixel submission. No reference implementation runs the journey, so comparison is unavailable
+and the Fast gate stays open.
 
 ### Content-pinned Atlas tileset on Pages (#270)
 
