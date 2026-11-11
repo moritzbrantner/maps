@@ -1291,6 +1291,7 @@ const NO_WORK: MixedLayerWork = {
   retainedPolygonUpdatedRecords: 0,
   retainedPolygonUpdates: 0,
   retainedUploadBytes: 0,
+  temporalSamples: 0,
   tileUploads: 0,
 };
 

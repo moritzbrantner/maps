@@ -90,6 +90,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | GeoJSON polygon fills/strokes and holes | Yes | Yes (#161: WebGPU matches the Canvas oracle) | In progress | Polygons are GPU-retained (#196): Rust lowers rings once and camera frames upload nothing. Frames that mix polygons, lines and points keep them retained as point and shape groups in one painter order (#195). Deterministic work contracts (#189, `performance:work`) hold camera pan and zoom/bearing at 100/1k/10k polygons to zero geometry rebuilds and uploads, in-place shape updates (`updateRetainedPolygons`) to work linear in the changed shapes only, and dataset replacement to declared linear work. |
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. |
 | Heat/scalar surfaces | Existing product capability | Partial (#171: deterministic density/scalar fixtures and retained-vs-uncached differential oracles; scalar-field polygon masks with holes clip the raster, contours and samples at grid-cell resolution, with mask boundary/hole fixtures and a masked-field oracle; browser alignment evidence on both pixel backends, see [below](#heatscalar-alignment-evidence-171-phase-3)) | In progress (#171 phase 5: full-map journey `heat-scalar-journey-v1` measured, see [below](#heatscalar-fast-evidence-171-phase-5); unpitched navigation, resize and data/style changes stay in the frame budget, pitched navigation over heat surfaces does not; no reference comparison, so no Fast verdict) | The oracle found and fixed stale stable-raster reuse after filter/weight/radius/style/data changes. The masked-field oracle found and fixed async field reuse after the mask was replaced. Work counters (`src/heat-layer-work.ts`, asserted in `src/heat-layer-work.test.tsx`) separate source-index, interpolation-grid, field-image, contour and raster work, cache hits and raster uploads. Camera frames inside a stable density raster or over a scalar field now do no per-point work; the per-frame source lowering and signature hashing that the stale-reuse fix had introduced (16,000 of each for 32 frames at 500 points) is gone. Bridge bytes are not applicable while TypeScript is the authority. Browser alignment evidence found and fixed stable-raster misplacement under pitch (up to 14 px). The full-map journey measured no long task from any heat/scalar computation, so the conditional Rust authority migration is not justified and TypeScript stays the authority. Next: the pitched Canvas raster draw (about 2,100 clipped triangles and +80 ms per pitched frame), an owner decision between a GPU raster path and accepting the Canvas limit. |
+| Moving features and Map-Scoped Timeline | Partial (#172 A: moving tracks over static regions on `flatRuntime="maps"` with one public map-scoped clock and play/pause/seek; temporal cluster/heat composition is phase D, blocked on #170/#171) | Partial (#172 A–C: seek/playback parity and edge sequences against an independent naive sampler, async/source-change guards, Rust/WASM sampler parity in the browser; screenshots and picking while camera and features move together are not covered) | In progress (#172 E: work counters and the full-map journey `temporal-playback-journey-v1` measured, see [below](#moving-features-fast-evidence-172-phase-e); every phase inside the frame budget at 2,000 tracks on the Canvas fallback; no reference comparison, so no Fast verdict) | Rust samples moving tracks; TypeScript keeps the clock and application data. Time changes only sample and rebuild the aggregation index (declared required work); camera frames and unrelated commits do no temporal work; static regions and tiles stay retained. The counters found and fixed re-preparation on runtime status changes, a placeholder-time sample on remount and a Rust aggregation trap on empty point sets. |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
 | Style-spec-compatible vector layers/expressions | Not complete | Not complete | Not started | Develop background/fill/line/circle/raster + filters/expressions, then parity, then bucket/render optimization. |
@@ -358,6 +359,40 @@ The per-axis raster mesh halved the triangles of unpitched frames. Rust authorit
 justified: no heat/scalar computation produced a long task, and the bottleneck is Canvas
 pixel submission. No reference implementation runs the journey, so comparison is unavailable
 and the Fast gate stays open.
+
+### Moving features Fast evidence (#172 phase E)
+
+Work counters (`src/temporal-work.ts`, asserted in `src/temporal-work.test.tsx`) separate track
+preparation, samples, emitted and changed features and Rust/WASM bridge bytes; the browser
+runtime counters separate aggregation index rebuilds, frame plans, repaints, static-layer
+writes and uploads. `temporal-playback-journey-v1` mounts the public `TemporalClusteredMap` on
+`flatRuntime="maps"` with 2,000 moving tracks (24 keyframes each) over 48 static regions on one
+shared Map-Scoped Timeline
+([evidence contract](engine-evidence.md#temporal-playback-journey-evidence-172),
+[measurements](engine-performance.md#moving-features-on-a-map-scoped-timeline-172-phase-e)).
+Two captures at `11f30390` on the Canvas fallback:
+
+- **Within the frame budget, no long task:** 180 frames of playback, 8 seeks, a 40-move
+  slider scrub, panning while paused and while playing, 3 source replacements, 20 unrelated
+  commits and 3 remounts (frame p95 16.7–16.8 ms throughout).
+- **Work:** one sample per advanced time (0.34 ms of Rust per 2,000-track sample) and one
+  aggregation index rebuild per sample; no preparation outside load, source replacement and
+  remount; camera frames and unrelated commits neither prepare nor sample; no phase rewrote the
+  static regions or re-uploaded tiles (asserted by the verifier and by
+  `e2e/maps-temporal-playback-journey.spec.ts`).
+- **Input → presented:** p50 30.0 ms, p95 30.3 ms over 11 awaited seeks and source
+  replacements.
+- **Memory:** JS heap 12.8 MB ready, 14.2 MB after the journey, 13.3 MB across three
+  unmounts; GPU and WASM memory are unavailable.
+
+**Found and fixed:** tracks re-prepared on every temporal runtime status change; a remount on a
+shared clock sampled the clock's placeholder time before the kept time; and the Rust
+aggregation index trapped on an empty point set, which any empty clustered Map Layer on the
+Maps runtime could reach.
+
+No reference implementation runs the journey, so comparison is unavailable and the Fast gate
+stays open; WebGPU timing and larger track counts are not measured. Temporal cluster/heat
+composition (phase D) has no Fast evidence.
 
 ### Content-pinned Atlas tileset on Pages (#270)
 

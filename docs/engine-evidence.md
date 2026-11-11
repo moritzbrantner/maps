@@ -193,6 +193,61 @@ Limits:
 - GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
   No WASM bridge carries heat/scalar data while TypeScript is the authority.
 
+## Temporal playback journey evidence (#172)
+
+`runtime-profiler-scenarios/temporal-playback-journey-browser-v1.yaml` captures the canonical
+`temporal-playback-journey-v1` through the same `browser-chromium` collector. Its Maps-owned
+journey, `scripts/profile-temporal-playback-journey.ts`, builds
+`e2e/fixtures/temporal-playback-journey.html` for production, serves it with the built
+`dist/wasm` package and drives the public temporal Convenience Map. It writes a Maps observation
+(`maps.temporal-playback-journey-observation/v1`) next to the immutable bundle.
+`verify:engine-runtime-evidence` runs it as `verify:engine-temporal-evidence`, under
+`temporal/` in the existing artifact:
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-temporal-evidence
+```
+
+The heat/scalar and temporal journeys share their fixture build, static server, in-page timing
+and heap sampling (`scripts/browser-journey-support.ts`).
+
+Per phase the observation records `requestAnimationFrame` intervals, long tasks, slow input
+events (Event Timing entries of at least 16 ms: input → next paint), and two work sets:
+
+- the temporal work counters (`src/temporal-work.ts`, read through the evidence-only
+  `observeTemporalWork()` registry): track preparations (and those by Rust), prepared tracks and
+  keyframes, samples, sampled tracks, emitted and changed features, and bridge bytes into and out
+  of the Rust/WASM sampler;
+- the Map View runtime counters (`e2e/helpers/mixed-layer-work.ts`): aggregation queries and
+  released aggregation indexes (one per rebuild), frame plans, projected coordinates, repaints,
+  retained point/polygon writes, tile uploads, released runtimes and renderers, and Rust
+  temporal samples, each also a measured `runtime-profiler:js-to-wasm:<label>` crossing.
+
+Seeks and source replacements also record input → presented latency: from the input until the
+new positions were sampled and repainted, plus one animation frame. JS heap is sampled after
+forced GC.
+
+The verifier fails when evidence is missing or the work contract is broken: no phase may
+rewrite the static regions, re-upload tiles or (outside teardown) rebuild the runtime; every
+sample is one measured Rust crossing over every track with the exact packed bridge bytes;
+idle, paused camera and unrelated commits must neither prepare nor sample; playback, seeks,
+scrubbing and camera-while-playing must sample without re-preparing; each seek samples once;
+each source replacement and remount prepares once, with Rust; the scrub samples at most once
+per input; the map-scoped time survives teardown. Load may prepare twice at most: the
+TypeScript reference before the Rust runtime is ready, then Rust. It writes `evaluation.json`
+with a per-phase summary.
+
+Limits:
+
+- The pinned collector launches Chromium without WebGPU flags, so the capture measures the
+  Canvas fallback. WebGPU frame timing is not measured; on WebGPU the static regions are
+  GPU-retained, and `e2e/maps-temporal-playback-journey.spec.ts` checks that time changes
+  write no retained polygons there, without timing.
+- The idle phase is the same Map View paused, not a reference implementation. No reference or
+  parent revision runs this journey, so `evaluation.json` records comparison and Moonlight as
+  `unavailable`. This evidence is descriptive, not a Fast verdict.
+- GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
+
 ## Comparability
 
 Runtime evidence may only be compared when runtime-profiler considers it strictly comparable. Missing or incomparable evidence is not reinterpreted as success by Maps or Moonlight.
