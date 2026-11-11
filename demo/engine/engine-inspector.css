@@ -326,3 +326,46 @@ body {
     padding: 16px;
   }
 }
+
+.engine-inspector__qa-side {
+  display: contents;
+}
+
+.engine-inspector__qa-status {
+  border-radius: 999px;
+  display: inline-block;
+  font-weight: 600;
+  margin: 10px 0;
+  padding: 3px 10px;
+  background: var(--inspector-accent-soft);
+}
+
+.engine-inspector__qa-status[data-status="failed"] {
+  color: var(--inspector-danger);
+}
+
+.engine-inspector__qa-tiles {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.engine-inspector__qa-tiles li {
+  align-items: baseline;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto 1fr;
+  font-size: 12px;
+}
+
+.engine-inspector__qa-tiles span {
+  color: var(--inspector-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.engine-inspector button[aria-pressed="true"] {
+  border-color: var(--inspector-accent);
+  background: var(--inspector-accent-soft);
+}

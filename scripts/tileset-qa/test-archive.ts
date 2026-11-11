@@ -22,8 +22,36 @@ const text = (value: string) => [...new TextEncoder().encode(value)];
 /** MoveTo(10,10) LineTo(+20,+0): one two-point line in tile units. */
 export const LINE_COMMANDS = [9, 20, 20, 10, 40, 0];
 
-export function mvtFeature(type: 1 | 2 | 3, commands: number[], tags: number[] = []): number[] {
-  return [...field(2, tags.flatMap(varint)), 0x18, type, ...field(4, commands.flatMap(varint))];
+export function mvtFeature(
+  type: 1 | 2 | 3,
+  commands: number[],
+  tags: number[] = [],
+  id?: number,
+): number[] {
+  return [
+    ...(id === undefined ? [] : [0x08, ...varint(id)]),
+    ...field(2, tags.flatMap(varint)),
+    0x18,
+    type,
+    ...field(4, commands.flatMap(varint)),
+  ];
+}
+
+/** Command integers for absolute paths; `closed` appends ClosePath to each (polygon rings). */
+export function pathCommands(paths: [number, number][][], closed = false): number[] {
+  const zigzag = (value: number) => ((value << 1) ^ (value >> 31)) >>> 0;
+  const commands: number[] = [];
+  let cursor: [number, number] = [0, 0];
+  for (const points of paths) {
+    points.forEach((point, index) => {
+      if (index === 0) commands.push(9);
+      if (index === 1) commands.push(((points.length - 1) << 3) | 2);
+      commands.push(zigzag(point[0] - cursor[0]), zigzag(point[1] - cursor[1]));
+      cursor = point;
+    });
+    if (closed) commands.push(15);
+  }
+  return commands;
 }
 
 export function mvtLayer(

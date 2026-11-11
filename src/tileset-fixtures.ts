@@ -54,3 +54,19 @@ export function createFixturePmtilesXyzTileset(baseUrl = "/"): MapsTileset {
     },
   };
 }
+
+/**
+ * Two synthetic revisions of one source for the Tileset revision diff (#276): r2 swaps a
+ * road, widens one polygon hole and drops tile 1/1/1. See `scripts/tileset-revision-fixture.mjs`.
+ */
+export function createFixtureRevisionTileset(revision: "r1" | "r2", baseUrl = "/"): MapsTileset {
+  return {
+    ...createFixtureTileset("a", revision, baseUrl),
+    sourceId: "fixture-revision",
+    maxZoom: 1,
+    attribution: "Maps revision diff fixture · CC0",
+    transport: { kind: "pmtiles", url: `${baseUrl}tilesets/fixture-revision-${revision}.pmtiles` },
+    provenance:
+      "scripts/tileset-revision-fixture.mjs; synthetic CC0 revisions of one source, not geographic data",
+  };
+}

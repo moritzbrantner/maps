@@ -193,20 +193,28 @@ impl MapsTileset {
     }
 }
 
-/// Whether a canonical tile intersects `[west, south, east, north]` coverage bounds.
-/// `west > east` denotes antimeridian coverage. The one coverage rule for runtime and QA.
+/// Geographic `[west, south, east, north]` extent of a canonical Web Mercator tile.
 #[must_use]
-pub(crate) fn tile_intersects_bounds(bounds: [f64; 4], tile: TileId) -> bool {
+pub fn tile_lng_lat_bounds(tile: TileId) -> [f64; 4] {
     let dimension = 2_f64.powi(i32::from(tile.z));
-    let west = f64::from(tile.x) / dimension * 360.0 - 180.0;
-    let east = (f64::from(tile.x) + 1.0) / dimension * 360.0 - 180.0;
     let latitude = |y: f64| {
         ((std::f64::consts::PI * (1.0 - 2.0 * y / dimension)).sinh())
             .atan()
             .to_degrees()
     };
-    let north = latitude(f64::from(tile.y));
-    let south = latitude(f64::from(tile.y) + 1.0);
+    [
+        f64::from(tile.x) / dimension * 360.0 - 180.0,
+        latitude(f64::from(tile.y) + 1.0),
+        (f64::from(tile.x) + 1.0) / dimension * 360.0 - 180.0,
+        latitude(f64::from(tile.y)),
+    ]
+}
+
+/// Whether a canonical tile intersects `[west, south, east, north]` coverage bounds.
+/// `west > east` denotes antimeridian coverage. The one coverage rule for runtime and QA.
+#[must_use]
+pub(crate) fn tile_intersects_bounds(bounds: [f64; 4], tile: TileId) -> bool {
+    let [west, south, east, north] = tile_lng_lat_bounds(tile);
     let [w, s, e, n] = bounds;
     south < n
         && north > s

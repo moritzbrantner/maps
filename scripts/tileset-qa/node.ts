@@ -95,11 +95,11 @@ export async function loadTilesetQaKernel(directory?: string): Promise<TilesetQa
     initSync(input: { module: Uint8Array }): unknown;
   } & Partial<TilesetQaKernel>;
   module.initSync({ module: readFileSync(path.join(found, "maps_wasm_bg.wasm")) });
-  const { inspectMvtTile, auditTilesetCoverage } = module;
-  if (!inspectMvtTile || !auditTilesetCoverage) {
+  const { inspectMvtTile, auditTilesetCoverage, diffMvtTiles, tileLngLatBounds } = module;
+  if (!inspectMvtTile || !auditTilesetCoverage || !diffMvtTiles || !tileLngLatBounds) {
     throw new Error(`Maps WASM module in ${found} predates Tileset QA; rebuild it`);
   }
-  return { inspectMvtTile, auditTilesetCoverage };
+  return { inspectMvtTile, auditTilesetCoverage, diffMvtTiles, tileLngLatBounds };
 }
 
 /**

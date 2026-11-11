@@ -46,6 +46,15 @@
   tile content, pinned `go-pmtiles verify`) and writes a `maps-tileset-qa-v1` artifact with
   `passed`/`failed`/`inconclusive` checks. `bun run verify:tileset-qa` gates the committed
   fixtures in CI. See `docs/maps-tilesets.md`.
+- Tileset revision diff, tooling and demo only (#276 part 2): `bun run qa:tileset -- diff`
+  compares a base and a candidate PMTiles archive and writes a `maps-tileset-diff-v1`
+  artifact: archive identity, manifest changes, the coverage delta from both directories,
+  and a bounded semantic diff of common tiles through the Rust kernel. Features without a
+  stable MVT ID are reported as ambiguous or unmatched, never as the same feature. The
+  Engine inspector (`/engine/?view=inspector`) gains a Revision QA panel that runs the same
+  comparison, shows either revision on the map and focuses a reported tile. New synthetic
+  fixtures `fixture-revision-r1/r2.pmtiles`. The only package addition is two WASM exports,
+  `diffMvtTiles` and `tileLngLatBounds`.
 
 ## 0.2.0
 

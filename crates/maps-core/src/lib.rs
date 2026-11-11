@@ -14,12 +14,15 @@ mod line_atlas;
 mod line_mesh;
 mod matrix_camera;
 mod mvt_features;
+#[cfg(test)]
+mod mvt_test_writer;
 mod scenario;
 mod sky;
 pub mod symbol;
 mod temporal;
 pub mod terrain;
 mod tileset;
+mod tileset_diff;
 mod tileset_qa;
 mod vector_bucket;
 mod vector_tile;
@@ -27,7 +30,13 @@ pub use temporal::{
     TEMPORAL_POINT_KEYFRAME_STRIDE, TEMPORAL_POINT_SAMPLE_STRIDE, TemporalPointKeyframe,
     TemporalPointSample, TemporalPointTrackIndex,
 };
-pub use tileset::{MapsTileset, TilesetObservation, TilesetSchema, TilesetTransport};
+pub use tileset::{
+    MapsTileset, TilesetObservation, TilesetSchema, TilesetTransport, tile_lng_lat_bounds,
+};
+pub use tileset_diff::{
+    MvtDiffCounts, MvtFeatureChange, MvtFeatureChangeKind, MvtLayerDiff, MvtLayerPresence,
+    MvtTileDiff, MvtTileDiffError, MvtTileSide, TILESET_DIFF_MAX_CHANGE_PROPERTIES, diff_mvt_tiles,
+};
 pub use tileset_qa::{
     MvtLayerInspection, MvtTileInspection, TILESET_QA_MAX_PROPERTY_KEYS, TilesetCoverageAudit,
     TilesetCoverageError, TilesetZoomCoverage, audit_tileset_coverage, inspect_mvt_tile,

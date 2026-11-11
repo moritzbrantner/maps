@@ -1,0 +1,565 @@
+{
+  "schema": "maps-tileset-diff-v1",
+  "checkVersion": "1.0.0",
+  "comparisonId": "fixture-revision-r1-r2",
+  "status": "failed",
+  "relation": "revision",
+  "mode": "sampled",
+  "seed": 1,
+  "limits": {
+    "sampleTiles": 32,
+    "maxContentTiles": 32,
+    "maxAddressedTiles": 250000,
+    "maxExpectedTiles": 250000,
+    "tilesPerFinding": 16,
+    "reportedTiles": 32,
+    "changesPerTile": 16
+  },
+  "base": {
+    "sourceId": "fixture-revision",
+    "dataRevision": "r1",
+    "schema": {
+      "id": "shortbread",
+      "version": "1.0",
+      "sourceLayers": [
+        "water_polygons",
+        "land",
+        "streets"
+      ]
+    },
+    "bounds": [
+      -180,
+      -85.0511287798066,
+      180,
+      85.0511287798066
+    ],
+    "minZoom": 0,
+    "maxZoom": 1,
+    "attribution": "Maps revision diff fixture · CC0",
+    "license": "CC0-1.0",
+    "provenance": "scripts/tileset-revision-fixture.mjs; synthetic CC0 revisions of one source, not geographic data",
+    "archive": {
+      "name": "fixture-revision-r1.pmtiles",
+      "bytes": 938,
+      "sha256": "59dab2efd3e55f1cfb324fd79d63fb75f49dc01a6bcff9ef68f4f8c12e7ca83b",
+      "tileCompression": 2
+    }
+  },
+  "candidate": {
+    "sourceId": "fixture-revision",
+    "dataRevision": "r2",
+    "schema": {
+      "id": "shortbread",
+      "version": "1.0",
+      "sourceLayers": [
+        "water_polygons",
+        "land",
+        "streets"
+      ]
+    },
+    "bounds": [
+      -180,
+      -85.0511287798066,
+      180,
+      85.0511287798066
+    ],
+    "minZoom": 0,
+    "maxZoom": 1,
+    "attribution": "Maps revision diff fixture · CC0",
+    "license": "CC0-1.0",
+    "provenance": "scripts/tileset-revision-fixture.mjs; synthetic CC0 revisions of one source, not geographic data",
+    "archive": {
+      "name": "fixture-revision-r2.pmtiles",
+      "bytes": 1129,
+      "sha256": "c1db371fec86473d50c667ce87b0948dd1d0a2a9605625aea94d46edc6973b72",
+      "tileCompression": 2
+    }
+  },
+  "tools": {
+    "pmtilesReader": "4.5.0"
+  },
+  "checks": [
+    {
+      "id": "pairing",
+      "status": "passed",
+      "summary": "fixture-revision: r1 → r2"
+    },
+    {
+      "id": "archives",
+      "status": "passed",
+      "summary": "both archive headers read"
+    },
+    {
+      "id": "source-metadata",
+      "status": "passed",
+      "summary": "manifests and headers compared"
+    },
+    {
+      "id": "coverage",
+      "status": "failed",
+      "summary": "4 common tiles, 0 added, 1 removed (1 inside the candidate's coverage)"
+    },
+    {
+      "id": "features",
+      "status": "passed",
+      "summary": "4 of 4 common tiles compared: 1 identical, 0 re-encoded, 3 changed"
+    }
+  ],
+  "findings": [
+    {
+      "check": "coverage",
+      "code": "coverage-lost",
+      "severity": "error",
+      "message": "base tile missing from the candidate inside the candidate's declared coverage; the Map View fails closed on it",
+      "count": 1,
+      "tiles": [
+        {
+          "z": 1,
+          "x": 1,
+          "y": 1,
+          "bounds": [
+            0,
+            -85.0511287798066,
+            180,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "check": "features",
+      "code": "features-ambiguous",
+      "severity": "info",
+      "message": "no stable ID: same type and properties on both sides with different geometry; identity is not asserted",
+      "count": 1,
+      "tiles": [
+        {
+          "z": 1,
+          "x": 1,
+          "y": 0,
+          "bounds": [
+            0,
+            0,
+            180,
+            85.0511287798066
+          ]
+        }
+      ]
+    },
+    {
+      "check": "features",
+      "code": "features-unmatched-added",
+      "severity": "info",
+      "message": "no stable ID: candidate feature without a counterpart in the base",
+      "count": 3,
+      "tiles": [
+        {
+          "z": 0,
+          "x": 0,
+          "y": 0,
+          "bounds": [
+            -180,
+            -85.0511287798066,
+            180,
+            85.0511287798066
+          ]
+        },
+        {
+          "z": 1,
+          "x": 0,
+          "y": 0,
+          "bounds": [
+            -180,
+            0,
+            0,
+            85.0511287798066
+          ]
+        },
+        {
+          "z": 1,
+          "x": 1,
+          "y": 0,
+          "bounds": [
+            0,
+            0,
+            180,
+            85.0511287798066
+          ]
+        }
+      ]
+    },
+    {
+      "check": "features",
+      "code": "features-unmatched-removed",
+      "severity": "info",
+      "message": "no stable ID: base feature without a counterpart in the candidate",
+      "count": 3,
+      "tiles": [
+        {
+          "z": 0,
+          "x": 0,
+          "y": 0,
+          "bounds": [
+            -180,
+            -85.0511287798066,
+            180,
+            85.0511287798066
+          ]
+        },
+        {
+          "z": 1,
+          "x": 0,
+          "y": 0,
+          "bounds": [
+            -180,
+            0,
+            0,
+            85.0511287798066
+          ]
+        },
+        {
+          "z": 1,
+          "x": 1,
+          "y": 0,
+          "bounds": [
+            0,
+            0,
+            180,
+            85.0511287798066
+          ]
+        }
+      ]
+    }
+  ],
+  "coverage": {
+    "base": 5,
+    "candidate": 4,
+    "common": 4,
+    "added": 0,
+    "removed": 1,
+    "byZoom": [
+      {
+        "zoom": 0,
+        "base": 1,
+        "candidate": 1,
+        "added": 0,
+        "removed": 0
+      },
+      {
+        "zoom": 1,
+        "base": 4,
+        "candidate": 3,
+        "added": 0,
+        "removed": 1
+      }
+    ],
+    "addedTiles": [],
+    "removedTiles": [
+      {
+        "z": 1,
+        "x": 1,
+        "y": 1,
+        "bounds": [
+          0,
+          -85.0511287798066,
+          180,
+          0
+        ]
+      }
+    ]
+  },
+  "features": {
+    "complete": true,
+    "commonTiles": 4,
+    "comparedTiles": 4,
+    "identicalTiles": 1,
+    "reencodedTiles": 0,
+    "changedTiles": 3,
+    "undiffableTiles": 0,
+    "counts": {
+      "unchanged": 6,
+      "added": 0,
+      "removed": 0,
+      "changed": 0,
+      "ambiguous": 1,
+      "unmatchedAdded": 3,
+      "unmatchedRemoved": 3
+    },
+    "layers": [
+      {
+        "name": "land",
+        "addedInTiles": 0,
+        "removedInTiles": 0,
+        "incomparableTiles": 0,
+        "counts": {
+          "unchanged": 3,
+          "added": 0,
+          "removed": 0,
+          "changed": 0,
+          "ambiguous": 0,
+          "unmatchedAdded": 0,
+          "unmatchedRemoved": 0
+        },
+        "propertyKeysAdded": [],
+        "propertyKeysRemoved": []
+      },
+      {
+        "name": "streets",
+        "addedInTiles": 0,
+        "removedInTiles": 0,
+        "incomparableTiles": 0,
+        "counts": {
+          "unchanged": 1,
+          "added": 0,
+          "removed": 0,
+          "changed": 0,
+          "ambiguous": 0,
+          "unmatchedAdded": 3,
+          "unmatchedRemoved": 3
+        },
+        "propertyKeysAdded": [],
+        "propertyKeysRemoved": []
+      },
+      {
+        "name": "water_polygons",
+        "addedInTiles": 0,
+        "removedInTiles": 0,
+        "incomparableTiles": 0,
+        "counts": {
+          "unchanged": 2,
+          "added": 0,
+          "removed": 0,
+          "changed": 0,
+          "ambiguous": 1,
+          "unmatchedAdded": 0,
+          "unmatchedRemoved": 0
+        },
+        "propertyKeysAdded": [],
+        "propertyKeysRemoved": []
+      }
+    ],
+    "tiles": [
+      {
+        "z": 0,
+        "x": 0,
+        "y": 0,
+        "bounds": [
+          -180,
+          -85.0511287798066,
+          180,
+          85.0511287798066
+        ],
+        "status": "changed",
+        "baseSha256": "2c3b5eba7921386161393f3f4bf31705a548fb4eafd5a4cf5414f4052d28ea56",
+        "candidateSha256": "71d41495edef259a4d9db3615e45bc4b924db067f616a7c393b705fbe56c46ac",
+        "counts": {
+          "unchanged": 3,
+          "added": 0,
+          "removed": 0,
+          "changed": 0,
+          "ambiguous": 0,
+          "unmatchedAdded": 1,
+          "unmatchedRemoved": 1
+        },
+        "schemaChanges": [],
+        "changes": [
+          {
+            "kind": "unmatched-added",
+            "layer": "streets",
+            "geometryType": "line",
+            "id": null,
+            "baseBounds": null,
+            "candidateBounds": [
+              0,
+              600,
+              4096,
+              600
+            ],
+            "geometryChanged": false,
+            "propertiesChanged": false,
+            "properties": {
+              "kind": "primary",
+              "name": "Gamma Road"
+            }
+          },
+          {
+            "kind": "unmatched-removed",
+            "layer": "streets",
+            "geometryType": "line",
+            "id": null,
+            "baseBounds": [
+              0,
+              1000,
+              4096,
+              1000
+            ],
+            "candidateBounds": null,
+            "geometryChanged": false,
+            "propertiesChanged": false,
+            "properties": {
+              "kind": "primary",
+              "name": "Alpha Road"
+            }
+          }
+        ],
+        "changesTruncated": false,
+        "reason": "unmatched-added 1; unmatched-removed 1"
+      },
+      {
+        "z": 1,
+        "x": 0,
+        "y": 0,
+        "bounds": [
+          -180,
+          0,
+          0,
+          85.0511287798066
+        ],
+        "status": "changed",
+        "baseSha256": "4b0e319c4ae9ef6d487c1d8bd77879b0ed28fde2936c36087be3e99dc3b7dc99",
+        "candidateSha256": "3721acc29ffb9e06e3bea46d54252f6d2f80bb7ae00f90169957108b0b832b85",
+        "counts": {
+          "unchanged": 2,
+          "added": 0,
+          "removed": 0,
+          "changed": 0,
+          "ambiguous": 0,
+          "unmatchedAdded": 1,
+          "unmatchedRemoved": 1
+        },
+        "schemaChanges": [],
+        "changes": [
+          {
+            "kind": "unmatched-added",
+            "layer": "streets",
+            "geometryType": "line",
+            "id": null,
+            "baseBounds": null,
+            "candidateBounds": [
+              0,
+              1200,
+              4096,
+              1200
+            ],
+            "geometryChanged": false,
+            "propertiesChanged": false,
+            "properties": {
+              "kind": "primary",
+              "name": "Gamma Road"
+            }
+          },
+          {
+            "kind": "unmatched-removed",
+            "layer": "streets",
+            "geometryType": "line",
+            "id": null,
+            "baseBounds": [
+              0,
+              2000,
+              4096,
+              2000
+            ],
+            "candidateBounds": null,
+            "geometryChanged": false,
+            "propertiesChanged": false,
+            "properties": {
+              "kind": "primary",
+              "name": "Alpha Road"
+            }
+          }
+        ],
+        "changesTruncated": false,
+        "reason": "unmatched-added 1; unmatched-removed 1"
+      },
+      {
+        "z": 1,
+        "x": 1,
+        "y": 0,
+        "bounds": [
+          0,
+          0,
+          180,
+          85.0511287798066
+        ],
+        "status": "changed",
+        "baseSha256": "4b0e319c4ae9ef6d487c1d8bd77879b0ed28fde2936c36087be3e99dc3b7dc99",
+        "candidateSha256": "b67a7cb1cd8310978f178e4072cf18863ce5cb6da6c0274947d13bf978cc9f24",
+        "counts": {
+          "unchanged": 1,
+          "added": 0,
+          "removed": 0,
+          "changed": 0,
+          "ambiguous": 1,
+          "unmatchedAdded": 1,
+          "unmatchedRemoved": 1
+        },
+        "schemaChanges": [],
+        "changes": [
+          {
+            "kind": "unmatched-added",
+            "layer": "streets",
+            "geometryType": "line",
+            "id": null,
+            "baseBounds": null,
+            "candidateBounds": [
+              0,
+              1200,
+              4096,
+              1200
+            ],
+            "geometryChanged": false,
+            "propertiesChanged": false,
+            "properties": {
+              "kind": "primary",
+              "name": "Gamma Road"
+            }
+          },
+          {
+            "kind": "unmatched-removed",
+            "layer": "streets",
+            "geometryType": "line",
+            "id": null,
+            "baseBounds": [
+              0,
+              2000,
+              4096,
+              2000
+            ],
+            "candidateBounds": null,
+            "geometryChanged": false,
+            "propertiesChanged": false,
+            "properties": {
+              "kind": "primary",
+              "name": "Alpha Road"
+            }
+          },
+          {
+            "kind": "ambiguous",
+            "layer": "water_polygons",
+            "geometryType": "polygon",
+            "id": null,
+            "baseBounds": [
+              0,
+              0,
+              4096,
+              4096
+            ],
+            "candidateBounds": [
+              0,
+              0,
+              4096,
+              4096
+            ],
+            "geometryChanged": true,
+            "propertiesChanged": false,
+            "properties": {
+              "kind": "water"
+            }
+          }
+        ],
+        "changesTruncated": false,
+        "reason": "ambiguous 1; unmatched-added 1; unmatched-removed 1"
+      }
+    ]
+  }
+}

@@ -436,6 +436,26 @@ pub fn audit_tileset_coverage_for_js(
     encode_json_compatible(&audit)
 }
 
+/// Tileset QA (#276): semantic difference between the base and candidate payload of one tile.
+#[wasm_bindgen(js_name = diffMvtTiles)]
+pub fn diff_mvt_tiles_for_js(
+    base: &[u8],
+    candidate: &[u8],
+    sample_limit: u32,
+) -> Result<JsValue, JsValue> {
+    encode_json_compatible(
+        &maps_core::diff_mvt_tiles(base, candidate, sample_limit as usize).map_err(to_js_error)?,
+    )
+}
+
+/// Tileset QA (#276): `[west, south, east, north]` of a canonical Web Mercator tile.
+#[wasm_bindgen(js_name = tileLngLatBounds)]
+pub fn tile_lng_lat_bounds_for_js(z: u8, x: u32, y: u32) -> Result<Vec<f64>, JsValue> {
+    let tile =
+        TileId::new(z, x, y).ok_or_else(|| to_js_error("tile is outside its zoom pyramid"))?;
+    Ok(maps_core::tile_lng_lat_bounds(tile).to_vec())
+}
+
 /// Normalizes native map points using the Maps-owned Rust contract.
 #[wasm_bindgen(js_name = normalizeMapPoints)]
 pub fn normalize_map_points_for_js(points: JsValue) -> Result<JsValue, JsValue> {
