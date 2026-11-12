@@ -8,7 +8,7 @@ fi
 
 # The producer's public prerelease retains immutable source-addressed assets.
 # Reusable workflow setup commands have no GitHub token; never introduce one.
-producer_source_sha=6d2c92edfc03456cde3d99d2aa6f4be5e008ecc4
+producer_source_sha=fd26af06b649d319fdd9c1cf14fce63f1abaa324
 download_url="https://github.com/moritzbrantner/runtime-profiler/releases/download/cli-artifacts/runtime-profiler-linux-x86_64-$producer_source_sha"
 
 if ! command -v curl >/dev/null 2>&1; then

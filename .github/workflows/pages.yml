@@ -54,7 +54,7 @@ jobs:
         git -C .github-pages-template checkout --detach FETCH_HEAD
         git init "$RUNNER_TEMP/maps-runtime-profiler-source"
         git -C "$RUNNER_TEMP/maps-runtime-profiler-source" remote add origin https://github.com/moritzbrantner/runtime-profiler.git
-        git -C "$RUNNER_TEMP/maps-runtime-profiler-source" fetch --depth 1 origin 6d2c92edfc03456cde3d99d2aa6f4be5e008ecc4
+        git -C "$RUNNER_TEMP/maps-runtime-profiler-source" fetch --depth 1 origin fd26af06b649d319fdd9c1cf14fce63f1abaa324
         git -C "$RUNNER_TEMP/maps-runtime-profiler-source" checkout --detach FETCH_HEAD
         bash scripts/install-runtime-profiler-ci.sh "$RUNNER_TEMP/maps-profiler/bin/runtime-profiler"
         git fetch --deepen=1 origin "$(git rev-parse HEAD)"
