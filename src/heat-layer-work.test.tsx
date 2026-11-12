@@ -336,6 +336,10 @@ function zeroData(): HeatLayerDataWork {
 
 function zeroSurface(): HeatLayerSurfaceWork {
   return {
+    textureUploads: 0,
+    textureUploadBytes: 0,
+    textureReleases: 0,
+    rasterGpuDraws: 0,
     rasterDrawTriangles: 0,
     rasterDraws: 0,
     rasterImagesDecoded: 0,

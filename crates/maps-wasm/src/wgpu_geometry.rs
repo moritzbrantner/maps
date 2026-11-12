@@ -192,6 +192,8 @@ pub(super) const APPLICATION_ORDER_RUN_LENGTH: usize = 3;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct WgpuApplicationFrame {
+    #[serde(default)]
+    pub(super) rasters: Vec<WgpuApplicationRaster>,
     #[serde(skip)]
     pub(super) circle_data: Vec<f32>,
     /// Render-surface offset applied to packed circle centers when they are read.
@@ -205,6 +207,13 @@ pub(super) struct WgpuApplicationFrame {
     pub(super) order: Vec<u32>,
     pub(super) polygons: Vec<WgpuApplicationPolygon>,
     pub(super) width: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct WgpuApplicationRaster {
+    pub(super) id: u32,
+    pub(super) opacity: f64,
+    pub(super) vertices: Vec<f64>,
 }
 
 impl WgpuApplicationFrame {
@@ -254,6 +263,12 @@ impl WgpuApplicationFrame {
         self.width += 2.0 * margin;
         self.height += 2.0 * margin;
         self.circle_offset += margin;
+        for raster in &mut self.rasters {
+            for vertex in raster.vertices.as_chunks_mut::<4>().0 {
+                vertex[0] += margin;
+                vertex[1] += margin;
+            }
+        }
         for marker in &mut self.direction_markers {
             marker.x += margin;
             marker.y += margin;
@@ -395,6 +410,9 @@ pub(super) struct WgpuApplicationPolygon {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ApplicationDraw {
+    Raster {
+        index: u32,
+    },
     Circles {
         first_instance: u32,
         instance_count: u32,
@@ -977,6 +995,14 @@ pub(super) fn prepare_application_geometry(
                 geometry
                     .draws
                     .push(ApplicationDraw::RetainedPolygons { group });
+            }
+            6 => {
+                if index >= frame.rasters.len() {
+                    return Err("invalid heat raster order index");
+                }
+                geometry.draws.push(ApplicationDraw::Raster {
+                    index: index as u32,
+                });
             }
             _ => return Err("invalid wgpu application order kind"),
         }
@@ -1960,6 +1986,7 @@ mod application_geometry_tests {
             .flat_map(|&[kind, index]| [kind, index, 1])
             .collect();
         let mut frame = WgpuApplicationFrame {
+            rasters: Vec::new(),
             circle_data: Vec::new(),
             circle_offset: 0.0,
             direction_markers,
@@ -1971,6 +1998,25 @@ mod application_geometry_tests {
         };
         frame.attach_packed(&circle_data, &runs).unwrap();
         frame
+    }
+
+    #[test]
+    fn heat_raster_keeps_painter_order_and_surface_offset() {
+        let mut frame = packed_frame(vec![], vec![], 80.0, vec![], vec![], vec![], 100.0);
+        frame.rasters.push(WgpuApplicationRaster {
+            id: 7,
+            opacity: 0.5,
+            vertices: vec![0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 1.0, 0.0, 0.0, 10.0, 0.0, 1.0],
+        });
+        frame.attach_packed(&[], &[6, 0, 1]).unwrap();
+        frame.offset_into_surface(20.0);
+        assert_eq!(frame.rasters[0].id, 7);
+        assert_eq!(frame.rasters[0].opacity, 0.5);
+        assert_eq!(&frame.rasters[0].vertices[..4], &[20.0, 20.0, 0.0, 0.0]);
+        let geometry = prepare_application_geometry(&frame, 1.0, None, None).unwrap();
+        assert_eq!(geometry.draws, vec![ApplicationDraw::Raster { index: 0 }]);
+        frame.attach_packed(&[], &[6, 1, 1]).unwrap();
+        assert!(prepare_application_geometry(&frame, 1.0, None, None).is_err());
     }
 
     fn circle(x: f64) -> WgpuApplicationCircle {

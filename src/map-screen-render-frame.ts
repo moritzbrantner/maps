@@ -51,7 +51,18 @@ export type MapScreenRenderPrimitive<TFeature = unknown> =
  * Geographic projection remains authoritative in Maps; renderers only consume finite
  * projected positions plus the original semantic primitive identity.
  */
+/** Prepared pixels and projected triangles; each vertex is CSS x/y followed by texture u/v. */
+export type MapScreenRaster = {
+  before: number;
+  uploaded?: (bytes: number) => void;
+  released?: () => void;
+  image: HTMLImageElement;
+  opacity: number;
+  vertices: number[];
+};
+
 export type MapScreenRenderFrame<TFeature = unknown> = {
+  rasters?: MapScreenRaster[];
   height: number;
   primitives: Array<MapScreenRenderPrimitive<TFeature>>;
   width: number;

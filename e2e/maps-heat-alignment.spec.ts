@@ -66,6 +66,8 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
       .poll(async () => Number(await overlay.getAttribute("data-map-overlay-heat-layers")))
       .toBe(3);
 
+    await expect(overlay).toHaveAttribute("data-map-overlay-backend", backend);
+
     const measure = (step: string) =>
       measureAlignment(page, map, base, testInfo, `${backend}-${step}`);
 

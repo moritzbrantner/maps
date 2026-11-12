@@ -41,6 +41,10 @@ export type HeatLayerDataWork = {
 };
 
 export type HeatLayerSurfaceWork = {
+  textureUploads: number;
+  textureUploadBytes: number;
+  textureReleases: number;
+  rasterGpuDraws: number;
   /** Density surface plans produced (each lowers its sources unless it reuses the raster). */
   surfacePlans: number;
   /** Sources lowered into raster/metric space by those plans. */
@@ -151,6 +155,10 @@ function emptyDataWork(): HeatLayerDataWork {
 
 function emptySurfaceWork(): HeatLayerSurfaceWork {
   return {
+    textureUploads: 0,
+    textureUploadBytes: 0,
+    textureReleases: 0,
+    rasterGpuDraws: 0,
     rasterDrawTriangles: 0,
     rasterDraws: 0,
     rasterImagesDecoded: 0,

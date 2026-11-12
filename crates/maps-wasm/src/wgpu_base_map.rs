@@ -255,6 +255,7 @@ pub struct MapsWgpuBaseMapRenderer {
     anisotropic_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: u64,
+    application_rasters: super::wgpu_heat_raster::HeatRasterGpu,
     application_pipeline: wgpu::RenderPipeline,
     polygon_pipelines: PolygonPipelines,
     polygon_outline_pipeline: wgpu::RenderPipeline,
@@ -1121,7 +1122,10 @@ impl MapsWgpuBaseMapRenderer {
         );
         let sky = SkyGpu::new(&device, surface_view_format);
 
+        let application_rasters =
+            super::wgpu_heat_raster::HeatRasterGpu::new(&device, surface_view_format);
         Ok(Self {
+            application_rasters,
             surface,
             device,
             queue,
@@ -1337,6 +1341,24 @@ impl MapsWgpuBaseMapRenderer {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
         self.stencil_view = create_stencil_view(&self.device, width, height);
+    }
+
+    #[wasm_bindgen(js_name = uploadApplicationRaster)]
+    pub fn upload_application_raster(
+        &mut self,
+        id: u32,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<(), JsValue> {
+        self.application_rasters
+            .upload(&self.device, &self.queue, id, width, height, rgba)
+            .map_err(JsValue::from_str)
+    }
+
+    #[wasm_bindgen(js_name = evictApplicationRaster)]
+    pub fn evict_application_raster(&mut self, id: u32) {
+        self.application_rasters.evict(id);
     }
 
     #[wasm_bindgen(js_name = uploadTile)]
@@ -1883,6 +1905,10 @@ impl MapsWgpuBaseMapRenderer {
         );
 
         let geojson_tiles = placements.iter().find_map(GeoJsonTileGrid::from_placement);
+        let raster_upload_bytes = self
+            .application_rasters
+            .prepare(&self.device, &self.queue, application_frame.as_ref())
+            .map_err(JsValue::from_str)?;
         let application_geometry = application_frame
             .map(|mut frame| {
                 let ground = GroundPerspective::new(view_projection, frame.width, frame.height)
@@ -2159,6 +2185,9 @@ impl MapsWgpuBaseMapRenderer {
 
             for draw in &application_geometry.draws {
                 match *draw {
+                    ApplicationDraw::Raster { index } => {
+                        draw_calls += self.application_rasters.draw(&mut pass, index);
+                    }
                     ApplicationDraw::Circles {
                         first_instance,
                         instance_count,
@@ -2226,11 +2255,11 @@ impl MapsWgpuBaseMapRenderer {
             raster_tiles: drawn_tiles as u32,
             vector_tiles: vector_draws.len() as u32,
             draw_calls,
-            application_upload_bytes: (application_geometry.circle_instances.len()
-                + application_geometry.pattern_vertices.len()
-                + application_geometry.line_pattern_vertices.len()
-                + application_geometry.triangle_vertices.len())
-                as u64,
+            application_upload_bytes: raster_upload_bytes
+                + (application_geometry.circle_instances.len()
+                    + application_geometry.pattern_vertices.len()
+                    + application_geometry.line_pattern_vertices.len()
+                    + application_geometry.triangle_vertices.len()) as u64,
             retained_point_frames: retained_point_draws.len() as u32,
             retained_polygon_frames: retained_polygon_draws.len() as u32,
         };
@@ -2869,7 +2898,7 @@ fn stencil_state(
 }
 
 /// The render pass carries the polygon stencil, so every pipeline declares it.
-fn ignored_stencil() -> Option<wgpu::DepthStencilState> {
+pub(super) fn ignored_stencil() -> Option<wgpu::DepthStencilState> {
     stencil_state(wgpu::StencilFaceState::IGNORE, 0, 0)
 }
 
