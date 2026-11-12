@@ -28,6 +28,7 @@ type Lane = {
   commitLatencyMs: Summary;
   jsHeapAfterGc: { jsHeapUsedBytes: number | null; label: string }[];
   load: {
+    work: { data: { sourceIndexPoints: number }; layers: number; surface: { textureUploads: number } };
     longTasks: { count: number; maxMs: number; totalMs: number };
     presentedMs: number;
   };
@@ -94,7 +95,7 @@ assert.equal(
   "maps.heat-scalar-journey-observation/v1",
 );
 assert.equal(observation.scenarioId, canonical.id);
-assert.match(observation.backend, /^(wgpu|canvas2d)$/);
+assert.equal(observation.backend, "wgpu", "required GPU heat/scalar evidence is unavailable on the fallback");
 const control: Lane = observation.lanes.control;
 const heat: Lane = observation.lanes.heat;
 assert.equal(
@@ -102,6 +103,12 @@ assert.equal(
   heat.backend,
   "the two lanes ran on different pixel backends",
 );
+assert.equal(heat.load.work.layers, 2, "initial mount prepared discarded Heat Layers");
+assert.equal(heat.load.work.data.sourceIndexPoints, 10_000, "initial density index must be built once");
+assert.equal(heat.load.work.surface.textureUploads, 2, "both initial rasters must upload to the GPU");
+for (const [name, phase] of Object.entries(heat.phases)) {
+  assert.equal(phase.work.surface.rasterDrawTriangles, 0, `${name}: heat silently fell back to Canvas`);
+}
 assert.deepEqual(Object.keys(heat.phases), canonical.runtimePhases);
 assert.deepEqual(Object.keys(control.phases), CONTROL_PHASES);
 

@@ -145,7 +145,6 @@ async function profileJourney(page: Page, origin: string) {
     unavailable: [
       "reference/parent comparison: no other implementation or parent revision runs this journey",
       "GPU completion time (frame intervals are requestAnimationFrame intervals)",
-      "bridge bytes: no WASM bridge carries heat/scalar data while TypeScript is the authority",
     ],
   };
 }
@@ -189,6 +188,7 @@ async function profileLane(page: Page, origin: string, lane: Lane, heap: Heap) {
     presentedMs: performance.now(),
     work: window.heatScalarJourney.totals(),
   }));
+  const initialWork = await totals(page);
   const backend = await map
     .locator('canvas[data-flat-runtime="maps"]')
     .getAttribute("data-map-base-renderer");
@@ -359,6 +359,7 @@ async function profileLane(page: Page, origin: string, lane: Lane, heap: Heap) {
   const commits = Object.values(phases).flatMap((entry) => entry.commits);
   return {
     backend,
+    initialWork,
     load: {
       longTasks: summarizeLongTasks(load.longTasks),
       // From navigation start until the Map View (heat lane: both surfaces) is presented.

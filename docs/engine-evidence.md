@@ -172,7 +172,9 @@ RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-heat-scalar
 Per phase and lane the observation records `requestAnimationFrame` intervals, long tasks and
 the heat/scalar work counters (`src/heat-layer-work.ts`, read through the evidence-only
 `observeHeatLayerWork()` registry): index, grid, image, contour and raster builds, reuses,
-discarded async results, uploads, decoded images, raster draws and their Canvas triangles.
+discarded async results, uploads, decoded images, raster draws and their Canvas triangles,
+plus GPU draws, texture uploads, RGBA upload bytes and texture releases. RGBA upload bytes
+also count the pixel payload crossing into WASM; serialized mesh/object overhead is not counted.
 Data and style phases also record input → presented-surface latency: from the input until
 the new raster is decoded, plus one animation frame. JS heap is sampled after forced GC.
 
@@ -184,14 +186,17 @@ re-index density points, and ramp changes must reuse the retained grid. It write
 
 Limits:
 
-- The pinned collector launches Chromium without WebGPU flags, so both lanes measure the
-  Canvas fallback. Heat rasters are drawn by the Canvas overlay on both backends.
+- The heat/scalar scenario declares the same SwiftShader WebGPU flags as the browser tests.
+  Its `wgpu` observation now includes heat/scalar presentation in the GPU application pass;
+  SwiftShader is software rendering and does not prove hardware GPU performance.
+  The earlier Canvas capture used a different collector/browser and is not a matched baseline.
 - The control lane isolates the cost of the heat surfaces; it is not a reference
   implementation. No reference or parent revision runs this journey, so `evaluation.json`
   records comparison and Moonlight as `unavailable`. This evidence is descriptive, not a Fast
   verdict.
 - GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
-  No WASM bridge carries heat/scalar data while TypeScript is the authority.
+  Heat/scalar computation remains in TypeScript; prepared RGBA pixels and projected meshes
+  cross into WASM for GPU presentation.
 
 ## Temporal playback journey evidence (#172)
 

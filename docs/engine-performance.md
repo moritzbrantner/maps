@@ -446,6 +446,52 @@ Observed, not investigated: the first mount builds the 10,000-point density inde
 data work sets for two Heat Layers at load); remounts build it once.
 A field refresh also rebuilds the field layer's own empty density index.
 
+## Heat/scalar GPU presentation (#171)
+
+Owner decision 2026-11-11 approves presentation of existing heat/scalar rasters on the existing
+wgpu backend, retaining Canvas. The application painter-order stream now includes textured
+meshes: one draw per raster, with unchanged TypeScript computational authority. Initial module
+loading no longer causes a discarded extra density-index build.
+
+Captured on `32e5be889ee6fd9abc04168429f7236d497767a1` plus this PR's runtime changes:
+WASM SHA-256 `ea78ead17e99abfd50aa24e0ef4651cc48597f8ac32e96228fdc6ace0ab2c239`
+(1,668,623 bytes), runtime-profiler `fd26af06b649d319fdd9c1cf14fce63f1abaa324`, Node
+24.16.0, Playwright 1.62.1 and Chromium 151.0.7922.34 on Linux x64. The scenario's explicit
+flags select SwiftShader **software WebGPU** with CPU Canvas rasterization. The capture ran
+alongside verification jobs; these are contended descriptive timings, not a controlled
+performance comparison or a hardware Fast result.
+
+| Phase | Control rAF p95 | Heat rAF p50 / p95 | Heat worst interval | Heat long tasks |
+| --- | ---: | ---: | ---: | ---: |
+| Pan | 16.7 ms | 16.7 / 33.4 ms | 33.4 ms | 0 |
+| Zoom | 133.4 ms | 16.7 / 133.3 ms | 350 ms | 1 (87 ms) |
+| Bearing/pitch | 66.7 ms | 66.7 / 233.3 ms | 333.4 ms | 100 (12,270 ms total) |
+| Resize | 16.7 ms | 16.7 / 50 ms | 116.6 ms | 0 |
+
+- Initial work: exactly two mounted layers, one nonempty density index (10,000 points),
+  one 64,000-cell field, two texture uploads / 2,303,920 RGBA bytes.
+- Camera/resize rebuild no index, grid, field image or contours. Pan/resize upload no texture.
+  Zoom and orientation each replace one density texture as their raster inputs require.
+  Six density seeks replace six textures; six field changes replace six field textures.
+  Four ramp changes replace eight textures and retain the field grid.
+- Every phase submits zero Canvas raster triangles; textures are retained per image and
+  released on replacement, removal and disposal. Meshes still cross the object bridge per frame;
+  numeric mesh bytes and serialized-object overhead are not separately measured.
+- Input-to-presented surface over 18 awaited changes: p50 244.2 ms, p95/worst 1,015.3 ms.
+- JS heap after GC: 9.45 MB ready, 13.26 MB after interaction, 6.47–6.61 MB across three
+  unmounts and 10.64 MB after remount. GPU, WASM-linear and total browser memory and GPU
+  completion time remain unavailable.
+
+The prior Canvas capture has different runtime inputs. No improvement is claimed from these
+numbers. Comparison/Moonlight remain unavailable and #171 stays open pending the Fast evidence.
+The owning correctness/retention and browser alignment checks pass independently of timing.
+
+Immutable bundle manifest SHA-256:
+`17c159185b9e1d27759c92b525c7d9300266a6a76a997107b514863c7fb32c87`.
+Local capture: `.runtime-profiler/maps-171-gpu-1/`; reproduce with
+`RUNTIME_PROFILER_BIN=/path/to/current/runtime-profiler bun run verify:engine-heat-scalar-evidence`
+in an idle environment (output directories are immutable).
+
 ## Moving features on a Map-Scoped Timeline (#172 phase E)
 
 ### Work counters

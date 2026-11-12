@@ -51,6 +51,12 @@ mod wgpu_geometry;
     target_os = "unknown",
     feature = "wgpu-base-map"
 ))]
+mod wgpu_heat_raster;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "wgpu-base-map"
+))]
 mod wgpu_mipmaps;
 #[cfg(all(
     target_arch = "wasm32",

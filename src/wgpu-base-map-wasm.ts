@@ -185,6 +185,8 @@ export type MapsWgpuBaseMapRenderer = {
 };
 
 type MapsWgpuBaseMapWasmRenderer = {
+  uploadApplicationRaster(id: number, width: number, height: number, rgba: Uint8Array): void;
+  evictApplicationRaster(id: number): void;
   evictTile(z: number, x: number, y: number): void;
   evictVectorTile(z: number, x: number, y: number): void;
   frameStats(): Float64Array | number[];
@@ -254,7 +256,14 @@ type MapsWgpuBaseMapWasmRenderer = {
     height: number,
   ): void;
   reliefRequests(): string[];
-  uploadDemTile(source: string, z: number, x: number, y: number, size: number, rgba: Uint8Array): void;
+  uploadDemTile(
+    source: string,
+    z: number,
+    x: number,
+    y: number,
+    size: number,
+    rgba: Uint8Array,
+  ): void;
   uploadReliefRaster(z: number, x: number, y: number, image: ImageBitmap): void;
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   missingGlyphRanges(): string[];
@@ -290,6 +299,45 @@ export async function loadMapsWgpuBaseMapRenderer(
 
     const renderer = await createRenderer(canvas);
     let disposed = false;
+    let nextRasterId = 1;
+    const rasterTextures = new Map<HTMLImageElement, { id: number; released?: () => void }>();
+    const prepareRasters = (frame: MapsWgpuApplicationFrame | null) => {
+      const live = new Set(frame?.rasters?.map((raster) => raster.image));
+      for (const [image, texture] of rasterTextures) {
+        if (!live.has(image)) {
+          renderer.evictApplicationRaster(texture.id);
+          texture.released?.();
+          rasterTextures.delete(image);
+        }
+      }
+      return (
+        frame?.rasters?.map((raster) => {
+          let texture = rasterTextures.get(raster.image);
+          if (!texture) {
+            const canvas = document.createElement("canvas");
+            canvas.width = raster.image.naturalWidth || raster.image.width;
+            canvas.height = raster.image.naturalHeight || raster.image.height;
+            const context = canvas.getContext("2d", { willReadFrequently: true });
+            if (!context) throw new Error("Maps raster pixel decode unavailable");
+            context.drawImage(raster.image, 0, 0);
+            const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+            texture = {
+              id: nextRasterId++,
+              ...(raster.released ? { released: raster.released } : {}),
+            };
+            renderer.uploadApplicationRaster(
+              texture.id,
+              canvas.width,
+              canvas.height,
+              new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength),
+            );
+            rasterTextures.set(raster.image, texture);
+            raster.uploaded?.(pixels.byteLength);
+          }
+          return { id: texture.id, opacity: raster.opacity, vertices: raster.vertices };
+        }) ?? []
+      );
+    };
     let tileDraws = new Float64Array(PACKED_TILE_DRAW_HEADER_LENGTH);
     const skyBand = new Float32Array(10);
     const frameBackground = new Float32Array(4);
@@ -303,6 +351,8 @@ export async function loadMapsWgpuBaseMapRenderer(
           canvas.style.opacity = "0";
           rendererOwners.delete(canvas);
         }
+        for (const texture of rasterTextures.values()) texture.released?.();
+        rasterTextures.clear();
         renderer.free?.();
       },
       evictTile(tile) {
@@ -385,9 +435,11 @@ export async function loadMapsWgpuBaseMapRenderer(
             length += PACKED_TILE_DRAW_STRIDE;
           }
           renderer.setFrameTime(performance.now());
+          const rasters = prepareRasters(applicationFrame);
+          const objectFrame = applicationFrame ? applicationObjectFrame(applicationFrame) : null;
           return renderer.renderPacked(
             tileDraws.subarray(0, length),
-            applicationFrame ? applicationObjectFrame(applicationFrame) : null,
+            objectFrame && rasters.length ? { ...objectFrame, rasters } : objectFrame,
             applicationFrame?.circleData ?? EMPTY_CIRCLES,
             applicationFrame?.order ?? EMPTY_ORDER,
           );
@@ -411,7 +463,16 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.evictRetainedPoints(group);
         });
       },
-      setRetainedPolygons(group, ringCounts, pointCounts, lonLat, paint, dashCounts, dashes, patterns) {
+      setRetainedPolygons(
+        group,
+        ringCounts,
+        pointCounts,
+        lonLat,
+        paint,
+        dashCounts,
+        dashes,
+        patterns,
+      ) {
         return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
           return renderer.setRetainedPolygons(
@@ -464,8 +525,14 @@ export async function loadMapsWgpuBaseMapRenderer(
           renderer.resize(width, height);
         });
       },
-      setVectorSource(source) { assertLive(disposed); renderer.setVectorSource(source); },
-      evictVectorSourceTile(source, tile) { assertLive(disposed); renderer.evictVectorSourceTile(source, tile.z, tile.x, tile.y); },
+      setVectorSource(source) {
+        assertLive(disposed);
+        renderer.setVectorSource(source);
+      },
+      evictVectorSourceTile(source, tile) {
+        assertLive(disposed);
+        renderer.evictVectorSourceTile(source, tile.z, tile.x, tile.y);
+      },
       setVectorMaxZoom(maxZoom) {
         assertLive(disposed);
         renderer.setVectorMaxZoom(maxZoom);
@@ -584,7 +651,7 @@ function assertLive(disposed: boolean) {
 type MapsWgpuApplicationObjectFrame = Pick<
   MapsWgpuApplicationFrame,
   "directionMarkers" | "height" | "lines" | "polygons" | "width"
->;
+> & { rasters?: { id: number; opacity: number; vertices: number[] }[] };
 
 const EMPTY_CIRCLES = new Float32Array(0);
 const EMPTY_SKY = new Float32Array(0);

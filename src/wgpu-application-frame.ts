@@ -1,4 +1,3 @@
-
 import type {
   MapRenderCircle,
   MapRenderDirectionMarker,
@@ -8,6 +7,7 @@ import type {
 } from "./map-render-frame";
 import type {
   MapScreenInteractionState,
+  MapScreenRaster,
   MapScreenRenderFrame,
 } from "./map-screen-render-frame";
 
@@ -150,6 +150,7 @@ export const MAPS_WGPU_APPLICATION_CIRCLE_STRIDE = 12;
 export const MAPS_WGPU_APPLICATION_ORDER_STRIDE = 3;
 
 export type MapsWgpuApplicationFrame = {
+  rasters?: MapScreenRaster[];
   /** `circleCount` packed circle records; a view into the packer's reused buffer. */
   circleData: Float32Array;
   circleCount: number;
@@ -242,7 +243,9 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
         circleBuffer = new Float32Array(Math.max(circleCapacity, circleBuffer.length * 2));
         stats.bufferAllocations += 1;
       }
-      const orderCapacity = frame.primitives.length * MAPS_WGPU_APPLICATION_ORDER_STRIDE;
+      const orderCapacity =
+        (frame.primitives.length + (frame.rasters?.length ?? 0)) *
+        MAPS_WGPU_APPLICATION_ORDER_STRIDE;
       if (orderBuffer.length < orderCapacity) {
         orderBuffer = new Uint32Array(Math.max(orderCapacity, orderBuffer.length * 2));
         stats.bufferAllocations += 1;
@@ -268,7 +271,19 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
         orderLength += MAPS_WGPU_APPLICATION_ORDER_STRIDE;
       };
 
+      let primitiveIndex = 0;
+      let rasterIndex = 0;
+      const insertRasters = () => {
+        while (
+          rasterIndex < (frame.rasters?.length ?? 0) &&
+          frame.rasters![rasterIndex]!.before === primitiveIndex
+        ) {
+          pushOrder(6, rasterIndex++);
+        }
+      };
       for (const scenePrimitive of frame.primitives) {
+        insertRasters();
+        primitiveIndex += 1;
         switch (scenePrimitive.kind) {
           case "circle": {
             const primitive = scenePrimitive.renderPrimitive as MapRenderCircle<unknown>;
@@ -352,7 +367,10 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
 
             const lineLayout = encodeLineLayout(primitive);
             // Dashes need the retained path's GeoJSON tiles; Canvas draws them otherwise.
-            if (!lineLayout || (!primitive.linePattern && (primitive.lineDasharray?.length ?? 0) > 0)) {
+            if (
+              !lineLayout ||
+              (!primitive.linePattern && (primitive.lineDasharray?.length ?? 0) > 0)
+            ) {
               return null;
             }
 
@@ -401,12 +419,17 @@ export function createMapsWgpuApplicationFramePacker(): MapsWgpuApplicationFrame
         }
       }
 
-      const circleData = circleBuffer.subarray(0, circleCount * MAPS_WGPU_APPLICATION_CIRCLE_STRIDE);
+      insertRasters();
+      const circleData = circleBuffer.subarray(
+        0,
+        circleCount * MAPS_WGPU_APPLICATION_CIRCLE_STRIDE,
+      );
       const order = orderBuffer.subarray(0, orderLength);
       stats.frames += 1;
       stats.circles += circleCount;
       stats.transportBytes += circleData.byteLength + order.byteLength;
       return {
+        ...(frame.rasters ? { rasters: frame.rasters } : {}),
         circleCount,
         circleData,
         directionMarkers,
@@ -528,9 +551,8 @@ function parseSupportedCssColor(value: string, opacity: number): MapsWgpuColor |
   if (text.startsWith("#")) {
     rgba = parseHexColor(text.slice(1));
   } else {
-    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(
-      text,
-    );
+    const match =
+      /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(text);
     if (match) {
       const red = Number(match[1]);
       const green = Number(match[2]);
@@ -556,7 +578,9 @@ function parseHexColor(hex: string): MapsWgpuColor | null {
           .join("")
       : hex;
   const withAlpha = expanded.length === 6 ? `${expanded}ff` : expanded;
-  const parts = [0, 2, 4, 6].map((offset) => Number.parseInt(withAlpha.slice(offset, offset + 2), 16));
+  const parts = [0, 2, 4, 6].map((offset) =>
+    Number.parseInt(withAlpha.slice(offset, offset + 2), 16),
+  );
   return [parts[0]! / 255, parts[1]! / 255, parts[2]! / 255, parts[3]! / 255];
 }
 
@@ -689,8 +713,20 @@ export function diffMapsRetainedPolygons(
       before.points[shape + 1]! - before.points[shape]! === points &&
       (previous.dashCounts[shape] ?? 0) === dashes &&
       pattern(previous, shape) === pattern(next, shape) &&
-      sameRange(previous.pointCounts, before.rings[shape]!, next.pointCounts, after.rings[shape]!, rings) &&
-      sameRange(previous.lonLat, before.points[shape]! * 2, next.lonLat, after.points[shape]! * 2, points * 2) &&
+      sameRange(
+        previous.pointCounts,
+        before.rings[shape]!,
+        next.pointCounts,
+        after.rings[shape]!,
+        rings,
+      ) &&
+      sameRange(
+        previous.lonLat,
+        before.points[shape]! * 2,
+        next.lonLat,
+        after.points[shape]! * 2,
+        points * 2,
+      ) &&
       sameRange(previous.paint, shape * stride, next.paint, shape * stride, stride) &&
       sameRange(previous.dashes, before.dashes[shape]!, next.dashes, after.dashes[shape]!, dashes);
     if (!same) {
@@ -719,7 +755,10 @@ export function diffMapsRetainedPolygons(
       [offsets[shape]! * scale, offsets[shape + 1]! * scale] as const;
     polygons.ringCounts[position] = next.ringCounts[shape]!;
     polygons.dashCounts[position] = next.dashCounts[shape] ?? 0;
-    polygons.paint.set(next.paint.subarray(shape * stride, (shape + 1) * stride), position * stride);
+    polygons.paint.set(
+      next.paint.subarray(shape * stride, (shape + 1) * stride),
+      position * stride,
+    );
     const rings = next.pointCounts.subarray(...range(after.rings));
     polygons.pointCounts.set(rings, ring);
     ring += rings.length;
@@ -807,7 +846,11 @@ function createRetainedPoints(
     if (primitive.kind !== "circle") return null;
     const fillColor = color(primitive.fillColor, primitive.fillOpacity);
     const strokeColor = color(primitive.strokeColor, primitive.strokeOpacity);
-    const strokeWidth = resolveStrokeWidth(primitive.strokeWidth, primitive.primitiveId, interaction);
+    const strokeWidth = resolveStrokeWidth(
+      primitive.strokeWidth,
+      primitive.primitiveId,
+      interaction,
+    );
     const [longitude, latitude] = primitive.center;
     if (
       !fillColor ||
@@ -1007,7 +1050,12 @@ function encodeLineLayout(
   const join = LINE_JOINS[line.lineJoin ?? "round"];
   const miterLimit = line.lineMiterLimit ?? 2;
   const roundLimit = line.lineRoundLimit ?? 1.05;
-  if (cap === undefined || join === undefined || !Number.isFinite(miterLimit) || !Number.isFinite(roundLimit)) {
+  if (
+    cap === undefined ||
+    join === undefined ||
+    !Number.isFinite(miterLimit) ||
+    !Number.isFinite(roundLimit)
+  ) {
     return null;
   }
   return [cap, join, miterLimit, roundLimit];

@@ -1186,6 +1186,7 @@ fn projected_points_camera_pan_is_the_linear_comparison_path() {
                     circle_data.extend_from_slice(record);
                 }
                 let mut application = WgpuApplicationFrame {
+                    rasters: Vec::new(),
                     circle_data: Vec::new(),
                     circle_offset: 0.0,
                     direction_markers: Vec::new(),

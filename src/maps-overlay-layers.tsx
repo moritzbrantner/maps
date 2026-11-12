@@ -1,13 +1,14 @@
 "use client";
 
+import { projectMapsHeatLayerCoordinate as projectMapsHeatLayerCoordinateForRaster } from "./maps-heat-layer-bounds";
+import { createGeographicRasterMesh } from "./canvas-geographic-raster";
+
 import { useMapsAggregationRuntime } from "./aggregation-runtime-react";
 import {
   Children,
   Fragment,
-  Suspense,
   forwardRef,
   isValidElement,
-  lazy,
   startTransition,
   useCallback,
   useEffect,
@@ -266,11 +267,6 @@ type InternalPick = {
   position: MapScreenPoint;
 };
 
-const LazyMapsHeatLayerMount = lazy(async () => {
-  const module = await import("./maps-heat-layer-mount");
-  return { default: module.MapsHeatLayerMount };
-});
-
 export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOverlayLayersProps>(
   function MapsOverlayLayers(
     {
@@ -342,6 +338,9 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
     const hovered = useMapHoveredFeature();
     const entries = useMemo(() => collectOverlayEntries(children), [children]);
     const hasHeatEntries = entries.some((entry) => entry.kind === "heat");
+    const [HeatMount, setHeatMount] = useState<
+      typeof import("./maps-heat-layer-mount").MapsHeatLayerMount | null
+    >(null);
     const [heatRuntime, setHeatRuntime] = useState<MapsHeatLayerRuntime | null>(null);
     const [heatRuntimeError, setHeatRuntimeError] = useState<unknown>(null);
     const heatRuntimeRef = useRef<MapsHeatLayerRuntime | null>(heatRuntime);
@@ -353,9 +352,13 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       if (!hasHeatEntries || heatRuntime) return;
 
       let active = true;
-      import("./maps-heat-layer-rendering").then(
-        (runtime) => {
-          if (active) setHeatRuntime(runtime);
+      // Resolve both modules before mounting: a suspended initial render can discard an expensive index.
+      Promise.all([import("./maps-heat-layer-rendering"), import("./maps-heat-layer-mount")]).then(
+        ([runtime, mount]) => {
+          if (active) {
+            setHeatMount(() => mount.MapsHeatLayerMount);
+            setHeatRuntime(runtime);
+          }
         },
         (error: unknown) => {
           if (active) setHeatRuntimeError(error);
@@ -538,7 +541,6 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       drawCanvasMapLabels(context, labels);
     };
-
 
     const clearHover = () => {
       const hovered = [...hoveredByLayerRef.current.values()];
@@ -809,7 +811,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         const patternImages = canvasPatternImages?.() ?? null;
         const drawOptions: CanvasMapDrawOptions =
           patternImages && viewportQuery
-            ? { ...interaction, patterns: { images: patternImages, project, zoom: viewportQuery.zoom } }
+            ? {
+                ...interaction,
+                patterns: { images: patternImages, project, zoom: viewportQuery.zoom },
+              }
             : interaction;
         const hasRaster = snapshot.renderSteps.some((step) => step.kind === "raster");
         const ratio = Math.max(1, window.devicePixelRatio || 1);
@@ -840,8 +845,84 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
           ratio,
         };
 
+        const rasters = [];
+        if (hasRaster && heatViewport) {
+          const screenIndices = new Map(
+            scene.primitives.map((primitive, index) => [
+              primitive.renderPrimitive.primitiveId,
+              index,
+            ]),
+          );
+          let before = 0;
+          for (const step of snapshot.renderSteps) {
+            if (step.kind !== "raster") {
+              before = (screenIndices.get(step.primitiveId) ?? before - 1) + 1;
+              continue;
+            }
+            const { raster } = step;
+            const vertices =
+              raster.projection === "screen"
+                ? [
+                    0,
+                    0,
+                    0,
+                    0,
+                    scene.width,
+                    0,
+                    1,
+                    0,
+                    0,
+                    scene.height,
+                    0,
+                    1,
+                    scene.width,
+                    0,
+                    1,
+                    0,
+                    scene.width,
+                    scene.height,
+                    1,
+                    1,
+                    0,
+                    scene.height,
+                    0,
+                    1,
+                  ]
+                : createGeographicRasterMesh({
+                    bounds: raster.bounds,
+                    image: raster.image,
+                    project: (coordinate) =>
+                      projectMapsHeatLayerCoordinateForRaster(heatViewport, coordinate),
+                    verticalScale: raster.projection,
+                    width: scene.width,
+                    height: scene.height,
+                  });
+            rasters.push({
+              before,
+              image: raster.image,
+              opacity: raster.opacity,
+              vertices,
+              uploaded: (bytes: number) => {
+                raster.work.textureUploads += 1;
+                raster.work.textureUploadBytes += bytes;
+              },
+              released: () => {
+                raster.work.textureReleases += 1;
+              },
+            });
+          }
+        }
         const renderedByWgpu =
-          !hasRaster && (renderApplicationFrame?.(scene, interaction) ?? false);
+          renderApplicationFrame?.(rasters.length ? { ...scene, rasters } : scene, interaction) ??
+          false;
+        if (renderedByWgpu && hasRaster) {
+          for (const step of snapshot.renderSteps) {
+            if (step.kind === "raster") {
+              step.raster.work.rasterDraws += 1;
+              step.raster.work.rasterGpuDraws += 1;
+            }
+          }
+        }
         if (renderedByWgpu) {
           applicationFrameVisibleRef.current = true;
         } else {
@@ -949,18 +1030,20 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
 
     return (
       <>
-        <Suspense fallback={null}>
-          {entries.map((entry) =>
-            entry.kind === "heat" ? (
-              <LazyMapsHeatLayerMount
-                key={entry.runtimeKey}
-                layerKey={entry.runtimeKey}
-                props={entry.props}
-                publish={publishHeatLayer}
-              />
-            ) : null,
-          )}
-        </Suspense>
+        {HeatMount ? (
+          <>
+            {entries.map((entry) =>
+              entry.kind === "heat" ? (
+                <HeatMount
+                  key={entry.runtimeKey}
+                  layerKey={entry.runtimeKey}
+                  props={entry.props}
+                  publish={publishHeatLayer}
+                />
+              ) : null,
+            )}
+          </>
+        ) : null}
         <canvas
           aria-hidden="true"
           data-map-overlay-backend="canvas2d"
