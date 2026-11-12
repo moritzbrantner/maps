@@ -58,7 +58,12 @@ export {
   type MapViewportProps,
   type RasterMapStyle,
 } from "./clustered-map";
-export { MapView, type MapLibreLayerRender, type FlatMapRuntime, type MapViewProps } from "./map-view";
+export {
+  MapView,
+  type MapLibreLayerRender,
+  type FlatMapRuntime,
+  type MapViewProps,
+} from "./map-view";
 export {
   MapControls,
   MapLayers,
@@ -420,7 +425,12 @@ export {
   type TemporalHeatMapProps,
 } from "./temporal-heat-map";
 
-export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "./maps-tileset";
+export {
+  validateMapsTileset,
+  validateMapsTilesetMetadata,
+  type MapsTileset,
+  type MapsTilesetMetadata,
+} from "./maps-tileset";
 export {
   DEFAULT_MAPS_TILE_BUDGET_BYTES,
   clearMapsDownloadedTiles,
@@ -456,3 +466,17 @@ export {
   type MapPlaceSearchProps,
   type MapsPlaceSearchState,
 } from "./map-place-search";
+
+export {
+  transformGeoJsonGeometry,
+  translateGeoJsonFeature,
+  rotateGeoJsonFeature,
+  scaleGeoJsonFeature,
+  GeoJsonGeographicOperationError,
+  GEOJSON_TRANSFORM_MAX_RADIUS_METERS,
+  type GeoJsonGeographicOperationIssueCode,
+  type GeoJsonTransformValues,
+  type GeoJsonTranslation,
+  type GeoJsonRotation,
+  type GeoJsonScale,
+} from "./geojson-transform";

@@ -1,5 +1,7 @@
 "use client";
 
+import { transformGeoJsonGeometry } from "./geojson-transform";
+
 import {
   cloneGeometry,
   clonePosition,
@@ -175,10 +177,10 @@ export function moveGeoJsonGeometry(
   deltaLatitude: number,
   options: GeoJsonGeometryTransformOptions = {},
 ): TemporalGeoJsonSupportedGeometry | null {
-  const moved = mapGeometryPositions(geometry, ([longitude, latitude]) => [
-    longitude + deltaLongitude,
-    latitude + deltaLatitude,
-  ]);
+  const moved = transformGeoJsonGeometry(geometry, {
+    longitudeOffset: deltaLongitude,
+    latitudeOffset: deltaLatitude,
+  });
 
   return constrainGeoJsonGeometryToPolygon(moved, options.polygonConstraint);
 }
@@ -423,7 +425,9 @@ export function removeClosingPosition(ring: readonly GeoJsonPosition[]) {
   return ring.map(clonePosition);
 }
 
-function resolvePolygonConstraint(constraint: GeoJsonPolygonConstraint): PolygonLikeGeometry | null {
+function resolvePolygonConstraint(
+  constraint: GeoJsonPolygonConstraint,
+): PolygonLikeGeometry | null {
   if (!constraint) {
     return null;
   }
@@ -523,46 +527,6 @@ function removeRingPosition(ring: GeoJsonPosition[] | undefined, vertexIndex: nu
 
   openRing.splice(vertexIndex, 1);
   ring.splice(0, ring.length, ...closeRing(openRing));
-}
-
-function mapGeometryPositions(
-  geometry: TemporalGeoJsonSupportedGeometry,
-  transform: (position: GeoJsonPosition) => GeoJsonPosition,
-): TemporalGeoJsonSupportedGeometry {
-  switch (geometry.type) {
-    case "Point":
-      return {
-        coordinates: transform(geometry.coordinates),
-        type: "Point",
-      };
-    case "MultiPoint":
-      return {
-        coordinates: geometry.coordinates.map(transform),
-        type: "MultiPoint",
-      };
-    case "LineString":
-      return {
-        coordinates: geometry.coordinates.map(transform),
-        type: "LineString",
-      };
-    case "MultiLineString":
-      return {
-        coordinates: geometry.coordinates.map((line) => line.map(transform)),
-        type: "MultiLineString",
-      };
-    case "Polygon":
-      return {
-        coordinates: geometry.coordinates.map((ring) => ring.map(transform)),
-        type: "Polygon",
-      };
-    case "MultiPolygon":
-      return {
-        coordinates: geometry.coordinates.map((polygon) =>
-          polygon.map((ring) => ring.map(transform)),
-        ),
-        type: "MultiPolygon",
-      };
-  }
 }
 
 function validatePolygonCoordinates(coordinates: readonly (readonly GeoJsonPosition[])[]) {

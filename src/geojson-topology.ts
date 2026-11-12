@@ -1,3 +1,4 @@
+import { GeoJsonGeographicOperationError } from "./geojson-geographic-contract";
 import { Delaunay } from "d3-delaunay";
 import polygonClipping, {
   type MultiPolygon as ClippingMultiPolygon,
@@ -51,7 +52,9 @@ export function intersectPolygonLike(
   right: PolygonLikeGeometry,
 ): PolygonLikeGeometry | null {
   return runBooleanOperation(() =>
-    fromClippingMultiPolygon(intersection(toClippingMultiPolygon(left), toClippingMultiPolygon(right))),
+    fromClippingMultiPolygon(
+      intersection(toClippingMultiPolygon(left), toClippingMultiPolygon(right)),
+    ),
   );
 }
 
@@ -80,7 +83,9 @@ export function unionPolygonLikes(items: PolygonLikeGeometry[]): PolygonLikeGeom
   }
 
   return runBooleanOperation(() =>
-    fromClippingMultiPolygon(union(toClippingMultiPolygon(items[0]!), ...items.slice(1).map(toClippingMultiPolygon))),
+    fromClippingMultiPolygon(
+      union(toClippingMultiPolygon(items[0]!), ...items.slice(1).map(toClippingMultiPolygon)),
+    ),
   );
 }
 
@@ -110,6 +115,18 @@ export function simplifyPolygonLike(
   return simplified.length === 1
     ? { coordinates: simplified[0]!, type: "Polygon" }
     : { coordinates: simplified, type: "MultiPolygon" };
+}
+
+/** Geographic operation inputs must not silently lose degenerate parts or holes. */
+export function hasNondegeneratePolygonParts(geometry: PolygonLikeGeometry): boolean {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  return polygons.every((polygon) => {
+    const areas = polygon.map((ring) => Math.abs(getRingSignedArea(ring)));
+    return (
+      areas.every((area) => area > 0) &&
+      (areas[0] ?? 0) > areas.slice(1).reduce((total, area) => total + area, 0)
+    );
+  });
 }
 
 export function getPolygonLikeArea(geometry: PolygonLikeGeometry): number {
@@ -148,7 +165,11 @@ export function getPolygonLikePerimeterMeters(
 
   return polygons.reduce(
     (sum, polygon) =>
-      sum + polygon.reduce((polygonSum, ring) => polygonSum + getRingGeodesicLengthMeters(ring, earthRadiusMeters), 0),
+      sum +
+      polygon.reduce(
+        (polygonSum, ring) => polygonSum + getRingGeodesicLengthMeters(ring, earthRadiusMeters),
+        0,
+      ),
     0,
   );
 }
@@ -280,7 +301,9 @@ function fromClippingMultiPolygon(output: ClippingMultiPolygon): PolygonLikeGeom
         .map((ring) => normalizeGeoJsonRing(ring))
         .filter((ring, index) => index === 0 || Math.abs(getRingSignedArea(ring)) > AREA_EPSILON),
     )
-    .filter((polygon) => polygon.length > 0 && Math.abs(getRingSignedArea(polygon[0]!)) > AREA_EPSILON);
+    .filter(
+      (polygon) => polygon.length > 0 && Math.abs(getRingSignedArea(polygon[0]!)) > AREA_EPSILON,
+    );
 
   if (polygons.length === 0) {
     return null;
@@ -328,7 +351,10 @@ function simplifyPolygonCoordinates(
   return [shell, ...holes];
 }
 
-function simplifyRing(ring: readonly GeoJsonPosition[], tolerance: number): GeoJsonPosition[] | null {
+function simplifyRing(
+  ring: readonly GeoJsonPosition[],
+  tolerance: number,
+): GeoJsonPosition[] | null {
   const closed = closeRing(ring);
   const open = closed.slice(0, -1);
 
@@ -336,7 +362,8 @@ function simplifyRing(ring: readonly GeoJsonPosition[], tolerance: number): GeoJ
     return null;
   }
 
-  const simplifiedOpen = tolerance <= 0 ? open.map(clonePosition) : simplifyOpenRing(open, tolerance);
+  const simplifiedOpen =
+    tolerance <= 0 ? open.map(clonePosition) : simplifyOpenRing(open, tolerance);
   const distinct = countDistinctPositions(simplifiedOpen);
 
   if (distinct < 3) {
@@ -411,7 +438,11 @@ function getPointSegmentDistanceSquared(
 
   const ratio = Math.max(
     0,
-    Math.min(1, ((point[0] - start[0]) * deltaX + (point[1] - start[1]) * deltaY) / (deltaX ** 2 + deltaY ** 2)),
+    Math.min(
+      1,
+      ((point[0] - start[0]) * deltaX + (point[1] - start[1]) * deltaY) /
+        (deltaX ** 2 + deltaY ** 2),
+    ),
   );
   const projectedX = start[0] + ratio * deltaX;
   const projectedY = start[1] + ratio * deltaY;
@@ -479,10 +510,7 @@ function getRingGeodesicAreaSquareMeters(
   return (total * earthRadiusMeters * earthRadiusMeters) / 2;
 }
 
-function getRingGeodesicLengthMeters(
-  ring: readonly GeoJsonPosition[],
-  earthRadiusMeters: number,
-) {
+function getRingGeodesicLengthMeters(ring: readonly GeoJsonPosition[], earthRadiusMeters: number) {
   if (ring.length < 2 || earthRadiusMeters <= 0) {
     return 0;
   }
@@ -561,10 +589,15 @@ function getRingCentroid(ring: readonly GeoJsonPosition[]): GeoJsonPosition {
   return [x / (6 * signedArea), y / (6 * signedArea)];
 }
 
-function runBooleanOperation(operation: () => PolygonLikeGeometry | null): PolygonLikeGeometry | null {
+function runBooleanOperation(
+  operation: () => PolygonLikeGeometry | null,
+): PolygonLikeGeometry | null {
   try {
     return operation();
-  } catch {
-    return null;
+  } catch (error) {
+    throw new GeoJsonGeographicOperationError(
+      "operation-failed",
+      `Polygon Boolean operation failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }

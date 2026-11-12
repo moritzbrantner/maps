@@ -1,3 +1,7 @@
+import {
+  assertGeoJsonGeographicFeature,
+  GeoJsonGeographicOperationError,
+} from "./geojson-geographic-contract";
 import { flattenGeoJsonFeatures, type GeoJsonMapSource } from "./geojson-source";
 import {
   differencePolygonLike,
@@ -7,6 +11,7 @@ import {
   getPolygonLikeGeodesicAreaSquareMeters,
   getPolygonLikePerimeterMeters,
   intersectPolygonLike,
+  hasNondegeneratePolygonParts,
   simplifyPolygonLike,
   unionPolygonLikes,
   type PolygonLikeGeometry,
@@ -23,6 +28,7 @@ import type {
 export type GeoJsonBooleanOperation = "intersection" | "union" | "difference" | "clip";
 
 export type GeoJsonOperationIssueCode =
+  | "unsupported-antimeridian"
   | "invalid-geometry"
   | "operation-failed"
   | "skipped-non-polygon";
@@ -46,9 +52,7 @@ export type GeoJsonOperationFeatureProperties = {
   targetIndexes: number[];
 };
 
-export type GeoJsonOperationPropertiesContext<
-  TInputProperties extends Record<string, unknown>,
-> = {
+export type GeoJsonOperationPropertiesContext<TInputProperties extends Record<string, unknown>> = {
   defaultProperties: GeoJsonOperationFeatureProperties;
   geometry: PolygonLikeGeometry;
   operation: GeoJsonBooleanOperation;
@@ -210,6 +214,9 @@ export function intersectGeoJsonFeatures<
   const areaEpsilon = options.areaEpsilon ?? DEFAULT_AREA_EPSILON;
   const leftEntries = collectPolygonEntries(toFeatureCollection(left), options, issues);
   const rightEntries = collectPolygonEntries(toFeatureCollection(right), options, issues);
+  if (hasOperationFailure(issues)) {
+    return { collection: { features: [], type: "FeatureCollection" }, issues };
+  }
   const features: Array<TemporalGeoJsonGeometryFeature<TOutputProperties>> = [];
 
   for (const leftEntry of leftEntries) {
@@ -239,18 +246,29 @@ export function intersectGeoJsonFeatures<
     }
   }
 
-  return { collection: { features, type: "FeatureCollection" }, issues };
+  return {
+    collection: {
+      features: hasOperationFailure(issues) ? [] : features,
+      type: "FeatureCollection",
+    },
+    issues,
+  };
 }
 
 export function unionGeoJsonFeatures<
   TInputProperties extends Record<string, unknown> = Record<string, unknown>,
   TOutputProperties extends Record<string, unknown> = GeoJsonOperationFeatureProperties,
 >(
-  featuresInput: GeoJsonMapSource<TInputProperties> | readonly TemporalGeoJsonGeometryFeature<TInputProperties>[],
+  featuresInput:
+    | GeoJsonMapSource<TInputProperties>
+    | readonly TemporalGeoJsonGeometryFeature<TInputProperties>[],
   options: GeoJsonOperationOptions<TInputProperties, TOutputProperties> = {},
 ): GeoJsonOperationResult<TOutputProperties> {
   const issues: GeoJsonOperationIssue[] = [];
   const entries = collectPolygonEntries(toFeatureCollection(featuresInput), options, issues);
+  if (hasOperationFailure(issues)) {
+    return { collection: { features: [], type: "FeatureCollection" }, issues };
+  }
   const geometry = runPolygonOperation(
     () => unionPolygonLikes(entries.map((entry) => entry.geometry)),
     issues,
@@ -258,11 +276,18 @@ export function unionGeoJsonFeatures<
   );
   const area = geometry ? getPolygonLikeArea(geometry) : 0;
   const outputFeatures =
-    geometry && (area > (options.areaEpsilon ?? DEFAULT_AREA_EPSILON) || options.includeEmptyResults)
+    geometry &&
+    (area > (options.areaEpsilon ?? DEFAULT_AREA_EPSILON) || options.includeEmptyResults)
       ? [createOperationFeature("union", geometry, entries, [], area, 0, options)]
       : [];
 
-  return { collection: { features: outputFeatures, type: "FeatureCollection" }, issues };
+  return {
+    collection: {
+      features: hasOperationFailure(issues) ? [] : outputFeatures,
+      type: "FeatureCollection",
+    },
+    issues,
+  };
 }
 
 export function differenceGeoJsonFeatures<
@@ -277,6 +302,9 @@ export function differenceGeoJsonFeatures<
   const areaEpsilon = options.areaEpsilon ?? DEFAULT_AREA_EPSILON;
   const subjectEntries = collectPolygonEntries(toFeatureCollection(subject), options, issues);
   const maskEntries = collectPolygonEntries(toFeatureCollection(masks), options, issues);
+  if (hasOperationFailure(issues)) {
+    return { collection: { features: [], type: "FeatureCollection" }, issues };
+  }
   const maskUnion = runPolygonOperation(
     () => unionPolygonLikes(maskEntries.map((entry) => entry.geometry)),
     issues,
@@ -312,7 +340,13 @@ export function differenceGeoJsonFeatures<
     );
   }
 
-  return { collection: { features: outputFeatures, type: "FeatureCollection" }, issues };
+  return {
+    collection: {
+      features: hasOperationFailure(issues) ? [] : outputFeatures,
+      type: "FeatureCollection",
+    },
+    issues,
+  };
 }
 
 export function clipGeoJsonToPolygon<
@@ -327,6 +361,9 @@ export function clipGeoJsonToPolygon<
   const areaEpsilon = options.areaEpsilon ?? DEFAULT_AREA_EPSILON;
   const sourceEntries = collectPolygonEntries(toFeatureCollection(source), options, issues);
   const maskEntries = collectPolygonEntries(toFeatureCollection(mask), options, issues);
+  if (hasOperationFailure(issues)) {
+    return { collection: { features: [], type: "FeatureCollection" }, issues };
+  }
   const maskUnion = runPolygonOperation(
     () => unionPolygonLikes(maskEntries.map((entry) => entry.geometry)),
     issues,
@@ -363,7 +400,13 @@ export function clipGeoJsonToPolygon<
     );
   }
 
-  return { collection: { features: outputFeatures, type: "FeatureCollection" }, issues };
+  return {
+    collection: {
+      features: hasOperationFailure(issues) ? [] : outputFeatures,
+      type: "FeatureCollection",
+    },
+    issues,
+  };
 }
 
 export function getGeoJsonIntersections<
@@ -380,7 +423,9 @@ export function getGeoJsonIntersections<
 
   for (const left of leftEntries) {
     for (const right of rightEntries) {
-      const geometry = runPolygonOperation(() => intersectPolygonLike(left.geometry, right.geometry));
+      const geometry = runPolygonOperation(() =>
+        intersectPolygonLike(left.geometry, right.geometry),
+      );
       const area = geometry ? getPolygonLikeArea(geometry) : 0;
 
       if (!geometry || area <= areaEpsilon) {
@@ -432,8 +477,12 @@ export function createGeoJsonPolygonOutlines<
 ): GeoJsonOperationResult<GeoJsonPolygonOutlineProperties> {
   const issues: GeoJsonOperationIssue[] = [];
   const entries = collectPolygonEntries(source, options, issues);
+  if (hasOperationFailure(issues)) {
+    return { collection: { features: [], type: "FeatureCollection" }, issues };
+  }
   const features = entries.flatMap((entry) => {
-    const polygons = entry.geometry.type === "Polygon" ? [entry.geometry.coordinates] : entry.geometry.coordinates;
+    const polygons =
+      entry.geometry.type === "Polygon" ? [entry.geometry.coordinates] : entry.geometry.coordinates;
 
     return polygons.flatMap((polygon, polygonIndex) =>
       polygon.map((ring, ringIndex) => {
@@ -461,7 +510,13 @@ export function createGeoJsonPolygonOutlines<
     );
   });
 
-  return { collection: { features, type: "FeatureCollection" }, issues };
+  return {
+    collection: {
+      features: hasOperationFailure(issues) ? [] : features,
+      type: "FeatureCollection",
+    },
+    issues,
+  };
 }
 
 export function findContainingGeoJsonFeatures<
@@ -511,7 +566,9 @@ export function findOverlappingGeoJsonFeatures<
     for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
       const left = entries[leftIndex]!;
       const right = entries[rightIndex]!;
-      const geometry = runPolygonOperation(() => intersectPolygonLike(left.geometry, right.geometry));
+      const geometry = runPolygonOperation(() =>
+        intersectPolygonLike(left.geometry, right.geometry),
+      );
       const area = geometry ? getPolygonLikeArea(geometry) : 0;
 
       if (!geometry || area <= areaEpsilon) {
@@ -546,14 +603,15 @@ export function resolveGeoJsonPolygonOverlaps<
   const areaEpsilon = options.areaEpsilon ?? DEFAULT_AREA_EPSILON;
   const strategy = options.strategy ?? "later-wins";
   const entries = collectPolygonEntries(source, options, issues);
+  if (hasOperationFailure(issues)) {
+    return { collection: { features: [], type: "FeatureCollection" }, issues, overlaps: [] };
+  }
   const overlaps = findOverlappingGeoJsonFeatures(source, options);
   const features: Array<TemporalGeoJsonGeometryFeature<TProperties>> = [];
 
   entries.forEach((entry, entryIndex) => {
     const maskEntries =
-      strategy === "later-wins"
-        ? entries.slice(entryIndex + 1)
-        : entries.slice(0, entryIndex);
+      strategy === "later-wins" ? entries.slice(entryIndex + 1) : entries.slice(0, entryIndex);
     const maskUnion = runPolygonOperation(
       () => unionPolygonLikes(maskEntries.map((mask) => mask.geometry)),
       issues,
@@ -581,7 +639,14 @@ export function resolveGeoJsonPolygonOverlaps<
     });
   });
 
-  return { collection: { features, type: "FeatureCollection" }, issues, overlaps };
+  return {
+    collection: {
+      features: hasOperationFailure(issues) ? [] : features,
+      type: "FeatureCollection",
+    },
+    issues,
+    overlaps,
+  };
 }
 
 export function simplifyGeoJsonPolygons<
@@ -593,8 +658,15 @@ export function simplifyGeoJsonPolygons<
   const issues: GeoJsonOperationIssue[] = [];
   const areaEpsilon = options.areaEpsilon ?? DEFAULT_AREA_EPSILON;
   const entries = collectPolygonEntries(source, options, issues);
+  if (hasOperationFailure(issues)) {
+    return { collection: { features: [], type: "FeatureCollection" }, issues };
+  }
   const features = entries.flatMap((entry) => {
-    const geometry = simplifyPolygonLike(entry.geometry, options.tolerance);
+    const geometry = runPolygonOperation(
+      () => simplifyPolygonLike(entry.geometry, options.tolerance),
+      issues,
+      "simplification failed.",
+    );
     const area = geometry ? getPolygonLikeArea(geometry) : 0;
 
     if (!geometry || area <= areaEpsilon) {
@@ -611,7 +683,13 @@ export function simplifyGeoJsonPolygons<
     ];
   });
 
-  return { collection: { features, type: "FeatureCollection" }, issues };
+  return {
+    collection: {
+      features: hasOperationFailure(issues) ? [] : features,
+      type: "FeatureCollection",
+    },
+    issues,
+  };
 }
 
 function toFeatureCollection<TProperties extends Record<string, unknown>>(
@@ -633,8 +711,11 @@ function collectPolygonEntries<TProperties extends Record<string, unknown>>(
   options:
     | GeoJsonOperationOptions<TProperties, Record<string, unknown>>
     | GeoJsonRelationshipOptions<TProperties>,
-  issues: GeoJsonOperationIssue[] = [],
+  issues?: GeoJsonOperationIssue[],
 ): Array<PolygonEntry<TProperties>> {
+  if (!validateOperationCollection(collection, options, issues)) {
+    return [];
+  }
   const entries: Array<PolygonEntry<TProperties>> = [];
   const flattened = flattenGeoJsonFeatures(collection);
   const featureParts = new Map<number, number>();
@@ -645,7 +726,7 @@ function collectPolygonEntries<TProperties extends Record<string, unknown>>(
     featureParts.set(entry.index, (featureParts.get(entry.index) ?? 0) + 1);
 
     if (!isPolygonLikeGeometry(entry.geometry)) {
-      issues.push({
+      issues?.push({
         code: "skipped-non-polygon",
         featureId: id,
         featureIndex: entry.index,
@@ -655,6 +736,22 @@ function collectPolygonEntries<TProperties extends Record<string, unknown>>(
       continue;
     }
 
+    if (!hasNondegeneratePolygonParts(entry.geometry)) {
+      const error = new GeoJsonGeographicOperationError(
+        "invalid-geometry",
+        "Polygon geometry must have positive area.",
+      );
+      if (!issues) {
+        throw error;
+      }
+      issues.push({
+        code: "invalid-geometry",
+        featureId: id,
+        featureIndex: entry.index,
+        message: error.message,
+      });
+      continue;
+    }
     entries.push({
       feature: entry.feature,
       geometry: cloneGeometry(entry.geometry) as PolygonLikeGeometry,
@@ -666,7 +763,7 @@ function collectPolygonEntries<TProperties extends Record<string, unknown>>(
 
   collection.features.forEach((feature, index) => {
     if (!featureParts.has(index)) {
-      issues.push({
+      issues?.push({
         code: "invalid-geometry",
         featureId: createFeatureId(feature, index, undefined, options.getFeatureId),
         featureIndex: index,
@@ -682,6 +779,7 @@ function collectPointEntries<TProperties extends Record<string, unknown>>(
   collection: GeoJsonMapSource<TProperties>,
   options: GeoJsonRelationshipOptions<TProperties>,
 ): Array<PointEntry<TProperties>> {
+  validateOperationCollection(collection, options);
   return flattenGeoJsonFeatures(collection).flatMap((entry) => {
     const id = createFeatureId(entry.feature, entry.index, entry.partIndex, options.getFeatureId);
 
@@ -723,7 +821,10 @@ function createOperationFeature<
   options: GeoJsonOperationOptions<TInputProperties, TOutputProperties>,
 ): TemporalGeoJsonGeometryFeature<TOutputProperties> {
   const firstSourceArea = sourceEntries[0] ? getPolygonLikeArea(sourceEntries[0].geometry) : 0;
-  const targetArea = targetEntries.reduce((sum, entry) => sum + getPolygonLikeArea(entry.geometry), 0);
+  const targetArea = targetEntries.reduce(
+    (sum, entry) => sum + getPolygonLikeArea(entry.geometry),
+    0,
+  );
   const defaultProperties: GeoJsonOperationFeatureProperties = {
     area,
     operation,
@@ -751,17 +852,31 @@ function createOperationFeature<
   };
 }
 
-function runPolygonOperation<T>(
-  operation: () => T,
+function runPolygonOperation(
+  operation: () => PolygonLikeGeometry | null,
   issues?: GeoJsonOperationIssue[],
-  message = "polygon operation failed.",
-): T | null {
+  message = "Polygon operation failed.",
+): PolygonLikeGeometry | null {
   try {
-    return operation();
-  } catch {
-    issues?.push({
-      code: "operation-failed",
-      message,
+    const geometry = operation();
+    if (geometry) {
+      assertGeoJsonGeographicFeature({ type: "Feature", geometry });
+    }
+    return geometry;
+  } catch (error) {
+    if (!issues) {
+      if (error instanceof GeoJsonGeographicOperationError) {
+        throw error;
+      }
+      throw new GeoJsonGeographicOperationError("operation-failed", message);
+    }
+    issues.push({
+      code:
+        error instanceof GeoJsonGeographicOperationError &&
+        error.code === "unsupported-antimeridian"
+          ? error.code
+          : "operation-failed",
+      message: error instanceof Error ? error.message : message,
     });
     return null;
   }
@@ -804,4 +919,35 @@ function containsPoint(
   const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
 
   return polygons.some((polygon) => containsPointInPolygon(polygon, point, includeBoundary));
+}
+
+function hasOperationFailure(issues: GeoJsonOperationIssue[]): boolean {
+  return issues.some((issue) => issue.code !== "skipped-non-polygon");
+}
+function validateOperationCollection<T extends Record<string, unknown>>(
+  collection: GeoJsonMapSource<T>,
+  options: GeoJsonRelationshipOptions<T>,
+  issues?: GeoJsonOperationIssue[],
+): boolean {
+  let valid = true;
+  collection.features.forEach((feature, index) => {
+    try {
+      assertGeoJsonGeographicFeature(feature);
+    } catch (error) {
+      if (!(error instanceof GeoJsonGeographicOperationError)) {
+        throw error;
+      }
+      if (!issues) {
+        throw error;
+      }
+      valid = false;
+      issues.push({
+        code: error.code === "unsupported-antimeridian" ? error.code : "invalid-geometry",
+        featureId: createFeatureId(feature, index, undefined, options.getFeatureId),
+        featureIndex: index,
+        message: error.message,
+      });
+    }
+  });
+  return valid;
 }
