@@ -1,3 +1,5 @@
+import { useContext, useEffect } from "react";
+import { MapSurfaceContext } from "./map-surface-context";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -5,6 +7,7 @@ import { GeoJsonLayer } from "./geojson-layer";
 import { MapControls } from "./map-components";
 import type { MapLibreMapStyle, MapSurfaceController } from "./map-display";
 import { MapView } from "./map-view";
+import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { PointLayer } from "./point-layer";
 
 vi.mock("./canvas-flat-runtime", async () => {
@@ -45,7 +48,8 @@ vi.mock("./canvas-flat-runtime", async () => {
   function MockMapsCanvasFlatRuntime(props: Props) {
     React.useEffect(() => {
       let currentViewState = props.viewState;
-      const controller: Controller = {
+      const controller: Controller & { flushCameraFrame(): void } = {
+        flushCameraFrame() {},
         getViewState() {
           return currentViewState;
         },
@@ -122,6 +126,73 @@ afterEach(() => {
 });
 
 describe("Maps-owned MapView runtime", () => {
+  test("creates controlled first-party measurements without selecting an unrelated Map Layer", async () => {
+    const onMeasurementCreate = vi.fn();
+    const onMeasurementDraftChange = vi.fn();
+    const onFeatureSelect = vi.fn();
+    const { container } = render(
+      <MapView flatRuntime="maps" fitToData={false} mapStyle={{ tiles: false }}>
+        <PointLayer points={[{ id: "berlin", longitude: 8, latitude: 50 }]} onFeatureSelect={onFeatureSelect} />
+        <BeeLineMeasurementLayer measurementMode="bee-line" onMeasurementCreate={onMeasurementCreate} onMeasurementDraftChange={onMeasurementDraftChange} />
+      </MapView>,
+    );
+    const map = screen.getByLabelText("Interactive map");
+    await waitFor(() => expect(map.getAttribute("data-map-ready")).toBe("true"));
+    const canvas = container.querySelector('canvas[data-flat-runtime="maps"]')!;
+    fireEvent.click(canvas, { clientX: 240, clientY: 160 });
+    expect(onMeasurementDraftChange).toHaveBeenLastCalledWith({ from: [8, 50] });
+    fireEvent.click(canvas, { clientX: 300, clientY: 200 });
+    expect(onMeasurementCreate).toHaveBeenCalledWith(expect.objectContaining({ from: [8, 50], to: [8, 50], distanceMeters: 0 }));
+    expect(onMeasurementDraftChange).toHaveBeenLastCalledWith(null);
+    expect(onFeatureSelect).not.toHaveBeenCalled();
+    expect(container.querySelector('canvas[data-map-measurement-runtime="maps"]')).toBeTruthy();
+  });
+
+  test.each(["escape", "pointercancel", "captureloss"])("cancels first-party measurement on %s and leaves the source controlled", async (reason) => {
+    const onMeasurementCreate = vi.fn();
+    const onMeasurementDraftChange = vi.fn();
+    const { container, unmount } = render(
+      <MapView flatRuntime="maps" mapStyle={{ tiles: false }}>
+        <BeeLineMeasurementLayer measurementMode="bee-line" onMeasurementCreate={onMeasurementCreate} onMeasurementDraftChange={onMeasurementDraftChange} />
+      </MapView>,
+    );
+    const map = screen.getByLabelText("Interactive map");
+    await waitFor(() => expect(map.getAttribute("data-map-ready")).toBe("true"));
+    const canvas = container.querySelector('canvas[data-flat-runtime="maps"]')!;
+    fireEvent.click(canvas, { clientX: 220, clientY: 140 });
+    if (reason === "escape") fireEvent.keyDown(map, { key: "Escape" });
+    if (reason === "pointercancel") fireEvent.pointerCancel(canvas);
+    if (reason === "captureloss") {
+      fireEvent.pointerDown(canvas, { button: 0, pointerId: 1 });
+      fireEvent.lostPointerCapture(map, { pointerId: 1 });
+    }
+    expect(onMeasurementDraftChange).toHaveBeenLastCalledWith(null);
+    expect(onMeasurementCreate).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  test("editing owns input ahead of measurement and releasing the owner restores measurement", async () => {
+    function EditingOwner() {
+      const register = useContext(MapSurfaceContext)!.registerInteractionMode;
+      useEffect(() => register("editor", "editing"), [register]);
+      return null;
+    }
+    const onMeasurementDraftChange = vi.fn();
+    const view = (editing: boolean) => <MapView flatRuntime="maps" mapStyle={{ tiles: false }}>
+      <BeeLineMeasurementLayer measurementMode="bee-line" onMeasurementDraftChange={onMeasurementDraftChange} />
+      <MapControls>{editing && <EditingOwner />}</MapControls>
+    </MapView>;
+    const { container, rerender } = render(view(true));
+    const map = screen.getByLabelText("Interactive map");
+    await waitFor(() => expect(map.getAttribute("data-map-interaction-mode")).toBe("editing"));
+    fireEvent.click(container.querySelector('canvas[data-flat-runtime="maps"]')!, { clientX: 240, clientY: 160 });
+    expect(onMeasurementDraftChange).not.toHaveBeenCalled();
+    rerender(view(false));
+    expect(map.getAttribute("data-map-interaction-mode")).toBe("measurement");
+    fireEvent.click(container.querySelector('canvas[data-flat-runtime="maps"]')!, { clientX: 240, clientY: 160 });
+    expect(onMeasurementDraftChange).toHaveBeenLastCalledWith({ from: [8, 50] });
+  });
+
   test("rejects the retired WebGL selector with an explicit migration", () => {
     expect(() => {
       // @ts-expect-error JavaScript callers can still pass the removed selector.

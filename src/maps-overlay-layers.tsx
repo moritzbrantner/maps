@@ -1137,6 +1137,8 @@ function collectOverlayEntries(
       return;
     }
 
+    if (isMeasurementLayerComponent(child.type)) return;
+
     throwUnsupportedMapsLayer();
   });
 
@@ -1763,4 +1765,20 @@ function sameScreenFrame(left: CanvasMapScene<unknown>, right: CanvasMapScene<un
     left.primitives.length === right.primitives.length &&
     left.primitives.every((primitive, index) => primitive === right.primitives[index])
   );
+}
+
+function isMeasurementLayerComponent(type: unknown) {
+  return (typeof type === "function" || (typeof type === "object" && type !== null)) &&
+    (type as MapLayerComponent)[MAP_LAYER_COMPONENT_KIND] === "measurement";
+}
+
+/** Mount native interaction layers without rebuilding static application geometry. */
+export function MapsInteractionLayers({ children }: { children: ReactNode }) {
+  return <>{Children.map(children, (child) => {
+    if (!isValidElement(child)) return null;
+    if (child.type === Fragment) {
+      return <MapsInteractionLayers>{(child.props as { children?: ReactNode }).children}</MapsInteractionLayers>;
+    }
+    return isMeasurementLayerComponent(child.type) ? child : null;
+  })}</>;
 }

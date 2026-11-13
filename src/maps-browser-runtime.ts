@@ -178,6 +178,8 @@ export type MapsRendererStats = Partial<MapsWgpuFrameStats> & {
 };
 
 export type MapsCanvasFlatRuntimeController = {
+  /** End browser navigation when a layer takes gesture ownership. */
+  cancelNavigation(): void;
   fitBounds(bounds: MapBounds, options?: MapsCanvasFitBoundsOptions): void;
   /**
    * Presents a camera change scheduled for the next animation frame now (`setViewState`,
@@ -798,6 +800,21 @@ export function createMapsBrowserRuntime(
       subscribeBaseRenderer(listener) {
         baseRendererListeners.add(listener);
         return () => baseRendererListeners.delete(listener);
+      },
+      cancelNavigation() {
+        cancelKineticPan();
+        cancelCameraFrame();
+        for (const pointer of pointerTimes.keys()) {
+          gesture.pointerUp(pointer);
+          if (canvas.hasPointerCapture(pointer)) canvas.releasePointerCapture(pointer);
+        }
+        pointerTimes.clear();
+        velocityTracker.clear();
+        const rotationPointer = mouseRotation?.pointerId;
+        mouseRotation = null;
+        if (rotationPointer !== undefined && canvas.hasPointerCapture(rotationPointer)) {
+          canvas.releasePointerCapture(rotationPointer);
+        }
       },
       unproject(x, y) {
         assertActive();

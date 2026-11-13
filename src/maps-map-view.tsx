@@ -41,6 +41,7 @@ import type { MapContextMenuContext, MapFeatureContextMenuContext } from "./map-
 import type { MapScreenInteractionState, MapScreenRenderFrame } from "./map-screen-render-frame";
 import {
   MapsOverlayLayers,
+  MapsInteractionLayers,
   type MapsOverlayLayersController,
   type MapsOverlayPopupSource,
   type MapsOverlayRetainedPoints,
@@ -53,11 +54,14 @@ import {
   createMapHoverStore,
   isMapFeatureHovered,
   type MapSurfaceContextValue,
+  type MapInteractionMode,
 } from "./map-surface-context";
 import { areMapViewStatesEqual, useControllableMapViewState } from "./map-view-state";
 import { getFeatureCoordinate, isBlockedHoverPosition } from "./map-view-utils";
 import type { MapsTileImageLoader } from "./maps-browser-runtime";
 import type { MapViewProps as LegacyMapViewProps } from "./map-view-maplibre";
+
+import type { MapsLayerInteraction, MapsLayerInteractionEvent } from "./maps-layer-interaction";
 
 export type MapsMapViewProps = Omit<LegacyMapViewProps, "flatRuntime"> & {
   flatRuntime?: "maps";
@@ -154,6 +158,87 @@ export function MapsMapView({
       unmountedRef.current = true;
     };
   }, []);
+  const interactionModesRef = useRef(new Map<string, { mode: Exclude<MapInteractionMode, "none"> }>());
+  const interactionModeRef = useRef<MapInteractionMode>("none");
+  const [interactionMode, setInteractionMode] = useState<MapInteractionMode>("none");
+  const [interactionListeners] = useState(() => new Set<(event: MapsLayerInteractionEvent) => boolean | void>());
+  const emitInteraction = useCallback((event: MapsLayerInteractionEvent) => {
+    let consumed = false;
+    for (const listener of interactionListeners) {
+      consumed = listener(event) === true || consumed;
+    }
+    return consumed;
+  }, [interactionListeners]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const ownedPointerRef = useRef<number | null>(null);
+  const cancelledClickRef = useRef(false);
+  const cancelInteraction = useCallback(() => {
+    const pointer = ownedPointerRef.current;
+    cancelledClickRef.current = pointer !== null || pointerDownPositionRef.current !== null;
+    ownedPointerRef.current = null;
+    pointerDownPositionRef.current = null;
+    if (pointer !== null && rootRef.current?.hasPointerCapture?.(pointer)) {
+      rootRef.current.releasePointerCapture(pointer);
+    }
+    emitInteraction({ type: "cancel" });
+  }, [emitInteraction]);
+  const registerInteractionMode = useCallback((id: string, mode: Exclude<MapInteractionMode, "none">) => {
+    const modes = interactionModesRef.current;
+    const token = { mode };
+    // Registration identity keeps an old cleanup from releasing a newer owner with the same ID.
+    const sync = () => {
+      const values = Array.from(modes.values(), (entry) => entry.mode);
+      let next: MapInteractionMode = "none";
+      if (values.includes("editing")) {
+        next = "editing";
+      } else if (values.includes("measurement")) {
+        next = "measurement";
+      }
+      if (next !== interactionModeRef.current) {
+        cancelInteraction();
+        runtimeControllerRef.current?.cancelNavigation?.();
+        interactionModeRef.current = next;
+        setInteractionMode(next);
+      }
+    };
+    modes.set(id, token);
+    sync();
+    return () => {
+      if (modes.get(id) === token) {
+        modes.delete(id);
+        sync();
+      }
+    };
+  }, [cancelInteraction]);
+  const measurementReleaseRef = useRef<(() => void) | null>(null);
+  const setMeasurementActive = useCallback((active: boolean) => {
+    measurementReleaseRef.current?.();
+    measurementReleaseRef.current = active ? registerInteractionMode("__measurement", "measurement") : null;
+  }, [registerInteractionMode]);
+  const [mapsInteraction] = useState<MapsLayerInteraction>(() => ({
+    getMode: () => interactionModeRef.current,
+    getPitch: () => runtimeControllerRef.current?.getViewState().pitch ?? 0,
+    project: (coordinate) => runtimeControllerRef.current?.project(coordinate) ?? null,
+    subscribe(listener) {
+      interactionListeners.add(listener);
+      return () => { interactionListeners.delete(listener); };
+    },
+  }));
+  useEffect(() => () => { emitInteraction({ type: "cancel" }); }, [emitInteraction]);
+  const emitPointerInteraction = (type: "click" | "move", clientX: number, clientY: number) => {
+    const root = rootRef.current;
+    const runtime = runtimeControllerRef.current;
+    if (!root || !runtime || interactionListeners.size === 0) return false;
+    // Moves refer to the presented camera; flushing here would drain a pending pan per pointer event.
+    if (type === "click") runtime.flushCameraFrame();
+    if ((runtime.getViewState().pitch ?? 0) !== 0 && interactionModeRef.current !== "none") {
+      cancelInteraction();
+      return true;
+    }
+    const bounds = root.getBoundingClientRect();
+    const position = { x: clientX - bounds.left, y: clientY - bounds.top };
+    return emitInteraction({ type, position, coordinates: runtime.unproject(position.x, position.y) });
+  };
   const resolvedMaxZoom = normalizeMapMaxZoom(maxZoom);
 
   // React constrains the controlled prop before it reaches the runtime, so the runtime's
@@ -634,28 +719,27 @@ export function MapsMapView({
 
         return getFeatureId(feature, getId as never) === selectedFeatureId;
       },
-      isMeasuring: false,
-      interactionMode: "none",
+      mapsInteraction,
+      isMeasuring: interactionMode === "measurement",
+      interactionMode,
       flatMap: null,
       maplibre: null,
       maplibreMap: null,
       registerMapLibreLayer() {
         throwUnsupportedMapsInteraction();
       },
-      registerInteractionMode() {
-        throwUnsupportedMapsInteraction();
-      },
+      registerInteractionMode,
       requestRender: () => undefined,
-      setMeasurementActive(active) {
-        if (active) {
-          throwUnsupportedMapsInteraction();
-        }
-      },
+      setMeasurementActive,
       setViewState: setSurfaceViewState,
     }),
     [
       closeContextMenu,
       closeFeaturePopup,
+      interactionMode,
+      mapsInteraction,
+      registerInteractionMode,
+      setMeasurementActive,
       getFeatureId,
       handleBackgroundClick,
       hoverStore,
@@ -691,12 +775,21 @@ export function MapsMapView({
       <MapViewStateContext.Provider value={currentViewState}>
       <MapHoverContext.Provider value={hoverStore}>
       <div
+        ref={rootRef}
+        tabIndex={0}
+        data-map-interaction-mode={interactionMode}
         aria-label={mapLabel}
         className={rootClassName}
         data-map-ready={isReady ? "true" : "false"}
         data-map-runtime="maps"
         onClickCapture={(event) => {
           if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
+          if (cancelledClickRef.current) {
+            cancelledClickRef.current = false;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           const down = pointerDownPositionRef.current;
           pointerDownPositionRef.current = null;
 
@@ -711,16 +804,44 @@ export function MapsMapView({
             return;
           }
 
+          const consumed = emitPointerInteraction("click", event.clientX, event.clientY);
+          if (consumed || interactionModeRef.current !== "none") {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (overlayControllerRef.current?.handleClickAtClientPoint(event.clientX, event.clientY)) {
             event.preventDefault();
             event.stopPropagation();
           }
         }}
-        onPointerCancelCapture={() => {
-          pointerDownPositionRef.current = null;
+        onKeyDownCapture={(event) => {
+          if (event.key === "Escape") cancelInteraction();
+        }}
+        onPointerCancelCapture={cancelInteraction}
+        onLostPointerCapture={(event) => {
+          if (ownedPointerRef.current === event.pointerId) cancelInteraction();
+        }}
+        onPointerUpCapture={(event) => {
+          if (ownedPointerRef.current !== event.pointerId) return;
+          ownedPointerRef.current = null;
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
         }}
         onPointerDownCapture={(event) => {
           if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
+          cancelledClickRef.current = false;
+          if (interactionModeRef.current !== "none" && event.button === 0 && !event.ctrlKey) {
+            if (ownedPointerRef.current !== null) {
+              cancelInteraction();
+            } else {
+              ownedPointerRef.current = event.pointerId;
+              event.currentTarget.focus({ preventScroll: true });
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+            }
+            event.stopPropagation();
+          }
           pointerDownPositionRef.current =
             event.pointerType === "mouse" && event.button !== 0
               ? null
@@ -730,7 +851,16 @@ export function MapsMapView({
           overlayControllerRef.current?.clearHover();
           event.currentTarget.style.cursor = fallbackCursor;
         }}
+        onPointerMoveCapture={(event) => {
+          if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) return;
+          emitPointerInteraction("move", event.clientX, event.clientY);
+          if (ownedPointerRef.current !== null) event.stopPropagation();
+        }}
         onPointerMove={(event) => {
+          if (interactionModeRef.current !== "none") {
+            event.currentTarget.style.cursor = "crosshair";
+            return;
+          }
           if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) {
             overlayControllerRef.current?.clearHover();
             event.currentTarget.style.cursor = fallbackCursor;
@@ -778,7 +908,11 @@ export function MapsMapView({
           mapStyle={resolvedMapStyle}
           maxBounds={maxBounds}
           maxZoom={resolvedMaxZoom}
-          onCameraFrame={() => overlayControllerRef.current?.redraw()}
+          onCameraFrame={() => {
+            overlayControllerRef.current?.redraw();
+            if ((runtimeControllerRef.current?.getViewState().pitch ?? 0) !== 0) cancelInteraction();
+            emitInteraction({ type: "camera" });
+          }}
           onContextMenu={handleMapContextMenu}
           onControllerReady={(controller) => {
             runtimeControllerRef.current = controller;
@@ -810,6 +944,7 @@ export function MapsMapView({
         >
           {mapChildren.layers}
         </MapsOverlayLayers>
+        <MapsInteractionLayers>{mapChildren.layers}</MapsInteractionLayers>
         {showAttributionControl && attribution ? (
           <div
             className="mb-maps__attribution"
@@ -1016,7 +1151,7 @@ function resolveMapsRuntimeStyle(mapStyle: string | RasterMapStyle): RasterMapSt
 
 function throwUnsupportedMapsInteraction(): never {
   throw new Error(
-    'flatRuntime="maps" does not support MapLibre-backed layer registration or editing/measurement interaction modes yet.',
+    'flatRuntime="maps" does not support MapLibre-backed layer registration; use a supported first-party Map Layer.',
   );
 }
 
