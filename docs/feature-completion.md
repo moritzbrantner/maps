@@ -91,7 +91,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. |
 | Heat/scalar surfaces | Developed: density and masked field on the public HeatLayer API, including GPU raster presentation and Canvas fallback | Correct on Chromium SwiftShader and Canvas: deterministic and retained-vs-uncached oracles, masks/holes, browser alignment during pan/zoom/orientation/resize and mutation/teardown coverage | In progress (#171): the GPU journey is measured descriptively; hardware acceleration and a comparable reference remain unavailable, so no Fast pass | Prepared TypeScript rasters now upload once per image to the existing wgpu backend and draw in application painter order. Camera frames retain textures; replacement/removal/disposal release them. Initial density indexing runs once after module loading. See [GPU evidence](#heatscalar-gpu-continuation-171). |
 | Moving features and Map-Scoped Timeline | Partial (#172 A: moving tracks over static regions on `flatRuntime="maps"` with one public map-scoped clock and play/pause/seek; temporal cluster/heat composition is phase D, blocked on #170/#171) | Partial (#172 A–C: seek/playback parity and edge sequences against an independent naive sampler, async/source-change guards, Rust/WASM sampler parity in the browser; screenshots and picking while camera and features move together are not covered) | In progress (#172 E: work counters and the full-map journey `temporal-playback-journey-v1` measured, see [below](#moving-features-fast-evidence-172-phase-e); every phase inside the frame budget at 2,000 tracks on the Canvas fallback; no reference comparison, so no Fast verdict) | Rust samples moving tracks; TypeScript keeps the clock and application data. Time changes only sample and rebuild the aggregation index (declared required work); camera frames and unrelated commits do no temporal work; static regions and tiles stay retained. The counters found and fixed re-preparation on runtime status changes, a placeholder-time sample on remount and a Rust aggregation trap on empty point sets. |
-| Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
+| Measurement and GeoJSON editing | Partial (#174 A): controlled bee-line measurement on the first-party Map View with mixed Map Layers; geometry editing remains MapLibre-backed pending B | Partial: public integration tests and real Rust/WASM browser evidence on Canvas/WebGPU cover bearing, create/select/save, navigation ownership and draft cancellation including pitch restriction | Not yet: dense-edit/measurement profiling and work counters remain #174 E | The consumer retains document/save ownership. Exact inputs depend on #173 and phase C; wider editor correctness is phase D. A is an integrated measurement slice, not completion of #174. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
 | Style-spec-compatible vector layers/expressions | Not complete | Not complete | Not started | Develop background/fill/line/circle/raster + filters/expressions, then parity, then bucket/render optimization. |
 | Labels, icons and collision placement | Not complete | Not complete | Not started | Develop the cartography model first; correctness includes shaping/collision/stability; optimize only afterward. |
@@ -591,3 +591,22 @@ The module contract and measurements are in [Performance](performance.md#wasm-ca
   The WebGPU path is byte-identical (SHA-256 of the full module before and after:
   `9b11c5b236e8ae7c7688c4bf9117aa650e4527759b50413c18e93d08fbaa5143`). Instantiation and
   first-frame timings were not profiled; only transfer is claimed.
+
+## First-party interaction modes and measurement (#174 phase A)
+
+`BeeLineMeasurementLayer` now mounts through the public first-party Map View.
+Maps owns interaction priority (editing before measurement before navigation),
+primary-pointer ownership, capture release and Rust project/unproject; the Canvas
+measurement adapter only draws and picks lines/labels. Existing bee-line distance,
+midpoint and formatting contracts remain shared with the MapLibre reference path.
+No transform implementation or unpublished #173 code is introduced.
+
+The controlled mixed-layer example composes heat, points, a flow and a polygon
+with a consumer-owned measurement array and save action. The focused browser
+journey in `e2e/maps-measurement.spec.ts` covers 35° bearing on both WebGPU and
+Canvas2D, live drafts, create/save/select, Escape, pointer cancellation, unexpected
+capture loss, tilt cancellation and reset, and restored map panning. Focused public
+integration tests cover mode priority and controlled callback behavior. This is
+partial Correct evidence; full GeoJSON editing, exact inputs, wider real-client
+coverage and representative Fast evidence remain phases B–E. No complete feature
+or performance verdict is claimed.
