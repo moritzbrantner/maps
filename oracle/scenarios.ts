@@ -444,6 +444,28 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { center: [8.6, 47.4], zoom: 7.2 },
+    capability:
+      "symbol-sort-key: placement priority across tiles, overlapping symbols drawn by key across tiles",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-sort-key",
+    origin: "Milestone E cartography (#80): major roads and large places win the label space (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: 160, center: [8.6, 47.4], zoom: 7.2 },
+    capability:
+      "symbol-z-order under a turned camera: overlapping symbols drawn top-down (auto), viewport-y placement bottom-up, source order",
+    knownGaps: [],
+    name: "symbol-z-order",
+    origin: "Milestone E cartography (#80): stacked markers that overlap in screen order (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],
