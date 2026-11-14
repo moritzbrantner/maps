@@ -197,6 +197,13 @@ impl BoundedFlatRasterRuntime {
         self.inner.unproject_screen(screen)
     }
 
+    pub fn map_plane_scale(
+        &self,
+        screen: ScreenCoordinate,
+    ) -> Result<Option<[f64; 4]>, FlatRasterRuntimeError> {
+        self.inner.map_plane_scale(screen)
+    }
+
     pub fn activate_tileset(
         &mut self,
         source: crate::MapsTileset,

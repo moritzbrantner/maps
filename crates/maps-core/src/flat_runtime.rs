@@ -798,6 +798,20 @@ impl FlatRasterRuntime {
             .ok_or(FlatRasterRuntimeError::UnsupportedCamera)
     }
 
+    /// The local screen-to-map-plane scale at a screen point under a pitched camera (#386),
+    /// row-major; see [`crate::MapLocalRenderFrame::map_plane_scale`]. `None` without pitch,
+    /// where the screen is the map plane up to the bearing's rotation, and beyond the horizon.
+    pub fn map_plane_scale(
+        &self,
+        screen: ScreenCoordinate,
+    ) -> Result<Option<[f64; 4]>, FlatRasterRuntimeError> {
+        validate_camera(self.camera)?;
+        if self.camera.pitch == 0.0 {
+            return Ok(None);
+        }
+        Ok(self.camera.map_plane_scale_matrix(screen))
+    }
+
     /// Marks a browser-fetched tile ready and updates deterministic recency.
     /// Completions for cancelled or already completed requests are ignored.
     pub fn mark_loaded(&mut self, tile: TileId) {
@@ -1833,6 +1847,18 @@ mod tests {
                 .iter()
                 .all(|placement| placement.tile.z == 4)
         );
+    }
+
+    #[test]
+    fn map_plane_scale_is_only_reported_under_pitch() {
+        let screen = ScreenCoordinate { x: 200.0, y: 40.0 };
+        let rotated = runtime_with_camera([9.0, 47.4], 8.0, -25.0, 0.0, 400.0, 300.0);
+        assert_eq!(rotated.map_plane_scale(screen), Ok(None));
+
+        let pitched = runtime_with_camera([9.0, 47.4], 8.0, -25.0, 50.0, 400.0, 300.0);
+        let [a, b, c, d] = pitched.map_plane_scale(screen).unwrap().unwrap();
+        // Far up the pitched map a screen pixel covers more than one map-plane pixel.
+        assert!((a * d - b * c).abs() > 1.0);
     }
 
     fn runtime(center: [f64; 2], zoom: f64, width: f64, height: f64) -> FlatRasterRuntime {

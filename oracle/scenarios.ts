@@ -524,11 +524,6 @@ export const scenarios: Scenario[] = [
         issue: 387,
         reason: "the projected path re-emits every patterned strip per frame; retained lines do not",
       },
-      {
-        gate: "interaction",
-        issue: 386,
-        reason: "pitched GeoJSON line picks use the screen-space width, wider than MapLibre far from the camera",
-      },
     ],
     name: "line-pattern-pitch",
     origin: "Patterned lines under a pitched camera (#350), follow-up of line patterns (#349)",

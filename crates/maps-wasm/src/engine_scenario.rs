@@ -416,6 +416,24 @@ impl MapsFlatRasterRuntime {
         encode_json_compatible(&[coordinate.longitude, coordinate.latitude])
     }
 
+    /// The local screen-to-map-plane scale `[a, b, c, d]` at a screen point under pitch, for
+    /// picking line widths on the map plane (#386); `undefined` without pitch or past the horizon.
+    #[wasm_bindgen(js_name = mapPlaneScale)]
+    pub fn map_plane_scale(
+        &self,
+        screen_x: f64,
+        screen_y: f64,
+    ) -> Result<Option<Vec<f64>>, JsValue> {
+        let scale = self
+            .inner
+            .map_plane_scale(ScreenCoordinate {
+                x: screen_x,
+                y: screen_y,
+            })
+            .map_err(to_js_error)?;
+        Ok(scale.map(Vec::from))
+    }
+
     /// The style's `sky`; an empty string or a style without one is no sky.
     #[wasm_bindgen(js_name = setSkyStyle)]
     pub fn set_sky_style(&mut self, style: &str) -> Result<(), JsValue> {
