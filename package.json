@@ -173,7 +173,7 @@
     "mobile-analysis": "git+https://github.com/moritzbrantner/mobile-analysis.git#f3f6a708b260cc0c5aeeaa24d940aa6d68012b48",
     "oxfmt": "0.78.0",
     "oxlint": "1.93.0",
-    "playwright": "1.65.0",
+    "playwright": "1.64.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "supercluster": "9.1.0",

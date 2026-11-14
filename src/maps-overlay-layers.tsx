@@ -58,7 +58,11 @@ import {
   type MapVectorRenderFrame,
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
-import type { MapScreenInteractionState, MapScreenProject } from "./map-screen-render-frame";
+import type {
+  MapScreenInteractionState,
+  MapScreenMapPlaneScale,
+  MapScreenProject,
+} from "./map-screen-render-frame";
 import { useMapHoveredFeature, type MapSurfaceContextValue } from "./map-surface-context";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
 import type {
@@ -141,6 +145,11 @@ export type MapsOverlayRetainedPoints = {
 type MapsOverlayLayersProps = {
   children: ReactNode;
   getViewport: (width: number, height: number) => ViewportAggregationQuery | null;
+  /**
+   * The screen-to-map-plane scale at a screen point under pitch, `null` without it: picking
+   * measures line widths on the map plane, as MapLibre does (#386).
+   */
+  mapPlaneScale?: (x: number, y: number) => MapScreenMapPlaneScale | null;
   project: MapsProjectCoordinate;
   /** The style sprite's images for Canvas patterns (#350), `null` until decoded. */
   canvasPatternImages?: () => CanvasMapPatternImages | null;
@@ -275,6 +284,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       canvasPatternImages,
       children,
       getViewport,
+      mapPlaneScale,
       project,
       renderApplicationFrame,
       retainedPoints,
@@ -564,7 +574,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       if (!location) return [];
       const nearest = project(location);
       if (!nearest || Math.hypot(nearest.x - position.x, nearest.y - position.y) < 0.5) return [];
-      return hitTestCanvasMapSceneAll(scene, nearest);
+      return hitTestCanvasMapSceneAll(scene, nearest, mapPlaneScale?.(nearest.x, nearest.y));
     };
 
     /**
@@ -600,7 +610,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       // While a motion transform presents the retained scene, hit-test in its coordinates.
       const scenePosition = matrix ? invertOverlayMotionPoint(matrix, position) : position;
       if (!scenePosition) return [];
-      let hits = hitTestCanvasMapSceneAll(scene, scenePosition);
+      // Under pitch, line widths are measured on the map plane at the pointer (#386). A
+      // motion-transformed scene belongs to an earlier camera, so it keeps screen widths.
+      const plane = matrix ? null : mapPlaneScale?.(scenePosition.x, scenePosition.y);
+      let hits = hitTestCanvasMapSceneAll(scene, scenePosition, plane);
       if (hits.length === 0 && retainedModeRef.current && retainedSizeRef.current) {
         hits = hitTestRetainedWorldCopies(scene, scenePosition);
       }
