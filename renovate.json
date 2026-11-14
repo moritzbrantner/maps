@@ -20,6 +20,7 @@
         "vitest",
         "jsdom",
         "@playwright/test",
+        "playwright",
         "@testing-library/react"
       ]
     },
