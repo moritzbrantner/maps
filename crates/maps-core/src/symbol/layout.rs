@@ -226,6 +226,9 @@ pub struct SymbolInstance {
     pub text: Option<SymbolText>,
     pub icon: Option<SymbolIcon>,
     pub feature_index: usize,
+    /// The feature's `symbol-sort-key` when the bucket sorts by it
+    /// ([`SymbolBucket::sort_features_by_key`]).
+    pub sort_key: Option<f64>,
 }
 
 /// One symbol layer of one tile with the layer-wide placement and draw state MapLibre keeps
@@ -275,6 +278,17 @@ pub struct SymbolBucket {
     pub icon_text_fit: bool,
     /// The layer sets `text-variable-anchor` or `text-variable-anchor-offset`.
     pub variable_anchors: bool,
+    /// `canOverlap`: some symbols show whatever they hit (`*-allow-overlap` or
+    /// `*-ignore-placement`), so their draw order shows.
+    pub can_overlap: bool,
+    /// `sortFeaturesByKey`: a data-driven `symbol-sort-key` and `symbol-z-order` not
+    /// `viewport-y`. Instances carry their key and come sorted by it.
+    pub sort_features_by_key: bool,
+    /// `sortFeaturesByY`: overlapping symbols draw from the top of the screen down
+    /// (`symbol-z-order: viewport-y`, or `auto` without sort keys).
+    pub sort_features_by_y: bool,
+    /// `symbol-z-order: viewport-y`: each tile places its symbols from the bottom up.
+    pub z_order_viewport_y: bool,
 }
 
 impl SymbolBucket {
@@ -458,7 +472,20 @@ pub fn layout_tile(
                     placement != SymbolPlacement::Point && text_rotation != "viewport";
                 let icon_along_line =
                     placement != SymbolPlacement::Point && icon_rotation != "viewport";
+                // `SymbolBucket` constructor: how symbols sort for placement and drawing.
+                let z_order = layer.string(false, "symbol-z-order", "auto", &constant)?;
+                let sort_features_by_key = z_order != "viewport-y"
+                    && !PropertyKind::of(layer.raw_layout("symbol-sort-key"))?
+                        .is_feature_constant();
+                let can_overlap = layer.boolean("text-allow-overlap", false, &constant)?
+                    || layer.boolean("icon-allow-overlap", false, &constant)?
+                    || layer.boolean("text-ignore-placement", false, &constant)?
+                    || layer.boolean("icon-ignore-placement", false, &constant)?;
+                let sort_features_by_y = (z_order == "viewport-y"
+                    || (z_order == "auto" && !sort_features_by_key))
+                    && can_overlap;
                 let options = SymbolOptions {
+                    sort_features_by_key,
                     placement,
                     text_along_line,
                     text_size: &text_size,
@@ -511,6 +538,10 @@ pub fn layout_tile(
                     text_padding: layer.number(false, "text-padding", 2.0, &constant)?,
                     icon_offset: layer.raw_layout("icon-offset").is_some(),
                     icon_text_fit,
+                    can_overlap,
+                    sort_features_by_key,
+                    sort_features_by_y,
+                    z_order_viewport_y: z_order == "viewport-y",
                     variable_anchors: layer.raw_layout("text-variable-anchor").is_some()
                         || layer.raw_layout("text-variable-anchor-offset").is_some(),
                     text_allow_overlap: layer.boolean("text-allow-overlap", false, &constant)?,
@@ -737,11 +768,15 @@ struct SymbolOptions<'a> {
     /// bottom, left).
     icon_text_fit: String,
     icon_text_fit_padding: [f64; 4],
+    /// [`SymbolBucket::sort_features_by_key`].
+    sort_features_by_key: bool,
 }
 
 /// One feature's symbol parts before anchors: its shaped text, icon and geometry.
 struct SymbolFeature {
     index: usize,
+    /// `symbol-sort-key` when the bucket sorts features by it.
+    sort_key: Option<f64>,
     text: Option<FeatureText>,
     icon: Option<FeatureIcon>,
     geometry: Vec<Vec<[f64; 2]>>,
@@ -803,10 +838,28 @@ fn layout_symbols(
                     .collect()
             })
             .collect();
+        // `symbolSortKey.evaluate(...)` at the tile zoom. MapLibre leaves a key that fails to
+        // evaluate undefined and then orders by `NaN`; Maps reports it instead.
+        let sort_key = if options.sort_features_by_key {
+            Some(
+                layer
+                    .value("symbol-sort-key", &tile_context)?
+                    .and_then(|value| value.as_f64())
+                    .ok_or_else(|| {
+                        format!(
+                            "layer {}: symbol-sort-key is not a number for feature {index}",
+                            layer.id
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
         features.push((
             feature,
             SymbolFeature {
                 index,
+                sort_key,
                 text,
                 icon,
                 geometry,
@@ -829,6 +882,14 @@ fn layout_symbols(
                 (feature, symbol)
             })
             .collect();
+    }
+    // After `mergeLines`; a stable sort, as JavaScript's `Array.prototype.sort`.
+    if options.sort_features_by_key {
+        features.sort_by(|(_, a), (_, b)| {
+            a.sort_key
+                .unwrap_or(0.0)
+                .total_cmp(&b.sort_key.unwrap_or(0.0))
+        });
     }
 
     let mut instances = Vec::new();
@@ -861,6 +922,7 @@ fn layout_symbols(
                     .map(|text| text.at_anchor(text_along_line)),
                 icon: symbol.icon.as_ref().map(|icon| icon.icon.clone()),
                 feature_index: symbol.index,
+                sort_key: symbol.sort_key,
             });
         };
         match options.placement {
@@ -2059,6 +2121,117 @@ mod tests {
             panic!("{buckets:?}")
         };
         (**bucket).clone()
+    }
+
+    /// Points ranked 3, 1, 2, 1 from west to east.
+    fn ranked_points(layer: &str) -> SymbolBucket {
+        let point = |x: i32, rank: f64| MvtFeature {
+            id: None,
+            geometry_type: MvtGeometryType::Point,
+            geometry: vec![vec![[x, 2048]]],
+            properties: BTreeMap::from([("rank".to_owned(), Value::from(rank))]),
+        };
+        let source = MvtLayer {
+            name: "places".to_owned(),
+            extent: 4096,
+            features: vec![
+                point(500, 3.0),
+                point(1500, 1.0),
+                point(2500, 2.0),
+                point(3500, 1.0),
+            ],
+        };
+        let buckets = layout_tile(
+            &[line_layer(layer)],
+            &[source],
+            8,
+            &oracle_glyphs(),
+            &sprite(),
+        )
+        .unwrap();
+        let LayerBucket::Symbols(bucket) = &buckets.layers[0] else {
+            panic!("{buckets:?}")
+        };
+        (**bucket).clone()
+    }
+
+    #[test]
+    fn data_driven_sort_keys_order_the_layout_stably_and_mark_how_symbols_sort() {
+        let keyed = ranked_points(
+            r#"{"id":"a","type":"symbol","source-layer":"places",
+                "layout":{"icon-image":"arrow","symbol-sort-key":["get","rank"]}}"#,
+        );
+        let order = |bucket: &SymbolBucket| -> Vec<(usize, Option<f64>)> {
+            bucket
+                .instances
+                .iter()
+                .map(|instance| (instance.feature_index, instance.sort_key))
+                .collect()
+        };
+        assert_eq!(
+            order(&keyed),
+            vec![
+                (1, Some(1.0)),
+                (3, Some(1.0)),
+                (2, Some(2.0)),
+                (0, Some(3.0))
+            ]
+        );
+        assert!(keyed.sort_features_by_key && !keyed.sort_features_by_y && !keyed.can_overlap);
+        assert!(!keyed.z_order_viewport_y);
+
+        // A constant key: layout order, no keys.
+        for key in ["4", r#"["+",1,3]"#] {
+            let constant = ranked_points(&format!(
+                r#"{{"id":"a","type":"symbol","source-layer":"places",
+                    "layout":{{"icon-image":"arrow","icon-allow-overlap":true,"symbol-sort-key":{key}}}}}"#
+            ));
+            assert_eq!(
+                order(&constant),
+                vec![(0, None), (1, None), (2, None), (3, None)]
+            );
+            // `auto` without keys: overlapping symbols draw top-down.
+            assert!(!constant.sort_features_by_key && constant.sort_features_by_y);
+            assert!(constant.can_overlap);
+        }
+
+        // `viewport-y` ignores the keys; `source` keeps them; `ignore-placement` overlaps too.
+        let by_y = ranked_points(
+            r#"{"id":"a","type":"symbol","source-layer":"places",
+                "layout":{"icon-image":"arrow","symbol-z-order":"viewport-y","symbol-sort-key":["get","rank"]}}"#,
+        );
+        assert_eq!(order(&by_y)[0], (0, None));
+        assert!(by_y.z_order_viewport_y && !by_y.sort_features_by_key);
+        assert!(
+            !by_y.sort_features_by_y,
+            "only overlapping symbols draw sorted"
+        );
+        let source = ranked_points(
+            r#"{"id":"a","type":"symbol","source-layer":"places",
+                "layout":{"icon-image":"arrow","symbol-z-order":"source","icon-ignore-placement":true}}"#,
+        );
+        assert!(source.can_overlap && !source.sort_features_by_y && !source.z_order_viewport_y);
+    }
+
+    #[test]
+    fn a_feature_without_a_numeric_sort_key_is_an_error_not_a_guess() {
+        let point = MvtFeature {
+            id: None,
+            geometry_type: MvtGeometryType::Point,
+            geometry: vec![vec![[500, 500]]],
+            properties: BTreeMap::new(),
+        };
+        let source = MvtLayer {
+            name: "places".to_owned(),
+            extent: 4096,
+            features: vec![point],
+        };
+        let layer = line_layer(
+            r#"{"id":"a","type":"symbol","source-layer":"places",
+                "layout":{"icon-image":"arrow","symbol-sort-key":["get","rank"]}}"#,
+        );
+        let error = layout_tile(&[layer], &[source], 8, &oracle_glyphs(), &sprite()).unwrap_err();
+        assert!(error.contains("symbol-sort-key"), "{error}");
     }
 
     #[test]

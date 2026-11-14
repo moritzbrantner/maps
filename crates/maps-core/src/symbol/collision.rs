@@ -5,8 +5,11 @@
 
 use std::collections::HashMap;
 
-use super::layout::{EXTENT, LayerBucket, SymbolInstance, TileStyleBuckets, VariableText};
+use super::layout::{
+    EXTENT, LayerBucket, SymbolBucket, SymbolInstance, TileStyleBuckets, VariableText,
+};
 use super::line_anchors::clip_line;
+use super::order::placement_order;
 use super::projection::{
     LineGlyphs, LineLabelContext, PathInterpolator, SymbolAlignment, TileProjection,
 };
@@ -592,9 +595,31 @@ pub fn place_symbols_with_collisions(
         b.z.cmp(&a.z).then(a.x.cmp(&b.x)).then(a.y.cmp(&b.y))
     });
     for layer in (0..layer_count).rev() {
-        for &tile_index in &order {
+        let buckets: Vec<Option<&SymbolBucket>> = order
+            .iter()
+            .map(
+                |&tile_index| match tiles[tile_index].buckets.layers.get(layer) {
+                    Some(LayerBucket::Symbols(bucket)) => Some(&**bucket),
+                    _ => None,
+                },
+            )
+            .collect();
+        // `symbol-sort-key` and `symbol-z-order` order the layer's symbols.
+        let sequence = placement_order(&buckets, bearing);
+        let mut start = 0;
+        while start < sequence.len() {
+            // A run of one tile's symbols shares the tile's setup.
+            let position = sequence[start].0;
+            let end = start
+                + sequence[start..]
+                    .iter()
+                    .take_while(|(other, _)| *other == position)
+                    .count();
+            let run = &sequence[start..end];
+            start = end;
+            let tile_index = order[position];
             let tile = &tiles[tile_index];
-            let Some(LayerBucket::Symbols(bucket)) = tile.buckets.layers.get(layer) else {
+            let Some(bucket) = buckets[position] else {
                 continue;
             };
             // Symbols whose overlap settings show them wherever they land.
@@ -610,7 +635,8 @@ pub fn place_symbols_with_collisions(
             let icon_project = tile.projection.shifted(icon_shift);
             let text_projection = tile.projection.with(&text_project);
             let icon_projection = tile.projection.with(&icon_project);
-            for (instance_index, instance) in bucket.instances.iter().enumerate() {
+            for &(_, instance_index) in run {
+                let instance = &bucket.instances[instance_index];
                 let memory_key = (tile.tile, layer, instance_index);
                 let (Some((_, ratio)), Some(_)) = (
                     text_projection.anchor(instance.anchor),
@@ -984,6 +1010,7 @@ mod tests {
             }),
             icon: None,
             feature_index: 0,
+            sort_key: None,
         }
     }
 
@@ -1147,6 +1174,7 @@ mod tests {
                 paint: [paint.clone(), paint.clone()],
             }),
             feature_index: 0,
+            sort_key: None,
         };
         let place = |text_optional: bool| {
             let buckets = TileStyleBuckets {
@@ -1177,5 +1205,79 @@ mod tests {
         };
         assert_eq!(place(false), vec![(0, true, true)]);
         assert_eq!(place(true), vec![(0, true, true), (1, false, true)]);
+    }
+
+    #[test]
+    fn sort_keys_win_collisions_across_tiles_and_viewport_y_places_bottom_up() {
+        use crate::symbol::layout::{SymbolIcon, SymbolPaint};
+        let paint = SymbolPaint {
+            color: [0.0; 4],
+            halo_color: [0.0; 4],
+            halo_width: 0.0,
+            halo_blur: 0.0,
+            opacity: 1.0,
+        };
+        let icon = |anchor: [f64; 2], sort_key: Option<f64>| SymbolInstance {
+            anchor,
+            line: None,
+            text: None,
+            icon: Some(SymbolIcon {
+                image: "dot".to_owned(),
+                quads: Vec::new(),
+                collision_box: [-8.0, -8.0, 8.0, 8.0],
+                line_offset: [0.0; 2],
+                sizes: [1.0; 2],
+                pixel_ratio: 1.0,
+                paint: [paint.clone(), paint.clone()],
+            }),
+            feature_index: 0,
+            sort_key,
+        };
+        let bucket = |instances: Vec<SymbolInstance>, keyed: bool, by_y: bool| TileStyleBuckets {
+            layers: vec![LayerBucket::Symbols(Box::new(SymbolBucket {
+                instances,
+                sort_features_by_key: keyed,
+                z_order_viewport_y: by_y,
+                ..SymbolBucket::default()
+            }))],
+            ..TileStyleBuckets::default()
+        };
+        // Both tiles draw over the same 200x100 viewport.
+        let project = |uv: [f64; 2]| ([uv[0] * 200.0, uv[1] * 100.0], 1.0);
+        let place = |buckets: &[(TileId, &TileStyleBuckets)]| {
+            let tiles: Vec<PlacementTile<'_>> = buckets
+                .iter()
+                .map(|(tile, buckets)| PlacementTile {
+                    tile: *tile,
+                    buckets,
+                    projection: TileProjection {
+                        project: &project,
+                        center_w: 1.0,
+                        tile_px: 200.0,
+                    },
+                })
+                .collect();
+            place_symbols(&tiles, 1, 200.0, 100.0, 1.0, 0.0, &mut Default::default())[0]
+                .iter()
+                .map(|symbol| (symbol.tile, symbol.instance))
+                .collect::<Vec<_>>()
+        };
+        let (west, east) = (TileId::new(1, 0, 0).unwrap(), TileId::new(1, 1, 0).unwrap());
+        for keyed in [false, true] {
+            let a = bucket(vec![icon([0.5, 0.5], keyed.then_some(5.0))], keyed, false);
+            let b = bucket(vec![icon([0.5, 0.5], keyed.then_some(1.0))], keyed, false);
+            // Tile order places the western tile first; a lower key places first.
+            let expected = if keyed { vec![(1, 0)] } else { vec![(0, 0)] };
+            assert_eq!(place(&[(west, &a), (east, &b)]), expected, "keyed {keyed}");
+        }
+        for by_y in [false, true] {
+            let tile = bucket(
+                vec![icon([0.5, 0.4], None), icon([0.5, 0.5], None)],
+                false,
+                by_y,
+            );
+            let expected = if by_y { vec![(0, 1)] } else { vec![(0, 0)] };
+            assert_eq!(place(&[(west, &tile)]), expected, "viewport-y {by_y}");
+        }
     }
 }

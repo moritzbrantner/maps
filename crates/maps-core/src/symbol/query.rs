@@ -5,12 +5,13 @@
 //! within a layer, tiles by zoom, then y, then x, and later features of a tile first.
 //! Renderers draw the frame; they do not decide what a pointer hits.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use serde_json::{Map, Value};
 
 use super::collision::{PlacedSymbol, PlacementTile, SymbolCollision, VIEWPORT_PADDING};
-use super::layout::LayerBucket;
+use super::layout::{LayerBucket, SymbolBucket};
+use super::order::viewport_y_order;
 use super::style::{StyleLayer, StyleLayerKind};
 use crate::TileId;
 use crate::mvt_features::MvtFeature;
@@ -32,6 +33,8 @@ struct QueryEntry {
     tile_index: usize,
     tile: TileId,
     feature_index: usize,
+    /// Where the feature draws in its tile: hits run later ranks first.
+    rank: usize,
     shape: QueryShape,
 }
 
@@ -63,6 +66,7 @@ impl RenderedFeatureIndex {
         collisions: &[Vec<SymbolCollision>],
         layers: &[StyleLayer],
         zoom: f64,
+        bearing: f64,
     ) -> Self {
         let mut entries = Vec::new();
         for (layer_index, layer) in layers.iter().enumerate() {
@@ -93,6 +97,7 @@ impl RenderedFeatureIndex {
                                 tile_index,
                                 tile: tile.tile,
                                 feature_index: circle.feature_index,
+                                rank: circle.feature_index,
                                 shape: QueryShape::Circle {
                                     center,
                                     radius: outer * (2.0 * ratio - 1.0),
@@ -107,6 +112,7 @@ impl RenderedFeatureIndex {
                     else {
                         continue;
                     };
+                    let mut ranks: HashMap<usize, Box<dyn Fn(usize) -> usize>> = HashMap::new();
                     for (symbol, collision) in symbols.iter().zip(collisions) {
                         let Some(tile) = tiles.get(symbol.tile) else {
                             continue;
@@ -119,6 +125,11 @@ impl RenderedFeatureIndex {
                         let Some(instance) = bucket.instances.get(symbol.instance) else {
                             continue;
                         };
+                        let rank = ranks
+                            .entry(symbol.tile)
+                            .or_insert_with(|| symbol_hit_ranks(bucket, bearing))(
+                            instance.feature_index,
+                        );
                         let shapes = collision
                             .text_box
                             .into_iter()
@@ -136,6 +147,7 @@ impl RenderedFeatureIndex {
                                 tile_index: symbol.tile,
                                 tile: tile.tile,
                                 feature_index: instance.feature_index,
+                                rank,
                                 shape,
                             });
                         }
@@ -165,6 +177,7 @@ impl RenderedFeatureIndex {
                 .then(a.tile.y.cmp(&b.tile.y))
                 .then(a.tile_index.cmp(&b.tile_index))
                 .then(a.tile.x.cmp(&b.tile.x))
+                .then(b.rank.cmp(&a.rank))
                 .then(b.feature_index.cmp(&a.feature_index))
         });
         hits.dedup_by_key(|entry| (entry.layer, entry.tile_index, entry.feature_index));
@@ -176,6 +189,25 @@ impl RenderedFeatureIndex {
             })
             .collect()
     }
+}
+
+/// Where each feature of a symbol bucket draws, for its hit order: a bucket sorted by viewport y
+/// ranks a feature by its first anchor in `featureSortOrder` (`viewport_y_order`), others by
+/// feature index (`queryRenderedSymbols`).
+fn symbol_hit_ranks(bucket: &SymbolBucket, bearing: f64) -> Box<dyn Fn(usize) -> usize> {
+    if !bucket.sort_features_by_y {
+        return Box::new(|feature| feature);
+    }
+    let mut ranks = HashMap::new();
+    for (position, instance) in viewport_y_order(&bucket.instances, bearing)
+        .into_iter()
+        .enumerate()
+    {
+        ranks
+            .entry(bucket.instances[instance].feature_index)
+            .or_insert(position);
+    }
+    Box::new(move |feature| ranks.get(&feature).copied().unwrap_or(usize::MAX))
 }
 
 impl QueryShape {
@@ -286,6 +318,7 @@ mod tests {
             tile_index,
             tile,
             feature_index,
+            rank: feature_index,
             shape,
         }
     }
@@ -385,6 +418,68 @@ mod tests {
                 (0, b, 0)
             ]
         );
+    }
+
+    #[test]
+    fn viewport_y_sorted_symbols_are_hit_in_their_drawn_order_and_others_by_feature() {
+        use crate::symbol::layout::{SymbolBucket, SymbolInstance};
+        let instance = |y: f64, feature_index: usize| SymbolInstance {
+            anchor: [0.5, y],
+            line: None,
+            text: None,
+            icon: None,
+            feature_index,
+            sort_key: None,
+        };
+        // Feature 0 lowest on screen, feature 2 highest; feature 1 has two anchors.
+        let instances = vec![
+            instance(0.9, 0),
+            instance(0.5, 1),
+            instance(0.1, 2),
+            instance(0.95, 1),
+        ];
+        let by_y = SymbolBucket {
+            instances: instances.clone(),
+            sort_features_by_y: true,
+            ..SymbolBucket::default()
+        };
+        // `featureSortOrder`: top of the screen first; a feature ranks by its first anchor.
+        let ranks = symbol_hit_ranks(&by_y, 0.0);
+        assert!(
+            ranks(2) < ranks(1) && ranks(1) < ranks(0),
+            "{:?}",
+            [ranks(0), ranks(1), ranks(2)]
+        );
+        let unsorted = SymbolBucket {
+            instances,
+            ..SymbolBucket::default()
+        };
+        let ranks = symbol_hit_ranks(&unsorted, 0.0);
+        assert_eq!([ranks(0), ranks(1), ranks(2)], [0, 1, 2]);
+
+        // Later in the drawn order is hit first.
+        let whole = QueryShape::Circle {
+            center: [0.0, 0.0],
+            radius: 10.0,
+        };
+        let index = RenderedFeatureIndex {
+            entries: vec![
+                QueryEntry {
+                    rank: 1,
+                    ..entry(0, 0, tile(1, 0, 0), 7, whole)
+                },
+                QueryEntry {
+                    rank: 2,
+                    ..entry(0, 0, tile(1, 0, 0), 3, whole)
+                },
+            ],
+        };
+        let hits: Vec<usize> = index
+            .query_point([0.0, 0.0], &[0])
+            .iter()
+            .map(|hit| hit.feature_index)
+            .collect();
+        assert_eq!(hits, vec![3, 7]);
     }
 
     #[test]

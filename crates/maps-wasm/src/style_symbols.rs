@@ -14,7 +14,7 @@ use maps_core::symbol::{
     LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile,
     RenderedFeatureIndex, StyleLayer, StyleLayerKind, SymbolAlignment, SymbolBucket,
     SymbolDrawState, SymbolGlyph, SymbolPaint, SymbolText, TileProjection, TileStyleBuckets,
-    VariableAnchorMemory, layout_tile, line_label_glyphs, parse_glyph_pbf,
+    VariableAnchorMemory, draw_groups, layout_tile, line_label_glyphs, parse_glyph_pbf,
     place_symbols_with_collisions, query_layer_indices, rendered_feature, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
@@ -568,7 +568,14 @@ impl StyleSymbols {
         );
         self.rendered = Some((
             source.to_owned(),
-            RenderedFeatureIndex::new(&placement_tiles, &placed, &collisions, &self.layers, zoom),
+            RenderedFeatureIndex::new(
+                &placement_tiles,
+                &placed,
+                &collisions,
+                &self.layers,
+                zoom,
+                bearing,
+            ),
         ));
 
         let to_clip = |viewport_point: [f64; 2]| -> [f32; 2] {
@@ -700,31 +707,40 @@ impl StyleSymbols {
                     }
                 }
                 StyleLayerKind::Symbol => {
-                    let symbols = &placed[layer_index];
                     // Symbols draw per tile in MapLibre's descending symbol tile order.
-                    let tiles: Vec<(usize, &SymbolBucket, SymbolDrawState, Vec<&PlacedSymbol>)> =
-                        (0..placement_tiles.len())
-                            .rev()
-                            .filter_map(|tile_index| {
-                                let tile = &placement_tiles[tile_index];
-                                let Some(LayerBucket::Symbols(bucket)) =
-                                    tile.buckets.layers.get(layer_index)
-                                else {
-                                    return None;
-                                };
-                                let tile_symbols: Vec<_> = symbols
+                    let draw_tiles: Vec<(usize, &SymbolBucket, SymbolDrawState)> = (0
+                        ..placement_tiles.len())
+                        .rev()
+                        .filter_map(|tile_index| {
+                            let tile = &placement_tiles[tile_index];
+                            let Some(LayerBucket::Symbols(bucket)) =
+                                tile.buckets.layers.get(layer_index)
+                            else {
+                                return None;
+                            };
+                            let state =
+                                SymbolDrawState::new(layer, zoom, f64::from(tile.tile.z)).ok()?;
+                            Some((tile_index, &**bucket, state))
+                        })
+                        .collect();
+                    // Maps-core orders each tile's symbols (`symbol-z-order`) and splits them
+                    // into sort-key segments drawn by key across tiles (`symbol-sort-key`).
+                    let groups = draw_groups(
+                        &draw_tiles
+                            .iter()
+                            .map(|(tile_index, bucket, _)| (*tile_index, *bucket))
+                            .collect::<Vec<_>>(),
+                        &placed[layer_index],
+                        bearing,
+                    );
+                    let tiles: Vec<(usize, &SymbolBucket, SymbolDrawState, Vec<PlacedSymbol>)> =
+                        groups
+                            .into_iter()
+                            .filter_map(|group| {
+                                let (_, bucket, state) = draw_tiles
                                     .iter()
-                                    .filter(|symbol| symbol.tile == tile_index)
-                                    .collect();
-                                let state =
-                                    SymbolDrawState::new(layer, zoom, f64::from(tile.tile.z))
-                                        .ok()?;
-                                (!tile_symbols.is_empty()).then_some((
-                                    tile_index,
-                                    &**bucket,
-                                    state,
-                                    tile_symbols,
-                                ))
+                                    .find(|(tile_index, _, _)| *tile_index == group.tile)?;
+                                Some((group.tile, *bucket, *state, group.symbols))
                             })
                             .collect();
                     frame.placed_labels += tiles
