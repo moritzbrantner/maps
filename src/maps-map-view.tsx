@@ -365,6 +365,11 @@ export function MapsMapView({
     [isReady],
   );
 
+  const mapPlaneScale = useCallback(
+    (x: number, y: number) => runtimeControllerRef.current?.mapPlaneScale?.(x, y) ?? null,
+    [],
+  );
+
   const canvasPatternImages = useCallback(
     () => runtimeControllerRef.current?.getCanvasPatternImages?.() ?? null,
     [],
@@ -821,6 +826,7 @@ export function MapsMapView({
         <MapsOverlayLayers
           ref={overlayControllerRef}
           getViewport={getViewportAggregationQuery}
+          mapPlaneScale={mapPlaneScale}
           project={projectCoordinate}
           renderApplicationFrame={renderApplicationFrame}
           canvasPatternImages={canvasPatternImages}

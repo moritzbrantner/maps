@@ -11,6 +11,7 @@ import type {
   MapScreenDirectionMarker,
   MapScreenInteractionState,
   MapScreenLine,
+  MapScreenMapPlaneScale,
   MapScreenPoint as SharedMapScreenPoint,
   MapScreenPolygon,
   MapScreenProject,
@@ -133,15 +134,21 @@ export function createCanvasMapSceneProjector<TFeature = unknown>() {
   };
 }
 
+/**
+ * The topmost interactive primitive under the point. Under a pitched camera, `mapPlane` is
+ * the local screen-to-map-plane scale at the point: line widths are then measured on the map
+ * plane, as MapLibre queries them in tile space (#386). Without it, the screen is the plane.
+ */
 export function hitTestCanvasMapScene<TFeature = unknown>(
   scene: CanvasMapScene<TFeature>,
   point: MapScreenPoint,
+  mapPlane?: MapScreenMapPlaneScale | null,
 ): CanvasMapScenePrimitive<TFeature> | null {
   for (let index = scene.primitives.length - 1; index >= 0; index -= 1) {
     const candidate = scene.primitives[index]!;
     if (!candidate.renderPrimitive.interactive) continue;
 
-    if (hitPrimitive(candidate, point)) {
+    if (hitPrimitive(candidate, point, mapPlane)) {
       return candidate;
     }
   }
@@ -153,11 +160,12 @@ export function hitTestCanvasMapScene<TFeature = unknown>(
 export function hitTestCanvasMapSceneAll<TFeature = unknown>(
   scene: CanvasMapScene<TFeature>,
   point: MapScreenPoint,
+  mapPlane?: MapScreenMapPlaneScale | null,
 ): CanvasMapScenePrimitive<TFeature>[] {
   const hits: CanvasMapScenePrimitive<TFeature>[] = [];
   for (let index = scene.primitives.length - 1; index >= 0; index -= 1) {
     const candidate = scene.primitives[index]!;
-    if (candidate.renderPrimitive.interactive && hitPrimitive(candidate, point)) {
+    if (candidate.renderPrimitive.interactive && hitPrimitive(candidate, point, mapPlane)) {
       hits.push(candidate);
     }
   }
@@ -761,6 +769,7 @@ function interactionStrokeWidth(base: number, selected: boolean, hovered: boolea
 function hitPrimitive<TFeature>(
   primitive: CanvasMapScenePrimitive<TFeature>,
   point: MapScreenPoint,
+  mapPlane?: MapScreenMapPlaneScale | null,
 ) {
   switch (primitive.kind) {
     case "circle": {
@@ -778,7 +787,9 @@ function hitPrimitive<TFeature>(
         4,
         (primitive.renderPrimitive as MapRenderLine<TFeature>).strokeWidth / 2 + 2,
       );
-      return isWithinPolylineTolerance(point, primitive.points, tolerance * tolerance);
+      return mapPlane
+        ? isWithinMapPlaneTolerance(point, primitive.points, tolerance * tolerance, mapPlane)
+        : isWithinPolylineTolerance(point, primitive.points, tolerance * tolerance);
     }
     case "polygon": {
       const renderPrimitive = primitive.renderPrimitive as MapRenderPolygon<TFeature>;
@@ -830,6 +841,35 @@ function isWithinPolylineTolerance(
     points.length >= 2 &&
     squaredDistanceToSegment(point, points[points.length - 1]!, points[0]!) <= squaredTolerance
   );
+}
+
+/**
+ * As `isWithinPolylineTolerance`, measured on the map plane: each segment's offsets from the
+ * point go through the local screen-to-map-plane scale, which keeps straight segments straight.
+ */
+function isWithinMapPlaneTolerance(
+  point: MapScreenPoint,
+  points: readonly MapScreenPoint[],
+  squaredTolerance: number,
+  [a, b, c, d]: MapScreenMapPlaneScale,
+) {
+  const origin = { x: 0, y: 0 };
+  const start = { x: 0, y: 0 };
+  const end = { x: 0, y: 0 };
+  const toPlane = (target: MapScreenPoint, screen: MapScreenPoint) => {
+    const dx = screen.x - point.x;
+    const dy = screen.y - point.y;
+    target.x = a * dx + b * dy;
+    target.y = c * dx + d * dy;
+  };
+  if (points.length > 0) toPlane(end, points[0]!);
+  for (let index = 1; index < points.length; index += 1) {
+    start.x = end.x;
+    start.y = end.y;
+    toPlane(end, points[index]!);
+    if (squaredDistanceToSegment(origin, start, end) <= squaredTolerance) return true;
+  }
+  return false;
 }
 
 function squaredDistanceToSegment(
