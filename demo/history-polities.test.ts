@@ -8,6 +8,7 @@ import {
   getDemoHistoricalPolityPlaybackFrame,
   getDemoHistoricalPolityRenderFeatureId,
   isDemoHistoricalPolityVisibleFeature,
+  isPolygonLikeGeometry,
   validateDemoHistoricalPolityScenes,
 } from "./data/history-polities";
 
@@ -121,17 +122,17 @@ describe("History demo polities", () => {
   test("uses detailed source polygon rings rather than simple bounding boxes", () => {
     const ringLengths = demoHistoricalPolityScenes.flatMap((scene) =>
       scene.collection.features.flatMap((feature) => {
-        if (feature.geometry?.type === "Polygon") {
+        if (!isPolygonLikeGeometry(feature.geometry)) {
+          return [];
+        }
+
+        if (feature.geometry.type === "Polygon") {
           return feature.geometry.coordinates.map((ring) => ring.length);
         }
 
-        if (feature.geometry?.type === "MultiPolygon") {
-          return feature.geometry.coordinates.flatMap((polygon) =>
-            polygon.map((ring) => ring.length),
-          );
-        }
-
-        return [];
+        return feature.geometry.coordinates.flatMap((polygon) =>
+          polygon.map((ring) => ring.length),
+        );
       }),
     );
 
@@ -265,9 +266,11 @@ function getControlledFeature(
 ) {
   const feature = frame.features.find((item) => item.properties?.polityId === polityId);
 
-  expect(feature).toBeDefined();
+  const properties = feature?.properties;
 
-  return feature!;
+  expect(properties).toBeDefined();
+
+  return { geometry: feature!.geometry, properties: properties! };
 }
 
 function getGermanControlledArea(frame: ReturnType<typeof getDemoHistoricalPolityPlaybackFrame>) {
