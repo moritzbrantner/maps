@@ -194,7 +194,11 @@ function HeatFeature({
           valueMetric="temperature"
         />
       </MapView>
-      <aside aria-label="Heat controls" className="features-panel" data-heat-render-mode={renderMode}>
+      <aside
+        aria-label="Heat controls"
+        className="features-panel"
+        data-heat-render-mode={renderMode}
+      >
         <p>Inverse-distance temperature surface from {demoTemperaturePoints.length} stations.</p>
         <HeatControlsPanel
           contourLineWidth={contourLineWidth}
@@ -285,7 +289,9 @@ function ClusterFeature() {
             </label>
           ))}
         </fieldset>
-        {layers.clusters && summary ? <output data-testid="feature-summary">{summary}</output> : null}
+        {layers.clusters && summary ? (
+          <output data-testid="feature-summary">{summary}</output>
+        ) : null}
         <SelectionReadout selected={selected} onClear={() => setSelected(null)} />
       </aside>
     </>
@@ -325,7 +331,10 @@ const polygonCollection = {
       type: "Feature" as const,
     },
     ...demoGeoJsonCollection.features,
-  ].map((feature, index) => ({ ...feature, id: feature.properties?.trackId ?? `feature-${index}` })),
+  ].map((feature, index) => ({
+    ...feature,
+    id: feature.properties?.trackId ?? `feature-${index}`,
+  })),
 };
 
 function PolygonFeature() {
@@ -409,11 +418,7 @@ function TimelineFeature() {
         timeline={clock}
         tracks={demoTracks}
       >
-        <GeoJsonLayer
-          featureCollection={timelineRoutes}
-          lineColor="#94a3b8"
-          lineWidth={2}
-        />
+        <GeoJsonLayer featureCollection={timelineRoutes} lineColor="#94a3b8" lineWidth={2} />
       </TemporalClusteredMap>
       <aside aria-label="Timeline controls" className="features-panel">
         <p>{demoTracks.length} freight routes moving on one Map-Scoped Timeline.</p>
@@ -432,13 +437,7 @@ function TimelineFeature() {
   );
 }
 
-function SelectionReadout({
-  onClear,
-  selected,
-}: {
-  onClear: () => void;
-  selected: string | null;
-}) {
+function SelectionReadout({ onClear, selected }: { onClear: () => void; selected: string | null }) {
   return (
     <div className="features-selection">
       <output data-testid="feature-selection">
