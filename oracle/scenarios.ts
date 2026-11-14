@@ -525,11 +525,6 @@ export const scenarios: Scenario[] = [
         reason:
           "pitched patterned lines are retained, but the ratio stays at line-pattern's WebGPU presentation floor (#343)",
       },
-      {
-        gate: "interaction",
-        issue: 386,
-        reason: "pitched GeoJSON line picks use the screen-space width, wider than MapLibre far from the camera",
-      },
     ],
     name: "line-pattern-pitch",
     origin: "Patterned lines under a pitched camera (#350), follow-up of line patterns (#349)",

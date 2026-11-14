@@ -122,6 +122,13 @@ impl MapCamera {
         self.local_render_frame()?.unproject(screen)
     }
 
+    /// The local screen-to-map-plane scale at a screen point; see
+    /// [`MapLocalRenderFrame::map_plane_scale`].
+    #[must_use]
+    pub fn map_plane_scale_matrix(self, screen: ScreenCoordinate) -> Option<[f64; 4]> {
+        self.local_render_frame()?.map_plane_scale(screen)
+    }
+
     /// Returns the local ground bounds visible under this camera, stopping at the Mercator
     /// horizon line as MapLibre's `getBounds` does. Tile covers use the camera frustum instead
     /// (`terrain::covering_tiles`).
@@ -173,6 +180,40 @@ impl MapLocalRenderFrame {
             y: self.flat_camera.viewport.height * 0.5 - local_y,
         };
         self.flat_camera.unproject_screen(flat_screen)
+    }
+
+    /// The local linear map from screen offsets to map-plane offsets at a screen point,
+    /// row-major `[a, b, c, d]`: a screen offset `(dx, dy)` spans `(a·dx + b·dy, c·dx + d·dy)`
+    /// CSS pixels of the map plane at the camera zoom (+x east, +y south, as the screen).
+    ///
+    /// MapLibre measures a line's width on this plane (`queryIntersectsFeature` in tile units),
+    /// so under pitch a screen pixel far from the camera covers more of it. The derivative of the
+    /// plane intersection is taken as a central difference of half a pixel; a point beyond the
+    /// horizon has none.
+    #[must_use]
+    pub fn map_plane_scale(self, screen: ScreenCoordinate) -> Option<[f64; 4]> {
+        const STEP: f64 = 0.5;
+        let at = |dx: f64, dy: f64| {
+            self.unproject_local(ScreenCoordinate {
+                x: screen.x + dx,
+                y: screen.y + dy,
+            })
+        };
+        let [left, right, up, down] = [
+            at(-STEP, 0.0)?,
+            at(STEP, 0.0)?,
+            at(0.0, -STEP)?,
+            at(0.0, STEP)?,
+        ];
+        let span = 2.0 * STEP;
+        // The local frame's +y is north; the screen's is south.
+        let scale = [
+            (right[0] - left[0]) / span,
+            (down[0] - up[0]) / span,
+            -(right[1] - left[1]) / span,
+            -(down[1] - up[1]) / span,
+        ];
+        scale.iter().all(|value| value.is_finite()).then_some(scale)
     }
 
     /// Returns the axis-aligned bound of the ground footprint in the local map plane.
@@ -404,5 +445,49 @@ mod tests {
         );
         assert!(bounds.north > below.north);
         assert!(bounds.west < bounds.east && bounds.south < bounds.north);
+    }
+
+    fn plane_scale(camera: MapCamera, x: f64, y: f64) -> [f64; 4] {
+        camera
+            .map_plane_scale_matrix(ScreenCoordinate { x, y })
+            .unwrap()
+    }
+
+    #[test]
+    fn map_plane_scale_measures_screen_offsets_on_the_pitched_map_plane() {
+        // North-up: at the center a horizontal screen pixel is one map-plane pixel (MapLibre's
+        // camera-to-center distance), and a vertical one is foreshortened by the pitch.
+        let pitched = camera(0.0, 60.0);
+        let [a, b, c, d] = plane_scale(pitched, 400.0, 300.0);
+        assert!((a - 1.0).abs() < 1.0e-3, "a={a}");
+        assert!(b.abs() < 1.0e-3 && c.abs() < 1.0e-3, "b={b} c={c}");
+        assert!(d > 1.5, "d={d}");
+
+        // Farther up the map, one screen pixel spans more of the map plane; nearer, less.
+        let [far_a, _, _, far_d] = plane_scale(pitched, 400.0, 100.0);
+        let [near_a, _, _, near_d] = plane_scale(pitched, 400.0, 580.0);
+        assert!(far_a > a && far_d > d, "far={far_a},{far_d}");
+        assert!(near_a < a && near_d < d, "near={near_a},{near_d}");
+
+        // A finite difference of the authoritative unprojection agrees.
+        let frame = pitched.local_render_frame().unwrap();
+        let local = |x: f64, y: f64| frame.unproject_local(ScreenCoordinate { x, y }).unwrap();
+        let [x0, y0] = local(400.0, 99.95);
+        let [x1, y1] = local(400.0, 100.05);
+        let measured = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt() / 0.1;
+        assert!(
+            (measured - far_d).abs() / far_d < 1.0e-3,
+            "{measured} vs {far_d}"
+        );
+
+        // Unpitched, the map plane is the screen up to the bearing's rotation.
+        let [a, b, c, d] = plane_scale(camera(30.0, 0.0), 120.0, 80.0);
+        assert!((a * d - b * c - 1.0).abs() < 1.0e-6);
+        assert!((a * a + c * c - 1.0).abs() < 1.0e-6);
+        assert!(
+            camera(0.0, 85.0)
+                .map_plane_scale_matrix(ScreenCoordinate { x: 400.0, y: 0.0 })
+                .is_none()
+        );
     }
 }
