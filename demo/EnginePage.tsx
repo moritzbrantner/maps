@@ -246,6 +246,7 @@ export function EnginePage() {
           </div>
         </div>
         <nav aria-label="Engine navigation" className="engine-nav">
+          <a href={`${import.meta.env.BASE_URL}features/`}>Features</a>
           <a href="?view=inspector">Renderer inspector</a>
           <a href={`${import.meta.env.BASE_URL}stats/`}>Stats</a>
           <a href={`${import.meta.env.BASE_URL}benchmarks/`}>Benchmark evidence</a>

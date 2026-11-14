@@ -9,6 +9,7 @@ export default defineConfig({
       input: {
         home: fileURLToPath(new URL("./index.html", import.meta.url)),
         engine: fileURLToPath(new URL("./engine/index.html", import.meta.url)),
+        features: fileURLToPath(new URL("./features/index.html", import.meta.url)),
         benchmarks: fileURLToPath(new URL("./benchmarks/index.html", import.meta.url)),
       },
     },
@@ -19,6 +20,7 @@ export default defineConfig({
     entries: [
       "index.html",
       "engine/index.html",
+      "features/index.html",
       "benchmarks/index.html",
       "demo-reference/index.html",
       "e2e/fixtures/*.html",
