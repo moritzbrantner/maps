@@ -1,0 +1,175 @@
+/* `/features/`: a narrow task sidebar beside a dominant map surface. */
+.features-workspace {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.features-workspace > .engine-map {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  min-height: 0;
+}
+.features-temporal .mb-temporal-map__surface {
+  height: 100%;
+}
+
+.features-picker,
+.features-panel {
+  grid-column: 1;
+  color: #101827;
+  background: #f8faf9;
+  border-right: 1px solid #cfdad5;
+}
+.features-picker {
+  grid-row: 1;
+  padding: 0.9rem 0.9rem 0.6rem;
+  border-bottom: 1px solid #cfdad5;
+}
+.features-picker ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.features-picker a {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  color: #14252b;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.features-picker a:hover {
+  background: #e3ebe7;
+}
+.features-picker a:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 1px;
+}
+.features-picker a[aria-current="page"] {
+  color: #f1f6f2;
+  background: #14252b;
+}
+.features-coming {
+  padding: 0.35rem 0.6rem;
+  color: #5b6b71;
+  font-size: 0.85rem;
+}
+.features-coming small {
+  font-size: 0.75rem;
+}
+
+.features-panel {
+  grid-row: 2;
+  display: grid;
+  align-content: start;
+  gap: 0.9rem;
+  padding: 0.9rem;
+  overflow-y: auto;
+  font-size: 0.88rem;
+}
+.features-panel p {
+  margin: 0;
+  color: #3b4a50;
+}
+.features-panel fieldset {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.features-panel legend {
+  margin-bottom: 0.4rem;
+  font-weight: 700;
+}
+.features-panel output {
+  font-variant-numeric: tabular-nums;
+}
+.features-list {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.features-list button,
+.features-selection button {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+  color: #101827;
+  background: #ffffff;
+  border: 1px solid #cfdad5;
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+}
+.features-list button[aria-pressed="true"] {
+  color: #ffffff;
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+.features-list small {
+  opacity: 0.7;
+}
+.features-selection {
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* Shared demo control classes, as used by HeatControlsPanel. */
+.features-panel .demo-layer-manager {
+  display: grid;
+  gap: 10px;
+}
+.features-panel .demo-layer-manager__header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.features-panel .demo-editor-mode-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.features-panel .demo-layer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+}
+.features-panel .demo-layer-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #0f766e;
+}
+.features-panel .demo-layer-slider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+  font-weight: 650;
+}
+.features-panel .demo-layer-slider input {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: #0f766e;
+}
+
+@media (max-width: 720px) {
+  .features-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(320px, 1fr) auto;
+    overflow-y: auto;
+  }
+  .features-workspace > .engine-map {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .features-panel {
+    grid-row: 3;
+    border-right: 0;
+  }
+}
