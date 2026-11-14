@@ -296,6 +296,7 @@ const initialViewState: MapViewState = {
   center: [Number(params.get("lon") ?? 0), Number(params.get("lat") ?? 0)],
   zoom: Number(params.get("zoom") ?? 4),
   bearing: Number(params.get("bearing") ?? 0),
+  pitch: Number(params.get("pitch") ?? 0),
 };
 
 function PolygonParity() {
