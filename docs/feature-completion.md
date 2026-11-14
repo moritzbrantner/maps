@@ -84,6 +84,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Capability | Developed | Correct | Fast | Current direction |
 | --- | --- | --- | --- | --- |
 | Geographic camera, project/unproject, fit/interaction | Yes | Yes | In progress | Keep Rust authoritative; profile the full camera presentation path, not camera math in isolation. |
+| Animated camera transitions (`flyTo`) | Yes (#433: `?acceptance=maps-runtime-flyto` flies center/zoom/bearing on `flatRuntime="maps"` with an `animate: false` opt-out) | Yes (#433: Rust trajectory reproduces recorded MapLibre 6.4.1 flights; host and Rust/WASM browser coverage, see [below](#animated-flyto-433)) | Not yet (work counters recorded, no comparison) | Rust owns the trajectory, constraints and cancellation; the browser host schedules one frame per animation frame. Timeline-keyframed camera sampling (#432) should reuse `CameraFlight`/`CameraPose`. |
 | Raster tile/source lifecycle and first-party base map | Yes | Yes | In progress | Retain GPU resources, prove churn/overzoom/world-copy/memory behavior, then retire superseded paths. |
 | Points and clusters | Yes | Yes | In progress | Circle instancing landed in #153; finish packed/retained application transport under #154/#60 with representative density evidence. Labeled points are GPU-retained like the others; camera frames project only the labeled points, for the Canvas label pass (#204). Deterministic work contracts (#189, `performance:work`) hold camera pan/zoom/bearing/pitch at 1k/10k/100k points to zero point encoding and upload, and in-place updates to work linear in the changed points only. Cluster layers still use the projected path. |
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
@@ -391,6 +392,78 @@ runtime-profiler at `6d2c92e`, on Linux x64 (AMD Ryzen 7 5700X, WSL2).
 
   Bundle manifest SHA-256:
   `8de3ff5b5312acf80a1a0835019ed06b82d45d818d9b7301c8adf0cd77367fa4`.
+
+### Animated flyTo (#433)
+
+`flyTo` on `flatRuntime="maps"` follows MapLibre's `flyTo` path. This is the owner's
+"matching the MapLibre path" decision. The path is van Wijk & Nuij's zoom-out/zoom-back
+curve with MapLibre's default curve (1.42), speed (1.2) and ease. The center takes the
+short way across the antimeridian. The bearing takes the shortest arc. The pitch is
+interpolated linearly.
+
+`animate: false`, `durationMs: 0` and `prefers-reduced-motion` jump at once.
+`maps-core::CameraFlight` owns the trajectory. `BoundedFlatRasterRuntime::fly_to` and
+`advance_flight` own validation, constraints and supersession. The browser host only
+schedules frames, one per animation frame.
+
+Executed at `dc0611488ce03a405ba6480c8827fcc1ff38d5a2` plus this change. The machine was
+Linux x64 (AMD Ryzen 7 5700X, WSL2), Playwright 1.62.1 Chromium, Node 24.16.0.
+
+- **Rust (deterministic).** `camera_flight` tests reproduce five flights recorded from
+  MapLibre GL JS 6.4.1's own `Camera.flyTo` with a frozen clock. Durations match within
+  1e-6 ms, centers within 1e-7°, and zoom, bearing and pitch within 1e-9. The recorded flights
+  cover:
+  - an out-and-back flight;
+  - a flight across the antimeridian with a bearing that crosses ±180°;
+  - zoom in place;
+  - rotation only (MapLibre's 500 ms `easeTo` fallback);
+  - an explicit duration.
+
+  Further tests check an independent transliteration at 19 midpoints, exact endpoints,
+  nonfinite and invalid input and the zoom bounds. `bounded_runtime` tests cover the
+  supersession of a flight by:
+  - `set_camera_state`;
+  - pan, zoom and rotate;
+  - `fit_bounds`;
+  - cancellation;
+  - a successive flight.
+
+  They also check that a flight survives a resize and that a rejected command leaves the
+  running flight intact. Flights on `maxBounds` cameras stay inside the bounds and clamp to
+  the maximum zoom. Rotated or pitched bounded flights fail closed. Pitched flights work on
+  unbounded cameras.
+- **Host integration** (`src/maps-camera-presentation.test.tsx`, real Map View with only the
+  WASM and GPU boundary replaced). These tests check that:
+  - each animation frame presents one Rust frame;
+  - a layer paints against that frame and `onViewStateChange(…, "fly-to")` reports it;
+  - the default duration passes through, while `animate: false` and `durationMs: 0` jump;
+  - reduced motion jumps;
+  - an invalid flight presents no motion and fires no callback;
+  - a camera command, a successive `flyTo`, wheel or a pointer press stops the flight with
+    no stale frame;
+  - the flight survives a resize and a device-loss fallback to Canvas;
+  - unmounting stops it;
+  - a controlled Map View's echoes do not cancel it.
+- **Real Rust/WASM browser** (`e2e/maps-flyto.spec.ts`, `@smoke`, WebGPU and Canvas,
+  6/6 over three repeats run alone). For every presented frame, the test recovers the eased
+  progress from the bearing. The center and zoom match the MapLibre oracle within 1e-6. The
+  flight ends at the exact target at MapLibre's duration (2,551 ms) after the command, and
+  frames follow the ease in time. After the flight, Berlin at the camera center is picked.
+  `animate: false` presents one `fly-to` frame. A pointer press ends the flight with no later
+  frame. After a resize and device-pixel-ratio change mid-flight, the flight still ends
+  exactly on target, and the point there is picked. The dateline flight keeps
+  |longitude| ≥ 171.76°.
+- **Work counters (not a Fast verdict).** Over the 2,551 ms flight:
+
+  | Backend | Presented flight frames | Base renders | Retained point preparations |
+  | --- | ---: | ---: | ---: |
+  | Canvas | 64–72 | 151–161 | 0 |
+  | WebGPU (SwiftShader) | 8–11 | 45–101 | 0 |
+
+  Map Layer data is not re-lowered per frame. Base renders exceed presented frames by about
+  2.3× on Canvas and up to 9× on SwiftShader WebGPU. The extra renders come from raster
+  fade-in renders and tile arrivals during the zoom-out. The flight has not been profiled
+  against a reference, so Fast remains open.
 
 ### Heat/scalar alignment evidence (#171 phase 3)
 

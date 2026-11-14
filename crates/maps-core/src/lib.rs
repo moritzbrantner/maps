@@ -7,6 +7,7 @@
 mod aggregation;
 mod background;
 mod bounded_runtime;
+mod camera_flight;
 mod engine;
 mod flat_runtime;
 mod geojson_vt;
@@ -57,6 +58,10 @@ pub use aggregation::{
 };
 pub use background::parse_background_color;
 pub use bounded_runtime::BoundedFlatRasterRuntime;
+pub use camera_flight::{
+    CAMERA_EASE_DEFAULT_DURATION_MS, CAMERA_FLIGHT_CURVE, CAMERA_FLIGHT_SPEED, CameraFlight,
+    CameraFlightError, CameraPose, maplibre_default_easing,
+};
 pub use engine::{
     GeographicCoordinate, MapCamera, MapViewportBounds, ScreenCoordinate, TileId, ViewportSize,
     WorldCoordinate, clamp_mercator_latitude, project_web_mercator, unproject_web_mercator,

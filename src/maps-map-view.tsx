@@ -294,11 +294,19 @@ export function MapsMapView({
 
   const flyToNow = useCallback(
     (next: MapViewState, options: MapFlyToOptions = {}) => {
-      void options;
       const runtime = runtimeControllerRef.current;
 
       if (runtime) {
-        runtime.setViewState(next, "fly-to");
+        // `animate: false` is an immediate jump; otherwise the runtime animates the flight
+        // (#433). React only issues the command and follows the presented frames.
+        if (options.animate === false) {
+          runtime.setViewState(next, "fly-to");
+        } else {
+          runtime.flyTo(
+            next,
+            options.durationMs === undefined ? {} : { durationMs: options.durationMs },
+          );
+        }
         return;
       }
 

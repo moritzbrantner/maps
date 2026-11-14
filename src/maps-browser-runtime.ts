@@ -184,6 +184,13 @@ export type MapsCanvasFlatRuntimeController = {
    * gestures), so a following read sees it. Reads report the presented frame otherwise.
    */
   flushCameraFrame(): void;
+  /**
+   * Animated `flyTo` (#433) on MapLibre's flight trajectory, presented one camera frame per
+   * animation frame with `onViewStateChange(…, "fly-to")`. `durationMs` overrides the
+   * speed-derived duration (`0` jumps); prefers-reduced-motion jumps. A later camera command,
+   * user pan/zoom/rotate or disposal ends the flight where it is.
+   */
+  flyTo(viewState: MapViewState, options?: { durationMs?: number }): void;
   getBaseRenderer(): MapsBaseRenderer;
   getRendererStats(): MapsRendererStats;
   /** The GPU-retained vector basemap, or `null` without the WebGPU backend. */
@@ -354,6 +361,10 @@ export function createMapsBrowserRuntime(
   let cameraFrame: number | null = null;
   let cameraReason: MapViewStateChangeReason | null = null;
   let cameraCommands: Array<() => void> = [];
+  // The in-flight animated `flyTo` (#433): Rust owns its trajectory and state; the host
+  // only schedules its frames. `null` when no flight runs.
+  let flightFrame: number | null = null;
+  let flightStartTime = 0;
   const scrollZoom = createMapsScrollZoom(() => scheduleCameraFrame("zoom", scrollZoomFrame));
 
   function assertActive() {
@@ -477,6 +488,54 @@ export function createMapsBrowserRuntime(
     }
   }
 
+  /** Ends an in-flight `flyTo` on its presented camera; no later frame or callback runs. */
+  function cancelFlight() {
+    if (flightFrame === null) return;
+    cancelAnimationFrame(flightFrame);
+    flightFrame = null;
+    delete canvas.dataset.mapCameraTransition;
+    activeRuntime?.cancelFlight();
+  }
+
+  /** A new camera command or user input supersedes camera motion in progress. */
+  function interruptCamera() {
+    cancelKineticPan();
+    cancelFlight();
+  }
+
+  function startFlight() {
+    flightStartTime = performance.now();
+    canvas.dataset.mapCameraTransition = "fly-to";
+    flightFrame = requestAnimationFrame(flightTick);
+  }
+
+  /** One flight frame: Rust presents the camera at the elapsed time, the host draws it. */
+  function flightTick(now: number) {
+    flightFrame = null;
+    const runtime = activeRuntime;
+    const syncFrame = synchronize;
+    if (!runtime || !syncFrame) {
+      delete canvas.dataset.mapCameraTransition;
+      return;
+    }
+    let running: boolean;
+    try {
+      running = runtime.advanceFlight(Math.max(0, now - flightStartTime));
+    } catch (error) {
+      // Rust ended the flight on the last presented camera.
+      delete canvas.dataset.mapCameraTransition;
+      config.onError?.(error);
+      return;
+    }
+    if (running) flightFrame = requestAnimationFrame(flightTick);
+    else delete canvas.dataset.mapCameraTransition;
+    try {
+      emitViewState?.(syncFrame(), "fly-to");
+    } catch (error) {
+      config.onError?.(error);
+    }
+  }
+
   function startKineticPan(velocity: MapsPanVelocity, anchor: ScreenPoint) {
     cancelKineticPan();
     const initial = createMapsKineticPanState(velocity);
@@ -538,7 +597,7 @@ export function createMapsBrowserRuntime(
 
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
-    cancelKineticPan();
+    interruptCamera();
     velocityTracker.clear();
     if (!activeRuntime || !synchronize) return;
     const position = pointerPosition(event.clientX, event.clientY);
@@ -723,12 +782,35 @@ export function createMapsBrowserRuntime(
     const controller: MapsCanvasFlatRuntimeController = {
       fitBounds(bounds, options = {}) {
         assertActive();
-        cancelKineticPan();
+        interruptCamera();
         cancelCameraFrame();
         const effectiveMaxZoom =
           options.maxZoom ?? normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM;
         runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
         notifyViewState(syncFrame(), options.reason ?? "fit-bounds");
+      },
+      flyTo(next, options = {}) {
+        assertActive();
+        interruptCamera();
+        cancelCameraFrame();
+        const viewState = copyViewState(next);
+        // As MapLibre's `flyTo`, honour prefers-reduced-motion with an immediate jump.
+        if (prefersReducedMotion()) {
+          scheduleCameraFrame("fly-to", () => runtime.setViewState(viewState));
+          return;
+        }
+        const effectiveMaxZoom = normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM;
+        let durationMs: number;
+        try {
+          durationMs = runtime.flyTo(viewState, options.durationMs, 0, effectiveMaxZoom);
+        } catch (error) {
+          // An invalid or unsupported flight fails closed: the camera stays where it is.
+          config.onError?.(error);
+          return;
+        }
+        // A zero-duration flight already jumped; present it on the next frame as `jumpTo`.
+        if (durationMs <= 0) scheduleCameraFrame("fly-to");
+        else startFlight();
       },
       getBaseRenderer() {
         return baseRenderer;
@@ -787,7 +869,7 @@ export function createMapsBrowserRuntime(
       },
       setViewState(next, reason = "programmatic") {
         assertActive();
-        cancelKineticPan();
+        interruptCamera();
         cancelCameraFrame();
         // As MapLibre renders a `jumpTo` on its next frame, the camera change and its frame
         // run on the next animation frame: per-frame camera updates never render
@@ -832,7 +914,7 @@ export function createMapsBrowserRuntime(
 
   function handleContextMenu(event: MouseEvent) {
     event.preventDefault();
-    cancelKineticPan();
+    interruptCamera();
     const client = { x: event.clientX, y: event.clientY };
     if (mouseRotation) {
       mouseRotation.pendingContextMenu = client;
@@ -889,7 +971,7 @@ export function createMapsBrowserRuntime(
     if (!activeRuntime) return;
     if (isMouseRotateStart(event)) {
       if (mouseRotation || gesture.pointerCount() > 0) return;
-      cancelKineticPan();
+      interruptCamera();
       velocityTracker.clear();
       const position = pointerPosition(event.clientX, event.clientY);
       mouseRotation = {
@@ -904,7 +986,7 @@ export function createMapsBrowserRuntime(
       return;
     }
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    cancelKineticPan();
+    interruptCamera();
     velocityTracker.clear();
     pointerTimes.set(event.pointerId, event.timeStamp);
     gesture.pointerDown(event.pointerId, pointerPosition(event.clientX, event.clientY));
@@ -1072,7 +1154,7 @@ export function createMapsBrowserRuntime(
       return;
     if (viewStateEchoTracker.acknowledge(config.viewState)) return;
     viewStateEchoTracker.clear();
-    cancelKineticPan();
+    interruptCamera();
     cancelCameraFrame();
     activeRuntime.setViewState(config.viewState);
     const frame = synchronize();
@@ -1087,7 +1169,7 @@ export function createMapsBrowserRuntime(
     canvas.removeEventListener("wheel", handleWheel);
     resizeObserver?.disconnect();
     disposeFrameSynchronizer?.();
-    cancelKineticPan();
+    interruptCamera();
     cancelCameraFrame();
     config.onControllerReady?.(null);
     baseRendererListeners.clear();
@@ -1135,6 +1217,12 @@ export function createMapsBrowserRuntime(
       return activeController;
     },
   };
+}
+
+function prefersReducedMotion() {
+  return (
+    typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 function copyViewState(state: MapViewState): MapViewState {
