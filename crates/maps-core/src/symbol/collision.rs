@@ -452,6 +452,16 @@ pub struct PlacementTile<'a> {
     pub projection: TileProjection<'a>,
 }
 
+/// What one placed symbol inserted into the collision index, in grid px (viewport px plus
+/// [`VIEWPORT_PADDING`]), as [`place_symbols_with_collisions`] reports it (#346).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SymbolCollision {
+    pub text_box: Option<[f64; 4]>,
+    pub icon_box: Option<[f64; 4]>,
+    /// A line label's collision circles, (x, y, radius).
+    pub text_circles: Vec<[f64; 3]>,
+}
+
 /// One symbol that shows its text, its icon or both (MapLibre's `JointPlacement`), with where
 /// its anchor projects.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -556,7 +566,24 @@ pub fn place_symbols(
     bearing: f64,
     memory: &mut VariableAnchorMemory,
 ) -> Vec<Vec<PlacedSymbol>> {
+    place_symbols_with_collisions(tiles, layer_count, width, height, zoom, bearing, memory).0
+}
+
+/// [`place_symbols`], with what each placed symbol inserted into the collision index, parallel
+/// to the placed symbols: `queryRenderedFeatures` hit-tests these (#346).
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn place_symbols_with_collisions(
+    tiles: &[PlacementTile<'_>],
+    layer_count: usize,
+    width: f64,
+    height: f64,
+    zoom: f64,
+    bearing: f64,
+    memory: &mut VariableAnchorMemory,
+) -> (Vec<Vec<PlacedSymbol>>, Vec<Vec<SymbolCollision>>) {
     let previous = std::mem::take(memory);
+    let mut collisions = vec![Vec::new(); layer_count];
     let mut index = CollisionIndex::new(width, height);
     let mut placed = vec![Vec::new(); layer_count];
     let mut order: Vec<usize> = (0..tiles.len()).collect();
@@ -734,11 +761,16 @@ pub fn place_symbols(
                         icon,
                         variable_anchor: if text { variable_choice } else { None },
                     });
+                    collisions[layer].push(SymbolCollision {
+                        text_box: text_box.filter(|_| place_text),
+                        icon_box: icon_box.filter(|_| place_icon),
+                        text_circles: text_circles.filter(|_| place_text).unwrap_or_default(),
+                    });
                 }
             }
         }
     }
-    placed
+    (placed, collisions)
 }
 
 #[cfg(test)]

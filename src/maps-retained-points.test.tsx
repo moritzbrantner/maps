@@ -188,6 +188,7 @@ beforeEach(() => {
     setVectorLayers: vi.fn(),
     addGlyphs: vi.fn(),
     missingGlyphRanges: vi.fn(() => []),
+    queryRenderedFeatures: vi.fn(() => []),
     uploadTile: vi.fn(),
     uploadVectorTile: vi.fn(() => 0),
     render: vi.fn((_tiles, matrix, application) => {
