@@ -20,6 +20,5 @@
     "demo/**/*.tsx",
     "e2e/fixtures/*.ts",
     "e2e/fixtures/*.tsx"
-  ],
-  "exclude": ["demo/**/*.test.ts"]
+  ]
 }
