@@ -130,7 +130,10 @@ export function MapsMapView({
   const [hoverStore] = useState(createMapHoverStore);
   const setHovered = hoverStore.set;
   const [tooltip, setTooltip] = useState<FeatureOverlayState | null>(null);
-  const [popup, setPopup] = useState<FeatureOverlayState | null>(null);
+  // `wasSelected`: a controlled selection has selected the popup's Map Feature since it opened.
+  const [popup, setPopup] = useState<(FeatureOverlayState & { wasSelected?: boolean }) | null>(
+    null,
+  );
   const [contextMenu, setContextMenu] = useState<ContextMenuOverlayState | null>(null);
   const {
     controlled,
@@ -241,18 +244,32 @@ export function MapsMapView({
     setPopup(null);
   }, []);
 
+  /**
+   * Whether the committed controlled selection selects a rendered Map Feature, so a popup
+   * opened for an already selected feature closes once that selection moves away.
+   */
+  const isOverlaySelectedRef = useRef<(overlayKey: string) => boolean>(() => false);
+
   /** Closes feature overlays whose Map Feature is no longer rendered. */
   const retireFeatureOverlays = useCallback(
     (
       isRendered: (overlayKey: string) => boolean,
       latestPopup?: (overlayKey: string) => MapsOverlayPopupSource | undefined,
+      isSelected?: (overlayKey: string) => boolean,
     ) => {
+      isOverlaySelectedRef.current = isSelected ?? (() => false);
       const keep = <TOverlay extends { overlayKey?: string } | null>(overlay: TOverlay) =>
         overlay?.overlayKey === undefined || isRendered(overlay.overlayKey) ? overlay : null;
       setPopup((overlay) => {
-        const kept = keep(overlay);
-        const latest = kept?.overlayKey === undefined ? undefined : latestPopup?.(kept.overlayKey);
-        return kept && latest && (latest.render !== kept.render || latest.feature !== kept.feature)
+        let kept = keep(overlay);
+        const overlayKey = kept?.overlayKey;
+        if (!kept || overlayKey === undefined) return kept;
+        // A popup whose feature the controlled selection selected closes once it no longer does.
+        const selected = isSelected?.(overlayKey) === true;
+        if (kept.wasSelected && !selected) return null;
+        if (selected && !kept.wasSelected) kept = { ...kept, wasSelected: true };
+        const latest = latestPopup?.(overlayKey);
+        return latest && (latest.render !== kept.render || latest.feature !== kept.feature)
           ? { ...kept, feature: latest.feature, render: latest.render }
           : kept;
       });
@@ -531,6 +548,8 @@ export function MapsMapView({
             position,
             overlayKey: options?.overlayKey,
             render: options.renderFeaturePopup as (feature: unknown) => ReactNode,
+            wasSelected:
+              options.overlayKey !== undefined && isOverlaySelectedRef.current(options.overlayKey),
           });
         }
       },
@@ -585,6 +604,8 @@ export function MapsMapView({
             position,
             overlayKey: options?.overlayKey,
             render: options.renderFeaturePopup as (feature: unknown) => ReactNode,
+            wasSelected:
+              options.overlayKey !== undefined && isOverlaySelectedRef.current(options.overlayKey),
           });
         }
       },

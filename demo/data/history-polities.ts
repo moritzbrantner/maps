@@ -58,6 +58,11 @@ type DemoHistoricalPolityScene = {
   collection: TemporalGeoJsonGeometryFeatureCollection<DemoHistoricalPolityProperties>;
 };
 
+/** Validation input may lack source metadata; reporting that is the validator's job. */
+type DemoHistoricalPolitySceneInput = Omit<DemoHistoricalPolityScene, "collection"> & {
+  collection: TemporalGeoJsonGeometryFeatureCollection<Partial<DemoHistoricalPolityProperties>>;
+};
+
 export type DemoHistoricalPolityScenarioId =
   | "european-states"
   | "wwii-control"
@@ -421,7 +426,7 @@ export function getDemoHistoricalPolityRenderFeatureId(
 }
 
 export function validateDemoHistoricalPolityScenes(
-  scenes: readonly DemoHistoricalPolityScene[] = demoHistoricalPolityScenes,
+  scenes: readonly DemoHistoricalPolitySceneInput[] = demoHistoricalPolityScenes,
 ): DemoHistoricalPolitySceneValidationIssue[] {
   return scenes.flatMap((scene) => [
     ...validateDemoHistoricalPolitySceneFeatures(scene),
@@ -430,7 +435,7 @@ export function validateDemoHistoricalPolityScenes(
 }
 
 function validateDemoHistoricalPolitySceneFeatures(
-  scene: DemoHistoricalPolityScene,
+  scene: DemoHistoricalPolitySceneInput,
 ): DemoHistoricalPolitySceneValidationIssue[] {
   return scene.collection.features.flatMap((feature) => {
     const polityId = feature.properties?.polityId ?? String(feature.id ?? "historical-polity");
@@ -482,7 +487,7 @@ function validateDemoHistoricalPolitySceneFeatures(
 }
 
 function validateDemoHistoricalPolitySceneOverlaps(
-  scene: DemoHistoricalPolityScene,
+  scene: DemoHistoricalPolitySceneInput,
 ): DemoHistoricalPolitySceneValidationIssue[] {
   const polygonFeatures = scene.collection.features.flatMap((feature) =>
     isPolygonLikeGeometry(feature.geometry)
@@ -554,8 +559,8 @@ function validateDemoHistoricalPolityRing(
   return [];
 }
 
-function isPolygonLikeGeometry(
-  geometry: TemporalGeoJsonGeometryFeature<DemoHistoricalPolityProperties>["geometry"],
+export function isPolygonLikeGeometry(
+  geometry: TemporalGeoJsonGeometryFeature["geometry"],
 ): geometry is PolygonLikeGeometry {
   return geometry?.type === "Polygon" || geometry?.type === "MultiPolygon";
 }

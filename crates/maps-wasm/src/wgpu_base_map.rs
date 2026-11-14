@@ -2414,7 +2414,9 @@ impl MapsWgpuBaseMapRenderer {
         view_projection: [f32; 16],
         clip: SurfaceClip,
     ) -> Option<RetainedView> {
-        let surface_width = f64::from(self.config.width) / clip.pixel_ratio.max(f64::MIN_POSITIVE);
+        let pixel_ratio = clip.pixel_ratio.max(f64::MIN_POSITIVE);
+        let surface_width = f64::from(self.config.width) / pixel_ratio;
+        let surface_height = f64::from(self.config.height) / pixel_ratio;
         RetainedView::from_placements(
             placements.iter().filter_map(|placement| {
                 let (z, x, y) = placement.key?;
@@ -2429,6 +2431,7 @@ impl MapsWgpuBaseMapRenderer {
             }),
             view_projection,
             surface_width,
+            surface_height,
         )
     }
 
