@@ -522,7 +522,8 @@ export const scenarios: Scenario[] = [
       {
         gate: "time",
         issue: 387,
-        reason: "the projected path re-emits every patterned strip per frame; retained lines do not",
+        reason:
+          "pitched patterned lines are retained, but the ratio stays at line-pattern's WebGPU presentation floor (#343)",
       },
       {
         gate: "interaction",
