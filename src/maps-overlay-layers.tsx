@@ -1071,7 +1071,10 @@ function collectOverlayEntries(
   Children.toArray(children).forEach((child, index) => {
     if (!isValidElement(child)) throwUnsupportedMapsLayer();
 
-    const childPath = `${path}.${index}`;
+    // `Children.toArray` keys a child by its declared position (or explicit key), so a
+    // conditional sibling that comes and goes (e.g. a temporal overlay that is empty at the
+    // sampled time) does not move the stateful cluster and heat runtimes after it (#172 D).
+    const childPath = `${path}.${child.key ?? index}`;
     if (child.type === Fragment) {
       collectOverlayEntries((child.props as { children?: ReactNode }).children, childPath, entries);
       return;

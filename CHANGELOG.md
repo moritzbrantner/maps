@@ -36,8 +36,18 @@
   New: `initializeMapsTemporalWasm()`, `ensureMapsTemporalWasm()` and
   `getMapsTemporalRuntimeStatus()`. Temporal GeoJSON geometry sampling is unchanged (owned by
   #173). See "Temporal computation authority" in `docs/timeline.md`.
+- Temporal clustering and heat on the first-party Flat Map (#172 phase D). `HeatMap` (and
+  `TemporalHeatMap`, `HeatFieldMap`, `FlatHeatMap`) accept `flatRuntime="maps"` like
+  `ClusteredMap`, so `TemporalClusteredMap` and `TemporalHeatMap` both run on the Maps
+  runtime over static Map Layers, sampled from one shared Map-Scoped Timeline clock. On that
+  runtime the measurement props stay MapLibre-only and fail closed.
 
 ### Patch Changes
+
+- On `flatRuntime="maps"`, a conditional Map Layer that comes and goes (for example a temporal
+  GeoJSON overlay that is empty at the sampled time) no longer remounts the cluster and heat
+  Map Layers declared after it, so their heat surfaces and cluster indexes are kept
+  (#172 phase D).
 
 - A clustered Map Layer with no points no longer crashes the Rust/WASM aggregation index; it
   builds an empty index (#172 phase E).
