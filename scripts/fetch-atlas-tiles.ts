@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { atlasReleaseIndex } from "../demo/atlas-source.ts";
+import { atlasReleaseIndex } from "../demo/atlas-source";
 
 const RELEASE_URL =
   "https://github.com/moritzbrantner/asset-tooling/releases/download/maps-shortbread";
