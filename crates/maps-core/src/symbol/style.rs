@@ -68,6 +68,8 @@ const SYMBOL_LAYOUT: &[&str] = &[
     "visibility",
     "symbol-placement",
     "symbol-spacing",
+    "symbol-sort-key",
+    "symbol-z-order",
     "text-field",
     "text-font",
     "text-size",
@@ -143,10 +145,13 @@ const ZOOM_CONSTANT: &[&str] = &[
     "circle-stroke-width",
     "circle-stroke-color",
     "circle-stroke-opacity",
+    // The style specification evaluates sort keys from feature data only.
+    "symbol-sort-key",
 ];
 /// Layout properties MapLibre reads as one value for the whole layer.
 const LAYER_CONSTANT: &[&str] = &[
     "symbol-placement",
+    "symbol-z-order",
     "text-rotation-alignment",
     "text-pitch-alignment",
     "icon-rotation-alignment",
@@ -262,6 +267,7 @@ impl StyleLayer {
             }
         };
         only("symbol-placement", &["point", "line", "line-center"])?;
+        only("symbol-z-order", &["auto", "viewport-y", "source"])?;
         only(
             "text-rotation-alignment",
             &["auto", "viewport", "map", "viewport-glyph"],
@@ -606,6 +612,35 @@ mod tests {
             r#"[{"id":"a","type":"fill-extrusion","source-layer":"p"}]"#,
         ] {
             assert!(parse(rejected).is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn symbol_order_takes_data_driven_sort_keys_and_a_constant_z_order() {
+        let parse = |layout: &str| {
+            StyleLayer::parse_all(&format!(
+                r#"[{{"id":"a","type":"symbol","source-layer":"p","layout":{layout}}}]"#
+            ))
+        };
+        for layout in [
+            r#"{"symbol-sort-key":2}"#,
+            r#"{"symbol-sort-key":["get","rank"]}"#,
+            r#"{"symbol-sort-key":["-",0,["get","population"]]}"#,
+            r#"{"symbol-z-order":"auto"}"#,
+            r#"{"symbol-z-order":"viewport-y","symbol-sort-key":["get","rank"]}"#,
+            r#"{"symbol-z-order":"source"}"#,
+        ] {
+            assert!(parse(layout).is_ok(), "{layout}");
+        }
+        for layout in [
+            r#"{"symbol-z-order":"depth"}"#,
+            r#"{"symbol-z-order":["step",["zoom"],"auto",8,"source"]}"#,
+            r#"{"symbol-sort-key":["unknown-op",1]}"#,
+            // The style specification takes feature data only for sort keys, as MapLibre.
+            r#"{"symbol-sort-key":["interpolate",["linear"],["zoom"],4,["get","rank"],9,0]}"#,
+            r#"{"symbol-sort-key":["step",["zoom"],1,8,2]}"#,
+        ] {
+            assert!(parse(layout).is_err(), "{layout}");
         }
     }
 }
