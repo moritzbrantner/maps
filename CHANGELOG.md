@@ -54,6 +54,12 @@
 
 ### Patch Changes
 
+- Under a pitched camera, hovering and clicking a GeoJSON line measures its width on the map
+  plane, as MapLibre does, instead of on the screen (#386): far up a pitched map the line is
+  thinner and no longer picks where MapLibre does not, and near the camera it is wider. The
+  Rust camera reports the local screen-to-map-plane scale at the pointer; unpitched picking
+  is unchanged. The oracle `line-pattern-pitch` interaction gate passes without a known gap.
+
 - On `flatRuntime="maps"`, a conditional Map Layer that comes and goes (for example a temporal
   GeoJSON overlay that is empty at the sampled time) no longer remounts the cluster and heat
   Map Layers declared after it, so their heat surfaces and cluster indexes are kept

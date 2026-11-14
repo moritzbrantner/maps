@@ -45,7 +45,11 @@ import {
   type MapViewStateChangeReason,
   type RasterMapStyle,
 } from "./map-display";
-import type { MapScreenInteractionState, MapScreenRenderFrame } from "./map-screen-render-frame";
+import type {
+  MapScreenInteractionState,
+  MapScreenMapPlaneScale,
+  MapScreenRenderFrame,
+} from "./map-screen-render-frame";
 import {
   loadMapsFlatRasterRuntime,
   type MapsFlatRasterFrame,
@@ -202,6 +206,11 @@ export type MapsCanvasFlatRuntimeController = {
   /** Whether the current camera sees the whole world, so a location can repeat across world copies. */
   getVisibleSpansFullWorld(): boolean;
   getVisibleTiles(): MapsRasterTileId[];
+  /**
+   * The screen-to-map-plane scale at a screen point under a pitched camera, for picking line
+   * widths on the map plane as MapLibre does (#386); `null` without pitch.
+   */
+  mapPlaneScale?(x: number, y: number): MapScreenMapPlaneScale | null;
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   projectPacked(coordinates: Float64Array): Float64Array;
   renderApplicationFrame(
@@ -846,6 +855,10 @@ export function createMapsBrowserRuntime(
       getVisibleTiles() {
         assertActive();
         return frameSynchronizer.getVisibleTiles();
+      },
+      mapPlaneScale(x, y) {
+        assertActive();
+        return runtime.mapPlaneScale?.(x, y) ?? null;
       },
       project(coordinates) {
         assertActive();

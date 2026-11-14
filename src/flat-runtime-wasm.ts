@@ -1,6 +1,7 @@
 import type { MapsTileset } from "./maps-tileset";
 import { importMapsWasmModule, type MapsWasmModuleBase } from "./aggregation-wasm";
 import type { MapBounds, MapViewState } from "./map-display";
+import type { MapScreenMapPlaneScale } from "./map-screen-render-frame";
 
 export type MapsRasterTileId = {
   key: string;
@@ -143,6 +144,8 @@ export type MapsFlatRasterRuntime = {
   frame(): MapsFlatRasterFrame;
   markFailed(tile: MapsRasterTileId): void;
   markLoaded(tile: MapsRasterTileId): void;
+  /** The screen-to-map-plane scale at a screen point under pitch (#386), else `null`. */
+  mapPlaneScale?(x: number, y: number): MapScreenMapPlaneScale | null;
   panBetween(previousX: number, previousY: number, currentX: number, currentY: number): void;
   panBy(deltaX: number, deltaY: number): void;
   project(longitude: number, latitude: number): [x: number, y: number];
@@ -193,6 +196,7 @@ type MapsFlatRasterWasmRuntime = {
   free?: () => void;
   markFailed(z: number, x: number, y: number): void;
   markLoaded(z: number, x: number, y: number): void;
+  mapPlaneScale?(x: number, y: number): Float64Array | number[] | undefined;
   panBetween(previousX: number, previousY: number, currentX: number, currentY: number): void;
   panBy(deltaX: number, deltaY: number): void;
   project(longitude: number, latitude: number): [x: number, y: number];
@@ -294,6 +298,11 @@ export async function loadMapsFlatRasterRuntime(
     markLoaded(tile) {
       assertLive(disposed);
       runtime.markLoaded(tile.z, tile.x, tile.y);
+    },
+    mapPlaneScale(x, y) {
+      assertLive(disposed);
+      const scale = runtime.mapPlaneScale?.(x, y);
+      return scale && scale.length === 4 ? [scale[0]!, scale[1]!, scale[2]!, scale[3]!] : null;
     },
     panBetween(previousX, previousY, currentX, currentY) {
       assertLive(disposed);
