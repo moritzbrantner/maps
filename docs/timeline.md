@@ -60,9 +60,12 @@ props (`autoPlay`, `currentTime`, `defaultTime`, `loopPlayback`, `onTimeChange`,
 `playbackRate`, `timeStep`), which configure a clock owned by the component. Those props are
 ignored when a `timeline` is supplied.
 
-`TemporalClusteredMap` also accepts `flatRuntime="maps"` with an explicit raster `mapStyle`;
-static Map Layers such as `GeoJsonLayer` go in as children and stay retained while only the
-time changes.
+`TemporalClusteredMap` and `TemporalHeatMap` also accept `flatRuntime="maps"` with an explicit
+raster `mapStyle`; static Map Layers such as `GeoJsonLayer` go in as children and stay retained
+while only the time changes. Both can share one clock, so temporal clusters and heat follow the
+same map-scoped time: at a given time the clusters equal clustering the independently sampled
+points, and a direct seek, playback and a burst of seeks present the same cluster and heat
+pixels (`e2e/maps-temporal-composition.spec.ts`, #172 phase D).
 
 ## Temporal edge policy
 
