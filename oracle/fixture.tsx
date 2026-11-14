@@ -773,6 +773,68 @@ const ALIGNMENT_LAYERS: Array<Record<string, unknown>> = [
     type: "symbol",
   },
 ];
+/** Overlapping SDF stars along every road, coloured by road `rank` and outlined dark. */
+const roadStars = (layout: Record<string, unknown>, id: string): Record<string, unknown> => ({
+  id,
+  layout: {
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "icon-image": "capital",
+    "icon-size": 2,
+    "symbol-placement": "line",
+    "symbol-spacing": 30,
+    ...layout,
+  },
+  paint: {
+    "icon-color": ["match", ["get", "rank"], 3, "#b91c1c", 6, "#15803d", 7, "#7c3aed", 8, "#ea580c", "#1d4ed8"],
+    "icon-halo-color": "#111827",
+    "icon-halo-width": 1.5,
+  },
+  source: "oracle-vector",
+  "source-layer": "streets",
+  type: "symbol",
+});
+/** Large SDF place stars that collide with each other: which ones place shows the order. */
+const placeStars = (layout: Record<string, unknown>, id: string): Record<string, unknown> => ({
+  id,
+  layout: { "icon-image": "capital", "icon-size": 5, ...layout },
+  paint: {
+    "icon-color": ["interpolate", ["linear"], ["get", "rank"], 2, "#0f766e", 8, "#be123c"],
+    "icon-halo-color": "#fef3c7",
+    "icon-halo-width": 2,
+  },
+  source: "oracle-vector",
+  "source-layer": "places",
+  type: "symbol",
+});
+/**
+ * The `symbol-sort-key` style layers (#346). Road stars overlap and draw by road `rank`, the
+ * highest rank on top, across tiles; large place stars collide and place by population, the
+ * largest first: Zürich over Luzern and Chur over Vaduz, each pair split across z7 tiles that
+ * tile order alone would place the other way round.
+ */
+const SORT_KEY_LAYERS: Array<Record<string, unknown>> = [
+  roadStars({ "symbol-sort-key": ["get", "rank"] }, "road-stars-by-rank"),
+  placeStars({ "symbol-sort-key": ["-", 0, ["get", "population"]] }, "place-stars-by-population"),
+];
+/**
+ * The `symbol-z-order` style layers (#346), under a camera facing south-south-east. Road stars
+ * overlap and draw from the top of the screen down (`auto`); river stars, outlined so their
+ * order shows, draw in source order; large place stars place from the bottom of the screen up
+ * (`viewport-y`, ignoring their sort key): Freiburg, now below Basel in the same tile, wins.
+ */
+const Z_ORDER_LAYERS: Array<Record<string, unknown>> = [
+  roadStars({}, "road-stars-top-down"),
+  {
+    ...roadStars({ "symbol-spacing": 25, "symbol-z-order": "source" }, "river-stars-in-source-order"),
+    paint: { "icon-color": "#38bdf8", "icon-halo-color": "#0c4a6e", "icon-halo-width": 2 },
+    "source-layer": "water_lines",
+  },
+  placeStars(
+    { "symbol-sort-key": ["get", "population"], "symbol-z-order": "viewport-y" },
+    "place-stars-bottom-up",
+  ),
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
@@ -789,6 +851,10 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
               ? { glyphs: GLYPHS_URL, layers: VARIABLE_ANCHOR_LAYERS }
               : name === "symbol-alignment" || name === "symbol-alignment-pitch"
                 ? { glyphs: GLYPHS_URL, layers: ALIGNMENT_LAYERS }
+              : name === "symbol-sort-key"
+                ? { glyphs: GLYPHS_URL, layers: SORT_KEY_LAYERS }
+              : name === "symbol-z-order"
+                ? { glyphs: GLYPHS_URL, layers: Z_ORDER_LAYERS }
               : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
               : name === "fill-pattern" || name === "fill-pattern-pitch"
@@ -902,6 +968,16 @@ function referenceStyle(name: string) {
     case "symbol-alignment-pitch": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...ALIGNMENT_LAYERS);
+      return style;
+    }
+    case "symbol-sort-key": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...SORT_KEY_LAYERS);
+      return style;
+    }
+    case "symbol-z-order": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...Z_ORDER_LAYERS);
       return style;
     }
     default:
@@ -1106,6 +1182,8 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-variable-anchors-pitch":
     case "symbol-alignment":
     case "symbol-alignment-pitch":
+    case "symbol-sort-key":
+    case "symbol-z-order":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

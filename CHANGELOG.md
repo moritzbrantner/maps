@@ -51,6 +51,15 @@
   `ClusteredMap`, so `TemporalClusteredMap` and `TemporalHeatMap` both run on the Maps
   runtime over static Map Layers, sampled from one shared Map-Scoped Timeline clock. On that
   runtime the measurement props stay MapLibre-only and fail closed.
+- Tileset `symbol` layers order their symbols, ported from MapLibre 6.17 (#346).
+  `symbol-sort-key` (constant or data-driven; zoom-dependent keys are rejected, as in the
+  style specification) places lower keys first, across tiles too, so they win collisions,
+  and symbols that may overlap draw by key across tiles. `symbol-z-order` takes `auto`,
+  `viewport-y` and `source`: overlapping symbols without keys now draw from the top of the
+  screen down by default, as in MapLibre, `viewport-y` also places each tile's symbols from
+  the bottom up, and `source` keeps layout order. A feature whose sort key is not a number
+  is reported instead of ordered arbitrarily. The oracle `symbol-sort-key` and
+  `symbol-z-order` scenarios are gated.
 
 ### Patch Changes
 
