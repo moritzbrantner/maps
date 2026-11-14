@@ -673,3 +673,67 @@ latitude and Mercator rasters, flat and pitched cameras, horizon rejection and c
 They require at most 12 projection batches per raster, no scalar calls when packed projection
 is available, no repeated sample projection, and only the initial 81 samples for an offscreen
 raster. Missing or failing packed projection retains the scalar fallback.
+
+### Interleaved hardware evidence, 2026-11-14
+
+Baseline `28dc7dd99edcabd7c5d7eaae459e21edb83debc6` (A) and candidate
+`b99e5c6ebb074f886a817bfa0cedd3ba392d624e` (B) were captured in order
+**A1, B1, B2, A2, A3, B3**, with heavy workloads paused and no concurrent verification jobs.
+Both used the same production fixture build procedure, 1,668,635-byte WASM artifact
+(`e0fcd990310e153ae5d26b131ba1d62ef2ff4c590c9f07c5d329914213d16e19`),
+Node 24.16.0, Playwright 1.62.1, Chromium 151.0.7922.34 and runtime-profiler
+`fd26af06b649d319fdd9c1cf14fce63f1abaa324`. The host was Linux x64, Ryzen 7 5700X,
+RTX 3060 Ti, NVIDIA driver 595.99.02. A same-flags Chromium adapter probe reported NVIDIA
+Ampere, `isFallbackAdapter: false`; the hardware scenario uses ANGLE/Vulkan, not SwiftShader.
+
+| Capture order | Pitched rAF p50 | Pitched rAF p95 | Worst pitched interval | Pitched long tasks |
+| --- | ---: | ---: | ---: | ---: |
+| A1 | 33.3 ms | 50.1 ms | 66.7 ms | 16 / 822 ms total |
+| B1 | 16.7 ms | 16.7 ms | 33.3 ms | 0 |
+| B2 | 16.7 ms | 16.8 ms | 33.4 ms | 0 |
+| A2 | 33.3 ms | 50.0 ms | 66.6 ms | 14 / 723 ms total |
+| A3 | 33.2 ms | 50.0 ms | 66.7 ms | 15 / 766 ms total |
+| B3 | 16.7 ms | 16.8 ms | 33.3 ms | 0 |
+
+Each capture contains the entire journey, not just the pitched phase:
+
+| Heat-lane phase | Baseline p95 range | Candidate p95 range | Candidate worst interval |
+| --- | ---: | ---: | ---: |
+| Pan | 16.7–16.8 ms | 16.7–16.8 ms | 16.8 ms |
+| Wheel zoom / density raster replacement | 33.4–50.0 ms | 49.9 ms | 50.1 ms |
+| Bearing/pitch | 50.0–50.1 ms | 16.7–16.8 ms | 33.4 ms |
+| Resize | 16.7–16.8 ms | 16.7–16.8 ms | 16.8 ms |
+| Density seeks | 16.7–16.8 ms | 16.7–16.8 ms | 33.4 ms |
+| Field refreshes | 16.7–16.8 ms | 16.7–16.8 ms | 16.8 ms |
+| Ramp changes | 16.7–16.8 ms | 16.7–16.8 ms | 33.4 ms |
+| Superseded bursts | 16.8–33.3 ms | 16.8–33.3 ms | 66.7 ms |
+| Teardown/remount | 33.3 ms | 33.2–33.3 ms | 66.7 ms |
+
+Every candidate passed the existing invalidation/upload assertions and every pair passed
+runtime-profiler strict comparability. Candidate input-to-presented p50 was 78.6–82.1 ms,
+p95/worst 146.0–164.7 ms over 18 commits per run; baseline p95 was 138.0–154.9 ms. No
+commit-latency improvement is claimed. Each candidate zoom phase had one long task; bursts
+had one and teardown had four (including forced-GC/remount work). These transient costs
+remain visible rather than being represented as uniform 60 FPS.
+
+Candidate JS heap after GC was about 9.45 MB ready, 13.25–13.26 MB after the journey,
+6.49–6.62 MB across unmounts, and 10.53 MB after remount. Baseline values were about
+9.45, 13.26, 6.47–6.61 and 10.50–10.51 MB respectively. GPU/WASM-linear/total-process
+memory and GPU completion time remain unavailable. The isolated raster helper's minified
+browser ESM grew from 4,223 to 5,693 bytes (esbuild 0.27.7, identical bundle/minify settings);
+this is a module-size measurement, not the full package size.
+
+Immutable local captures are under `.runtime-profiler/maps-171-interleaved/`, with per-pair
+`pair-N-comparability.json`, per-capture observations and host metadata. Bundle IDs:
+
+- A1: `193d6f3f989c064361c05c0d85151c1d06b9319911901e752055ca0dd5e731f8`
+- B1: `cb240c6ab26d09aa77c2109e75beeb01a4ce491ae7e223393ad5fee317eee47e`
+- B2: `574c26c7ad4071b1cba6ff38012bc2de030bef36ae06b62d40b9308376eb05eb`
+- A2: `0eb947435e29f69a7648830bbead58f30cdf9fb806bfef062b6a6b9d6bb5ab27`
+- A3: `3ffe9dff5aee829d4541c6efd7900a4448f40461e1fa3c336f05f15ddd698891`
+- B3: `901895fbdb9f86ad9d1424bcd03afad032738d84a03dad4c3c51a92f7aeaa352`
+
+This resolves the measured pitched-navigation gap on this hardware. Comparability is not
+an automated performance verdict: Moonlight browser policy remains unavailable. The earlier
+contended/software captures above are historical evidence, not members of this comparison.
+Convention resolution sourceRevision: `15f348b072188255da837578eaafc8a98f12fdf0`.
