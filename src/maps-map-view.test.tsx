@@ -534,6 +534,48 @@ describe("Maps-owned MapView runtime", () => {
     });
   });
 
+  test("closes a popup once the controlled selection that selected its Map Feature moves away", async () => {
+    // Parity with the MapLibre path's overlay retirement (#231 phase D): a popup closes when
+    // the layer's controlled selectedFeatureId had selected its feature and no longer does.
+    const points = [
+      { id: "berlin", label: "Berlin", latitude: 52.52, longitude: 13.405 },
+      { id: "paris", label: "Paris", latitude: 48.8566, longitude: 2.3522 },
+    ];
+    const composition = (selectedFeatureId: string | null) => (
+      <MapView flatRuntime="maps" fitToData={false} mapLabel="Selection map" mapStyle={{ tiles: false }}>
+        <PointLayer
+          points={points}
+          renderFeaturePopup={(feature) => <span>Popup {feature.point.label}</span>}
+          selectedFeatureId={selectedFeatureId}
+        />
+      </MapView>
+    );
+    const { rerender } = render(composition(null));
+    const map = screen.getByLabelText("Selection map");
+    const baseCanvas = getBaseCanvas(map);
+    await waitFor(() => expect(map.getAttribute("data-map-ready")).toBe("true"));
+
+    // A popup opened while its feature is not (yet) selected stays open on unrelated renders.
+    clickSurface(baseCanvas, 534.05, 37.4);
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+    rerender(composition(null));
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+
+    // Once the controlled selection selects it, moving the selection elsewhere closes it.
+    rerender(composition("berlin"));
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+    rerender(composition("paris"));
+    await waitFor(() => expect(screen.queryByText("Popup Berlin")).toBeNull());
+
+    // A popup opened for the feature already selected closes the same way, even when the
+    // click itself changes nothing in the composition.
+    rerender(composition("berlin"));
+    clickSurface(baseCanvas, 534.05, 37.4);
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+    rerender(composition("paris"));
+    await waitFor(() => expect(screen.queryByText("Popup Berlin")).toBeNull());
+  });
+
   test("tells a controlled owner when a limit corrects its camera", async () => {
     const onViewStateChange = vi.fn();
     const composition = (maxZoom: number) => (

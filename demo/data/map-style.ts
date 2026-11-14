@@ -166,3 +166,18 @@ export const demoMapStyle: RasterMapStyle | undefined =
   typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
     ? e2eMapStyle
     : undefined;
+
+/**
+ * The basemap of first-party (`flatRuntime="maps"`) demo Map Views: the default raster tiles,
+ * or under `?e2e` a constant offline background, so browser evidence needs no tile network.
+ */
+export const demoMapsRuntimeMapStyle: RasterMapStyle | undefined =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("e2e")
+    ? ({
+        layers: [
+          { id: "demo-ocean", paint: { "background-color": "#082f49" }, type: "background" },
+        ],
+        sources: {},
+        version: 8,
+      } satisfies RasterMapStyle)
+    : undefined;
