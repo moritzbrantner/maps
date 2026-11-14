@@ -54,3 +54,43 @@ export const TEMPORAL_ACCEPTANCE_ANTIMERIDIAN_TRACKS: TemporalMapTrack[] = [
     label: "Ferry east",
   },
 ];
+
+/**
+ * Temporal clustering and heat (#172 phase D): three couriers converge on (13, 52) at time 50
+ * and separate again; `courier-late` is admitted at time 60. At zoom 6 the converged couriers
+ * form one cluster and the separated ones do not.
+ */
+export const TEMPORAL_COMPOSITION_TRACKS: TemporalMapTrack[] = [
+  {
+    frames: [
+      { latitude: 52, longitude: 10, metrics: { cargo: 1 }, time: 0 },
+      { latitude: 52, longitude: 16, metrics: { cargo: 1 }, time: 100 },
+    ],
+    id: "courier-west",
+    label: "Courier west",
+  },
+  {
+    frames: [
+      { latitude: 52, longitude: 16, metrics: { cargo: 2 }, time: 0 },
+      { latitude: 52, longitude: 10, metrics: { cargo: 2 }, time: 100 },
+    ],
+    id: "courier-east",
+    label: "Courier east",
+  },
+  {
+    frames: [
+      { latitude: 50.5, longitude: 13, metrics: { cargo: 4 }, time: 0 },
+      { latitude: 53.5, longitude: 13, metrics: { cargo: 4 }, time: 100 },
+    ],
+    id: "courier-south",
+    label: "Courier south",
+  },
+  {
+    frames: [
+      { latitude: 50.8, longitude: 10.5, metrics: { cargo: 8 }, time: 60 },
+      { latitude: 50.8, longitude: 11.5, metrics: { cargo: 8 }, time: 100 },
+    ],
+    id: "courier-late",
+    label: "Courier late",
+  },
+];

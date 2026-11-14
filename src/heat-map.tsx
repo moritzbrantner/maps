@@ -32,7 +32,7 @@ import {
   type HeatLayerSurfaceMode,
 } from "./heat-layer";
 import { GeoJsonLayer, type GeoJsonLayerProps } from "./geojson-layer";
-import { MapView } from "./map-view";
+import { MapView, type FlatMapRuntime } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import type { MapMeasurementProps } from "./measurement";
 import { type HeatFieldMaskGeoJson, type HeatFieldOptions } from "./scalar-field";
@@ -134,6 +134,11 @@ export type HeatMapProps<TProperties extends Record<string, unknown> = Record<st
     fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
     fitBoundsPadding?: number;
     fitToData?: boolean;
+    /**
+     * The Flat Map runtime. `"maps"` runs the first-party Rust/WASM runtime and needs an explicit
+     * raster `mapStyle`; measurement props remain MapLibre-only there and fail closed.
+     */
+    flatRuntime?: FlatMapRuntime;
     geoJson?: GeoJsonMapSource<TProperties>;
     geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
     geoJsonOverlay?: GeoJsonOverlayMode;
@@ -188,6 +193,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
   className,
   fitBoundsPadding = 56,
   fitToData = true,
+  flatRuntime,
   initialViewState,
   mapLabel = "Interactive heat map",
   mapStyle = defaultRasterMapStyle,
@@ -237,6 +243,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
       defaultViewState={defaultViewState}
       fitBoundsPadding={fitBoundsPadding}
       fitToData={fitToData}
+      flatRuntime={flatRuntime}
       initialViewState={initialViewState}
       mapDisplay={mapDisplay}
       mapLabel={mapLabel}
@@ -257,16 +264,18 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
         />
       ) : null}
       <HeatLayer {...(props as React.ComponentProps<typeof HeatLayer<TProperties>>)} points={resolvedPoints} />
-      <BeeLineMeasurementLayer
-        measurementDistanceFormat={measurementDistanceFormat}
-        measurementDraftLineColor={measurementDraftLineColor}
-        measurementLineColor={measurementLineColor}
-        measurementMode={measurementMode}
-        measurements={measurements}
-        onMeasurementCreate={onMeasurementCreate}
-        onMeasurementDraftChange={onMeasurementDraftChange}
-        onMeasurementSelect={onMeasurementSelect}
-      />
+      {flatRuntime !== "maps" || measurementMode !== undefined || measurements !== undefined ? (
+        <BeeLineMeasurementLayer
+          measurementDistanceFormat={measurementDistanceFormat}
+          measurementDraftLineColor={measurementDraftLineColor}
+          measurementLineColor={measurementLineColor}
+          measurementMode={measurementMode}
+          measurements={measurements}
+          onMeasurementCreate={onMeasurementCreate}
+          onMeasurementDraftChange={onMeasurementDraftChange}
+          onMeasurementSelect={onMeasurementSelect}
+        />
+      ) : null}
       {children}
     </MapView>
   );
