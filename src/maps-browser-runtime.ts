@@ -121,8 +121,10 @@ type MapsRetainedPointTransport = {
   runs: (
     frame: MapVectorRenderFrame<unknown>,
     interaction: MapScreenInteractionState,
-    options: { shapes: boolean },
+    options: { pitched: boolean },
   ) => MapsRetainedApplicationRun[] | null;
+  /** Whether a retained group draws as the projected path does under a pitched camera. */
+  pitchSafe: (run: MapsRetainedApplicationRun) => boolean;
   frame: (
     runs: readonly MapsRetainedApplicationRun["kind"][],
     width: number,
@@ -621,6 +623,7 @@ export function createMapsBrowserRuntime(
         frame: transport.createMapsWgpuRetainedFrame,
         pointChanges: transport.diffMapsRetainedPoints,
         runs: transport.createMapsRetainedApplicationRuns,
+        pitchSafe: transport.isMapsRetainedRunPitchSafe,
         polygonChanges: transport.diffMapsRetainedPolygons,
       };
       delete canvas.dataset.mapBaseRendererError;
@@ -1607,6 +1610,8 @@ function createFrameSynchronizer({
   let retainedPoints: {
     hovered: ReadonlySet<string>;
     kinds: MapsRetainedApplicationRun["kind"][];
+    /** Every group draws as the projected path does under a pitched camera (#387). */
+    pitchSafe: boolean;
     primitives: readonly unknown[];
     renderer: MapsWgpuBaseMapRenderer;
     // What each group holds, so data and interaction changes update groups in place.
@@ -1952,7 +1957,9 @@ function createFrameSynchronizer({
   // Retained polygons stay on unpitched cameras. Under pitch a vertex can fall behind the
   // camera: the GPU would clip and draw the rest of the polygon, while the projected
   // picking scene (and the Canvas oracle) drop it, so the projected path keeps them in
-  // agreement. An inactive retained group makes the overlay redraw, which re-projects.
+  // agreement. Retained points and lines stay under pitch (#387; see
+  // `isMapsRetainedRunPitchSafe`). An inactive retained group makes the overlay redraw,
+  // which re-projects.
   function cameraPitched() {
     return (lastFrame?.camera.pitch ?? 0) !== 0;
   }
@@ -1961,8 +1968,9 @@ function createFrameSynchronizer({
     return !frame || frame.order.length === 0;
   }
 
-  function hasRetainedShapes() {
-    return retainedPoints?.kinds.includes("polygons") ?? false;
+  /** Retained groups a pitched camera returns to the projected path. */
+  function hasPitchUnsafeRetainedGroups() {
+    return retainedPoints !== null && !retainedPoints.pitchSafe;
   }
 
   /** Evicts the retained groups from `keep` on, and every group whose kind changes. */
@@ -1990,8 +1998,8 @@ function createFrameSynchronizer({
     const currentRenderer = renderer();
     if (!currentRenderer || !retainedPointTransport) return false;
 
-    // A pitched camera returns retained shapes to the projected path.
-    if (hasRetainedShapes() && cameraPitched()) releaseRetainedPoints();
+    // A pitched camera returns retained shapes other than lines to the projected path.
+    if (hasPitchUnsafeRetainedGroups() && cameraPitched()) releaseRetainedPoints();
     const current = retainedPoints;
     const unchanged =
       current !== null &&
@@ -2002,7 +2010,7 @@ function createFrameSynchronizer({
       sameIdSet(current.selected, interaction.selectedPrimitiveIds);
     if (!unchanged) {
       const transport = retainedPointTransport;
-      const runs = transport.runs(frame, interaction, { shapes: !cameraPitched() });
+      const runs = transport.runs(frame, interaction, { pitched: cameraPitched() });
       // Groups still retained on this renderer from the previous runs. A group of the same
       // kind is kept: unchanged groups are not touched and groups of the same size are
       // updated in place, so one changed feature uploads one point or shape (#189).
@@ -2085,6 +2093,7 @@ function createFrameSynchronizer({
       retainedPoints = {
         hovered: new Set(interaction.hoveredPrimitiveIds ?? []),
         kinds,
+        pitchSafe: runs.every(transport.pitchSafe),
         primitives: frame.primitives.slice(),
         renderer: currentRenderer,
         runs,
@@ -2363,7 +2372,7 @@ function createFrameSynchronizer({
     retainedApplicationPointsActive: () =>
       retainedPoints !== null &&
       retainedPoints.renderer === renderer() &&
-      !(hasRetainedShapes() && cameraPitched()),
+      !(hasPitchUnsafeRetainedGroups() && cameraPitched()),
     syncFrame,
   };
 }

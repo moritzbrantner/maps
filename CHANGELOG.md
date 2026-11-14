@@ -60,6 +60,13 @@
 - Temporal Convenience Maps no longer re-prepare their tracks when the WASM runtime only
   changes its loading status, and a map remounted on a shared Map-Scoped Timeline samples the
   kept time once instead of first sampling the clock's placeholder time (#172 phase E).
+- Under a pitched camera, GeoJSON Map Layers whose shapes are all lines (patterned or not)
+  stay on the WebGPU-retained path (#387). Camera frames now only update the frame uniform:
+  they no longer send every line and its screen points to WASM and rebuild every strip.
+  Frames with polygons, direction markers or flow endpoints still use the projected path under
+  pitch. Retained lines and patterns now take the camera zoom as their GeoJSON tile zoom under
+  any bearing and pitch. Before, a rotated or pitched camera could measure pattern repeats
+  one zoom level too low.
 
 ### Internal
 

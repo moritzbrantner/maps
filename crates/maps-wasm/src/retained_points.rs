@@ -281,12 +281,13 @@ pub(crate) struct RetainedView {
 
 impl RetainedView {
     /// Derives the view from raster placements `(z, x, y, local west, local north, local
-    /// size)`, the camera view-projection and the surface width in px. `None` without a
-    /// usable placement.
+    /// size)`, the camera view-projection and the surface width and height in CSS px. `None`
+    /// without a usable placement.
     pub(crate) fn from_placements(
         placements: impl IntoIterator<Item = (u8, u32, u32, f64, f64, f64)>,
         view_projection: [f32; 16],
         surface_width_px: f64,
+        surface_height_px: f64,
     ) -> Option<Self> {
         let mut copy_origins_x: Vec<f64> = Vec::new();
         let mut frame: Option<(f64, f64)> = None;
@@ -323,7 +324,22 @@ impl RetainedView {
             (origin_y - local_y) / scale,
         ];
         let w = m[3] * local_x + m[7] * local_y + m[15];
-        let px_per_world = m[0].hypot(m[1]) / w.abs() * surface_width_px * 0.5 * scale;
+        // The map plane's screen Jacobian at the centre (clip x and y are 0 there, so the w
+        // gradient drops out), in CSS px per local unit. Its largest singular value is the
+        // scale of the unforeshortened direction: the camera zoom's under any bearing and
+        // pitch, which MapLibre's covering tile zoom follows (#387).
+        let (half_width, half_height) = (surface_width_px * 0.5, surface_height_px * 0.5);
+        let [a, b] = [m[0] * half_width, m[4] * half_width];
+        let [c, d] = [m[1] * half_height, m[5] * half_height];
+        let sum = a * a + b * b + c * c + d * d;
+        let determinant_px = a * d - b * c;
+        let largest = ((sum
+            + (sum * sum - 4.0 * determinant_px * determinant_px)
+                .max(0.0)
+                .sqrt())
+            * 0.5)
+            .sqrt();
+        let px_per_world = largest / w.abs() * scale;
         let half_width_world = (local_x - local_x_range.0).max(local_x_range.1 - local_x) / scale;
         (center.iter().all(|value| value.is_finite()) && px_per_world.is_finite()).then_some(Self {
             copy_origins_x,
@@ -522,6 +538,7 @@ mod tests {
             ],
             view_projection,
             1000.0,
+            1000.0,
         )
         .unwrap()
     }
@@ -536,6 +553,55 @@ mod tests {
         assert_eq!(view.center, [0.5, 0.5]);
         // 1024 local units per world x 0.001 clip per local unit x 500 px per clip unit.
         assert!((view.px_per_world - 512.0).abs() < 1.0e-3);
+    }
+
+    /// The view of a real camera plan on a `width` x `height` CSS-px surface.
+    fn camera_view(zoom: f64, bearing: f64, pitch: f64, [width, height]: [f64; 2]) -> RetainedView {
+        use maps_core::{
+            FlatRasterRuntime, FlatRasterRuntimeLimits, MapCamera, RasterSourceSpec, ViewportSize,
+        };
+        let viewport = ViewportSize::new(width, height).unwrap();
+        let camera = MapCamera::new(9.0, 47.4, zoom, bearing, pitch, viewport).unwrap();
+        let mut runtime = FlatRasterRuntime::new(
+            camera,
+            RasterSourceSpec::new(0, 22, 256).unwrap(),
+            FlatRasterRuntimeLimits::default(),
+        )
+        .unwrap();
+        let plan = runtime.frame_plan().unwrap();
+        RetainedView::from_placements(
+            plan.placements.iter().map(|placement| {
+                let tile = placement.tile;
+                let (west, north) = (placement.local_west, placement.local_north);
+                (tile.z, tile.x, tile.y, west, north, placement.local_size)
+            }),
+            plan.render_camera.view_projection,
+            width,
+            height,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tile_zoom_is_the_floored_camera_zoom_under_any_bearing_and_pitch() {
+        // MapLibre's GeoJSON tiles (#334) and pattern pixels (#349) follow the camera zoom;
+        // a rotated, pitched camera on a wide surface must not floor below it (#387).
+        for (bearing, pitch) in [(0.0, 0.0), (-25.0, 0.0), (-25.0, 50.0), (60.0, 60.0)] {
+            for (zoom, tile_zoom) in [(8.0, 8), (8.4, 8), (7.99, 7)] {
+                let view = camera_view(zoom, bearing, pitch, [720.0, 480.0]);
+                assert_eq!(
+                    view.tile_zoom(),
+                    tile_zoom,
+                    "zoom {zoom}, bearing {bearing}, pitch {pitch}"
+                );
+                let css_px_per_world = 512.0 * zoom.exp2();
+                assert!(
+                    (view.px_per_world / css_px_per_world - 1.0).abs() < 1.0e-4,
+                    "zoom {zoom}, bearing {bearing}, pitch {pitch}: {}",
+                    view.px_per_world
+                );
+            }
+        }
     }
 
     #[test]
@@ -595,6 +661,7 @@ mod tests {
         let view = RetainedView::from_placements(
             [(10, 512, 512, -128.0, 128.0, 256.0)],
             identity_scaled(0.001),
+            1000.0,
             1000.0,
         )
         .unwrap();
