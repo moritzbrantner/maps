@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,7 @@ const scenarios = {
   browser: path.join(root, "runtime-profiler-scenarios/atlas-tileset-browser-v1.yaml"),
 };
 assert(!existsSync(output), `Atlas tileset evidence already exists and is immutable: ${output}`);
+await assertChromiumLaunches();
 mkdirSync(output, { recursive: true });
 
 const temporary = mkdtempSync(path.join(os.tmpdir(), "maps-atlas-tileset-"));
@@ -60,11 +62,27 @@ try {
   const archives = buildAtlasTilesetSite(site);
   const capture = (kind: keyof typeof scenarios, role: Role, bundle: string) => {
     const observations = `${bundle}.observations.jsonl`;
-    invoke(profiler, ["capture", "--scenario", scenarios[kind], "--output", bundle], {
-      MAPS_ATLAS_TILESET_OBSERVATIONS: observations,
-      MAPS_ATLAS_TILESET_SITE: site,
-      MAPS_RUNTIME_PROFILE_IMPLEMENTATION: role,
-    });
+    const captured = invoke(
+      profiler,
+      ["capture", "--scenario", scenarios[kind], "--output", bundle],
+      {
+        MAPS_ATLAS_TILESET_OBSERVATIONS: observations,
+        MAPS_ATLAS_TILESET_SITE: site,
+        MAPS_RUNTIME_PROFILE_IMPLEMENTATION: role,
+      },
+      true,
+    );
+    if (captured.status !== 0) {
+      // runtime-profiler discards the journey's own output; the journey records its error.
+      const journeyError = `${observations}.error`;
+      assert.fail(
+        `${kind} ${role} capture failed\n${captured.stdout}\n${captured.stderr}\n${
+          existsSync(journeyError)
+            ? `journey error:\n${readFileSync(journeyError, "utf8")}`
+            : "the journey recorded no error: it failed before it ran (driver, Playwright or Chromium launch)"
+        }`,
+      );
+    }
     invoke(profiler, ["validate", "--bundle", bundle]);
     return readFileSync(observations, "utf8")
       .trim()
@@ -379,6 +397,29 @@ function invoke(
     `${program} ${args[0]} failed\n${result.stdout}\n${result.stderr}`,
   );
   return result.stdout;
+}
+
+/**
+ * runtime-profiler launches Chromium through the consumer's `playwright` package and discards
+ * the driver's output, so a browser that package cannot launch (for example a Chromium
+ * revision the CI setup never installed) surfaces only as `exit_code=Some(1)`. Fail first
+ * with Playwright's own message instead.
+ */
+async function assertChromiumLaunches() {
+  const playwright = createRequire(path.join(root, "package.json"))("playwright") as {
+    chromium: { launch(options: { headless: boolean }): Promise<{ close(): Promise<void> }> };
+  };
+  const version = json(path.join(root, "node_modules", "playwright", "package.json")).version;
+  try {
+    const browser = await playwright.chromium.launch({ headless: true });
+    await browser.close();
+  } catch (error) {
+    throw new Error(
+      `runtime-profiler journeys load playwright@${version}, which cannot launch Chromium here. ` +
+        "Install that package's browser, and keep `playwright` and `@playwright/test` on one version.",
+      { cause: error },
+    );
+  }
 }
 
 function json(file: string) {
