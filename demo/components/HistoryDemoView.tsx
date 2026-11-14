@@ -29,7 +29,7 @@ import {
   type PointMapLayerFeature,
 } from "@moritzbrantner/maps";
 
-import { demoMapStyle } from "../data/map-style";
+import { demoMapStyle, demoMapsRuntimeMapStyle } from "../data/map-style";
 import {
   demoHistoricalPlaceAttribution,
   demoHistoricalPlaceLocales,
@@ -53,6 +53,11 @@ import {
 } from "../data/history-polities";
 
 type HistoryDemoViewProps = {
+  /**
+   * The Flat Map runtime of the History Map View. `"maps"` runs the whole journey on the
+   * first-party runtime (#231 phase D) with the same composition, clock and selection.
+   */
+  flatRuntime?: "maplibre" | "maps";
   onMapControllerReady?: (controller: MapSurfaceController) => void;
   onMapReady?: (map: MapLibreMap) => void;
   onViewStateChange?: (viewState: MapViewState) => void;
@@ -148,6 +153,7 @@ const getPolityFeatureId = (feature: GeoJsonLayerFeature<DemoHistoricalPolityPro
 const getPlaceFeatureId = (feature: PointMapLayerFeature) => feature.point.id;
 
 export function HistoryDemoView({
+  flatRuntime = "maplibre",
   onMapControllerReady,
   onMapReady,
   onViewStateChange,
@@ -286,8 +292,9 @@ export function HistoryDemoView({
             dataBounds={historySceneBounds}
             defaultViewState={{ center: [13, 51], zoom: 3.4 }}
             fitBoundsPadding={52}
+            flatRuntime={flatRuntime}
             mapLabel="European polity history"
-            mapStyle={demoMapStyle}
+            mapStyle={flatRuntime === "maps" ? demoMapsRuntimeMapStyle : demoMapStyle}
             onMapControllerReady={handleMapControllerReady}
             onMapReady={onMapReady}
             onViewStateChange={onViewStateChange}

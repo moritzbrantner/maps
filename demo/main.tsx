@@ -28,6 +28,7 @@ import {
   markRustRuntimeUnavailable,
   recordRustAggregationDiagnostic,
 } from "./rust-runtime-status";
+import { MapsHistoryRuntimeAcceptance } from "./MapsHistoryRuntimeAcceptance";
 import { ShowcaseShell } from "./ShowcaseShell";
 
 const queryClient = new QueryClient();
@@ -90,6 +91,8 @@ async function bootstrap() {
     content = <MapsTemporalCompositionAcceptance />;
   } else if (acceptanceMode === "maps-runtime-historical") {
     content = <MapsHistoricalRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-history") {
+    content = <MapsHistoryRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-oriented") {
     content = <MapsOrientedRuntimeAcceptance />;
   }
