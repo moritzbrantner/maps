@@ -1,11 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { maplibreDefaultEasing, maplibreFlyTo } from "./helpers/maplibre-flyto-oracle";
+import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 
 // Animated first-party flyTo (#433) through the real Rust/WASM runtime: the presented
 // trajectory follows MapLibre's flyTo, `onViewStateChange` reports every presented frame,
 // layers stay aligned and pickable after the flight, user input interrupts it, and the Canvas
 // fallback presents the same flight.
+
+// Run this file in its own worker and browser. After seconds of animated flight on the Canvas
+// fallback, the same browser presents the next page's WebGPU work late: the heat fixture
+// that follows in file order took about 4.5 s instead of 0.6 s to draw its three heat layers
+// and missed its readiness budget in CI. A fresh browser shows no delay. A file-level launch
+// option gives this file its own worker, so its browser is not reused by another spec.
+test.use({ launchOptions: { args: [...WEBGPU_SWIFTSHADER_ARGS] } });
 
 type TraceEntry = {
   reason: string;
