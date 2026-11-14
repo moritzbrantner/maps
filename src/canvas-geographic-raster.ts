@@ -1,3 +1,5 @@
+import type { MapScreenProject } from "./map-screen-render-frame";
+
 export type CanvasGeographicRasterBounds = [
   west: number,
   south: number,
@@ -5,9 +7,7 @@ export type CanvasGeographicRasterBounds = [
   north: number,
 ];
 
-export type CanvasGeographicRasterProject = (
-  coordinate: [longitude: number, latitude: number],
-) => { x: number; y: number } | null;
+export type CanvasGeographicRasterProject = MapScreenProject;
 
 export type CanvasGeographicRasterVerticalScale = "latitude" | "mercator";
 
@@ -19,6 +19,10 @@ type RasterVertex = {
 };
 
 type RasterTriangle = readonly [RasterVertex, RasterVertex, RasterVertex];
+
+type RasterVertexAt = ((u: number, v: number) => RasterVertex | null) & {
+  prepare(samples: [number, number][]): void;
+};
 
 const TRANSFORM_EPSILON = 1e-7;
 const MAX_MERCATOR_LATITUDE = 85.05112878;
@@ -131,13 +135,70 @@ function visitGeographicRasterTriangles({
   view: { width: number; height: number };
   drawTriangle: (triangle: RasterTriangle) => void;
 }) {
-  const vertexAt = (u: number, v: number): RasterVertex | null => {
+  // Only this draw owns the cache: a new camera must project every needed sample anew.
+  // The scalar path remains the uncached reference for packed projection parity.
+  const projected = new Map<number, RasterVertex | null>();
+  const resolution = subdivisions * 2 ** (MAX_CELL_SPLIT_DEPTH + 1);
+  // All samples lie on this dyadic lattice. Numeric keys avoid allocating strings per sample.
+  const sampleKey = (u: number, v: number) =>
+    Math.round(u * resolution) + Math.round(v * resolution) * (resolution + 1);
+  const coordinateAt = (u: number, v: number): [number, number] => [
+    bounds[0] + (bounds[2] - bounds[0]) * u,
+    interpolateLatitude(bounds[1], bounds[3], v, verticalScale),
+  ];
+  const vertexAt: RasterVertexAt = (u, v) => {
+    const cached = projected.get(sampleKey(u, v));
+    if (cached !== undefined) return cached;
     const latitude = interpolateLatitude(bounds[1], bounds[3], v, verticalScale);
     const longitude = bounds[0] + (bounds[2] - bounds[0]) * u;
-    const screen = project([longitude, latitude]);
+    let screen;
+    try {
+      screen = project([longitude, latitude]);
+    } catch {
+      return null;
+    }
     return isFinitePoint(screen)
       ? { sourceX: image.width * u, sourceY: image.height * v, x: screen.x, y: screen.y }
       : null;
+  };
+  vertexAt.prepare = (samples) => {
+    if (!project.projectPacked) return;
+    const missing: [number, number][] = [];
+    const keys = new Set<number>();
+    for (const sample of samples) {
+      const key = sampleKey(...sample);
+      if (!projected.has(key) && !keys.has(key)) {
+        keys.add(key);
+        missing.push(sample);
+      }
+    }
+    if (missing.length === 0) return;
+    const coordinates = new Float64Array(missing.length * 2);
+    for (let i = 0; i < missing.length; i += 1) {
+      const coordinate = coordinateAt(...missing[i]!);
+      coordinates[i * 2] = coordinate[0];
+      coordinates[i * 2 + 1] = coordinate[1];
+    }
+    let points: Float64Array | null;
+    try {
+      points = project.projectPacked(coordinates);
+    } catch {
+      // Match the vector renderer: a custom packed projector may be unavailable while
+      // its scalar projection still works. Each rejected scalar point remains invisible.
+      return;
+    }
+    if (!points || points.length !== coordinates.length) return;
+    for (let i = 0; i < missing.length; i += 1) {
+      const [u, v] = missing[i]!;
+      const x = points[i * 2]!;
+      const y = points[i * 2 + 1]!;
+      projected.set(
+        sampleKey(u, v),
+        Number.isFinite(x) && Number.isFinite(y)
+          ? { sourceX: image.width * u, sourceY: image.height * v, x, y }
+          : null,
+      );
+    }
   };
   const rowLength = subdivisions + 1;
   const vertices: Array<RasterVertex | null> = Array.from(
@@ -145,32 +206,81 @@ function visitGeographicRasterTriangles({
     () => null,
   );
 
+  const samples: [number, number][] = [];
+  for (let row = 0; row <= subdivisions; row += 1) {
+    for (let column = 0; column <= subdivisions; column += 1) {
+      samples.push([column / subdivisions, row / subdivisions]);
+    }
+  }
+  vertexAt.prepare(samples);
   for (let row = 0; row <= subdivisions; row += 1) {
     for (let column = 0; column <= subdivisions; column += 1) {
       vertices[row * rowLength + column] = vertexAt(column / subdivisions, row / subdivisions);
     }
   }
 
+  const roots: RasterCellNode[] = [];
   for (let row = 0; row < subdivisions; row += 1) {
     for (let column = 0; column < subdivisions; column += 1) {
-      drawRasterCell(
-        {
-          bottomLeft: vertices[(row + 1) * rowLength + column]!,
-          bottomRight: vertices[(row + 1) * rowLength + column + 1]!,
-          topLeft: vertices[row * rowLength + column]!,
-          topRight: vertices[row * rowLength + column + 1]!,
-          u0: column / subdivisions,
-          u1: (column + 1) / subdivisions,
-          v0: row / subdivisions,
-          v1: (row + 1) / subdivisions,
-        },
-        { u: 0, v: 0 },
-        vertexAt,
-        view,
-        drawTriangle,
-      );
+      const cell = {
+        bottomLeft: vertices[(row + 1) * rowLength + column]!,
+        bottomRight: vertices[(row + 1) * rowLength + column + 1]!,
+        topLeft: vertices[row * rowLength + column]!,
+        topRight: vertices[row * rowLength + column + 1]!,
+        u0: column / subdivisions,
+        u1: (column + 1) / subdivisions,
+        v0: row / subdivisions,
+        v1: (row + 1) / subdivisions,
+      };
+      if (project.projectPacked) {
+        roots.push({ cell, depth: { u: 0, v: 0 }, children: [], triangles: [] });
+      } else {
+        drawRasterCell(cell, { u: 0, v: 0 }, vertexAt, view, drawTriangle);
+      }
     }
   }
+  // Project one adaptive frontier at a time. Preserve the original depth-first triangle order
+  // when emitting leaves, so the optimization changes only boundary crossings, never pixels.
+  let frontier = roots;
+  while (frontier.length > 0) {
+    vertexAt.prepare(
+      frontier.flatMap(({ cell, depth }) => {
+        if (depth.u >= MAX_CELL_SPLIT_DEPTH && depth.v >= MAX_CELL_SPLIT_DEPTH) {
+          return [];
+        }
+        const corners = [cell.topLeft, cell.topRight, cell.bottomLeft, cell.bottomRight];
+        if (corners.every((corner) => corner === null)) {
+          return [];
+        }
+        const finite = corners.filter((corner) => corner !== null);
+        if (finite.length === 4 && isCellOffScreen(finite, view)) {
+          return [];
+        }
+        return rasterCellSamples(cell);
+      }),
+    );
+    const next: RasterCellNode[] = [];
+    for (const node of frontier) {
+      drawRasterCell(
+        node.cell,
+        node.depth,
+        vertexAt,
+        view,
+        (triangle) => node.triangles.push(triangle),
+        (cell, depth) => {
+          const child: RasterCellNode = { cell, depth, children: [], triangles: [] };
+          node.children.push(child);
+          next.push(child);
+        },
+      );
+    }
+    frontier = next;
+  }
+  const emit = (node: RasterCellNode) => {
+    for (const triangle of node.triangles) drawTriangle(triangle);
+    for (const child of node.children) emit(child);
+  };
+  for (const root of roots) emit(root);
 }
 
 /**
@@ -195,13 +305,37 @@ type RasterCell = {
   v1: number;
 };
 
+type RasterCellNode = {
+  cell: RasterCell;
+  depth: { u: number; v: number };
+  children: RasterCellNode[];
+  triangles: RasterTriangle[];
+};
+
+function rasterCellSamples({ u0, u1, v0, v1 }: RasterCell): [number, number][] {
+  const uMid = (u0 + u1) / 2;
+  const vMid = (v0 + v1) / 2;
+  return [
+    [uMid, v0],
+    [uMid, v1],
+    [u0, vMid],
+    [u1, vMid],
+    [uMid, vMid],
+  ];
+}
+
 function drawRasterCell(
   cell: RasterCell,
   depth: { u: number; v: number },
-  vertexAt: (u: number, v: number) => RasterVertex | null,
+  vertexAt: RasterVertexAt,
   view: { height: number; width: number },
   drawTriangle: (triangle: RasterTriangle) => void,
+  visitChild?: (cell: RasterCell, depth: { u: number; v: number }) => void,
 ) {
+  const child = (cell: RasterCell, depth: { u: number; v: number }) => {
+    if (visitChild) visitChild(cell, depth);
+    else drawRasterCell(cell, depth, vertexAt, view, drawTriangle);
+  };
   const { bottomLeft, bottomRight, topLeft, topRight, u0, u1, v0, v1 } = cell;
   const corners = [topLeft, topRight, bottomLeft, bottomRight];
   if (corners.every((corner) => corner === null)) return;
@@ -213,6 +347,7 @@ function drawRasterCell(
   if (canSplitU || canSplitV) {
     const uMid = (u0 + u1) / 2;
     const vMid = (v0 + v1) / 2;
+
     const top = vertexAt(uMid, v0);
     const bottom = vertexAt(uMid, v1);
     const left = vertexAt(u0, vMid);
@@ -235,7 +370,7 @@ function drawRasterCell(
 
     if (splitU && splitV) {
       const next = { u: depth.u + 1, v: depth.v + 1 };
-      for (const child of [
+      for (const cell of [
         {
           bottomLeft: left,
           bottomRight: center,
@@ -277,43 +412,31 @@ function drawRasterCell(
           v1,
         },
       ]) {
-        drawRasterCell(child, next, vertexAt, view, drawTriangle);
+        child(cell, next);
       }
       return;
     }
     if (splitU) {
       const next = { u: depth.u + 1, v: depth.v };
-      drawRasterCell(
+      child(
         { bottomLeft, bottomRight: bottom, topLeft, topRight: top, u0, u1: uMid, v0, v1 },
         next,
-        vertexAt,
-        view,
-        drawTriangle,
       );
-      drawRasterCell(
+      child(
         { bottomLeft: bottom, bottomRight, topLeft: top, topRight, u0: uMid, u1, v0, v1 },
         next,
-        vertexAt,
-        view,
-        drawTriangle,
       );
       return;
     }
     if (splitV) {
       const next = { u: depth.u, v: depth.v + 1 };
-      drawRasterCell(
+      child(
         { bottomLeft: left, bottomRight: right, topLeft, topRight, u0, u1, v0, v1: vMid },
         next,
-        vertexAt,
-        view,
-        drawTriangle,
       );
-      drawRasterCell(
+      child(
         { bottomLeft, bottomRight, topLeft: left, topRight: right, u0, u1, v0: vMid, v1 },
         next,
-        vertexAt,
-        view,
-        drawTriangle,
       );
       return;
     }

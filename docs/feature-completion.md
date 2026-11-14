@@ -89,7 +89,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
 | GeoJSON polygon fills/strokes and holes | Yes | Yes (#161: WebGPU matches the Canvas oracle) | In progress | Polygons are GPU-retained (#196): Rust lowers rings once and camera frames upload nothing. Frames that mix polygons, lines and points keep them retained as point and shape groups in one painter order (#195). Deterministic work contracts (#189, `performance:work`) hold camera pan and zoom/bearing at 100/1k/10k polygons to zero geometry rebuilds and uploads, in-place shape updates (`updateRetainedPolygons`) to work linear in the changed shapes only, and dataset replacement to declared linear work. |
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. |
-| Heat/scalar surfaces | Developed: density and masked field on the public HeatLayer API, including GPU raster presentation and Canvas fallback | Correct on Chromium SwiftShader and Canvas: deterministic and retained-vs-uncached oracles, masks/holes, browser alignment during pan/zoom/orientation/resize and mutation/teardown coverage | In progress (#171): the GPU journey is measured descriptively; hardware acceleration and a comparable reference remain unavailable, so no Fast pass | Prepared TypeScript rasters now upload once per image to the existing wgpu backend and draw in application painter order. Camera frames retain textures; replacement/removal/disposal release them. Initial density indexing runs once after module loading. See [GPU evidence](#heatscalar-gpu-continuation-171). |
+| Heat/scalar surfaces | Developed: density and masked field on the public HeatLayer API, including GPU raster presentation and Canvas fallback | Correct on Chromium SwiftShader and Canvas: deterministic and retained-vs-uncached oracles, masks/holes, browser alignment during pan/zoom/orientation/resize and mutation/teardown coverage | Verified on the interleaved RTX 3060 Ti journey (#171): pitched p95 16.7–16.8 ms, zero pitched long tasks; see hardware scope and remaining transient costs below | Prepared TypeScript rasters now upload once per image to the existing wgpu backend and draw in application painter order. Camera frames retain textures; replacement/removal/disposal release them. Initial density indexing runs once after module loading. See [GPU evidence](#heatscalar-gpu-continuation-171). |
 | Moving features and Map-Scoped Timeline | Partial (#172 A: moving tracks over static regions on `flatRuntime="maps"` with one public map-scoped clock and play/pause/seek; temporal cluster/heat composition is phase D, blocked on #170/#171) | Partial (#172 A–C: seek/playback parity and edge sequences against an independent naive sampler, async/source-change guards, Rust/WASM sampler parity in the browser; screenshots and picking while camera and features move together are not covered) | In progress (#172 E: work counters and the full-map journey `temporal-playback-journey-v1` measured, see [below](#moving-features-fast-evidence-172-phase-e); every phase inside the frame budget at 2,000 tracks on the Canvas fallback; no reference comparison, so no Fast verdict) | Rust samples moving tracks; TypeScript keeps the clock and application data. Time changes only sample and rebuild the aggregation index (declared required work); camera frames and unrelated commits do no temporal work; static regions and tiles stay retained. The counters found and fixed re-preparation on runtime status changes, a placeholder-time sample on remount and a Rust aggregation trap on empty point sets. |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
@@ -481,8 +481,32 @@ Pitched p50/p95 were 66.7/233.3 ms (control 33.3/66.7 ms), with 100 long tasks; 
 triangles were submitted. Initial texture uploads were two images / 2,303,920 RGBA bytes;
 pan and resize uploaded no texture. See [the full measurements](engine-performance.md#heatscalar-gpu-presentation-171).
 
-**#171 remains open.** Hardware GPU frame-budget evidence and a comparable reference are
-unavailable; the Fast gate has not passed and no performance improvement is claimed.
+That capture did not close the Fast gate. The subsequent hardware investigation and fix below
+supply the missing representative evidence.
+
+### Heat/scalar hardware acceptance (#171)
+
+The GPU presentation path still spent most pitched-frame CPU time making individual
+Rust/WASM projection calls for the adaptive raster mesh. Batching the existing projector
+by subdivision round removes those crossings while preserving the exact ordered mesh,
+its 0.5 CSS-pixel error criterion, masks, holes, painter order and Canvas fallback.
+
+On 2026-11-14, three interleaved baseline/candidate pairs ran the complete canonical journey
+on the same RTX 3060 Ti / Ryzen 7 5700X host, after heavy workloads were paused. Order was
+A1, B1, B2, A2, A3, B3. Runtime-profiler accepted all three pairs as comparable. Pitched
+navigation p95 fell from 50.0–50.1 ms to 16.7–16.8 ms; all three candidate runs had zero
+pitched long tasks, versus 14–16 in each baseline. Camera-independent artifact retention,
+texture upload/release and source-change invariants passed in every candidate capture.
+
+This completes the heat/scalar Developed → Correct → Fast feature acceptance on the named
+hardware/workload, including the owner-approved GPU continuation. It does not promise
+60 FPS for every operation: density raster replacement during wheel zoom still has a
+49.9 ms p95, and superseded bursts/teardown have isolated longer intervals. JS heap is
+measured; GPU memory, WASM linear memory and GPU completion time remain unavailable.
+Moonlight browser performance policy remains unavailable; strict bundle comparability
+and these measured feature results are not an automated Moonlight verdict.
+See [interleaved measurements and provenance](engine-performance.md#batched-heat-raster-projection-171).
+
 
 ### Moving features Fast evidence (#172 phase E)
 

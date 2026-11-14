@@ -191,12 +191,34 @@ Limits:
   SwiftShader is software rendering and does not prove hardware GPU performance.
   The earlier Canvas capture used a different collector/browser and is not a matched baseline.
 - The control lane isolates the cost of the heat surfaces; it is not a reference
-  implementation. No reference or parent revision runs this journey, so `evaluation.json`
-  records comparison and Moonlight as `unavailable`. This evidence is descriptive, not a Fast
-  verdict.
+  implementation. Without `--reference`, `evaluation.json` records comparison as
+  `unavailable`. Moonlight browser performance policy remains unavailable. These captures
+  are descriptive, not an automatic Fast verdict.
 - GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
   Heat/scalar computation remains in TypeScript; prepared RGBA pixels and projected meshes
   cross into WASM for GPU presentation.
+
+### Hardware heat/scalar captures
+
+`verify:engine-heat-scalar-evidence --gpu` selects
+`heat-scalar-journey-hardware-browser-v1.yaml`: the same journey with Linux ANGLE/Vulkan
+flags instead of SwiftShader. Confirm the physical adapter on the capture host; selecting
+`wgpu` alone does not prove hardware acceleration. Keep software-rendered browser checks
+as the portable correctness lane.
+
+Supply a previous immutable bundle with `--reference /path/to/bundle` to require
+runtime-profiler's strict browser comparability check. Both captures must use the same
+scenario, journey, browser, profiler and execution environment. The command preserves
+`comparability.json`; an incompatible reference fails rather than being silently ignored.
+The no-heat control lane is still diagnostic, not a reference implementation. A comparable
+bundle is not a Moonlight performance verdict; that policy remains unavailable here.
+
+```sh
+MAPS_HEAT_SCALAR_EVIDENCE_DIR=.runtime-profiler/heat-hardware-candidate \
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler \
+bun run verify:engine-heat-scalar-evidence --gpu --reference /path/to/reference-bundle
+```
+
 
 ## Temporal playback journey evidence (#172)
 

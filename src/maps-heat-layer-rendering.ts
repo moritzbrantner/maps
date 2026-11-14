@@ -11,7 +11,6 @@ import { clamp } from "./heat-layer-utils";
 import {
   createMapsHeatSurfaceViewport,
   getMapsHeatLayerViewportBounds,
-  projectMapsHeatLayerCoordinate,
   queryMapsHeatLayerFeatureCollection,
   type MapsHeatLayerViewportGeometry,
 } from "./maps-heat-layer-bounds";
@@ -151,7 +150,7 @@ export function drawMapsHeatRaster(
     devicePixelRatio,
     image: raster.image,
     opacity: raster.opacity,
-    project: (coordinate) => projectMapsHeatLayerCoordinate(viewport, coordinate),
+    project: viewport.project,
     verticalScale: raster.projection,
   });
   raster.work.rasterDrawTriangles += triangles;
