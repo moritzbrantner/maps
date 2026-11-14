@@ -162,10 +162,13 @@ type MapsOverlayLayersProps = {
    * Closes feature overlays whose Map Feature left the composition and refreshes a retained
    * popup with its layer's latest feature and renderer, so popup content follows the
    * committed composition (such as a date-appropriate name) instead of the click-time props.
+   * `isSelected` reports whether a PointLayer or GeoJsonLayer's controlled `selectedFeatureId`
+   * selects the feature, so a popup closes once that selection moves away (as on MapLibre).
    */
   retireFeatureOverlays?: (
     isRendered: (overlayKey: string) => boolean,
     latestPopup?: (overlayKey: string) => MapsOverlayPopupSource | undefined,
+    isSelected?: (overlayKey: string) => boolean,
   ) => void;
   surface: MapsOverlayInteractionSurface;
   unproject: MapsUnprojectCoordinate;
@@ -696,10 +699,23 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       if (reconciledEntriesRef.current === entries) return;
       reconciledEntriesRef.current = entries;
       const rendered = new Set<string>();
+      const selected = new Set<string>();
       const popups = new Map<string, MapsOverlayPopupSource>();
-      for (const interaction of snapshot.interactions.values()) {
+      // Popups follow controlled selection only where the MapLibre path's layers do.
+      const selectionLayers = new Set(
+        entries.flatMap((entry) =>
+          entry.kind === "point" || entry.kind === "geojson" ? [entry.prefix] : [],
+        ),
+      );
+      for (const [primitiveId, interaction] of snapshot.interactions) {
         rendered.add(interaction.key);
         if (interaction.popup) popups.set(interaction.key, interaction.popup);
+        if (
+          selectionLayers.has(interaction.layer) &&
+          snapshot.selectedPrimitiveIds.has(primitiveId)
+        ) {
+          selected.add(interaction.key);
+        }
       }
       const viewportLayers = entries.flatMap((entry) =>
         entry.kind === "cluster"
@@ -715,7 +731,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         hoveredByLayerRef.current.delete(layer);
         interaction.clearHover();
       }
-      retireFeatureOverlays?.(isRendered, (key) => popups.get(key));
+      retireFeatureOverlays?.(
+        isRendered,
+        (key) => popups.get(key),
+        (key) => selected.has(key),
+      );
     };
 
     useLayoutEffect(() => {
