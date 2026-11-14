@@ -657,3 +657,19 @@ clustering oracle: the approved #47 no-WASM/SSR contract intentionally returns
 unclustered points. The reference adapter is outside all package entries and
 retains the canonical, seeded, metric, expansion, leaf and large-index checks;
 it does not restore a JavaScript production clustering authority.
+
+## Batched heat raster projection (#171)
+
+The hardware continuation exposed a second bottleneck after GPU presentation: adaptive heat
+meshes called the scalar Rust/WASM projector for every midpoint, including shared samples.
+A Chromium CPU profile attributed the largest application cost to `MapsFlatRasterRuntime.project`
+and its WASM call. The existing packed projection boundary now handles one adaptive subdivision
+round at a time; sample reuse is scoped to one draw and leaves retain their original order.
+The geographic projection and 0.5 CSS-pixel subdivision criterion are unchanged. Both GPU
+and Canvas use this preparation; no heat/scalar computation moves out of TypeScript.
+
+Deterministic tests compare the complete ordered mesh against the uncached scalar path for
+latitude and Mercator rasters, flat and pitched cameras, horizon rejection and camera changes.
+They require at most 12 projection batches per raster, no scalar calls when packed projection
+is available, no repeated sample projection, and only the initial 81 samples for an offscreen
+raster. Missing or failing packed projection retains the scalar fallback.

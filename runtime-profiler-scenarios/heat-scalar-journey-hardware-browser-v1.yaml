@@ -1,0 +1,24 @@
+schema_version: runtime-profiler/scenario/v1
+id: maps-heat-scalar-journey-v1
+target:
+  type: browser-journey
+  module: scripts/profile-heat-scalar-journey.ts
+  working_directory: ..
+  browser_args:
+    - --enable-unsafe-webgpu
+    - --use-angle=vulkan
+    - --enable-features=Vulkan
+    - --disable-vulkan-surface
+  inherit_env:
+    - HOME
+    - MAPS_HEAT_SCALAR_OBSERVATION
+    - PATH
+    - PLAYWRIGHT_BROWSERS_PATH
+    - TMPDIR
+    - XDG_CACHE_HOME
+run:
+  warmup_iterations: 0
+  measurement_iterations: 1
+  timeout_seconds: 420
+collectors:
+  - browser-chromium

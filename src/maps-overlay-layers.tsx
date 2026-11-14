@@ -1,6 +1,5 @@
 "use client";
 
-import { projectMapsHeatLayerCoordinate as projectMapsHeatLayerCoordinateForRaster } from "./maps-heat-layer-bounds";
 import { createGeographicRasterMesh } from "./canvas-geographic-raster";
 
 import { useMapsAggregationRuntime } from "./aggregation-runtime-react";
@@ -891,8 +890,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
                 : createGeographicRasterMesh({
                     bounds: raster.bounds,
                     image: raster.image,
-                    project: (coordinate) =>
-                      projectMapsHeatLayerCoordinateForRaster(heatViewport, coordinate),
+                    project: heatViewport.project,
                     verticalScale: raster.projection,
                     width: scene.width,
                     height: scene.height,
