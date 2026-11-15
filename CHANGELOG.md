@@ -4,6 +4,16 @@
 
 ### Minor Changes
 
+- `flyTo` animates on `flatRuntime="maps"` (#433). The first-party runtime no longer jumps:
+  it follows MapLibre's `flyTo` path (van Wijk & Nuij zoom-out/zoom-back curve, default
+  curve 1.42 and speed 1.2, default ease; shortest path across the antimeridian and for the
+  bearing; linear pitch) and honours `MapFlyToOptions.durationMs`. `animate: false`,
+  `durationMs: 0` and `prefers-reduced-motion` jump at once, as MapLibre. Rust owns the
+  trajectory, camera constraints and cancellation; the browser host presents one camera
+  frame per animation frame with `onViewStateChange(…, { reason: "fly-to" })`. A later camera
+  command, `flyTo`, pan, zoom, rotate, pointer press or unmount ends the flight where it is.
+  Invalid targets or durations, and rotated or pitched flights on a `maxBounds` camera, fail
+  closed and leave the camera unchanged.
 - Tileset style features are pickable on `flatRuntime="maps"` (#346). `tilesetLayers` takes
   `interactiveLayerIds` (circle and symbol layers only; other ids throw) and the usual Map
   Feature callbacks: `getFeatureId`, `onFeatureHover`, `onHoveredFeatureIdChange`,

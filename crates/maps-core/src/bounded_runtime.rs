@@ -5,6 +5,8 @@
 //! is applied after every camera mutation so browser hosts never become the
 //! authority for geographic clamping or minimum-zoom derivation.
 
+use crate::camera_flight::{CameraFlight, CameraPose};
+use crate::flat_runtime::validate_camera;
 use crate::{
     FlatRasterRuntime, FlatRasterRuntimeError, MapBounds, MapCamera, RasterFramePlan,
     RasterSourceSpec, ScreenCoordinate, TileId, WorldCoordinate, project_web_mercator,
@@ -19,6 +21,8 @@ const WORLD_EPSILON: f64 = 1e-12;
 pub struct BoundedFlatRasterRuntime {
     inner: FlatRasterRuntime,
     max_bounds: Option<MapBounds>,
+    /// The in-flight animated `flyTo`. Every other camera command supersedes it.
+    flight: Option<CameraFlight>,
 }
 
 impl BoundedFlatRasterRuntime {
@@ -28,7 +32,11 @@ impl BoundedFlatRasterRuntime {
     ) -> Result<Self, FlatRasterRuntimeError> {
         validate_max_bounds(max_bounds)?;
         validate_bounded_camera(inner.camera(), max_bounds)?;
-        let mut runtime = Self { inner, max_bounds };
+        let mut runtime = Self {
+            inner,
+            max_bounds,
+            flight: None,
+        };
         runtime.apply_camera_constraint()?;
         Ok(runtime)
     }
@@ -52,6 +60,7 @@ impl BoundedFlatRasterRuntime {
         &mut self,
         max_bounds: Option<MapBounds>,
     ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
         validate_max_bounds(max_bounds)?;
         validate_bounded_camera(self.inner.camera(), max_bounds)?;
         let previous = self.max_bounds;
@@ -71,11 +80,160 @@ impl BoundedFlatRasterRuntime {
         latitude: f64,
         zoom: f64,
     ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
         self.inner.set_view_state(longitude, latitude, zoom)?;
         self.apply_camera_constraint()
     }
 
     pub fn set_camera_state(
+        &mut self,
+        longitude: f64,
+        latitude: f64,
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+    ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
+        self.present_camera_state(longitude, latitude, zoom, bearing, pitch)
+    }
+
+    /// Starts an animated `flyTo` from the current camera (#433), superseding any flight.
+    ///
+    /// The target is validated and constrained as a camera command would be: an invalid or
+    /// unsupported target (nonfinite input, a rotated or pitched bounded camera, a pitch the
+    /// renderer cannot plan) fails closed and leaves the camera and any flight untouched.
+    /// Returns the flight duration; `0` jumps to the target at once. Advance it with
+    /// [`Self::advance_flight`]; any other camera command supersedes it.
+    pub fn fly_to(
+        &mut self,
+        target: CameraPose,
+        duration_ms: Option<f64>,
+        min_zoom: f64,
+        max_zoom: f64,
+    ) -> Result<f64, FlatRasterRuntimeError> {
+        let finite_target = [
+            target.longitude,
+            target.latitude,
+            target.zoom,
+            target.bearing,
+            target.pitch,
+        ]
+        .iter()
+        .all(|value| value.is_finite());
+        if !finite_target || !min_zoom.is_finite() || !max_zoom.is_finite() || min_zoom > max_zoom {
+            return Err(FlatRasterRuntimeError::InvalidCamera);
+        }
+        let viewport = self.inner.camera().viewport;
+        let candidate = MapCamera::new(
+            target.longitude,
+            target.latitude,
+            target.zoom.clamp(min_zoom, max_zoom),
+            target.bearing,
+            target.pitch,
+            viewport,
+        )
+        .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+        validate_bounded_camera(candidate, self.max_bounds)?;
+        validate_camera(candidate)?;
+
+        let (target, min_zoom) = match self.max_bounds {
+            Some(bounds) => {
+                let constrained = constrain_camera_to_bounds(candidate, bounds)?;
+                // MapLibre limits the zoom-out to the constrained minimum zoom.
+                let lowest = MapCamera::new(
+                    constrained.longitude,
+                    constrained.latitude,
+                    min_zoom.min(self.inner.camera().zoom).min(constrained.zoom),
+                    0.0,
+                    0.0,
+                    viewport,
+                )
+                .ok_or(FlatRasterRuntimeError::InvalidCamera)?;
+                let lowest = constrain_camera_to_bounds(lowest, bounds)?;
+                (
+                    CameraPose {
+                        longitude: constrained.longitude,
+                        latitude: constrained.latitude,
+                        zoom: constrained.zoom,
+                        bearing: 0.0,
+                        pitch: 0.0,
+                    },
+                    min_zoom.max(lowest.zoom).min(max_zoom),
+                )
+            }
+            None => (
+                CameraPose {
+                    latitude: candidate.latitude,
+                    zoom: candidate.zoom,
+                    pitch: candidate.pitch,
+                    ..target
+                },
+                min_zoom,
+            ),
+        };
+        let flight = CameraFlight::new(
+            self.inner.camera(),
+            target,
+            duration_ms,
+            min_zoom,
+            max_zoom,
+            // A bounded camera has no world copies to wrap through (MapLibre `lngRange`).
+            self.max_bounds.is_none(),
+        )
+        .map_err(|_| FlatRasterRuntimeError::InvalidCamera)?;
+
+        self.flight = None;
+        if flight.duration_ms() <= 0.0 {
+            self.present_pose(flight.target())?;
+            return Ok(0.0);
+        }
+        self.flight = Some(flight);
+        Ok(flight.duration_ms())
+    }
+
+    /// Presents the in-flight `flyTo` at `elapsed_ms` since it started. Returns whether the
+    /// flight continues; the final frame presents the exact target. A camera state the
+    /// runtime cannot present ends the flight on the last presented camera.
+    pub fn advance_flight(&mut self, elapsed_ms: f64) -> Result<bool, FlatRasterRuntimeError> {
+        let Some(flight) = self.flight else {
+            return Ok(false);
+        };
+        if !elapsed_ms.is_finite() {
+            self.flight = None;
+            return Err(FlatRasterRuntimeError::InvalidCamera);
+        }
+        let finished = flight.is_finished_at(elapsed_ms);
+        if let Err(error) = self.present_pose(flight.pose_at(elapsed_ms)) {
+            self.flight = None;
+            return Err(error);
+        }
+        if finished {
+            self.flight = None;
+        }
+        Ok(!finished)
+    }
+
+    /// Ends the in-flight `flyTo` where it is, if any.
+    pub fn cancel_flight(&mut self) {
+        self.flight = None;
+    }
+
+    #[must_use]
+    pub const fn is_flying(&self) -> bool {
+        self.flight.is_some()
+    }
+
+    fn present_pose(&mut self, pose: CameraPose) -> Result<(), FlatRasterRuntimeError> {
+        self.present_camera_state(
+            pose.longitude,
+            pose.latitude,
+            pose.zoom,
+            pose.bearing,
+            pose.pitch,
+        )
+    }
+
+    fn present_camera_state(
         &mut self,
         longitude: f64,
         latitude: f64,
@@ -123,6 +281,7 @@ impl BoundedFlatRasterRuntime {
         delta_x: f64,
         delta_y: f64,
     ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
         self.inner.pan_by_pixels(delta_x, delta_y)?;
         self.apply_camera_constraint()
     }
@@ -132,6 +291,7 @@ impl BoundedFlatRasterRuntime {
         previous: ScreenCoordinate,
         current: ScreenCoordinate,
     ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
         self.inner.pan_between_screen_points(previous, current)?;
         self.apply_camera_constraint()
     }
@@ -143,6 +303,7 @@ impl BoundedFlatRasterRuntime {
         min_zoom: f64,
         max_zoom: f64,
     ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
         self.inner
             .zoom_about(delta_zoom, screen, min_zoom, max_zoom)?;
         self.apply_camera_constraint()
@@ -154,6 +315,7 @@ impl BoundedFlatRasterRuntime {
         delta_bearing: f64,
         screen: ScreenCoordinate,
     ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
         if self.max_bounds.is_some() && delta_bearing != 0.0 {
             return Err(FlatRasterRuntimeError::UnsupportedCamera);
         }
@@ -170,6 +332,7 @@ impl BoundedFlatRasterRuntime {
         padding: f64,
         max_zoom: f64,
     ) -> Result<(), FlatRasterRuntimeError> {
+        self.flight = None;
         self.inner
             .fit_bounds(west, south, east, north, padding, max_zoom)?;
         self.apply_camera_constraint()
@@ -551,5 +714,258 @@ mod tests {
                 .unwrap();
 
         assert!(runtime.camera().longitude.abs() > 170.0);
+    }
+
+    fn pose(longitude: f64, latitude: f64, zoom: f64, bearing: f64, pitch: f64) -> CameraPose {
+        CameraPose {
+            longitude,
+            latitude,
+            zoom,
+            bearing,
+            pitch,
+        }
+    }
+
+    fn camera_pose(runtime: &BoundedFlatRasterRuntime) -> CameraPose {
+        let camera = runtime.camera();
+        pose(
+            camera.longitude,
+            camera.latitude,
+            camera.zoom,
+            camera.bearing,
+            camera.pitch,
+        )
+    }
+
+    #[test]
+    fn flight_presents_the_planned_trajectory_and_ends_exactly_on_target() {
+        let mut runtime =
+            BoundedFlatRasterRuntime::new(runtime([-74.006, 40.7128], 9.0, 800.0, 600.0), None)
+                .unwrap();
+        let start = runtime.camera();
+        let target = pose(13.405, 52.52, 11.0, 40.0, 30.0);
+        let duration = runtime.fly_to(target, None, 0.0, 22.0).unwrap();
+        let reference = CameraFlight::new(start, target, None, 0.0, 22.0, true).unwrap();
+
+        assert_eq!(duration, reference.duration_ms());
+        assert!(runtime.is_flying());
+        // Starting a flight presents nothing until the host advances it.
+        assert_eq!(runtime.camera(), start);
+
+        for step in 1..10 {
+            let elapsed = duration * f64::from(step) / 10.0;
+            assert!(runtime.advance_flight(elapsed).unwrap());
+            let expected = reference.pose_at(elapsed);
+            let actual = camera_pose(&runtime);
+            assert!((actual.longitude - expected.longitude).abs() < 1e-9);
+            assert!((actual.latitude - expected.latitude).abs() < 1e-9);
+            assert!((actual.zoom - expected.zoom).abs() < 1e-12);
+            assert!((actual.bearing - expected.bearing).abs() < 1e-9);
+            assert!((actual.pitch - expected.pitch).abs() < 1e-9);
+        }
+
+        assert!(!runtime.advance_flight(duration + 16.0).unwrap());
+        assert!(!runtime.is_flying());
+        let end = camera_pose(&runtime);
+        assert!((end.longitude - 13.405).abs() < 1e-12);
+        assert!((end.latitude - 52.52).abs() < 1e-12);
+        assert_eq!(end.zoom, 11.0);
+        assert_eq!(end.bearing, 40.0);
+        assert_eq!(end.pitch, 30.0);
+        // Advancing a finished flight is a no-op.
+        assert!(!runtime.advance_flight(duration * 2.0).unwrap());
+        assert_eq!(camera_pose(&runtime), end);
+    }
+
+    #[test]
+    fn camera_commands_supersede_an_in_flight_flight() {
+        type Command = fn(&mut BoundedFlatRasterRuntime);
+        let commands: [(&str, Command); 6] = [
+            ("set_camera_state", |runtime| {
+                runtime.set_camera_state(1.0, 2.0, 5.0, 0.0, 0.0).unwrap();
+            }),
+            ("pan", |runtime| {
+                runtime
+                    .pan_between_screen_points(
+                        ScreenCoordinate { x: 400.0, y: 300.0 },
+                        ScreenCoordinate { x: 420.0, y: 300.0 },
+                    )
+                    .unwrap();
+            }),
+            ("zoom", |runtime| {
+                runtime
+                    .zoom_about(0.5, ScreenCoordinate { x: 400.0, y: 300.0 }, 0.0, 22.0)
+                    .unwrap();
+            }),
+            ("rotate", |runtime| {
+                runtime
+                    .rotate_about(10.0, ScreenCoordinate { x: 400.0, y: 300.0 })
+                    .unwrap();
+            }),
+            ("fit_bounds", |runtime| {
+                runtime.fit_bounds(0.0, 0.0, 10.0, 10.0, 0.0, 22.0).unwrap();
+            }),
+            ("cancel", |runtime| runtime.cancel_flight()),
+        ];
+        for (label, command) in commands {
+            let mut runtime =
+                BoundedFlatRasterRuntime::new(runtime([0.0, 0.0], 4.0, 800.0, 600.0), None)
+                    .unwrap();
+            runtime
+                .fly_to(pose(60.0, 20.0, 6.0, 0.0, 0.0), Some(1000.0), 0.0, 22.0)
+                .unwrap();
+            runtime.advance_flight(300.0).unwrap();
+            command(&mut runtime);
+            let after_command = runtime.camera();
+
+            assert!(!runtime.is_flying(), "{label}");
+            assert!(!runtime.advance_flight(600.0).unwrap(), "{label}");
+            assert_eq!(runtime.camera(), after_command, "{label}: no stale frame");
+        }
+    }
+
+    #[test]
+    fn a_new_flight_starts_from_the_presented_camera() {
+        let mut runtime =
+            BoundedFlatRasterRuntime::new(runtime([0.0, 0.0], 4.0, 800.0, 600.0), None).unwrap();
+        runtime
+            .fly_to(pose(60.0, 20.0, 6.0, 0.0, 0.0), Some(1000.0), 0.0, 22.0)
+            .unwrap();
+        runtime.advance_flight(400.0).unwrap();
+        let interrupted = runtime.camera();
+        runtime
+            .fly_to(pose(-30.0, -10.0, 3.0, 0.0, 0.0), Some(500.0), 0.0, 22.0)
+            .unwrap();
+        runtime.advance_flight(0.0).unwrap();
+        assert_eq!(runtime.camera(), interrupted);
+        assert!(!runtime.advance_flight(500.0).unwrap());
+        let end = runtime.camera();
+        assert!((end.longitude + 30.0).abs() < 1e-12 && (end.latitude + 10.0).abs() < 1e-12);
+        assert_eq!(end.zoom, 3.0);
+    }
+
+    #[test]
+    fn resizing_keeps_the_geographic_flight() {
+        let mut runtime =
+            BoundedFlatRasterRuntime::new(runtime([0.0, 0.0], 4.0, 800.0, 600.0), None).unwrap();
+        runtime
+            .fly_to(pose(60.0, 20.0, 6.0, 0.0, 0.0), Some(1000.0), 0.0, 22.0)
+            .unwrap();
+        runtime.advance_flight(200.0).unwrap();
+        runtime.resize(400.0, 300.0).unwrap();
+        assert!(runtime.is_flying());
+        assert!(!runtime.advance_flight(1000.0).unwrap());
+        assert_eq!(runtime.camera().zoom, 6.0);
+        assert_eq!(runtime.camera().viewport.width, 400.0);
+    }
+
+    #[test]
+    fn invalid_or_unsupported_flights_fail_closed() {
+        let mut runtime =
+            BoundedFlatRasterRuntime::new(runtime([0.0, 0.0], 4.0, 800.0, 600.0), None).unwrap();
+        runtime
+            .fly_to(pose(60.0, 20.0, 6.0, 0.0, 0.0), Some(1000.0), 0.0, 22.0)
+            .unwrap();
+        runtime.advance_flight(100.0).unwrap();
+        let presented = runtime.camera();
+
+        for (target, duration, min, max) in [
+            (pose(f64::NAN, 0.0, 4.0, 0.0, 0.0), None, 0.0, 22.0),
+            (pose(0.0, 0.0, f64::INFINITY, 0.0, 0.0), None, 0.0, 22.0),
+            (pose(0.0, 0.0, 4.0, f64::NAN, 0.0), None, 0.0, 22.0),
+            (pose(0.0, 0.0, 4.0, 0.0, 0.0), Some(f64::NAN), 0.0, 22.0),
+            (pose(0.0, 0.0, 4.0, 0.0, 0.0), Some(-1.0), 0.0, 22.0),
+            (pose(0.0, 0.0, 4.0, 0.0, 0.0), None, 5.0, 2.0),
+        ] {
+            assert!(runtime.fly_to(target, duration, min, max).is_err());
+            assert_eq!(runtime.camera(), presented);
+            // A rejected command does not disturb the running flight.
+            assert!(runtime.is_flying());
+        }
+        assert!(runtime.advance_flight(f64::NAN).is_err());
+        assert!(!runtime.is_flying());
+        assert_eq!(runtime.camera(), presented);
+
+        // Bounded cameras are north-up and unpitched: a rotated/pitched flight is rejected.
+        let mut bounded = BoundedFlatRasterRuntime::new(
+            self::runtime([10.0, 50.0], 5.0, 800.0, 600.0),
+            Some(europe_bounds()),
+        )
+        .unwrap();
+        let before = bounded.camera();
+        assert_eq!(
+            bounded.fly_to(pose(12.0, 48.0, 6.0, 20.0, 0.0), None, 0.0, 22.0),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        );
+        assert_eq!(
+            bounded.fly_to(pose(12.0, 48.0, 6.0, 0.0, 30.0), None, 0.0, 22.0),
+            Err(FlatRasterRuntimeError::UnsupportedCamera)
+        );
+        assert_eq!(bounded.camera(), before);
+        assert!(!bounded.is_flying());
+    }
+
+    #[test]
+    fn bounded_flights_stay_inside_the_bounds_and_clamp_the_zoom() {
+        let bounds = europe_bounds();
+        let mut runtime =
+            BoundedFlatRasterRuntime::new(runtime([-10.0, 40.0], 6.0, 800.0, 600.0), Some(bounds))
+                .unwrap();
+        let duration = runtime
+            .fly_to(pose(30.0, 60.0, 30.0, 0.0, 0.0), None, 0.0, 9.0)
+            .unwrap();
+        let mut elapsed = 0.0;
+        while runtime.advance_flight(elapsed).unwrap() {
+            assert_camera_inside_bounds(&runtime, bounds);
+            elapsed += 16.0;
+        }
+        assert!(elapsed >= duration);
+        assert_camera_inside_bounds(&runtime, bounds);
+        assert_eq!(runtime.camera().zoom, 9.0);
+    }
+
+    #[test]
+    fn zero_duration_flights_jump_and_dateline_flights_wrap() {
+        let mut runtime =
+            BoundedFlatRasterRuntime::new(runtime([170.0, 0.0], 4.0, 800.0, 600.0), None).unwrap();
+        assert_eq!(
+            runtime
+                .fly_to(pose(-170.0, 5.0, 5.0, 0.0, 0.0), Some(0.0), 0.0, 22.0)
+                .unwrap(),
+            0.0
+        );
+        assert!(!runtime.is_flying());
+        assert!((runtime.camera().longitude + 170.0).abs() < 1e-12);
+
+        let mut runtime =
+            BoundedFlatRasterRuntime::new(self::runtime([170.0, 0.0], 4.0, 800.0, 600.0), None)
+                .unwrap();
+        runtime
+            .fly_to(pose(-170.0, 0.0, 4.0, 0.0, 0.0), Some(1000.0), 0.0, 22.0)
+            .unwrap();
+        for step in 1..10 {
+            runtime.advance_flight(f64::from(step) * 100.0).unwrap();
+            let longitude = runtime.camera().longitude;
+            assert!(longitude >= 170.0 || longitude <= -170.0, "{longitude}");
+        }
+    }
+
+    #[test]
+    fn pitched_flights_interpolate_supported_pitch() {
+        let mut runtime = BoundedFlatRasterRuntime::new(
+            oriented_runtime([13.4, 52.5], 7.0, 30.0, 45.0, 800.0, 600.0),
+            None,
+        )
+        .unwrap();
+        runtime
+            .fly_to(pose(2.35, 48.85, 8.0, -20.0, 10.0), Some(800.0), 0.0, 22.0)
+            .unwrap();
+        runtime.advance_flight(400.0).unwrap();
+        let middle = runtime.camera();
+        assert!(middle.pitch < 45.0 && middle.pitch > 10.0);
+        assert!(middle.bearing < 30.0 && middle.bearing > -20.0);
+        assert!(!runtime.advance_flight(800.0).unwrap());
+        assert_eq!(runtime.camera().pitch, 10.0);
+        assert_eq!(runtime.camera().bearing, -20.0);
     }
 }

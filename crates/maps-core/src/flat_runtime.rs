@@ -1206,7 +1206,7 @@ fn is_flat_camera(camera: MapCamera) -> bool {
     camera.bearing == 0.0 && camera.pitch == 0.0
 }
 
-fn validate_camera(camera: MapCamera) -> Result<(), FlatRasterRuntimeError> {
+pub(crate) fn validate_camera(camera: MapCamera) -> Result<(), FlatRasterRuntimeError> {
     camera
         .world_size()
         .ok_or(FlatRasterRuntimeError::InvalidCamera)?;

@@ -18,6 +18,7 @@ import { configureMapsWasmPackage } from "../src/aggregation-wasm";
 import { App } from "./App";
 import { MapsClusterRaceAcceptance } from "./MapsClusterRaceAcceptance";
 import { MapsOrientedRuntimeAcceptance } from "./MapsOrientedRuntimeAcceptance";
+import { MapsFlyToAcceptance } from "./MapsFlyToAcceptance";
 import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
 import { MapsTemporalCompositionAcceptance } from "./MapsTemporalCompositionAcceptance";
 import { MapsTemporalRuntimeAcceptance } from "./MapsTemporalRuntimeAcceptance";
@@ -95,6 +96,8 @@ async function bootstrap() {
     content = <MapsHistoryRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-oriented") {
     content = <MapsOrientedRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-flyto") {
+    content = <MapsFlyToAcceptance />;
   }
 
   createRoot(document.getElementById("root")!).render(

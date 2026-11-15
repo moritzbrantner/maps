@@ -125,6 +125,21 @@ export type MapsFlatRasterRuntime = {
   markSourceLoaded(source: string, tile: MapsRasterTileId): void;
   dispose(): void;
   fitBounds(bounds: MapBounds, padding: number, maxZoom: number): void;
+  /**
+   * Starts an animated `flyTo` from the presented camera on MapLibre's flight trajectory
+   * (#433). Rust owns the trajectory, constraints and cancellation: any other camera
+   * command supersedes it. Returns the duration in ms; `0` jumped to the target.
+   */
+  flyTo(
+    viewState: MapViewState,
+    durationMs: number | undefined,
+    minZoom: number,
+    maxZoom: number,
+  ): number;
+  /** Presents the flight `elapsedMs` after it started; whether it continues. */
+  advanceFlight(elapsedMs: number): boolean;
+  /** Ends the in-flight `flyTo` on the presented camera. */
+  cancelFlight(): void;
   /** Advances scheduling; dispatch the returned work and retain the frame for reads/redraws. */
   frame(): MapsFlatRasterFrame;
   markFailed(tile: MapsRasterTileId): void;
@@ -163,6 +178,18 @@ type MapsFlatRasterWasmRuntime = {
   ): void;
   /** Packed frame; layout documented with `pack_frame_plan` in maps-wasm. */
   framePacked(): Float64Array;
+  flyTo(
+    longitude: number,
+    latitude: number,
+    zoom: number,
+    bearing: number,
+    pitch: number,
+    durationMs: number | undefined,
+    minZoom: number,
+    maxZoom: number,
+  ): number;
+  advanceFlight(elapsedMs: number): boolean;
+  cancelFlight(): void;
   setSkyStyle(style: string): void;
   /** The constant `background-color` as JSON, or an empty string for the surface default. */
   setBackgroundStyle(style: string): void;
@@ -235,6 +262,26 @@ export async function loadMapsFlatRasterRuntime(
     frame() {
       assertLive(disposed);
       return decodePackedRasterFrame(runtime.framePacked());
+    },
+    flyTo(viewState, durationMs, minZoom, maxZoom) {
+      assertLive(disposed);
+      return runtime.flyTo(
+        viewState.center[0],
+        viewState.center[1],
+        viewState.zoom,
+        viewState.bearing ?? 0,
+        viewState.pitch ?? 0,
+        durationMs,
+        minZoom,
+        maxZoom,
+      );
+    },
+    advanceFlight(elapsedMs) {
+      assertLive(disposed);
+      return runtime.advanceFlight(elapsedMs);
+    },
+    cancelFlight() {
+      if (!disposed) runtime.cancelFlight();
     },
     setBackgroundStyle(style) {
       assertLive(disposed);
