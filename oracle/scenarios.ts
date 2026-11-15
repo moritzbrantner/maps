@@ -496,6 +496,28 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { bearing: -20, center: [7.598, 47.573], zoom: 13.45 },
+    capability:
+      "symbols past the source maxzoom (12): laid out again at the overscaled tile zoom, with symbol-spacing, line anchors, zoom-dependent sizes and zoom-dependent text-field",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-overscaled",
+    origin: "Milestone E cartography (#80): street-level labels over a tileset whose tiles stop at a lower zoom (#346)",
+    size: MAP_SIZE,
+    steps: [{ at: [7.59, 47.5804], kind: "hover", label: "hover the Basel label" }],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: 30, center: [7.599, 47.5665], zoom: 19.4 },
+    capability:
+      "symbols four zooms below the map's maxzoom (22): source tiles sliced to zoom 18, then laid out again at the overscaled tile zoom 19",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-overscaled-deep",
+    origin: "Milestone E cartography (#80): a river name at building zoom over a tileset that stops at zoom 12 (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],

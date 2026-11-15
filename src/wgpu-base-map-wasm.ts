@@ -175,11 +175,18 @@ export type MapsWgpuBaseMapRenderer = {
   /** Glyph ranges retained tiles still need, as `"<start>:<font stack>"`. */
   missingGlyphRanges(): string[];
   /**
+   * `undefined` unless frames since the last call laid tiles out again past the source's
+   * maximum zoom (#346); then the errors of the tiles that failed to lay out.
+   */
+  takeStyleRelayout?(): string[] | undefined;
+  /**
    * MapLibre's `queryRenderedFeatures` at a viewport point (CSS px) over circle and symbol
    * style layers, against what the last frame drew, topmost first (#346).
    */
   queryRenderedFeatures(point: { x: number; y: number }, layers: readonly string[]): MapsTilesetFeature[];
   setVectorMaxZoom(maxZoom: number): void;
+  /** The Map View's maximum zoom, bounding how deep style layers split source tiles (#346). */
+  setMapMaxZoom?(maxZoom: number): void;
   setVectorSource(source: string): void;
   evictVectorSourceTile(source: string, tile: MapsRasterTileId): void;
   uploadTile(tile: MapsRasterTileId, image: ImageBitmap): void;
@@ -242,6 +249,7 @@ type MapsWgpuBaseMapWasmRenderer = {
   ): number;
   evictRetainedPolygons(group: number): void;
   setVectorMaxZoom(maxZoom: number): void;
+  setMapMaxZoom(maxZoom: number): void;
   setVectorSource(source: string): void;
   evictVectorSourceTile(source: string, z: number, x: number, y: number): void;
   setVectorStyle(table: Float32Array): void;
@@ -273,6 +281,7 @@ type MapsWgpuBaseMapWasmRenderer = {
   uploadReliefRaster(z: number, x: number, y: number, image: ImageBitmap): void;
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   missingGlyphRanges(): string[];
+  takeStyleRelayout(): string[] | undefined;
   queryRenderedFeatures(x: number, y: number, layers: string[]): string;
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
   uploadVectorTile(z: number, x: number, y: number, bytes: Uint8Array): number;
@@ -544,6 +553,10 @@ export async function loadMapsWgpuBaseMapRenderer(
         assertLive(disposed);
         renderer.setVectorMaxZoom(maxZoom);
       },
+      setMapMaxZoom(maxZoom) {
+        assertLive(disposed);
+        renderer.setMapMaxZoom(maxZoom);
+      },
       setVectorStyle(table) {
         assertLive(disposed);
         renderer.setVectorStyle(table);
@@ -617,6 +630,10 @@ export async function loadMapsWgpuBaseMapRenderer(
       missingGlyphRanges() {
         assertLive(disposed);
         return renderer.missingGlyphRanges();
+      },
+      takeStyleRelayout() {
+        assertLive(disposed);
+        return renderer.takeStyleRelayout();
       },
       queryRenderedFeatures(point, layers) {
         assertLive(disposed);
