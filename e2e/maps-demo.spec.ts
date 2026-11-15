@@ -492,6 +492,14 @@ for (const view of ["Editor", "Globe", "Heat", "Timeline"] as const) {
       await page.getByRole("button", { name: "Start" }).click();
       await expect(page.locator(".mb-temporal-map__current-time")).toHaveText("08:00");
     }
+    if (view === "Globe") {
+      // The Globe reports its fitted camera after loading; the Viewport readout starts at the
+      // App's initial state, so capture only once the readout has left it.
+      const viewport = page.locator("dt", { hasText: "Viewport" }).locator("+ dd");
+      await expect(viewport).toBeVisible();
+      await expect(viewport).not.toHaveText("13.40, 52.52 / 5.0");
+      await waitForDemoMapIdle(page);
+    }
     await expect(page.locator("main")).toHaveScreenshot(`${view.toLowerCase()}-mobile.png`);
   });
 }
