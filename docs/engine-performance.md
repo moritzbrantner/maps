@@ -605,24 +605,27 @@ Per completed flight, from the command to its last frame:
 
 | Flight | Parent: animation frames / plans / renders | This change (2 captures) |
 | --- | --- | --- |
-| Paris → Berlin | 108 / 231 / 267 | 142 / 142 / 142 |
-| Berlin → Paris | 129 / 162 / 163 | 142 / 142 / 142 |
-| Fiji → Samoa (1.2 s) | 73 / 113 / 73 | 73 / 73 / 73 |
-| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 257 / 257 / 257 |
-| Berlin, narrowed mid-flight | 120 / 170 / 197 | 142 / 143 / 143 |
-| Paris, after superseded flights | 15 / 15 / 15 | 15–16 / 15–16 / 15–16 |
+| Paris → Berlin | 108 / 231 / 267 | 128 / 128 / 128; 125 / 125 / 125 |
+| Berlin → Paris | 129 / 162 / 163 | 122 / 122 / 122; 121 / 121 / 121 |
+| Fiji → Samoa (1.2 s) | 73 / 113 / 73 | 74 / 74 / 73; 73 / 73 / 73 |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 252 / 252 / 252; 248 / 248 / 248 |
+| Berlin, narrowed mid-flight | 120 / 170 / 197 | 138 / 139 / 139; 124 / 125 / 125 |
+| Paris, after superseded flights | 15 / 15 / 15 | 24 / 24 / 23; 27 / 27 / 26 |
 
 | Phase | Parent: frame p50 / p95 / max (ms) | This change |
 | --- | --- | --- |
-| Paris ⇄ Berlin | 16.7 / 33.4 / 83.4 | 16.7 / 16.8 / 16.8 |
-| Dateline | 16.7 / 16.7 / 16.8 | 16.7 / 16.8 / 16.8 |
-| Resize mid-flight | 16.7 / 33.3 / 66.7 | 16.7 / 16.7–16.8 / 16.8 |
+| Paris ⇄ Berlin | 16.7 / 33.4 / 83.4 | 16.7 / 33.3–33.4 / 33.5–50.0 |
+| Dateline | 16.7 / 16.7 / 16.8 | 16.7 / 16.8 / 33.4 |
+| Resize mid-flight | 16.7 / 33.3 / 66.7 | 16.7 / 33.3–33.4 / 33.4–49.9 |
 
-No phase of either candidate capture had a long task. An earlier parent capture on the same
-machine was slower still (Paris ⇄ Berlin p95 100 ms, 24 long tasks over the flight phases), so
-the parent's timing varies more than the candidate's. Bundle manifest SHA-256: parent
-`4e69cef2…bf9bf6`, candidates `0158f89b…c5bbb9` and `639eb2b6…070648`. JS heap after GC:
-5.7 MB ready, 7.9 MB after the journey, 5.15–5.20 MB after each mid-flight unmount, 7.2 MB
+The candidate captures ran while other work loaded the host (load average about 9 on 8
+cores); one had a single long task in the resize phase. Their timing is therefore not a
+clean comparison with the parent's. An earlier capture of the same fix on a quieter host
+presented 142 animation frames per Paris ⇄ Berlin flight with one plan and render each, at
+frame p95 16.8 ms and no long task; an earlier parent capture was slower still (Paris ⇄ Berlin
+p95 100 ms, 24 long tasks over the flight phases). Bundle manifest SHA-256: parent
+`4e69cef2…bf9bf6`, candidates `57f642ab…cab17d5` and `b4c061ee…93cd5a514`. JS heap after GC:
+5.7 MB ready, 7.9 MB after the journey, 5.13–5.20 MB after each mid-flight unmount, 7.1–7.2 MB
 remounted, in every capture.
 
 On SwiftShader WebGPU (the journey run directly with `WEBGPU_SWIFTSHADER_ARGS`), every

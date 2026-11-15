@@ -98,7 +98,7 @@
   fade-in re-render never adds a second render to a camera frame. A controlled Map View's echo
   of a camera frame no longer submits a second WebGPU frame when its retained Map Layer groups
   are unchanged. On the Canvas fallback a 2.4 s Paris → Berlin flight went from 231 plans and
-  267 renders over 108 animation frames to 142 of each over 142 frames.
+  267 renders over 108 animation frames to one of each per animation frame.
 
 - Under a pitched camera, hovering and clicking a GeoJSON line measures its width on the map
   plane, as MapLibre does, instead of on the screen (#386): far up a pitched map the line is

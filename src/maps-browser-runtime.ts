@@ -758,8 +758,8 @@ export function createMapsBrowserRuntime(
       onError: (error) => config.onError?.(error),
       onRendererFailure: activateCanvasFallback,
       onCameraFrame: () => config.onCameraFrame?.(),
-      cameraMotionPending: () =>
-        flightFrame !== null || cameraFrame !== null || kineticFrame !== null,
+      // Animation frame request ids are positive: a pending camera frame is truthy.
+      busy: () => flightFrame || cameraFrame || kineticFrame,
     });
     const syncFrame = frameSynchronizer.syncFrame;
     disposeFrameSynchronizer = frameSynchronizer.dispose;
@@ -1364,7 +1364,7 @@ function createFrameSynchronizer({
   onError,
   onRendererFailure,
   onCameraFrame,
-  cameraMotionPending,
+  busy,
 }: {
   loadTile: MapsTileImageLoader["load"];
   canvas: HTMLCanvasElement;
@@ -1391,7 +1391,7 @@ function createFrameSynchronizer({
   onRendererFailure: () => void;
   onCameraFrame: () => void;
   /** A camera frame (flight, gesture, inertia, command) is scheduled for the next frame. */
-  cameraMotionPending: () => boolean;
+  busy: () => unknown;
 }) {
   type VectorResource = { bytes: Uint8Array; pixels: ShortbreadTilePixels; tile: MapsRasterTileId };
   const vectors = new Map<string, VectorResource>();
@@ -1763,11 +1763,11 @@ function createFrameSynchronizer({
   let settleHandle: number | null = null;
   let renderRequest: number | null = null;
   // Tile arrivals are planned on the next animation frame, once for all of them (#433).
-  let syncRequest: number | null = null;
-  // The animation frame (document timeline time) of the last plan and the last base render.
-  // A deferred plan or re-render skips an animation frame whose camera frame already did it.
-  let syncedFrameTime: number | null = null;
-  let renderedFrameTime: number | null = null;
+  let syncRequest = 0;
+  // The animation frame (document timeline time) of the last plan. Every camera frame plans,
+  // and presents fresh pixels: a deferred plan or re-render skips an animation frame whose
+  // camera frame already ran.
+  let syncedFrameTime: CSSNumberish | null | undefined;
   let drawnTilesAttribute = "0";
   let pendingTilesAttribute = "0";
   let retainedTilesAttribute: string | null = null;
@@ -2010,7 +2010,6 @@ function createFrameSynchronizer({
   function renderFrame(frame: MapsFlatRasterFrame, viewportOnly = false) {
     if (disposed) return;
     lastFrame = frame;
-    renderedFrameTime = animationFrameTime();
     const margin = frame.surface?.margin ?? 0;
     const viewportClip = viewportOnly
       ? { height: frame.camera.height, width: frame.camera.width }
@@ -2098,15 +2097,13 @@ function createFrameSynchronizer({
     if (disposed || renderRequest !== null) return;
     renderRequest = requestAnimationFrame((frameTime) => {
       renderRequest = null;
-      if (disposed || !lastFrame || !renderInvalidated) return;
-      // A camera frame (a flight, a gesture) already rendered this animation frame, or renders
-      // it next: this request may have been scheduled before the camera frame and run first.
+      // A camera frame (a flight, a gesture) already presented this animation frame, or does
+      // next: this request may have been scheduled before the camera frame and run first.
       // A fade still in progress asks for the next one; nothing renders twice per frame (#433).
-      if (renderedFrameTime === frameTime || cameraMotionPending()) {
-        requestRender();
-        return;
+      if (!disposed && lastFrame && renderInvalidated) {
+        if (syncedFrameTime === frameTime || busy()) requestRender();
+        else renderFrame(lastFrame);
       }
-      renderFrame(lastFrame);
     });
   }
 
@@ -2116,22 +2113,16 @@ function createFrameSynchronizer({
    * camera frame already planned that frame (#433); a camera at rest presents them at once.
    */
   function requestSync() {
-    if (disposed) return;
-    if (!cameraMotionPending()) {
-      if (syncRequest === null) syncFrame();
-      return;
+    if (!busy()) {
+      if (!syncRequest) syncFrame();
+    } else {
+      // A camera frame that already planned this animation frame planned the arrived tiles;
+      // otherwise plan them now, or leave them to the camera frame still pending.
+      syncRequest ||= requestAnimationFrame((frameTime) => {
+        syncRequest = 0;
+        if (!disposed && syncedFrameTime !== frameTime) requestSync();
+      });
     }
-    if (syncRequest !== null) return;
-    syncRequest = requestAnimationFrame((frameTime) => {
-      syncRequest = null;
-      if (disposed || syncedFrameTime === frameTime) return;
-      // The pending camera frame plans the arrived tiles itself.
-      if (cameraMotionPending()) {
-        requestSync();
-        return;
-      }
-      syncFrame();
-    });
   }
 
   // Painter order covers every primitive, retained groups included.
@@ -2282,9 +2273,10 @@ function createFrameSynchronizer({
       };
     }
 
-    const repacked =
-      !unchanged || !applicationFrame || applicationFrame !== retainedApplicationFrame;
-    if (repacked) {
+    // Unchanged groups, e.g. a controlled Map View's echo of the camera frame just presented,
+    // submit no GPU frame of their own; whatever invalidated the pixels otherwise (a tile
+    // arrival, a fade) schedules their render (#433).
+    if (!unchanged || !applicationFrame || applicationFrame !== retainedApplicationFrame) {
       applicationFrame = retainedPointTransport.frame(
         retainedPoints!.kinds,
         size.width,
@@ -2292,15 +2284,9 @@ function createFrameSynchronizer({
       );
       retainedApplicationFrame = applicationFrame;
       invalidateRendered();
+      if (!preparingCameraFrame && lastFrame) renderFrame(lastFrame);
     }
-    if (!preparingCameraFrame) {
-      if (!lastFrame) syncFrame();
-      else if (repacked) renderFrame(lastFrame);
-      // Unchanged groups, e.g. a controlled Map View's echo of the camera frame just
-      // presented, submit no GPU frame of their own; pixels invalidated elsewhere (a tile
-      // arrival) render on the next animation frame, once (#433).
-      else if (renderInvalidated) requestRender();
-    }
+    if (!preparingCameraFrame && !lastFrame) syncFrame();
     return renderer() !== null;
   }
 
@@ -2328,7 +2314,7 @@ function createFrameSynchronizer({
   }
 
   function syncFrame(): MapsFlatRasterFrame {
-    syncedFrameTime = animationFrameTime();
+    syncedFrameTime = document.timeline?.currentTime;
     void loadSprite();
     let frame = runtime.frame();
 
@@ -2500,8 +2486,6 @@ function createFrameSynchronizer({
       cancelDeviceLossMonitor();
       if (renderRequest !== null) cancelAnimationFrame(renderRequest);
       renderRequest = null;
-      if (syncRequest !== null) cancelAnimationFrame(syncRequest);
-      syncRequest = null;
       lastFrame = null;
       applicationFrame = null;
     },
@@ -2610,15 +2594,6 @@ function frameViewState(frame: MapsFlatRasterFrame): MapViewState {
   }
 
   return viewState;
-}
-
-/**
- * The current animation frame's time: inside a `requestAnimationFrame` callback the document
- * timeline reads that callback's timestamp. `null` where the timeline is unavailable.
- */
-function animationFrameTime(): number | null {
-  const time = typeof document === "undefined" ? null : document.timeline?.currentTime;
-  return typeof time === "number" ? time : null;
 }
 
 async function loadRasterTile(url: string, signal: AbortSignal) {

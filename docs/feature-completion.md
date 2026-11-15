@@ -495,13 +495,16 @@ the flight's last frame):
 
 | Flight | Parent: frames / plans / renders | This change (2 captures) |
 | --- | --- | --- |
-| Paris → Berlin (2.4 s) | 108 / 231 / 267 | 142 / 142 / 142 |
-| Berlin → Paris (2.4 s) | 129 / 162 / 163 | 142 / 142 / 142 |
-| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 257 / 257 / 257 |
-| Berlin, resized mid-flight | 120 / 170 / 197 | 142 / 143 / 143 |
+| Paris → Berlin (2.4 s) | 108 / 231 / 267 | 125–128 / same / same |
+| Berlin → Paris (2.4 s) | 129 / 162 / 163 | 121–122 / same / same |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 248–252 / same / same |
+| Berlin, resized mid-flight | 120 / 170 / 197 | 124–138 / +1 / +1 |
 
-Frame p95 over the flight phases was 16.7–16.8 ms with no long task in both captures; the
-parent's p95 was 33.4 ms in this capture and 100 ms with 24 long tasks in an earlier one.
+The final captures ran on a host loaded by other work (load average about 9 on 8 cores), so
+their frame timing (p95 16.8–33.4 ms, one long task) is not comparable with the parent's
+(p95 33.4 ms in this capture, 100 ms with 24 long tasks in an earlier one). An earlier
+capture of the same fix on a quieter host presented 142 frames per Paris ⇄ Berlin flight at
+p95 16.8 ms with no long task. The work counts do not depend on load.
 On SwiftShader WebGPU (the journey run directly, not through the collector) every completed
 flight also planned and rendered once per frame: Paris ⇄ Berlin presented 65 and 64 frames,
 where #443 recorded 8–11 frames per flight with 45–101 renders. Every interrupted flight
