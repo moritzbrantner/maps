@@ -1757,6 +1757,12 @@ function createFrameSynchronizer({
   let lastReshape = Number.NEGATIVE_INFINITY;
   let settleHandle: number | null = null;
   let renderRequest: number | null = null;
+  // Tile arrivals are planned on the next animation frame, once for all of them (#433).
+  let syncRequest: number | null = null;
+  // The animation frame (document timeline time) of the last plan and the last base render.
+  // A deferred plan or re-render skips an animation frame whose camera frame already did it.
+  let syncedFrameTime: number | null = null;
+  let renderedFrameTime: number | null = null;
   let drawnTilesAttribute = "0";
   let pendingTilesAttribute = "0";
   let retainedTilesAttribute: string | null = null;
@@ -1999,6 +2005,7 @@ function createFrameSynchronizer({
   function renderFrame(frame: MapsFlatRasterFrame, viewportOnly = false) {
     if (disposed) return;
     lastFrame = frame;
+    renderedFrameTime = animationFrameTime();
     const margin = frame.surface?.margin ?? 0;
     const viewportClip = viewportOnly
       ? { height: frame.camera.height, width: frame.camera.width }
@@ -2084,9 +2091,29 @@ function createFrameSynchronizer({
   function requestRender() {
     invalidateRendered();
     if (disposed || renderRequest !== null) return;
-    renderRequest = requestAnimationFrame(() => {
+    renderRequest = requestAnimationFrame((frameTime) => {
       renderRequest = null;
-      if (!disposed && lastFrame && renderInvalidated) renderFrame(lastFrame);
+      if (disposed || !lastFrame || !renderInvalidated) return;
+      // A camera frame (a flight, a gesture) already rendered this animation frame. A fade
+      // still in progress asks for the next one; nothing renders twice per frame (#433).
+      if (renderedFrameTime === frameTime) {
+        requestRender();
+        return;
+      }
+      renderFrame(lastFrame);
+    });
+  }
+
+  /**
+   * Plans and presents tiles that arrived since the last frame on the next animation frame,
+   * once however many arrived, unless a camera frame already planned that frame (#433).
+   */
+  function requestSync() {
+    if (disposed || syncRequest !== null) return;
+    syncRequest = requestAnimationFrame((frameTime) => {
+      syncRequest = null;
+      if (disposed || syncedFrameTime === frameTime) return;
+      syncFrame();
     });
   }
 
@@ -2238,7 +2265,9 @@ function createFrameSynchronizer({
       };
     }
 
-    if (!unchanged || !applicationFrame || applicationFrame !== retainedApplicationFrame) {
+    const repacked =
+      !unchanged || !applicationFrame || applicationFrame !== retainedApplicationFrame;
+    if (repacked) {
       applicationFrame = retainedPointTransport.frame(
         retainedPoints!.kinds,
         size.width,
@@ -2248,8 +2277,12 @@ function createFrameSynchronizer({
       invalidateRendered();
     }
     if (!preparingCameraFrame) {
-      if (lastFrame) renderFrame(lastFrame);
-      else syncFrame();
+      if (!lastFrame) syncFrame();
+      else if (repacked) renderFrame(lastFrame);
+      // Unchanged groups, e.g. a controlled Map View's echo of the camera frame just
+      // presented, submit no GPU frame of their own; pixels invalidated elsewhere (a tile
+      // arrival) render on the next animation frame, once (#433).
+      else if (renderInvalidated) requestRender();
     }
     return renderer() !== null;
   }
@@ -2278,6 +2311,7 @@ function createFrameSynchronizer({
   }
 
   function syncFrame(): MapsFlatRasterFrame {
+    syncedFrameTime = animationFrameTime();
     void loadSprite();
     let frame = runtime.frame();
 
@@ -2402,7 +2436,7 @@ function createFrameSynchronizer({
             if (descriptor) runtime.markSourceLoaded(requestedIdentity, tile);
             else runtime.markLoaded(tile);
             invalidateRendered(tile.key);
-            syncFrame();
+            requestSync();
           },
           (error) => {
             if (disposed || abort.signal.aborted || loads.get(tile.key) !== load) return;
@@ -2414,7 +2448,7 @@ function createFrameSynchronizer({
               error instanceof Error ? error.message : String(error);
             if (descriptor) sourceFailures.set(tile.key, canvas.dataset.mapBaseTileError);
             invalidateRendered(tile.key);
-            syncFrame();
+            requestSync();
             throw error;
           },
         )
@@ -2449,6 +2483,8 @@ function createFrameSynchronizer({
       cancelDeviceLossMonitor();
       if (renderRequest !== null) cancelAnimationFrame(renderRequest);
       renderRequest = null;
+      if (syncRequest !== null) cancelAnimationFrame(syncRequest);
+      syncRequest = null;
       lastFrame = null;
       applicationFrame = null;
     },
@@ -2557,6 +2593,15 @@ function frameViewState(frame: MapsFlatRasterFrame): MapViewState {
   }
 
   return viewState;
+}
+
+/**
+ * The current animation frame's time: inside a `requestAnimationFrame` callback the document
+ * timeline reads that callback's timestamp. `null` where the timeline is unavailable.
+ */
+function animationFrameTime(): number | null {
+  const time = typeof document === "undefined" ? null : document.timeline?.currentTime;
+  return typeof time === "number" ? time : null;
 }
 
 async function loadRasterTile(url: string, signal: AbortSignal) {

@@ -71,6 +71,22 @@
       ]
     },
     {
+      "id": "camera-transition-journey-v1",
+      "family": "map-view-composition",
+      "reference": "none",
+      "capabilities": ["rust-wasm", "browser"],
+      "runtimePhases": [
+        "idle",
+        "flight",
+        "dateline",
+        "successive",
+        "pointer-interrupt",
+        "resize",
+        "jumps",
+        "teardown"
+      ]
+    },
+    {
       "id": "temporal-geojson-indexed-playback-v1",
       "family": "temporal-kernel",
       "reference": "legacy-kernel-observations-at-748166c",

@@ -585,6 +585,41 @@ tracks on the Canvas fallback. No reference implementation or parent revision ru
 journey, so the comparison is unavailable; WebGPU timing and larger track counts are not
 measured.
 
+## Animated camera transitions (#433 Fast)
+
+`camera-transition-journey-v1` flies the public controlled Map View on `flatRuntime="maps"`
+over 2,000 points and 48 static polygons
+([scenario](engine-scenarios.md#camera-transition-journey-v1),
+[evidence contract](engine-evidence.md#camera-transition-journey-evidence-433)):
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-camera-transition-evidence
+```
+
+Three captures on 2026-11-15 from `590566f` plus this change, runtime-profiler 0.1.0,
+Playwright 1.64.1, Node 24.19.0, Ryzen 7 5700X, Linux x64 (WSL2), WASM SHA-256
+`272c1f8b64619854e2be1f1480cc3bd7cca0fa6fedbd537f76b8ca73e9f1a9ac`. The pinned collector
+launches Chromium without WebGPU, so the Canvas fallback ran. "Parent" is the same journey
+with `src/maps-browser-runtime.ts` from `590566f`; it fails the verifier's per-frame contract.
+
+| Phase | Parent: frames / flight frames / renders / plans, p95 | This change (2 captures) |
+| --- | --- | --- |
+| Paris ⇄ Berlin | 134 / 121 / 194 / 172, p95 100 ms, 8 long tasks | 260–292 / 250–278 / 251–279 / 250–278, p95 16.8–33.3 ms, 0–1 long task |
+| Dateline (jump, 1.2 s, 4.3 s flights) | 291 / 266 / 472 / 431, p95 33.4 ms | 343–344 / 330–332 / 335–337 / 334–336, p95 16.7–16.8 ms |
+| Successive commands | 85 / 69 / 121 / 104, p95 83.3 ms, 6 long tasks | 52–54 / 44–47 / 44–47 / 45–47, p95 16.8 ms |
+| Resize mid-flight | 149 / 132 / 202 / 185, p95 83.2 ms, 10 long tasks | 285–298 / 270–284 / 273–286 / 272–286, p95 16.7–16.8 ms |
+
+Bundle manifest SHA-256: parent `2977ad5a…8220`, candidates `30ee9554…5691` and
+`f4b2ef62…fd8fda`. The successive phase is shorter in frames after the change because its
+flights are superseded after 8 presented frames, which now arrive sooner.
+
+On SwiftShader WebGPU (the journey run directly with `WEBGPU_SWIFTSHADER_ARGS`), the
+Paris ⇄ Berlin flights presented 105 frames with 106 GPU frames and 105 plans, at p95
+66.7 ms. The parent did not complete the journey there: one stage exceeded its 30 s wait.
+
+**Not a Fast verdict.** No MapLibre reference or Moonlight policy covers this journey; GPU
+completion time, GPU and WASM memory are unavailable.
+
 ## Evidence tooling repair — September 30
 
 The build now copies its optimized WASM and matching glue to `public/wasm`, so

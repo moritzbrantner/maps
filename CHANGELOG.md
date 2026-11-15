@@ -92,6 +92,15 @@
 
 ### Patch Changes
 
+- On `flatRuntime="maps"`, camera motion plans and renders the base map at most once per
+  animation frame (#433 Fast). Raster tiles that arrive are now planned on the next animation
+  frame, once for all of them, instead of one frame plan and full render per arrived tile, and
+  a fade-in re-render is skipped when the camera frame already rendered that animation frame.
+  A controlled Map View's echo of a camera frame no longer submits a second WebGPU frame when
+  its retained Map Layer groups are unchanged. On the Canvas fallback a Paris → Berlin flight
+  went from about 1.8 plans and renders per frame to one, and from about 220 to 285 presented
+  frames over two 2.4 s flights.
+
 - Under a pitched camera, hovering and clicking a GeoJSON line measures its width on the map
   plane, as MapLibre does, instead of on the screen (#386): far up a pitched map the line is
   thinner and no longer picks where MapLibre does not, and near the camera it is wider. The
