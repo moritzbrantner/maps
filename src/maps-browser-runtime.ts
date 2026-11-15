@@ -750,6 +750,7 @@ export function createMapsBrowserRuntime(
       tileset: () => config.tileset,
       tilesetStyle: () => config.tilesetStyle,
       tilesetLayers: () => config.tilesetLayers,
+      mapMaxZoom: () => normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM,
       tilePersistence: () => config.tilePersistence,
       sprite: () => config.sprite,
       relief: () => config.relief,
@@ -1353,6 +1354,7 @@ function createFrameSynchronizer({
   tileset,
   tilesetStyle,
   tilesetLayers,
+  mapMaxZoom,
   tilePersistence,
   sprite,
   relief,
@@ -1376,6 +1378,8 @@ function createFrameSynchronizer({
   tileset: () => MapsTileset | undefined;
   tilesetStyle: () => MapsVectorBasemapStyle | undefined;
   tilesetLayers: () => MapsTilesetLayers | undefined;
+  /** The Map View's maximum zoom: style layers split tiles up to four zooms below it (#346). */
+  mapMaxZoom: () => number;
   tilePersistence: () => boolean | MapsTilePersistenceOptions | undefined;
   sprite: () => string | undefined;
   relief: () => MapsRelief | undefined;
@@ -1479,6 +1483,17 @@ function createFrameSynchronizer({
       return request;
     });
     return Promise.all(pending).then(() => undefined);
+  }
+
+  /**
+   * Tiles the frame laid out again past the source's maximum zoom (#346): report the ones
+   * that failed and load the glyph ranges the new layout needs.
+   */
+  function syncStyleRelayout(current: MapsWgpuBaseMapRenderer) {
+    const errors = current.takeStyleRelayout?.();
+    if (!errors) return;
+    for (const error of errors) onError(new Error(`could not lay out tileset style layers: ${error}`));
+    void loadGlyphs();
   }
 
   // The style sprite's sheet per URL (#323, #350), decoded once for the renderer's image
@@ -2006,6 +2021,7 @@ function createFrameSynchronizer({
         if (relief()) currentRenderer.setReliefCamera?.(frame.camera);
         currentRenderer.setFrameSky?.(frame.sky ?? null);
         currentRenderer.setFrameBackground?.(frame.background ?? null);
+        if (tilesetLayers()) currentRenderer.setMapMaxZoom?.(mapMaxZoom());
         const drawnTiles = currentRenderer.render(
           placements,
           frame.renderCamera,
@@ -2014,6 +2030,7 @@ function createFrameSynchronizer({
           viewportClip,
         );
         if (relief()) syncRelief(currentRenderer);
+        if (tilesetLayers()) syncStyleRelayout(currentRenderer);
         stats.lastRenderMs = performance.now() - started;
         recordFrameStats(currentRenderer);
         const hasDecodedVisibleTile = frame.placements.some((placement) =>

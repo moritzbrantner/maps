@@ -30,7 +30,7 @@ use crate::retained_polygons::{
     RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonGeometry, RetainedPolygonState,
     RetainedPolygonUpload, RetainedPolygons,
 };
-use crate::style_symbols::{StyleFrame, StyleSurface, StyleSymbols};
+use crate::style_symbols::{SourceZooms, StyleFrame, StyleSurface, StyleSymbols};
 use crate::vector_basemap_layout::{
     FILL_VERTEX_SIZE, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes, fill_vertex_bytes,
     line_index_bytes, line_vertex_bytes, style_table_bytes,
@@ -57,6 +57,8 @@ const MAP_BACKGROUND_GREEN: f64 = 244.0 / 255.0;
 const MAP_BACKGROUND_BLUE: f64 = 238.0 / 255.0;
 /// Shortbread publishes tiles up to z14; deeper cameras overzoom those tiles.
 const DEFAULT_VECTOR_MAX_ZOOM: u8 = 14;
+/// MapLibre's and the Map View's default maximum zoom.
+const DEFAULT_MAP_MAX_ZOOM: f64 = 22.0;
 
 const BASE_MAP_SHADER: &str = include_str!("shaders/base_map.wgsl");
 
@@ -296,6 +298,9 @@ pub struct MapsWgpuBaseMapRenderer {
     retained_polygon_uniforms: FrameUniforms,
     retained_polygon_counters: RetainedPolygonCounters,
     vector_max_zoom: u8,
+    /// The Map View's maximum zoom: style layers split source tiles up to four zooms below it
+    /// (#346).
+    map_max_zoom: f64,
     frame_stats: FrameStats,
     /// Reused per-frame scratch space; avoids allocating on the render path.
     frame_vertices: Vec<u8>,
@@ -304,6 +309,9 @@ pub struct MapsWgpuBaseMapRenderer {
     style_symbols: StyleSymbols,
     symbol_gpu: SymbolGpu,
     placed_labels: u32,
+    /// Errors of the tiles the last frames laid out again past the source's maximum zoom
+    /// (#346), `Some` until the host takes them.
+    style_relayout: Option<Vec<String>>,
     /// MapLibre's dash atlas for dashed lines (#322) and its texture.
     line_atlas: LineAtlas,
     dash_atlas: DashAtlasGpu,
@@ -1179,12 +1187,14 @@ impl MapsWgpuBaseMapRenderer {
             retained_polygon_uniforms,
             retained_polygon_counters: RetainedPolygonCounters::default(),
             vector_max_zoom: DEFAULT_VECTOR_MAX_ZOOM,
+            map_max_zoom: DEFAULT_MAP_MAX_ZOOM,
             frame_stats: FrameStats::default(),
             frame_vertices: Vec::new(),
             frame_placements: Vec::new(),
             style_symbols: StyleSymbols::default(),
             symbol_gpu,
             placed_labels: 0,
+            style_relayout: None,
             line_atlas: LineAtlas::new(),
             dash_atlas,
             style_line_uniforms,
@@ -1779,6 +1789,17 @@ impl MapsWgpuBaseMapRenderer {
     #[wasm_bindgen(js_name = setVectorMaxZoom)]
     pub fn set_vector_max_zoom(&mut self, max_zoom: u8) {
         self.vector_max_zoom = max_zoom;
+    }
+
+    /// The Map View's maximum zoom, which bounds how deep tileset style layers split source
+    /// tiles past their maximum zoom before stretching them (#346).
+    #[wasm_bindgen(js_name = setMapMaxZoom)]
+    pub fn set_map_max_zoom(&mut self, max_zoom: f64) {
+        self.map_max_zoom = if max_zoom.is_finite() {
+            max_zoom
+        } else {
+            DEFAULT_MAP_MAX_ZOOM
+        };
     }
 
     /// Last frame and retained-resource counters: raster tiles drawn, vector tiles
@@ -2380,6 +2401,7 @@ impl MapsWgpuBaseMapRenderer {
         let mut frame = self.style_symbols.frame(
             &self.vector_source,
             &tiles,
+            SourceZooms::new(self.vector_max_zoom, self.map_max_zoom),
             view_projection,
             surface,
             &mut self.line_atlas,
@@ -2409,11 +2431,22 @@ impl MapsWgpuBaseMapRenderer {
             }
         }
         self.placed_labels = frame.placed_labels;
+        if let Some(errors) = frame.relayout.take() {
+            self.style_relayout.get_or_insert_default().extend(errors);
+        }
         let atlas = self.style_symbols.atlas();
         let images = self.images.atlas();
         self.symbol_gpu
             .prepare(&self.device, &self.queue, &frame, atlas, images);
         frame
+    }
+
+    /// `undefined` unless frames since the last call laid tiles out again past the source's
+    /// maximum zoom (#346); then the errors of the tiles that failed, so the host reports them
+    /// and loads the glyph ranges the new layout needs.
+    #[wasm_bindgen(js_name = takeStyleRelayout)]
+    pub fn take_style_relayout(&mut self) -> Option<Vec<String>> {
+        self.style_relayout.take()
     }
 
     /// Labels placed by the last frame (tileset symbol layers).
