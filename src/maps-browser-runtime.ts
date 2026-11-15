@@ -8,6 +8,7 @@ import {
 import { type MapsTileset } from "./maps-tileset";
 import {
   tilesetStyleTable,
+  type MapsTilesetFeature,
   type MapsTilesetLayers,
   type MapsVectorBasemapStyle,
 } from "./maps-tileset-style";
@@ -45,7 +46,11 @@ import {
   type MapViewStateChangeReason,
   type RasterMapStyle,
 } from "./map-display";
-import type { MapScreenInteractionState, MapScreenRenderFrame } from "./map-screen-render-frame";
+import type {
+  MapScreenInteractionState,
+  MapScreenMapPlaneScale,
+  MapScreenRenderFrame,
+} from "./map-screen-render-frame";
 import {
   loadMapsFlatRasterRuntime,
   type MapsFlatRasterFrame,
@@ -117,8 +122,10 @@ type MapsRetainedPointTransport = {
   runs: (
     frame: MapVectorRenderFrame<unknown>,
     interaction: MapScreenInteractionState,
-    options: { shapes: boolean },
+    options: { pitched: boolean },
   ) => MapsRetainedApplicationRun[] | null;
+  /** Whether a retained group draws as the projected path does under a pitched camera. */
+  pitchSafe: (run: MapsRetainedApplicationRun) => boolean;
   frame: (
     runs: readonly MapsRetainedApplicationRun["kind"][],
     width: number,
@@ -184,6 +191,13 @@ export type MapsCanvasFlatRuntimeController = {
    * gestures), so a following read sees it. Reads report the presented frame otherwise.
    */
   flushCameraFrame(): void;
+  /**
+   * Animated `flyTo` (#433) on MapLibre's flight trajectory, presented one camera frame per
+   * animation frame with `onViewStateChange(…, "fly-to")`. `durationMs` overrides the
+   * speed-derived duration (`0` jumps); prefers-reduced-motion jumps. A later camera command,
+   * user pan/zoom/rotate or disposal ends the flight where it is.
+   */
+  flyTo(viewState: MapViewState, options?: { durationMs?: number }): void;
   getBaseRenderer(): MapsBaseRenderer;
   getRendererStats(): MapsRendererStats;
   /** The GPU-retained vector basemap, or `null` without the WebGPU backend. */
@@ -193,8 +207,22 @@ export type MapsCanvasFlatRuntimeController = {
   /** Whether the current camera sees the whole world, so a location can repeat across world copies. */
   getVisibleSpansFullWorld(): boolean;
   getVisibleTiles(): MapsRasterTileId[];
+  /**
+   * The screen-to-map-plane scale at a screen point under a pitched camera, for picking line
+   * widths on the map plane as MapLibre does (#386); `null` without pitch.
+   */
+  mapPlaneScale?(x: number, y: number): MapScreenMapPlaneScale | null;
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   projectPacked(coordinates: Float64Array): Float64Array;
+  /**
+   * The rendered features of Tileset `circle` and `symbol` style layers at a viewport point
+   * (CSS px), topmost first, as Rust placed and drew them in the last frame (#346). Empty
+   * without the WebGPU backend, which alone draws style layers.
+   */
+  queryRenderedFeatures(
+    point: { x: number; y: number },
+    layers: readonly string[],
+  ): MapsTilesetFeature[];
   renderApplicationFrame(
     frame: MapScreenRenderFrame<unknown>,
     interaction?: MapScreenInteractionState,
@@ -354,6 +382,10 @@ export function createMapsBrowserRuntime(
   let cameraFrame: number | null = null;
   let cameraReason: MapViewStateChangeReason | null = null;
   let cameraCommands: Array<() => void> = [];
+  // The in-flight animated `flyTo` (#433): Rust owns its trajectory and state; the host
+  // only schedules its frames. `null` when no flight runs.
+  let flightFrame: number | null = null;
+  let flightStartTime = 0;
   const scrollZoom = createMapsScrollZoom(() => scheduleCameraFrame("zoom", scrollZoomFrame));
 
   function assertActive() {
@@ -477,6 +509,54 @@ export function createMapsBrowserRuntime(
     }
   }
 
+  /** Ends an in-flight `flyTo` on its presented camera; no later frame or callback runs. */
+  function cancelFlight() {
+    if (flightFrame === null) return;
+    cancelAnimationFrame(flightFrame);
+    flightFrame = null;
+    delete canvas.dataset.mapCameraTransition;
+    activeRuntime?.cancelFlight();
+  }
+
+  /** A new camera command or user input supersedes camera motion in progress. */
+  function interruptCamera() {
+    cancelKineticPan();
+    cancelFlight();
+  }
+
+  function startFlight() {
+    flightStartTime = performance.now();
+    canvas.dataset.mapCameraTransition = "fly-to";
+    flightFrame = requestAnimationFrame(flightTick);
+  }
+
+  /** One flight frame: Rust presents the camera at the elapsed time, the host draws it. */
+  function flightTick(now: number) {
+    flightFrame = null;
+    const runtime = activeRuntime;
+    const syncFrame = synchronize;
+    if (!runtime || !syncFrame) {
+      delete canvas.dataset.mapCameraTransition;
+      return;
+    }
+    let running: boolean;
+    try {
+      running = runtime.advanceFlight(Math.max(0, now - flightStartTime));
+    } catch (error) {
+      // Rust ended the flight on the last presented camera.
+      delete canvas.dataset.mapCameraTransition;
+      config.onError?.(error);
+      return;
+    }
+    if (running) flightFrame = requestAnimationFrame(flightTick);
+    else delete canvas.dataset.mapCameraTransition;
+    try {
+      emitViewState?.(syncFrame(), "fly-to");
+    } catch (error) {
+      config.onError?.(error);
+    }
+  }
+
   function startKineticPan(velocity: MapsPanVelocity, anchor: ScreenPoint) {
     cancelKineticPan();
     const initial = createMapsKineticPanState(velocity);
@@ -538,7 +618,7 @@ export function createMapsBrowserRuntime(
 
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
-    cancelKineticPan();
+    interruptCamera();
     velocityTracker.clear();
     if (!activeRuntime || !synchronize) return;
     const position = pointerPosition(event.clientX, event.clientY);
@@ -612,6 +692,7 @@ export function createMapsBrowserRuntime(
         frame: transport.createMapsWgpuRetainedFrame,
         pointChanges: transport.diffMapsRetainedPoints,
         runs: transport.createMapsRetainedApplicationRuns,
+        pitchSafe: transport.isMapsRetainedRunPitchSafe,
         polygonChanges: transport.diffMapsRetainedPolygons,
       };
       delete canvas.dataset.mapBaseRendererError;
@@ -723,12 +804,35 @@ export function createMapsBrowserRuntime(
     const controller: MapsCanvasFlatRuntimeController = {
       fitBounds(bounds, options = {}) {
         assertActive();
-        cancelKineticPan();
+        interruptCamera();
         cancelCameraFrame();
         const effectiveMaxZoom =
           options.maxZoom ?? normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM;
         runtime.fitBounds(bounds, options.padding ?? 0, effectiveMaxZoom);
         notifyViewState(syncFrame(), options.reason ?? "fit-bounds");
+      },
+      flyTo(next, options = {}) {
+        assertActive();
+        interruptCamera();
+        cancelCameraFrame();
+        const viewState = copyViewState(next);
+        // As MapLibre's `flyTo`, honour prefers-reduced-motion with an immediate jump.
+        if (prefersReducedMotion()) {
+          scheduleCameraFrame("fly-to", () => runtime.setViewState(viewState));
+          return;
+        }
+        const effectiveMaxZoom = normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM;
+        let durationMs: number;
+        try {
+          durationMs = runtime.flyTo(viewState, options.durationMs, 0, effectiveMaxZoom);
+        } catch (error) {
+          // An invalid or unsupported flight fails closed: the camera stays where it is.
+          config.onError?.(error);
+          return;
+        }
+        // A zero-duration flight already jumped; present it on the next frame as `jumpTo`.
+        if (durationMs <= 0) scheduleCameraFrame("fly-to");
+        else startFlight();
       },
       getBaseRenderer() {
         return baseRenderer;
@@ -762,6 +866,10 @@ export function createMapsBrowserRuntime(
         assertActive();
         return frameSynchronizer.getVisibleTiles();
       },
+      mapPlaneScale(x, y) {
+        assertActive();
+        return runtime.mapPlaneScale?.(x, y) ?? null;
+      },
       project(coordinates) {
         assertActive();
         const [x, y] = runtime.project(coordinates[0], coordinates[1]);
@@ -770,6 +878,11 @@ export function createMapsBrowserRuntime(
       projectPacked(coordinates) {
         assertActive();
         return runtime.projectPacked(coordinates);
+      },
+      queryRenderedFeatures(point, layers) {
+        assertActive();
+        if (!activeRenderer || layers.length === 0) return [];
+        return activeRenderer.queryRenderedFeatures(point, layers);
       },
       renderApplicationFrame(frame, interaction = {}) {
         if (cancelled) return false;
@@ -787,7 +900,7 @@ export function createMapsBrowserRuntime(
       },
       setViewState(next, reason = "programmatic") {
         assertActive();
-        cancelKineticPan();
+        interruptCamera();
         cancelCameraFrame();
         // As MapLibre renders a `jumpTo` on its next frame, the camera change and its frame
         // run on the next animation frame: per-frame camera updates never render
@@ -832,7 +945,7 @@ export function createMapsBrowserRuntime(
 
   function handleContextMenu(event: MouseEvent) {
     event.preventDefault();
-    cancelKineticPan();
+    interruptCamera();
     const client = { x: event.clientX, y: event.clientY };
     if (mouseRotation) {
       mouseRotation.pendingContextMenu = client;
@@ -889,7 +1002,7 @@ export function createMapsBrowserRuntime(
     if (!activeRuntime) return;
     if (isMouseRotateStart(event)) {
       if (mouseRotation || gesture.pointerCount() > 0) return;
-      cancelKineticPan();
+      interruptCamera();
       velocityTracker.clear();
       const position = pointerPosition(event.clientX, event.clientY);
       mouseRotation = {
@@ -904,7 +1017,7 @@ export function createMapsBrowserRuntime(
       return;
     }
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    cancelKineticPan();
+    interruptCamera();
     velocityTracker.clear();
     pointerTimes.set(event.pointerId, event.timeStamp);
     gesture.pointerDown(event.pointerId, pointerPosition(event.clientX, event.clientY));
@@ -1072,7 +1185,7 @@ export function createMapsBrowserRuntime(
       return;
     if (viewStateEchoTracker.acknowledge(config.viewState)) return;
     viewStateEchoTracker.clear();
-    cancelKineticPan();
+    interruptCamera();
     cancelCameraFrame();
     activeRuntime.setViewState(config.viewState);
     const frame = synchronize();
@@ -1087,7 +1200,7 @@ export function createMapsBrowserRuntime(
     canvas.removeEventListener("wheel", handleWheel);
     resizeObserver?.disconnect();
     disposeFrameSynchronizer?.();
-    cancelKineticPan();
+    interruptCamera();
     cancelCameraFrame();
     config.onControllerReady?.(null);
     baseRendererListeners.clear();
@@ -1135,6 +1248,12 @@ export function createMapsBrowserRuntime(
       return activeController;
     },
   };
+}
+
+function prefersReducedMotion() {
+  return (
+    typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 function copyViewState(state: MapViewState): MapViewState {
@@ -1303,7 +1422,7 @@ function createFrameSynchronizer({
   }
   let tileReader = activeDescriptor ? createTileReader(activeDescriptor, sourceIdentity) : null;
   publishPersistenceStats();
-  let styleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
+  let styleKey = tilesetStyleKey(tilesetStyle(), tilesetLayers());
   let sourceSwitchStarted = performance.now();
   let sourceSwitchMs: number | null = null;
   let requests = 0;
@@ -1565,7 +1684,7 @@ function createFrameSynchronizer({
         cacheReuses++;
       }
     }
-    const nextStyleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
+    const nextStyleKey = tilesetStyleKey(tilesetStyle(), tilesetLayers());
     const styleChanged = styleKey !== nextStyleKey;
     if (changed || styleChanged) {
       styleKey = nextStyleKey;
@@ -1594,6 +1713,8 @@ function createFrameSynchronizer({
   let retainedPoints: {
     hovered: ReadonlySet<string>;
     kinds: MapsRetainedApplicationRun["kind"][];
+    /** Every group draws as the projected path does under a pitched camera (#387). */
+    pitchSafe: boolean;
     primitives: readonly unknown[];
     renderer: MapsWgpuBaseMapRenderer;
     // What each group holds, so data and interaction changes update groups in place.
@@ -1623,12 +1744,29 @@ function createFrameSynchronizer({
   let renderRequest: number | null = null;
   let drawnTilesAttribute = "0";
   let pendingTilesAttribute = "0";
+  let retainedTilesAttribute: string | null = null;
 
   function publishPendingTiles() {
     const value = String(loads.size + reliefLoads.size + (reliefDirty ? 1 : 0));
-    if (value === pendingTilesAttribute) return;
-    pendingTilesAttribute = value;
-    canvas.dataset.mapBasePendingTiles = value;
+    if (value !== pendingTilesAttribute) {
+      pendingTilesAttribute = value;
+      canvas.dataset.mapBasePendingTiles = value;
+    }
+    publishRetainedTiles();
+  }
+
+  /**
+   * Decoded tile images held for the active and inactive sources (#447). Rust's tile cache
+   * capacity bounds them and names every eviction; this is all the tile memory the Canvas
+   * fallback retains.
+   */
+  function publishRetainedTiles() {
+    let count = images.size;
+    for (const entries of inactive.values()) count += entries.size;
+    const value = String(count);
+    if (value === retainedTilesAttribute) return;
+    retainedTilesAttribute = value;
+    canvas.dataset.mapBaseRetainedTiles = value;
   }
   let vectorTilesAttribute: string | null = null;
   const stats = { lastRenderMs: 0, renders: 0, translatedFrames: 0 };
@@ -1939,7 +2077,9 @@ function createFrameSynchronizer({
   // Retained polygons stay on unpitched cameras. Under pitch a vertex can fall behind the
   // camera: the GPU would clip and draw the rest of the polygon, while the projected
   // picking scene (and the Canvas oracle) drop it, so the projected path keeps them in
-  // agreement. An inactive retained group makes the overlay redraw, which re-projects.
+  // agreement. Retained points and lines stay under pitch (#387; see
+  // `isMapsRetainedRunPitchSafe`). An inactive retained group makes the overlay redraw,
+  // which re-projects.
   function cameraPitched() {
     return (lastFrame?.camera.pitch ?? 0) !== 0;
   }
@@ -1948,8 +2088,9 @@ function createFrameSynchronizer({
     return !frame || frame.order.length === 0;
   }
 
-  function hasRetainedShapes() {
-    return retainedPoints?.kinds.includes("polygons") ?? false;
+  /** Retained groups a pitched camera returns to the projected path. */
+  function hasPitchUnsafeRetainedGroups() {
+    return retainedPoints !== null && !retainedPoints.pitchSafe;
   }
 
   /** Evicts the retained groups from `keep` on, and every group whose kind changes. */
@@ -1977,8 +2118,8 @@ function createFrameSynchronizer({
     const currentRenderer = renderer();
     if (!currentRenderer || !retainedPointTransport) return false;
 
-    // A pitched camera returns retained shapes to the projected path.
-    if (hasRetainedShapes() && cameraPitched()) releaseRetainedPoints();
+    // A pitched camera returns retained shapes other than lines to the projected path.
+    if (hasPitchUnsafeRetainedGroups() && cameraPitched()) releaseRetainedPoints();
     const current = retainedPoints;
     const unchanged =
       current !== null &&
@@ -1989,7 +2130,7 @@ function createFrameSynchronizer({
       sameIdSet(current.selected, interaction.selectedPrimitiveIds);
     if (!unchanged) {
       const transport = retainedPointTransport;
-      const runs = transport.runs(frame, interaction, { shapes: !cameraPitched() });
+      const runs = transport.runs(frame, interaction, { pitched: cameraPitched() });
       // Groups still retained on this renderer from the previous runs. A group of the same
       // kind is kept: unchanged groups are not touched and groups of the same size are
       // updated in place, so one changed feature uploads one point or shape (#189).
@@ -2072,6 +2213,7 @@ function createFrameSynchronizer({
       retainedPoints = {
         hovered: new Set(interaction.hoveredPrimitiveIds ?? []),
         kinds,
+        pitchSafe: runs.every(transport.pitchSafe),
         primitives: frame.primitives.slice(),
         renderer: currentRenderer,
         runs,
@@ -2350,7 +2492,7 @@ function createFrameSynchronizer({
     retainedApplicationPointsActive: () =>
       retainedPoints !== null &&
       retainedPoints.renderer === renderer() &&
-      !(hasRetainedShapes() && cameraPitched()),
+      !(hasPitchUnsafeRetainedGroups() && cameraPitched()),
     syncFrame,
   };
 }
@@ -2555,4 +2697,12 @@ function getCanvasCssSize(canvas: HTMLCanvasElement) {
     height: Math.max(1, Math.round(rect.height || canvas.clientHeight || 1)),
     width: Math.max(1, Math.round(rect.width || canvas.clientWidth || 1)),
   };
+}
+
+/** What the Tileset renders from: picking callbacks and interactive layer ids lay nothing out. */
+function tilesetStyleKey(
+  style: MapsVectorBasemapStyle | undefined,
+  layers: MapsTilesetLayers | undefined,
+) {
+  return JSON.stringify([style, layers?.glyphs, layers?.layers]);
 }

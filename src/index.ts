@@ -438,7 +438,12 @@ export {
   type MapsTilePersistenceOptions,
   type MapsTilePersistenceStatus,
 } from "./maps-tile-persistence";
-export { type MapsTilesetLayers, type MapsVectorBasemapStyle } from "./maps-tileset-style";
+export {
+  type MapsTilesetFeature,
+  type MapsTilesetLayerInteraction,
+  type MapsTilesetLayers,
+  type MapsVectorBasemapStyle,
+} from "./maps-tileset-style";
 export {
   createMapsPlaceSearchIndex,
   loadMapsPlaceSearchIndex,

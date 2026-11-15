@@ -11,10 +11,11 @@ use maps_core::symbol::layout::EXTENT;
 use maps_core::symbol::variable_anchors::render_shift;
 use maps_core::symbol::{
     AtlasRect, GlyphStore, IconQuad, ImageAtlas, ImageStore, LabelAxes, LayerBucket, LineGlyphs,
-    LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile, StyleLayer,
-    StyleLayerKind, SymbolAlignment, SymbolBucket, SymbolDrawState, SymbolGlyph, SymbolPaint,
-    SymbolText, TileProjection, TileStyleBuckets, VariableAnchorMemory, layout_tile,
-    line_label_glyphs, parse_glyph_pbf, place_symbols, symbol_tile_order,
+    LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile,
+    RenderedFeatureIndex, StyleLayer, StyleLayerKind, SymbolAlignment, SymbolBucket,
+    SymbolDrawState, SymbolGlyph, SymbolPaint, SymbolText, TileProjection, TileStyleBuckets,
+    VariableAnchorMemory, draw_groups, layout_tile, line_label_glyphs, parse_glyph_pbf,
+    place_symbols_with_collisions, query_layer_indices, rendered_feature, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
@@ -152,6 +153,8 @@ pub(crate) struct StyleSymbols {
     fill_signature: Vec<(TileKey, u64)>,
     /// The anchors variable labels took in the last placement.
     variable_anchors: VariableAnchorMemory,
+    /// What the last frame drew, by source, for `queryRenderedFeatures` (#346).
+    rendered: Option<(String, RenderedFeatureIndex)>,
 }
 
 impl StyleSymbols {
@@ -163,6 +166,8 @@ impl StyleSymbols {
     /// every retained tile out again.
     pub(crate) fn set_layers(&mut self, json: &str, images: &mut ImageStore) -> Result<(), String> {
         self.layers = StyleLayer::parse_all(json)?;
+        // The last frame indexed the previous layers.
+        self.rendered = None;
         self.relayout(images)
     }
 
@@ -231,6 +236,40 @@ impl StyleSymbols {
         Ok(())
     }
 
+    /// MapLibre's `queryRenderedFeatures` at a viewport point (CSS px) over the `layers` ids,
+    /// against what the last frame drew: a JSON array of features, topmost first. Only circle
+    /// and symbol layers are queryable; other ids are errors.
+    pub(crate) fn query_rendered_features<S: AsRef<str>>(
+        &self,
+        point: [f64; 2],
+        layers: &[S],
+    ) -> Result<String, String> {
+        let indices = query_layer_indices(&self.layers, layers)?;
+        let features: Vec<serde_json::Value> = self
+            .rendered
+            .iter()
+            .flat_map(|(source, index)| {
+                index
+                    .query_point(point, &indices)
+                    .into_iter()
+                    .map(move |hit| (source, hit))
+            })
+            .filter_map(|(source, hit)| {
+                let layer = self.layers.get(hit.layer)?;
+                let tile = self
+                    .tiles
+                    .get(&(source.clone(), (hit.tile.z, hit.tile.x, hit.tile.y)))?;
+                let features = &tile
+                    .source
+                    .iter()
+                    .find(|decoded| decoded.name == layer.source_layer)?
+                    .features;
+                Some(rendered_feature(layer, features.get(hit.feature_index)?))
+            })
+            .collect();
+        serde_json::to_string(&features).map_err(|error| error.to_string())
+    }
+
     pub(crate) fn evict(&mut self, source: &str, key: TileKey) {
         self.tiles.remove(&(source.to_owned(), key));
     }
@@ -261,6 +300,7 @@ impl StyleSymbols {
         images: &mut ImageStore,
     ) -> StyleFrame {
         let mut frame = StyleFrame::default();
+        self.rendered = None;
         if !self.is_active() || placements.is_empty() {
             return frame;
         }
@@ -517,7 +557,7 @@ impl StyleSymbols {
                 },
             })
             .collect();
-        let placed = place_symbols(
+        let (placed, collisions) = place_symbols_with_collisions(
             &placement_tiles,
             self.layers.len(),
             viewport.0,
@@ -526,6 +566,17 @@ impl StyleSymbols {
             bearing,
             &mut self.variable_anchors,
         );
+        self.rendered = Some((
+            source.to_owned(),
+            RenderedFeatureIndex::new(
+                &placement_tiles,
+                &placed,
+                &collisions,
+                &self.layers,
+                zoom,
+                bearing,
+            ),
+        ));
 
         let to_clip = |viewport_point: [f64; 2]| -> [f32; 2] {
             [
@@ -656,31 +707,40 @@ impl StyleSymbols {
                     }
                 }
                 StyleLayerKind::Symbol => {
-                    let symbols = &placed[layer_index];
                     // Symbols draw per tile in MapLibre's descending symbol tile order.
-                    let tiles: Vec<(usize, &SymbolBucket, SymbolDrawState, Vec<&PlacedSymbol>)> =
-                        (0..placement_tiles.len())
-                            .rev()
-                            .filter_map(|tile_index| {
-                                let tile = &placement_tiles[tile_index];
-                                let Some(LayerBucket::Symbols(bucket)) =
-                                    tile.buckets.layers.get(layer_index)
-                                else {
-                                    return None;
-                                };
-                                let tile_symbols: Vec<_> = symbols
+                    let draw_tiles: Vec<(usize, &SymbolBucket, SymbolDrawState)> = (0
+                        ..placement_tiles.len())
+                        .rev()
+                        .filter_map(|tile_index| {
+                            let tile = &placement_tiles[tile_index];
+                            let Some(LayerBucket::Symbols(bucket)) =
+                                tile.buckets.layers.get(layer_index)
+                            else {
+                                return None;
+                            };
+                            let state =
+                                SymbolDrawState::new(layer, zoom, f64::from(tile.tile.z)).ok()?;
+                            Some((tile_index, &**bucket, state))
+                        })
+                        .collect();
+                    // Maps-core orders each tile's symbols (`symbol-z-order`) and splits them
+                    // into sort-key segments drawn by key across tiles (`symbol-sort-key`).
+                    let groups = draw_groups(
+                        &draw_tiles
+                            .iter()
+                            .map(|(tile_index, bucket, _)| (*tile_index, *bucket))
+                            .collect::<Vec<_>>(),
+                        &placed[layer_index],
+                        bearing,
+                    );
+                    let tiles: Vec<(usize, &SymbolBucket, SymbolDrawState, Vec<PlacedSymbol>)> =
+                        groups
+                            .into_iter()
+                            .filter_map(|group| {
+                                let (_, bucket, state) = draw_tiles
                                     .iter()
-                                    .filter(|symbol| symbol.tile == tile_index)
-                                    .collect();
-                                let state =
-                                    SymbolDrawState::new(layer, zoom, f64::from(tile.tile.z))
-                                        .ok()?;
-                                (!tile_symbols.is_empty()).then_some((
-                                    tile_index,
-                                    &**bucket,
-                                    state,
-                                    tile_symbols,
-                                ))
+                                    .find(|(tile_index, _, _)| *tile_index == group.tile)?;
+                                Some((group.tile, *bucket, *state, group.symbols))
                             })
                             .collect();
                     frame.placed_labels += tiles
@@ -698,7 +758,10 @@ impl StyleSymbols {
                             let icon_size = bucket.icon_size.at_zoom(zoom);
                             let icon_text_size = bucket.text_size.at_zoom(zoom);
                             let tile_projection = &placement_tiles[*tile_index].projection;
-                            let shift = bucket.icon_translate.uv(bearing, tile_projection.tile_px);
+                            let shift =
+                                bucket
+                                    .icon_translate
+                                    .uv(zoom, bearing, tile_projection.tile_px);
                             let shifted = tile_projection.shifted(shift);
                             let projection = tile_projection.with(&shifted);
                             let mut quads = Vec::new();
@@ -833,8 +896,11 @@ impl StyleSymbols {
                                 // `updateVariableAnchors`: an icon fitted to variable text sits
                                 // at the text's shifted anchor, and is hidden without one.
                                 if bucket.variable_anchors && bucket.icon_text_fit {
-                                    let text_shift =
-                                        bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                                    let text_shift = bucket.text_translate.uv(
+                                        zoom,
+                                        bearing,
+                                        tile_projection.tile_px,
+                                    );
                                     let text_plane = SymbolPlane::new(
                                         quad_context,
                                         tile_projection,
@@ -907,7 +973,10 @@ impl StyleSymbols {
                         let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                         for (tile_index, bucket, state, tile_symbols) in &tiles {
                             let tile_projection = &placement_tiles[*tile_index].projection;
-                            let shift = bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                            let shift =
+                                bucket
+                                    .text_translate
+                                    .uv(zoom, bearing, tile_projection.tile_px);
                             let shifted = tile_projection.shifted(shift);
                             let projection = &tile_projection.with(&shifted);
                             let text_size = bucket.text_size.at_zoom(zoom);
@@ -1672,6 +1741,92 @@ mod tests {
         assert!(symbols.atlas().width > 0);
         symbols.evict("s", (7, 66, 45));
         assert!(symbols.missing_glyph_ranges().is_empty());
+    }
+
+    #[test]
+    fn queries_hit_drawn_circles_and_placed_labels_top_layer_first() {
+        let mut images = ImageStore::default();
+        let mut symbols = StyleSymbols::default();
+        symbols
+            .set_layers(
+                r##"[
+                {"id":"roads","type":"line","source":"v","source-layer":"streets"},
+                {"id":"dots","type":"circle","source":"v","source-layer":"places",
+                 "paint":{"circle-radius":14,"circle-stroke-width":1}},
+                {"id":"labels","type":"symbol","source":"v","source-layer":"places",
+                 "layout":{"text-field":["get","name"],"text-font":["NotoSans-Regular"],"text-anchor":"left",
+                           "text-offset":[0.6,0],"text-size":20}}
+            ]"##,
+                &mut images,
+            )
+            .unwrap();
+        symbols
+            .upload("s", (7, 66, 45), &places_tile(), &mut images)
+            .unwrap();
+        add_glyphs(&mut symbols, &mut images);
+        // Nothing is drawn before the first frame.
+        assert_eq!(
+            symbols.query_rendered_features([360.0, 240.0], &["dots", "labels"]),
+            Ok("[]".to_owned())
+        );
+        centred_frame(&mut symbols, &mut images);
+
+        let names =
+            |symbols: &StyleSymbols, point: [f64; 2], layers: &[&str]| -> Vec<(String, String)> {
+                let json = symbols.query_rendered_features(point, layers).unwrap();
+                let features: serde_json::Value = serde_json::from_str(&json).unwrap();
+                features
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|feature| {
+                        assert_eq!(feature["sourceLayer"], "places");
+                        assert_eq!(feature["properties"]["rank"], 2);
+                        (
+                            feature["layer"]["id"].as_str().unwrap().to_owned(),
+                            feature["properties"]["name"].as_str().unwrap().to_owned(),
+                        )
+                    })
+                    .collect()
+            };
+        let zurich = |layer: &str| (layer.to_owned(), "Zürich".to_owned());
+        // The circle (radius plus stroke 15 px) sits on the anchor at the screen centre.
+        assert_eq!(
+            names(&symbols, [360.0, 240.0], &["dots", "labels"]),
+            vec![zurich("dots")]
+        );
+        assert_eq!(
+            names(&symbols, [374.9, 240.0], &["dots"]),
+            vec![zurich("dots")]
+        );
+        assert!(names(&symbols, [375.0, 240.0], &["dots"]).is_empty());
+        // The label's box starts 12 px (0.6 em) right of the anchor.
+        assert_eq!(
+            names(&symbols, [400.0, 240.0], &["dots", "labels"]),
+            vec![zurich("labels")]
+        );
+        assert!(names(&symbols, [400.0, 240.0], &["dots"]).is_empty());
+        assert!(names(&symbols, [360.0, 300.0], &["dots", "labels"]).is_empty());
+        // Where both draw, the upper layer comes first.
+        assert_eq!(
+            names(&symbols, [372.0, 240.0], &["dots", "labels"]),
+            vec![zurich("labels"), zurich("dots")]
+        );
+        // Line and unknown layers are refused, not silently empty.
+        assert!(
+            symbols
+                .query_rendered_features([0.0, 0.0], &["roads"])
+                .is_err()
+        );
+        assert!(
+            symbols
+                .query_rendered_features([0.0, 0.0], &["lakes"])
+                .is_err()
+        );
+        // An evicted tile takes its features out of later frames' queries.
+        symbols.evict("s", (7, 66, 45));
+        centred_frame(&mut symbols, &mut images);
+        assert!(names(&symbols, [360.0, 240.0], &["dots", "labels"]).is_empty());
     }
 
     fn add_glyphs(symbols: &mut StyleSymbols, images: &mut ImageStore) {

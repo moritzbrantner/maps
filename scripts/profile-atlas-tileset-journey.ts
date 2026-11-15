@@ -95,27 +95,35 @@ export type AtlasTilesetObservation = {
 };
 
 export async function run({ page }: { page: Page }): Promise<AtlasTilesetObservation> {
-  const role = process.env.MAPS_RUNTIME_PROFILE_IMPLEMENTATION;
-  if (!role || !IMPLEMENTATIONS.has(role)) {
-    throw new Error(
-      "MAPS_RUNTIME_PROFILE_IMPLEMENTATION must be either 'reference' or 'candidate'",
-    );
-  }
-  const site = process.env.MAPS_ATLAS_TILESET_SITE;
-  if (!site) {
-    throw new Error("MAPS_ATLAS_TILESET_SITE must name a site built by buildAtlasTilesetSite");
-  }
-  const server = await serveSite(path.resolve(rootDir, site));
+  const output = process.env.MAPS_ATLAS_TILESET_OBSERVATIONS;
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("static server has no port");
-    const observation = await journey(page, `http://127.0.0.1:${address.port}`, role);
-    const output = process.env.MAPS_ATLAS_TILESET_OBSERVATIONS;
-    if (output) appendFileSync(output, `${JSON.stringify(observation)}\n`);
-    return observation;
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const role = process.env.MAPS_RUNTIME_PROFILE_IMPLEMENTATION;
+    if (!role || !IMPLEMENTATIONS.has(role)) {
+      throw new Error(
+        "MAPS_RUNTIME_PROFILE_IMPLEMENTATION must be either 'reference' or 'candidate'",
+      );
+    }
+    const site = process.env.MAPS_ATLAS_TILESET_SITE;
+    if (!site) {
+      throw new Error("MAPS_ATLAS_TILESET_SITE must name a site built by buildAtlasTilesetSite");
+    }
+    const server = await serveSite(path.resolve(rootDir, site));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("static server has no port");
+      const observation = await journey(page, `http://127.0.0.1:${address.port}`, role);
+      if (output) appendFileSync(output, `${JSON.stringify(observation)}\n`);
+      return observation;
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  } catch (error) {
+    // runtime-profiler discards this process's output; leave the cause for the caller.
+    if (output) {
+      appendFileSync(`${output}.error`, `${error instanceof Error ? error.stack : String(error)}\n`);
+    }
+    throw error;
   }
 }
 

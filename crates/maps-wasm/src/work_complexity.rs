@@ -210,6 +210,7 @@ fn camera_view(runtime: &mut FlatRasterRuntime) -> (RetainedView, [f32; 16]) {
         }),
         view_projection,
         VIEWPORT[0],
+        VIEWPORT[1],
     )
     .expect("retained view");
     (view, view_projection)

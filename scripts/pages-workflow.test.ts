@@ -41,6 +41,21 @@ test("PR previews preserve CI oracle authority and do not rerun publication meas
   assert.match(ci, /bun run oracle -- --out oracle-report/);
 });
 
+test("the Chromium the setup installs is the one runtime-profiler journeys launch", () => {
+  // `bunx playwright install` runs node_modules/.bin/playwright, which is @playwright/test's
+  // CLI, while runtime-profiler's driver loads the consumer's `playwright` package. Different
+  // versions pin different Chromium revisions, and the journey cannot launch at all (#270).
+  const setup = workflow.split("      setup_command: |\n")[1]?.split("      build_command: |\n")[0];
+  assert.match(setup ?? "", /bunx playwright install --with-deps chromium/);
+  const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as {
+    devDependencies?: Record<string, string>;
+    dependencies?: Record<string, string>;
+  };
+  const versions = { ...manifest.dependencies, ...manifest.devDependencies };
+  assert.ok(versions.playwright, "runtime-profiler journeys need the `playwright` package");
+  assert.equal(versions.playwright, versions["@playwright/test"]);
+});
+
 test("every same-origin evidence source names a file the Pages build produces", () => {
   const config = JSON.parse(readFileSync(resolve(root, "pages.config.json"), "utf8")) as {
     evidenceSources: Array<{ id: string; url: string }>;

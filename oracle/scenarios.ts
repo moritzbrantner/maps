@@ -333,7 +333,14 @@ export const scenarios: Scenario[] = [
     name: "symbols",
     origin: "Milestone E cartography (#80); place labels on any vector basemap; Tileset style layers #321",
     size: MAP_SIZE,
-    steps: [],
+    steps: [
+      { at: [8.674, 47.3819], kind: "hover", label: "hover the Zürich label" },
+      { at: [7.467, 46.9167], kind: "hover", label: "hover the Bern dot" },
+      { at: [9.4676, 47.5732], kind: "hover", label: "hover the Bodensee label on its pole" },
+      { at: [8.0, 46.75], kind: "hover", label: "hover nothing" },
+      { at: [8.5481, 47.3819], kind: "click", label: "select the Zürich dot" },
+      { at: [7.67, 47.5804], kind: "click", label: "select the Basel label" },
+    ],
   },
   {
     basemap: "vector",
@@ -344,7 +351,11 @@ export const scenarios: Scenario[] = [
     name: "symbol-icons",
     origin: "Milestone E cartography (#80): POI and capital icons on any vector basemap; symbol icons (#346)",
     size: MAP_SIZE,
-    steps: [],
+    steps: [
+      { at: [9.5149, 47.135], kind: "hover", label: "hover the Vaduz star" },
+      { at: [8.5464, 47.3471], kind: "hover", label: "hover the Zürich name under its icon" },
+      { at: [9.4645, 47.5859], kind: "click", label: "select the Bodensee icon" },
+    ],
   },
   {
     basemap: "vector",
@@ -366,7 +377,11 @@ export const scenarios: Scenario[] = [
     name: "symbol-lines",
     origin: "Milestone E cartography (#80): river and road names along their lines; line placement (#346)",
     size: MAP_SIZE,
-    steps: [],
+    steps: [
+      { at: [9.2484, 47.6513], kind: "hover", label: "hover the Rhein along the lake" },
+      { at: [8.4822, 47.5846], kind: "hover", label: "hover the Rhin label" },
+      { at: [8.962, 47.6027], kind: "click", label: "select a motorway label" },
+    ],
   },
   {
     basemap: "vector",
@@ -439,6 +454,43 @@ export const scenarios: Scenario[] = [
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-alignment-pitch",
     origin: "Milestone E cartography (#80): names and markers that lie on the pitched map (#346)",
+    size: MAP_SIZE,
+    steps: [
+      { at: [8.28, 47.0504], kind: "hover", label: "hover the Luzern icon turned with the map" },
+      { at: [7.467, 46.9167], kind: "hover", label: "hover the Bern star on the map" },
+      { at: [8.5481, 47.3819], kind: "click", label: "select the Zürich icon" },
+    ],
+  },
+  {
+    basemap: "vector",
+    camera: { center: [8.6, 47.4], zoom: 7.2 },
+    capability:
+      "symbol-sort-key: placement priority across tiles, overlapping symbols drawn by key across tiles",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-sort-key",
+    origin: "Milestone E cartography (#80): major roads and large places win the label space (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: 160, center: [8.6, 47.4], zoom: 7.2 },
+    capability:
+      "symbol-z-order under a turned camera: overlapping symbols drawn top-down (auto), viewport-y placement bottom-up, source order",
+    knownGaps: [],
+    name: "symbol-z-order",
+    origin: "Milestone E cartography (#80): stacked markers that overlap in screen order (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
+    camera: { bearing: -25, center: [8.6, 47.3], zoom: 7.6 },
+    capability:
+      "zoom-dependent and data-driven variable anchors (text-variable-anchor step, text-variable-anchor-offset per feature and interpolated), text/icon-translate and translate anchors at the camera zoom",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-zoom-anchors",
+    origin: "Milestone E cartography (#80): place labels whose anchors and offsets follow the zoom and the place (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -522,12 +574,8 @@ export const scenarios: Scenario[] = [
       {
         gate: "time",
         issue: 387,
-        reason: "the projected path re-emits every patterned strip per frame; retained lines do not",
-      },
-      {
-        gate: "interaction",
-        issue: 386,
-        reason: "pitched GeoJSON line picks use the screen-space width, wider than MapLibre far from the camera",
+        reason:
+          "pitched patterned lines are retained, but the ratio stays at line-pattern's WebGPU presentation floor (#343)",
       },
     ],
     name: "line-pattern-pitch",

@@ -9,6 +9,7 @@ import type {
 import type { MapScreenRenderFrame } from "./map-screen-render-frame";
 import {
   createMapsRetainedApplicationRuns,
+  isMapsRetainedRunPitchSafe,
   createMapsWgpuApplicationFrame,
   MAPS_WGPU_APPLICATION_LINE,
   createMapsWgpuApplicationFramePacker,
@@ -763,14 +764,35 @@ describe("retained application runs (#195)", () => {
     ]);
   });
 
+  test("retains lines under a pitched camera: their strips extrude on the map plane (#387)", () => {
+    const patterned: MapRenderLine = { ...line("p"), linePattern: "track" };
+    const frame = {
+      kind: "vector" as const,
+      primitives: [line("l"), patterned, ...circles(MAPS_RETAINED_POINT_RUN_MIN, "c")],
+    };
+    const result = createMapsRetainedApplicationRuns(frame, {}, { pitched: true });
+
+    expect(result?.map((run) => run.kind)).toEqual(["polygons", "points"]);
+    expect(result?.every(isMapsRetainedRunPitchSafe)).toBe(true);
+    const [shapes] = result!;
+    if (shapes?.kind !== "polygons") throw new Error("expected shapes");
+    expect(shapes.polygons.patterns).toEqual(["", "track"]);
+    // Built for an unpitched camera, a group with any other shape is not pitch-safe.
+    expect(runs([line("l"), marker("m")])?.map(isMapsRetainedRunPitchSafe)).toEqual([false]);
+  });
+
   test("keeps frames that still need screen work on the projected path", () => {
     expect(runs([])).toBeNull();
     expect(runs([line("degenerate", [[1, 1], [1, 1]])])).toBeNull();
     expect(runs([line("nan", [[0, 0], [Number.NaN, 1]])])).toBeNull();
 
-    const pitched = { shapes: false };
+    // A pitched camera keeps polygons, direction markers and shape-run circles projected.
+    const pitched = { pitched: true };
     expect(
       createMapsRetainedApplicationRuns({ kind: "vector", primitives: [circle("a"), line("l")] }, {}, pitched),
+    ).toBeNull();
+    expect(
+      createMapsRetainedApplicationRuns({ kind: "vector", primitives: [line("l"), marker("m")] }, {}, pitched),
     ).toBeNull();
     expect(
       createMapsRetainedApplicationRuns({ kind: "vector", primitives: [circle("a")] }, {}, pitched),

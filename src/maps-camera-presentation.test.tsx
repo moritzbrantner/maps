@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GeoJsonLayer } from "./geojson-layer";
@@ -38,10 +39,19 @@ let resizeCallbacks: Array<{ callback: ResizeObserverCallback; target?: Element 
 let size: { width: number; height: number };
 let context: CanvasRenderingContext2D;
 let surface: MapsFlatRasterFrame["surface"];
+type FakeFlight = {
+  from: MapsFlatRasterFrame["camera"];
+  to: Pick<MapsFlatRasterFrame["camera"], "center" | "zoom" | "bearing" | "pitch">;
+  duration: number;
+};
+// A stand-in for the Rust flight (linear here): the trajectory itself is verified against
+// MapLibre in Rust and in the real Rust/WASM browser test. These tests own the host.
+let flight: FakeFlight | null;
 
 beforeEach(() => {
   camera = { center: [0, 0], zoom: 4, bearing: 0, pitch: 0, width: 600, height: 400 };
   surface = undefined;
+  flight = null;
   size = { width: 600, height: 400 };
   paints = [];
   frames = new Map();
@@ -95,6 +105,51 @@ beforeEach(() => {
     takeSourceEvictions: vi.fn(() => []),
     markSourceLoaded: vi.fn(),
     dispose: vi.fn(),
+    flyTo: vi.fn(
+      (state: MapViewState, durationMs: number | undefined, _minZoom: number, maxZoom: number) => {
+        const values = [...state.center, state.zoom, state.bearing ?? 0, state.pitch ?? 0];
+        if (
+          !values.every(Number.isFinite) ||
+          (durationMs !== undefined && !(Number.isFinite(durationMs) && durationMs >= 0))
+        ) {
+          throw new Error("invalid flat raster camera");
+        }
+        const to = {
+          center: [state.center[0], state.center[1]] as [number, number],
+          zoom: Math.min(state.zoom, maxZoom),
+          bearing: state.bearing ?? 0,
+          pitch: state.pitch ?? 0,
+        };
+        const duration = durationMs ?? 1000;
+        flight = null;
+        if (duration === 0) {
+          camera = { ...camera, ...to };
+          return 0;
+        }
+        flight = { from: { ...camera, center: [...camera.center] }, to, duration };
+        return duration;
+      },
+    ),
+    advanceFlight: vi.fn((elapsed: number) => {
+      if (!flight) return false;
+      const t = Math.min(1, Math.max(0, elapsed / flight.duration));
+      const mix = (a: number, b: number) => a + (b - a) * t;
+      camera = {
+        ...camera,
+        center: [
+          mix(flight.from.center[0], flight.to.center[0]),
+          mix(flight.from.center[1], flight.to.center[1]),
+        ],
+        zoom: mix(flight.from.zoom, flight.to.zoom),
+        bearing: mix(flight.from.bearing ?? 0, flight.to.bearing),
+        pitch: mix(flight.from.pitch ?? 0, flight.to.pitch),
+      };
+      if (t >= 1) flight = null;
+      return t < 1;
+    }),
+    cancelFlight: vi.fn(() => {
+      flight = null;
+    }),
     fitBounds: vi.fn(),
     markFailed: vi.fn(),
     markLoaded: vi.fn(),
@@ -102,9 +157,11 @@ beforeEach(() => {
     setSkyStyle: vi.fn(),
     setBackgroundStyle: vi.fn(),
     panBetween: vi.fn((previousX, previousY, x, y) => {
+      flight = null;
       camera.center = [camera.center[0] + previousX - x, camera.center[1] + previousY - y];
     }),
     setViewState: vi.fn((state: MapViewState) => {
+      flight = null;
       camera = { ...camera, ...state, bearing: state.bearing ?? 0, pitch: state.pitch ?? 0 };
     }),
     resize: vi.fn((width, height) => {
@@ -133,6 +190,7 @@ beforeEach(() => {
     }),
     zoom: vi.fn(() => camera.zoom),
     zoomAbout: vi.fn((delta, _x, _y, min, max) => {
+      flight = null;
       camera.zoom = Math.max(min, Math.min(max, camera.zoom + delta));
     }),
     frame: vi.fn(
@@ -195,6 +253,7 @@ beforeEach(() => {
     setVectorLayers: vi.fn(),
     addGlyphs: vi.fn(),
     missingGlyphRanges: vi.fn(() => []),
+    queryRenderedFeatures: vi.fn(() => []),
     uploadTile: vi.fn(),
     uploadVectorTile: vi.fn(() => 0),
     render: vi.fn((_tiles, matrix, application, _margin, viewportClip) => {
@@ -965,6 +1024,255 @@ describe("Maps camera presentation", () => {
     expect(paints).toHaveLength(0);
     expect(changed).not.toHaveBeenCalled();
     expect(runtime.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Maps animated flyTo (#433)", () => {
+  /** The `[viewState, reason]` pairs `onViewStateChange` received. */
+  function reasons(changed: ReturnType<typeof vi.fn>) {
+    return changed.mock.calls.map(([next, context]) => {
+      const viewState = next as MapViewState;
+      return [
+        {
+          center: viewState.center,
+          zoom: viewState.zoom,
+          bearing: viewState.bearing ?? 0,
+          pitch: viewState.pitch ?? 0,
+        },
+        (context as { reason: string }).reason,
+      ] as const;
+    });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(performance, "now").mockReturnValue(1000);
+  });
+
+  it("presents one Rust flight frame per animation frame, with aligned layers and fly-to view states", async () => {
+    const { canvas, controller, changed } = await mountMap();
+
+    act(() => controller.flyTo({ center: [10, 0], zoom: 6, bearing: 30 }, { durationMs: 200 }));
+    expect(runtime.flyTo).toHaveBeenCalledWith(
+      { center: [10, 0], zoom: 6, bearing: 30 },
+      200,
+      0,
+      22,
+    );
+    expect(canvas.dataset.mapCameraTransition).toBe("fly-to");
+    // The command presents nothing until the host's next animation frame.
+    expect(paints).toEqual([]);
+    expect(changed).not.toHaveBeenCalled();
+
+    act(() => flushAnimationFrame(1100));
+    expect(runtime.advanceFlight).toHaveBeenLastCalledWith(100);
+    // The point at longitude 10 is drawn against the same presented camera (center 5, zoom 5).
+    expect(paints).toEqual([{ zoom: 5, x: 300 + (10 - 5) * 5 }]);
+    expect(reasons(changed)).toEqual([
+      [{ center: [5, 0], zoom: 5, bearing: 15, pitch: 0 }, "fly-to"],
+    ]);
+
+    act(() => flushAnimationFrame(1200));
+    expect(paints.at(-1)).toEqual({ zoom: 6, x: 300 });
+    expect(reasons(changed).at(-1)).toEqual([
+      { center: [10, 0], zoom: 6, bearing: 30, pitch: 0 },
+      "fly-to",
+    ]);
+    expect(canvas.dataset.mapCameraTransition).toBeUndefined();
+    expect(runtime.advanceFlight).toHaveBeenCalledTimes(2);
+
+    // Settling commits the final camera; no further flight frame runs.
+    act(settleCamera);
+    expect(runtime.advanceFlight).toHaveBeenCalledTimes(2);
+    expect(controller.getViewState()).toMatchObject({
+      center: [10, 0],
+      zoom: 6,
+      bearing: 30,
+    });
+  });
+
+  it("passes the default duration to Rust and jumps for animate:false or a zero duration", async () => {
+    const { controller, changed } = await mountMap();
+
+    act(() => controller.flyTo({ center: [10, 0], zoom: 6 }));
+    expect(vi.mocked(runtime.flyTo).mock.calls[0]?.[1]).toBeUndefined();
+    act(() => controller.setViewState({ center: [0, 0], zoom: 4 }));
+    act(settleCamera);
+    changed.mockClear();
+    vi.mocked(runtime.flyTo).mockClear();
+
+    act(() => controller.flyTo({ center: [10, 0], zoom: 6 }, { animate: false }));
+    expect(runtime.flyTo).not.toHaveBeenCalled();
+    act(() => flushAnimationFrame(1100));
+    expect(reasons(changed)).toEqual([
+      [{ center: [10, 0], zoom: 6, bearing: 0, pitch: 0 }, "fly-to"],
+    ]);
+    act(settleCamera);
+    changed.mockClear();
+
+    act(() => controller.flyTo({ center: [-10, 0], zoom: 5 }, { durationMs: 0 }));
+    expect(runtime.flyTo).toHaveBeenCalledTimes(1);
+    act(() => flushAnimationFrame(1100));
+    expect(reasons(changed)).toEqual([
+      [{ center: [-10, 0], zoom: 5, bearing: 0, pitch: 0 }, "fly-to"],
+    ]);
+    act(settleCamera);
+    expect(runtime.advanceFlight).not.toHaveBeenCalled();
+  });
+
+  it("honours prefers-reduced-motion with an immediate jump, as MapLibre", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({ matches: query === "(prefers-reduced-motion: reduce)" })),
+    );
+    const { controller, changed } = await mountMap();
+
+    act(() => controller.flyTo({ center: [10, 0], zoom: 6 }, { durationMs: 500 }));
+    act(settleCamera);
+    expect(runtime.flyTo).not.toHaveBeenCalled();
+    expect(runtime.advanceFlight).not.toHaveBeenCalled();
+    expect(reasons(changed)).toEqual([
+      [{ center: [10, 0], zoom: 6, bearing: 0, pitch: 0 }, "fly-to"],
+    ]);
+  });
+
+  it("fails closed on an invalid flight: no motion, frame or callback", async () => {
+    const { canvas, controller, changed } = await mountMap();
+
+    for (const [viewState, options] of [
+      [{ center: [Number.NaN, 0], zoom: 6 }, {}],
+      [{ center: [10, 0], zoom: Number.POSITIVE_INFINITY }, {}],
+      [{ center: [10, 0], zoom: 6 }, { durationMs: Number.NaN }],
+      [{ center: [10, 0], zoom: 6 }, { durationMs: -5 }],
+    ] as const) {
+      act(() => controller.flyTo(viewState as MapViewState, options));
+    }
+    expect(runtime.flyTo).toHaveBeenCalledTimes(4);
+    expect(frames.size).toBe(0);
+    expect(canvas.dataset.mapCameraTransition).toBeUndefined();
+    expect(paints).toEqual([]);
+    expect(changed).not.toHaveBeenCalled();
+    expect(controller.getViewState()).toMatchObject({ center: [0, 0], zoom: 4 });
+  });
+
+  it("lets a camera command, a successive flyTo or user input supersede the flight without stale frames", async () => {
+    const { canvas, controller, changed } = await mountMap();
+    const startFlight = () => {
+      act(() => controller.flyTo({ center: [10, 0], zoom: 6 }, { durationMs: 200 }));
+      act(() => flushAnimationFrame(1100));
+    };
+
+    // A camera command.
+    startFlight();
+    act(() => controller.setViewState({ center: [0, 0], zoom: 8 }));
+    expect(runtime.cancelFlight).toHaveBeenCalledTimes(1);
+    expect(canvas.dataset.mapCameraTransition).toBeUndefined();
+    changed.mockClear();
+    act(settleCamera);
+    expect(runtime.advanceFlight).toHaveBeenCalledTimes(1);
+    expect(reasons(changed).map(([, reason]) => reason)).toEqual(["programmatic"]);
+    expect(paints.at(-1)).toEqual({ zoom: 8, x: 380 });
+
+    // A successive flyTo restarts from the presented camera.
+    startFlight();
+    act(() => controller.flyTo({ center: [-10, 0], zoom: 4 }, { durationMs: 100 }));
+    expect(runtime.cancelFlight).toHaveBeenCalledTimes(2);
+    act(() => flushAnimationFrame(1100));
+    act(settleCamera);
+    expect(controller.getViewState()).toMatchObject({ center: [-10, 0], zoom: 4 });
+
+    // A wheel zoom and a pointer press.
+    for (const interrupt of [
+      () => fireEvent.wheel(canvas, { deltaY: -2, clientX: 120, clientY: 80 }),
+      () => pointer(canvas, "pointerdown", 120, 2000),
+    ]) {
+      startFlight();
+      const presented = controller.getViewState();
+      const advanced = vi.mocked(runtime.advanceFlight).mock.calls.length;
+      act(interrupt);
+      act(() => flushAnimationFrame(1150));
+      act(() => flushAnimationFrame(1300));
+      expect(vi.mocked(runtime.advanceFlight).mock.calls.length).toBe(advanced);
+      expect(canvas.dataset.mapCameraTransition).toBeUndefined();
+      expect(controller.getViewState().zoom).not.toBe(6);
+      expect(controller.getViewState().zoom).toBeGreaterThanOrEqual(presented.zoom);
+      pointer(canvas, "pointerup", 120, 2010);
+      act(settleCamera);
+    }
+  });
+
+  it("keeps flying through a resize and a GPU fallback, and stops on unmount", async () => {
+    const { canvas, controller, overlay, changed, unmount } = await mountMap();
+    act(() => controller.flyTo({ center: [10, 0], zoom: 6 }, { durationMs: 400 }));
+    act(() => flushAnimationFrame(1100));
+
+    // A resize keeps the geographic flight; it is not a camera command.
+    size = { width: 800, height: 400 };
+    act(() =>
+      resizeCallbacks
+        .find((entry) => entry.target?.getAttribute("data-flat-runtime") === "maps")!
+        .callback([], {} as ResizeObserver),
+    );
+    expect(canvas.dataset.mapCameraTransition).toBe("fly-to");
+
+    // Device loss moves the presentation to Canvas; the same flight continues.
+    vi.mocked(renderer.render).mockImplementationOnce(() => {
+      throw new Error("device lost");
+    });
+    act(() => flushAnimationFrame(1200));
+    expect(overlay.dataset.mapOverlayBackend).toBe("canvas2d");
+    expect(canvas.dataset.mapBaseRenderer).toBe("canvas2d");
+    expect(canvas.dataset.mapCameraTransition).toBe("fly-to");
+    expect(reasons(changed).at(-1)).toEqual([
+      { center: [5, 0], zoom: 5, bearing: 0, pitch: 0 },
+      "fly-to",
+    ]);
+
+    unmount();
+    changed.mockClear();
+    const advanced = vi.mocked(runtime.advanceFlight).mock.calls.length;
+    act(() => flushAnimationFrame(1300));
+    expect(runtime.advanceFlight).toHaveBeenCalledTimes(advanced);
+    expect(changed).not.toHaveBeenCalled();
+    expect(frames.size).toBe(0);
+  });
+
+  it("does not let a controlled Map View's echo of a flight frame cancel the flight", async () => {
+    let controller: MapSurfaceController | undefined;
+    const seen: MapViewState[] = [];
+    function Controlled() {
+      const [viewState, setViewState] = useState<MapViewState>({ center: [0, 0], zoom: 4 });
+      return (
+        <MapsMapView
+          mapLabel="Controlled flight"
+          mapStyle={{ tiles: false }}
+          fitToData={false}
+          onMapControllerReady={(next) => {
+            controller = next;
+          }}
+          onViewStateChange={(next) => {
+            seen.push(next);
+            setViewState(next);
+          }}
+          viewState={viewState}
+        >
+          <GeoJsonLayer featureCollection={featureCollection} />
+        </MapsMapView>
+      );
+    }
+    const mounted = render(<Controlled />);
+    await waitFor(() =>
+      expect(mounted.getByLabelText("Controlled flight").dataset.mapReady).toBe("true"),
+    );
+    act(() => controller!.flyTo({ center: [10, 0], zoom: 6 }, { durationMs: 300 }));
+    for (const time of [1100, 1200, 1300]) act(() => flushAnimationFrame(time));
+
+    expect(runtime.cancelFlight).not.toHaveBeenCalled();
+    expect(runtime.setViewState).not.toHaveBeenCalled();
+    expect(seen.map((viewState) => viewState.zoom)).toEqual([
+      4 + 2 / 3,
+      4 + 4 / 3,
+      6,
+    ]);
   });
 });
 

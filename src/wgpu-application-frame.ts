@@ -779,13 +779,14 @@ export function diffMapsRetainedPolygons(
  * retained like any other (#204): only their label text needs a screen position, which the
  * host's Canvas annotation pass projects for the labeled circles alone. `null` when a
  * primitive cannot be lowered, or the frame splits into more than
- * `MAPS_RETAINED_APPLICATION_MAX_RUNS` runs. `shapes: false` (a pitched camera) keeps every frame with shapes on the projected
+ * `MAPS_RETAINED_APPLICATION_MAX_RUNS` runs. Under a `pitched` camera only lines join shape
+ * groups (see `isMapsRetainedRunPitchSafe`); a frame with other shapes stays on the projected
  * path. Paint is resolved here with the screen transport's hover/selection deltas.
  */
 export function createMapsRetainedApplicationRuns(
   frame: MapVectorRenderFrame<unknown>,
   interaction: MapScreenInteractionState = {},
-  { shapes = true }: { shapes?: boolean } = {},
+  { pitched = false }: { pitched?: boolean } = {},
 ): MapsRetainedApplicationRun[] | null {
   const primitives = frame.primitives;
   if (primitives.length === 0) return null;
@@ -797,8 +798,9 @@ export function createMapsRetainedApplicationRuns(
     const points = groups[start] === "points";
     let end = start + 1;
     while (end < primitives.length && groups[end] === groups[start]) end += 1;
-    if (runs.length === MAPS_RETAINED_APPLICATION_MAX_RUNS || (!points && !shapes)) return null;
+    if (runs.length === MAPS_RETAINED_APPLICATION_MAX_RUNS) return null;
     const slice = primitives.slice(start, end);
+    if (pitched && !points && !slice.every((primitive) => primitive.kind === "line")) return null;
     if (points) {
       const lowered = createRetainedPoints(slice, interaction, color);
       if (!lowered) return null;
@@ -811,6 +813,25 @@ export function createMapsRetainedApplicationRuns(
     start = end;
   }
   return runs;
+}
+
+/**
+ * Whether a retained group draws as the projected path does under a pitched camera (#387).
+ * Point groups scale with depth like the projected circles, and line strips extrude on the
+ * map plane through the camera's view-projection, cut into the same GeoJSON tile pieces, so
+ * camera frames only rewrite the frame uniform. Polygons stay projected: a vertex behind the
+ * camera would draw the rest of the fill, which projected picking and Canvas drop; direction
+ * markers and shape circles keep their screen-space size.
+ */
+export function isMapsRetainedRunPitchSafe(run: MapsRetainedApplicationRun): boolean {
+  if (run.kind === "points") return true;
+  const { count, paint } = run.polygons;
+  for (let index = 0; index < count; index += 1) {
+    if (paint[index * MAPS_RETAINED_POLYGON_PAINT_STRIDE + 9] !== MAPS_RETAINED_SHAPE_LINE) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Each primitive's group kind: long circle runs (or an all-circle frame) are points. */

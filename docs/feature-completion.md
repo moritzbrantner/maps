@@ -84,13 +84,14 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Capability | Developed | Correct | Fast | Current direction |
 | --- | --- | --- | --- | --- |
 | Geographic camera, project/unproject, fit/interaction | Yes | Yes | In progress | Keep Rust authoritative; profile the full camera presentation path, not camera math in isolation. |
+| Animated camera transitions (`flyTo`) | Yes (#433: `?acceptance=maps-runtime-flyto` flies center/zoom/bearing on `flatRuntime="maps"` with an `animate: false` opt-out) | Yes (#433: Rust trajectory reproduces recorded MapLibre 6.4.1 flights; host and Rust/WASM browser coverage, see [below](#animated-flyto-433)) | Not yet (work counters recorded, no comparison) | Rust owns the trajectory, constraints and cancellation; the browser host schedules one frame per animation frame. Timeline-keyframed camera sampling (#432) should reuse `CameraFlight`/`CameraPose`. |
 | Raster tile/source lifecycle and first-party base map | Yes | Yes | In progress | Retain GPU resources, prove churn/overzoom/world-copy/memory behavior, then retire superseded paths. |
 | Points and clusters | Yes | Yes | In progress | Circle instancing landed in #153; finish packed/retained application transport under #154/#60 with representative density evidence. Labeled points are GPU-retained like the others; camera frames project only the labeled points, for the Canvas label pass (#204). Deterministic work contracts (#189, `performance:work`) hold camera pan/zoom/bearing/pitch at 1k/10k/100k points to zero point encoding and upload, and in-place updates to work linear in the changed points only. Cluster layers still use the projected path. |
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
 | GeoJSON polygon fills/strokes and holes | Yes | Yes (#161: WebGPU matches the Canvas oracle) | In progress | Polygons are GPU-retained (#196): Rust lowers rings once and camera frames upload nothing. Frames that mix polygons, lines and points keep them retained as point and shape groups in one painter order (#195). Deterministic work contracts (#189, `performance:work`) hold camera pan and zoom/bearing at 100/1k/10k polygons to zero geometry rebuilds and uploads, in-place shape updates (`updateRetainedPolygons`) to work linear in the changed shapes only, and dataset replacement to declared linear work. |
-| Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. |
-| Heat/scalar surfaces | Developed: density and masked field on the public HeatLayer API, including GPU raster presentation and Canvas fallback | Correct on Chromium SwiftShader and Canvas: deterministic and retained-vs-uncached oracles, masks/holes, browser alignment during pan/zoom/orientation/resize and mutation/teardown coverage | In progress (#171): the GPU journey is measured descriptively; hardware acceleration and a comparable reference remain unavailable, so no Fast pass | Prepared TypeScript rasters now upload once per image to the existing wgpu backend and draw in application painter order. Camera frames retain textures; replacement/removal/disposal release them. Initial density indexing runs once after module loading. See [GPU evidence](#heatscalar-gpu-continuation-171). |
-| Moving features and Map-Scoped Timeline | Partial (#172 A: moving tracks over static regions on `flatRuntime="maps"` with one public map-scoped clock and play/pause/seek; temporal cluster/heat composition is phase D, blocked on #170/#171) | Partial (#172 A–C: seek/playback parity and edge sequences against an independent naive sampler, async/source-change guards, Rust/WASM sampler parity in the browser; screenshots and picking while camera and features move together are not covered) | In progress (#172 E: work counters and the full-map journey `temporal-playback-journey-v1` measured, see [below](#moving-features-fast-evidence-172-phase-e); every phase inside the frame budget at 2,000 tracks on the Canvas fallback; no reference comparison, so no Fast verdict) | Rust samples moving tracks; TypeScript keeps the clock and application data. Time changes only sample and rebuild the aggregation index (declared required work); camera frames and unrelated commits do no temporal work; static regions and tiles stay retained. The counters found and fixed re-preparation on runtime status changes, a placeholder-time sample on remount and a Rust aggregation trap on empty point sets. |
+| Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. The History demo's integrated journey (#231 phase D) runs on the Maps runtime with the same composition and clock (`?acceptance=maps-runtime-history`, `e2e/maps-history-runtime.spec.ts`), and a popup now closes when the controlled selection that selected its feature moves away, as on MapLibre; no Fast evidence recorded for it. |
+| Heat/scalar surfaces | Developed: density and masked field on the public HeatLayer API, including GPU raster presentation and Canvas fallback | Correct on Chromium SwiftShader and Canvas: deterministic and retained-vs-uncached oracles, masks/holes, browser alignment during pan/zoom/orientation/resize and mutation/teardown coverage | Verified on the interleaved RTX 3060 Ti journey (#171): pitched p95 16.7–16.8 ms, zero pitched long tasks; see hardware scope and remaining transient costs below | Prepared TypeScript rasters now upload once per image to the existing wgpu backend and draw in application painter order. Camera frames retain textures; replacement/removal/disposal release them. Initial density indexing runs once after module loading. See [GPU evidence](#heatscalar-gpu-continuation-171). |
+| Moving features and Map-Scoped Timeline | Yes (#172 A: moving tracks over static regions on `flatRuntime="maps"` with one public map-scoped clock and play/pause/seek; #172 D: `TemporalClusteredMap` clustering and `TemporalHeatMap` heat over static regions on `flatRuntime="maps"`, both on one shared clock, with no MapLibre canvas, `e2e/maps-temporal-composition.spec.ts`) | Partial (#172 A–C: seek/playback parity and edge sequences against an independent naive sampler, async/source-change guards, Rust/WASM sampler parity in the browser; #172 D: clusters at the map-scoped time equal clustering the naive sample through seek, playback, backward seek and resume, and a direct seek, playback then seek, and a burst of seeks present identical cluster and heat pixels on WebGPU and the Canvas fallback; screenshots and picking while camera and features move together are not covered) | In progress (#172 E: work counters and the full-map journey `temporal-playback-journey-v1` measured, see [below](#moving-features-fast-evidence-172-phase-e); every phase inside the frame budget at 2,000 tracks on the Canvas fallback; no reference comparison, so no Fast verdict) | Rust samples moving tracks; TypeScript keeps the clock and application data. Time changes only sample and rebuild the aggregation index (declared required work); camera frames and unrelated commits do no temporal work; static regions and tiles stay retained. The counters found and fixed re-preparation on runtime status changes, a placeholder-time sample on remount and a Rust aggregation trap on empty point sets. Phase D found and fixed heat and cluster Map Layers remounting whenever a temporal overlay before them became empty or non-empty. |
 | Geographic transforms and operations (#173) | Phase A: usable standalone data-only APIs and timeline metric transform reference | Regional transform/static-operation fixtures; full runtime parity awaits B/C/E | Not measured; D/E pending | [Regional contract and public static example](geojson.md#regional-transforms-and-static-operations). TypeScript remains the phase-A reference; #173 stays open through approved A→B→C→D→E and final authoritative-path evidence. |
 | Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
@@ -393,6 +394,78 @@ runtime-profiler at `6d2c92e`, on Linux x64 (AMD Ryzen 7 5700X, WSL2).
   Bundle manifest SHA-256:
   `8de3ff5b5312acf80a1a0835019ed06b82d45d818d9b7301c8adf0cd77367fa4`.
 
+### Animated flyTo (#433)
+
+`flyTo` on `flatRuntime="maps"` follows MapLibre's `flyTo` path. This is the owner's
+"matching the MapLibre path" decision. The path is van Wijk & Nuij's zoom-out/zoom-back
+curve with MapLibre's default curve (1.42), speed (1.2) and ease. The center takes the
+short way across the antimeridian. The bearing takes the shortest arc. The pitch is
+interpolated linearly.
+
+`animate: false`, `durationMs: 0` and `prefers-reduced-motion` jump at once.
+`maps-core::CameraFlight` owns the trajectory. `BoundedFlatRasterRuntime::fly_to` and
+`advance_flight` own validation, constraints and supersession. The browser host only
+schedules frames, one per animation frame.
+
+Executed at `dc0611488ce03a405ba6480c8827fcc1ff38d5a2` plus this change. The machine was
+Linux x64 (AMD Ryzen 7 5700X, WSL2), Playwright 1.62.1 Chromium, Node 24.16.0.
+
+- **Rust (deterministic).** `camera_flight` tests reproduce five flights recorded from
+  MapLibre GL JS 6.4.1's own `Camera.flyTo` with a frozen clock. Durations match within
+  1e-6 ms, centers within 1e-7°, and zoom, bearing and pitch within 1e-9. The recorded flights
+  cover:
+  - an out-and-back flight;
+  - a flight across the antimeridian with a bearing that crosses ±180°;
+  - zoom in place;
+  - rotation only (MapLibre's 500 ms `easeTo` fallback);
+  - an explicit duration.
+
+  Further tests check an independent transliteration at 19 midpoints, exact endpoints,
+  nonfinite and invalid input and the zoom bounds. `bounded_runtime` tests cover the
+  supersession of a flight by:
+  - `set_camera_state`;
+  - pan, zoom and rotate;
+  - `fit_bounds`;
+  - cancellation;
+  - a successive flight.
+
+  They also check that a flight survives a resize and that a rejected command leaves the
+  running flight intact. Flights on `maxBounds` cameras stay inside the bounds and clamp to
+  the maximum zoom. Rotated or pitched bounded flights fail closed. Pitched flights work on
+  unbounded cameras.
+- **Host integration** (`src/maps-camera-presentation.test.tsx`, real Map View with only the
+  WASM and GPU boundary replaced). These tests check that:
+  - each animation frame presents one Rust frame;
+  - a layer paints against that frame and `onViewStateChange(…, "fly-to")` reports it;
+  - the default duration passes through, while `animate: false` and `durationMs: 0` jump;
+  - reduced motion jumps;
+  - an invalid flight presents no motion and fires no callback;
+  - a camera command, a successive `flyTo`, wheel or a pointer press stops the flight with
+    no stale frame;
+  - the flight survives a resize and a device-loss fallback to Canvas;
+  - unmounting stops it;
+  - a controlled Map View's echoes do not cancel it.
+- **Real Rust/WASM browser** (`e2e/maps-flyto.spec.ts`, `@smoke`, WebGPU and Canvas,
+  6/6 over three repeats run alone). For every presented frame, the test recovers the eased
+  progress from the bearing. The center and zoom match the MapLibre oracle within 1e-6. The
+  flight ends at the exact target at MapLibre's duration (2,551 ms) after the command, and
+  frames follow the ease in time. After the flight, Berlin at the camera center is picked.
+  `animate: false` presents one `fly-to` frame. A pointer press ends the flight with no later
+  frame. After a resize and device-pixel-ratio change mid-flight, the flight still ends
+  exactly on target, and the point there is picked. The dateline flight keeps
+  |longitude| ≥ 171.76°.
+- **Work counters (not a Fast verdict).** Over the 2,551 ms flight:
+
+  | Backend | Presented flight frames | Base renders | Retained point preparations |
+  | --- | ---: | ---: | ---: |
+  | Canvas | 64–72 | 151–161 | 0 |
+  | WebGPU (SwiftShader) | 8–11 | 45–101 | 0 |
+
+  Map Layer data is not re-lowered per frame. Base renders exceed presented frames by about
+  2.3× on Canvas and up to 9× on SwiftShader WebGPU. The extra renders come from raster
+  fade-in renders and tile arrivals during the zoom-out. The flight has not been profiled
+  against a reference, so Fast remains open.
+
 ### Heat/scalar alignment evidence (#171 phase 3)
 
 `e2e/maps-heat-alignment.spec.ts` (`@smoke`) renders `e2e/fixtures/heat-alignment.tsx` on
@@ -482,8 +555,32 @@ Pitched p50/p95 were 66.7/233.3 ms (control 33.3/66.7 ms), with 100 long tasks; 
 triangles were submitted. Initial texture uploads were two images / 2,303,920 RGBA bytes;
 pan and resize uploaded no texture. See [the full measurements](engine-performance.md#heatscalar-gpu-presentation-171).
 
-**#171 remains open.** Hardware GPU frame-budget evidence and a comparable reference are
-unavailable; the Fast gate has not passed and no performance improvement is claimed.
+That capture did not close the Fast gate. The subsequent hardware investigation and fix below
+supply the missing representative evidence.
+
+### Heat/scalar hardware acceptance (#171)
+
+The GPU presentation path still spent most pitched-frame CPU time making individual
+Rust/WASM projection calls for the adaptive raster mesh. Batching the existing projector
+by subdivision round removes those crossings while preserving the exact ordered mesh,
+its 0.5 CSS-pixel error criterion, masks, holes, painter order and Canvas fallback.
+
+On 2026-11-14, three interleaved baseline/candidate pairs ran the complete canonical journey
+on the same RTX 3060 Ti / Ryzen 7 5700X host, after heavy workloads were paused. Order was
+A1, B1, B2, A2, A3, B3. Runtime-profiler accepted all three pairs as comparable. Pitched
+navigation p95 fell from 50.0–50.1 ms to 16.7–16.8 ms; all three candidate runs had zero
+pitched long tasks, versus 14–16 in each baseline. Camera-independent artifact retention,
+texture upload/release and source-change invariants passed in every candidate capture.
+
+This completes the heat/scalar Developed → Correct → Fast feature acceptance on the named
+hardware/workload, including the owner-approved GPU continuation. It does not promise
+60 FPS for every operation: density raster replacement during wheel zoom still has a
+49.9 ms p95, and superseded bursts/teardown have isolated longer intervals. JS heap is
+measured; GPU memory, WASM linear memory and GPU completion time remain unavailable.
+Moonlight browser performance policy remains unavailable; strict bundle comparability
+and these measured feature results are not an automated Moonlight verdict.
+See [interleaved measurements and provenance](engine-performance.md#batched-heat-raster-projection-171).
+
 
 ### Moving features Fast evidence (#172 phase E)
 
@@ -532,10 +629,45 @@ MapLibre GL 6.16 + `pmtiles` 4.5 against the first-party Map View over the same
 archives, interleaved, evaluated by Moonlight with the owner-approved viability policy
 (≥ 5 samples, complete candidate execution, runtime score ≥ 75). Every Pages deploy
 build runs it and publishes the outcome at `/maps/evidence/atlas-tileset-runtime.json`.
-**The Fast gate counts as measured only from such a published deploy-build run. Until
-one exists it is unavailable, not passed.**
+The Fast gate counts as measured only from such a published deploy-build run.
 
-One local capture exists so far. It is advisory and is not that run. Executed at
+**Fast: measured, passed under the approved viability policy.** The first published
+deploy-build run is Pages run
+[43664634489](https://github.com/moritzbrantner/maps/actions/runs/43664634489) at
+`55b012a762c1e4feb956e286c6ca78db61931481` (clean tree), generated
+2026-11-15T02:34:15Z. It ran on the GitHub-hosted runner with WASM SHA-256
+`b0f80af15e950dd88322f73490efb44a66b6164919316212679cd9c2333f3e88`, Chromium headless
+shell 156.0.8078.4, Playwright 1.64.1, Node 26.13.1 and environment fingerprint
+`e5ba94d298ce782821911286f126d01dde191c60c0be410bc02f443ccf2e0147`. The reference was
+`maplibre-gl@6.17.0 + pmtiles@4.5.0`, the candidate the first-party Map View on Canvas2D.
+Both read the same archives (`sha256:a1741ca6…` and `sha256:286216ea…`), so
+`sameWorkload` is true. Ten measured journeys per side over two rounds:
+
+- **Moonlight:** `passed`. Both rounds (reference first, then candidate first) scored
+  99 against the minimum of 75 with complete candidate execution. The browser bundles
+  are `comparable`. This is the viability guard the owner approved on 2026-11-08, not
+  a claim that Maps is faster than MapLibre.
+- **Journey medians (reference → candidate), advisory shared-runner timings:** first
+  useful map 830 → 468 ms; warm revisit 106 → 20 ms; source A → B ready 279 → 120 ms;
+  source B → A ready 233 → **503 ms**.
+- **Transfer:** the candidate made 89 range requests for 1,750,372 bytes and the reference
+  made 57 for 1,517,785 bytes. Neither side re-read the archive on the warm revisit. The
+  candidate's return to source A made no request.
+- **Renderer main thread (one trace each):** candidate 1,568 ms of top-level tasks with
+  three long tasks (longest 494 ms). Reference 359 ms with one long task (72 ms).
+- **Memory:** driver-process RSS medians were 110,686 KiB (reference) and 113,932 KiB
+  (candidate). This excludes Chromium. The candidate retained 85 tiles with
+  91,640,111 RGBA + MVT lower-bound bytes. GPU-buffer bytes are unavailable because
+  the backend was Canvas2D.
+- **Unavailable:** browser heap and GPU memory (#76), Rust decode and bucket-rebuild
+  timings (decodes are counted, not timed), frame time during camera motion, and the
+  WebGPU backend.
+
+The deploy run confirms what the local capture below showed. The candidate is slower
+to return to source A, transfers more data and blocks the main thread longer. These
+are observations to act on, not regressions against an earlier Maps revision.
+
+The earlier local capture below is advisory and is not the deploy-build run. Executed at
 `2ca24c67519b50247ff38b96905c0e03bb2c72aa` (clean tree), WASM SHA-256
 `3ab3375046534cab14a2e5b4dc9c2875814a4e2287b3ec0aa539bcede83bb2c6`, Chromium headless
 shell 158.0.8127.18, Playwright 1.65.0, Node 24.19.0, runtime-profiler `6d2c92e` and

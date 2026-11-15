@@ -261,6 +261,54 @@ impl MapsFlatRasterRuntime {
             .map_err(to_js_error)
     }
 
+    /// Starts an animated `flyTo` (#433) from the presented camera on MapLibre's trajectory.
+    /// `duration_ms` overrides the speed-derived duration. Returns the duration; `0` jumped.
+    /// Any other camera command supersedes the flight.
+    #[wasm_bindgen(js_name = flyTo)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn fly_to(
+        &mut self,
+        longitude: f64,
+        latitude: f64,
+        zoom: f64,
+        bearing: f64,
+        pitch: f64,
+        duration_ms: Option<f64>,
+        min_zoom: f64,
+        max_zoom: f64,
+    ) -> Result<f64, JsValue> {
+        self.inner
+            .fly_to(
+                maps_core::CameraPose {
+                    longitude,
+                    latitude,
+                    zoom,
+                    bearing,
+                    pitch,
+                },
+                duration_ms,
+                min_zoom,
+                max_zoom,
+            )
+            .map_err(to_js_error)
+    }
+
+    /// Presents the in-flight `flyTo` at `elapsed_ms` since it started; whether it continues.
+    #[wasm_bindgen(js_name = advanceFlight)]
+    pub fn advance_flight(&mut self, elapsed_ms: f64) -> Result<bool, JsValue> {
+        self.inner.advance_flight(elapsed_ms).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = cancelFlight)]
+    pub fn cancel_flight(&mut self) {
+        self.inner.cancel_flight();
+    }
+
+    #[wasm_bindgen(js_name = isFlying)]
+    pub fn is_flying(&self) -> bool {
+        self.inner.is_flying()
+    }
+
     pub fn resize(&mut self, width: f64, height: f64) -> Result<(), JsValue> {
         self.inner.resize(width, height).map_err(to_js_error)
     }
@@ -414,6 +462,24 @@ impl MapsFlatRasterRuntime {
             })
             .map_err(to_js_error)?;
         encode_json_compatible(&[coordinate.longitude, coordinate.latitude])
+    }
+
+    /// The local screen-to-map-plane scale `[a, b, c, d]` at a screen point under pitch, for
+    /// picking line widths on the map plane (#386); `undefined` without pitch or past the horizon.
+    #[wasm_bindgen(js_name = mapPlaneScale)]
+    pub fn map_plane_scale(
+        &self,
+        screen_x: f64,
+        screen_y: f64,
+    ) -> Result<Option<Vec<f64>>, JsValue> {
+        let scale = self
+            .inner
+            .map_plane_scale(ScreenCoordinate {
+                x: screen_x,
+                y: screen_y,
+            })
+            .map_err(to_js_error)?;
+        Ok(scale.map(Vec::from))
     }
 
     /// The style's `sky`; an empty string or a style without one is no sky.

@@ -302,6 +302,8 @@
     "MapsTilePersistenceOptions",
     "MapsTilePersistenceStatus",
     "MapsTileset",
+    "MapsTilesetFeature",
+    "MapsTilesetLayerInteraction",
     "MapsTilesetLayers",
     "MapsTilesetMetadata",
     "MapSurfaceController",

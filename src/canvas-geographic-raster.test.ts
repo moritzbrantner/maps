@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  createGeographicRasterMesh,
   drawCanvasGeographicRaster,
   type CanvasGeographicRasterBounds,
   type CanvasGeographicRasterProject,
@@ -61,7 +62,10 @@ const CENTER = mercator([10, 50]);
 /** A flat Mercator camera: affine in Mercator, so a Mercator raster needs no splitting. */
 const flat: CanvasGeographicRasterProject = (coordinate) => {
   const world = mercator(coordinate);
-  return { x: VIEW.width / 2 + (world.x - CENTER.x) * 2, y: VIEW.height / 2 + (world.y - CENTER.y) * 2 };
+  return {
+    x: VIEW.width / 2 + (world.x - CENTER.x) * 2,
+    y: VIEW.height / 2 + (world.y - CENTER.y) * 2,
+  };
 };
 
 /** A pitched camera: farther (northern) ground is smaller, a projective, non-affine map. */
@@ -74,6 +78,98 @@ const pitched: CanvasGeographicRasterProject = (coordinate) => {
     y: VIEW.height / 2 + ((world.y - CENTER.y) * 2) / depth,
   };
 };
+
+test.each(["latitude", "mercator"] as const)(
+  "packed %s raster projection preserves the scalar mesh and projects each sample once",
+  (verticalScale) => {
+    for (const reference of [flat, pitched]) {
+      let scalarCalls = 0;
+      let batchCalls = 0;
+      const coordinatesSeen = new Set<string>();
+      const project: CanvasGeographicRasterProject = (coordinate) => {
+        scalarCalls += 1;
+        return reference(coordinate);
+      };
+      project.projectPacked = (coordinates) => {
+        batchCalls += 1;
+        const result = new Float64Array(coordinates.length);
+        for (let i = 0; i < coordinates.length; i += 2) {
+          const coordinate: [number, number] = [coordinates[i]!, coordinates[i + 1]!];
+          const key = coordinate.join(",");
+          expect(coordinatesSeen.has(key)).toBe(false);
+          coordinatesSeen.add(key);
+          const point = reference(coordinate);
+          result[i] = point?.x ?? NaN;
+          result[i + 1] = point?.y ?? NaN;
+        }
+        return result;
+      };
+      const options = { bounds: BOUNDS, image: IMAGE, ...VIEW, verticalScale };
+      const expected = createGeographicRasterMesh({ ...options, project: reference });
+      expect(createGeographicRasterMesh({ ...options, project })).toEqual(expected);
+      expect(scalarCalls).toBe(0);
+      expect(batchCalls).toBeGreaterThan(0);
+      expect(batchCalls).toBeLessThanOrEqual(12);
+    }
+  },
+);
+
+test("raster projection invalidates across camera changes and preserves horizon rejection", () => {
+  let camera = 0;
+  const reference: CanvasGeographicRasterProject = ([longitude, latitude]) =>
+    latitude > 57 ? null : { x: longitude * 25 + camera, y: (60 - latitude) * 25 };
+  const project: CanvasGeographicRasterProject = (coordinate) => reference(coordinate);
+  project.projectPacked = (coordinates) => {
+    const result = new Float64Array(coordinates.length);
+    for (let i = 0; i < coordinates.length; i += 2) {
+      const point = reference([coordinates[i]!, coordinates[i + 1]!]);
+      result[i] = point?.x ?? NaN;
+      result[i + 1] = point?.y ?? NaN;
+    }
+    return result;
+  };
+  const options = { bounds: BOUNDS, image: IMAGE, ...VIEW, verticalScale: "latitude" as const };
+  for (const offset of [0, 100, -200, 0]) {
+    camera = offset;
+    expect(createGeographicRasterMesh({ ...options, project })).toEqual(
+      createGeographicRasterMesh({ ...options, project: reference }),
+    );
+  }
+});
+
+test("an offscreen raster projects only the initial grid, without adaptive midpoint work", () => {
+  let projected = 0;
+  const project: CanvasGeographicRasterProject = () => ({ x: -100, y: -100 });
+  project.projectPacked = (coordinates) => {
+    projected += coordinates.length / 2;
+    return new Float64Array(coordinates.length).fill(-100);
+  };
+  expect(
+    createGeographicRasterMesh({
+      bounds: BOUNDS,
+      image: IMAGE,
+      ...VIEW,
+      verticalScale: "mercator",
+      project,
+    }),
+  ).toEqual([]);
+  expect(projected).toBe(81);
+});
+
+test.each(["null", "truncated", "throw"])(
+  "%s packed projection falls back to the scalar projection",
+  (failure) => {
+    const project: CanvasGeographicRasterProject = (coordinate) => flat(coordinate);
+    project.projectPacked = () => {
+      if (failure === "throw") throw new Error("projection unavailable");
+      return failure === "truncated" ? new Float64Array(1) : null;
+    };
+    const options = { bounds: BOUNDS, image: IMAGE, ...VIEW, verticalScale: "mercator" as const };
+    expect(createGeographicRasterMesh({ ...options, project })).toEqual(
+      createGeographicRasterMesh({ ...options, project: flat }),
+    );
+  },
+);
 
 /**
  * The largest distance between where a drawn triangle puts an image pixel and where the

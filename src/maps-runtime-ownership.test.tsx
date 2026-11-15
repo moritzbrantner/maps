@@ -94,6 +94,9 @@ beforeEach(() => {
     activateTileset: vi.fn(() => "fixture-source"),
     takeSourceEvictions: vi.fn(() => []),
     markSourceLoaded: vi.fn(),
+    flyTo: vi.fn(() => 0),
+    advanceFlight: vi.fn(() => false),
+    cancelFlight: vi.fn(),
     dispose: vi.fn(),
     fitBounds: vi.fn(),
     markFailed: vi.fn(),
@@ -191,6 +194,7 @@ beforeEach(() => {
     setVectorLayers: vi.fn(),
     addGlyphs: vi.fn(),
     missingGlyphRanges: vi.fn(() => []),
+    queryRenderedFeatures: vi.fn(() => []),
     uploadTile: vi.fn(),
     uploadVectorTile: vi.fn(() => 0),
     render: vi.fn((_tiles, matrix, application) => {

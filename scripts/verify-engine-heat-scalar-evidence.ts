@@ -1,13 +1,14 @@
 // Captures `heat-scalar-journey-v1` (#171 phase 5, Fast) through the runtime-profiler browser
 // collector, checks that the required evidence is complete and that the journey kept the
 // heat/scalar invalidation contract, and summarizes the heat lane against its control lane.
-// It renders no performance verdict: no reference implementation or parent revision runs this
-// journey, so comparison and Moonlight stay explicitly unavailable.
+// Optional reference bundles use runtime-profiler strict comparability. This command does not
+// own performance policy: comparable captures are not a Moonlight verdict.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 type Summary = {
   count: number;
@@ -35,6 +36,9 @@ type Lane = {
   phases: Record<string, Phase>;
 };
 
+const { values: options } = parseArgs({
+  options: { gpu: { type: "boolean", default: false }, reference: { type: "string" } },
+});
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.resolve(
   root,
@@ -44,7 +48,9 @@ const output = path.resolve(
 const profiler = process.env.RUNTIME_PROFILER_BIN ?? "runtime-profiler";
 const scenarioFile = path.join(
   root,
-  "runtime-profiler-scenarios/heat-scalar-journey-browser-v1.yaml",
+  options.gpu
+    ? "runtime-profiler-scenarios/heat-scalar-journey-hardware-browser-v1.yaml"
+    : "runtime-profiler-scenarios/heat-scalar-journey-browser-v1.yaml",
 );
 const canonical = JSON.parse(
   readFileSync(
@@ -239,6 +245,26 @@ const cameraComparison = Object.fromEntries(
   }),
 );
 
+let comparison = "unavailable";
+if (options.reference) {
+  const report = invoke([
+    "compare-browser",
+    "--reference",
+    path.resolve(options.reference),
+    "--candidate",
+    bundle,
+    "--json",
+  ]);
+  writeFileSync(path.join(output, "comparability.json"), report);
+  const result = JSON.parse(report);
+  assert.equal(
+    result.status,
+    "comparable",
+    `incomparable heat/scalar evidence: ${JSON.stringify(result.reasons)}`,
+  );
+  comparison = result.status;
+}
+
 const evaluation = {
   schemaVersion: "maps.heat-scalar-journey-evaluation/v1",
   scenarioId: canonical.id,
@@ -248,11 +274,11 @@ const evaluation = {
   invariants: "passed",
   cameraComparison,
   commitLatencyMs: heat.commitLatencyMs,
-  comparison: "unavailable",
+  comparison,
   moonlight: "unavailable",
   reasons: [
-    "no reference implementation runs this first-party heat/scalar journey",
-    "the parent revision has no capture of this journey",
+    ...(options.reference ? [] : ["no reference bundle was supplied"]),
+    "browser comparability does not produce a performance verdict; Moonlight browser policy is unavailable",
     "the control lane is the same Map View without heat layers, not a baseline for a verdict",
   ],
 };

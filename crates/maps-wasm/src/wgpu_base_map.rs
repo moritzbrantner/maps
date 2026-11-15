@@ -1750,6 +1750,21 @@ impl MapsWgpuBaseMapRenderer {
         self.style_symbols.missing_glyph_ranges()
     }
 
+    /// MapLibre's `queryRenderedFeatures` at a viewport point (CSS px) over the named circle
+    /// and symbol style layers, against what the last frame drew (#346): a JSON array of
+    /// features, topmost first. Other layer kinds and unknown ids throw.
+    #[wasm_bindgen(js_name = queryRenderedFeatures)]
+    pub fn query_rendered_features(
+        &self,
+        x: f64,
+        y: f64,
+        layers: Vec<String>,
+    ) -> Result<String, JsValue> {
+        self.style_symbols
+            .query_rendered_features([x, y], &layers)
+            .map_err(|error| js_error("invalid rendered feature query", error))
+    }
+
     /// Replaces the vector style table: one entry of 8 floats (RGBA in [0, 1], line
     /// width in CSS px, 3 reserved) per `maps_core::VectorBasemapStyleClass`.
     #[wasm_bindgen(js_name = setVectorStyle)]
@@ -2414,7 +2429,9 @@ impl MapsWgpuBaseMapRenderer {
         view_projection: [f32; 16],
         clip: SurfaceClip,
     ) -> Option<RetainedView> {
-        let surface_width = f64::from(self.config.width) / clip.pixel_ratio.max(f64::MIN_POSITIVE);
+        let pixel_ratio = clip.pixel_ratio.max(f64::MIN_POSITIVE);
+        let surface_width = f64::from(self.config.width) / pixel_ratio;
+        let surface_height = f64::from(self.config.height) / pixel_ratio;
         RetainedView::from_placements(
             placements.iter().filter_map(|placement| {
                 let (z, x, y) = placement.key?;
@@ -2429,6 +2446,7 @@ impl MapsWgpuBaseMapRenderer {
             }),
             view_projection,
             surface_width,
+            surface_height,
         )
     }
 

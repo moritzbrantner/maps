@@ -240,6 +240,48 @@ test("Canvas line patterns follow retained WebGPU line patterns (#350)", async (
   );
 });
 
+test("A pitched patterned line stays retained: camera frames re-lower and upload nothing (#387) @smoke", async ({
+  baseURL,
+}) => {
+  const sprite = `${SPRITE_ORIGIN}/oracle`;
+  const camera = { bearing: -25, pitch: 50 };
+  const query = { bearing: "-25", cases: "pattern-line", pitch: "50", sprite, zoom: "4" };
+  await renderPolygonParity(baseURL, "wgpu", query, "wgpu-retained", async (page) => {
+    const journey = await page.evaluate(async (camera) => {
+      const probe = window.polygonParity;
+      const frame = () => new Promise(requestAnimationFrame);
+      await frame();
+      const before = probe.stats()!;
+      const steps: { upload: number; frames: number }[] = [];
+      // Pans and zooms within one floored zoom: the strips' GeoJSON tiles stay the same.
+      for (let step = 1; step <= 20; step += 1) {
+        const t = step / 20;
+        probe.setViewState({ ...camera, center: [-4 * t, -2 * t], zoom: 4 + 0.6 * t });
+        await frame();
+        const stats = probe.stats()!;
+        steps.push({
+          frames: stats.retainedPolygonFrames ?? 0,
+          upload: stats.applicationUploadBytes ?? 0,
+        });
+      }
+      return { after: probe.stats()!, before, steps };
+    }, camera);
+    expect(journey.before.retainedPolygons).toBe(1);
+    for (const counter of [
+      "retainedPolygonPreparations",
+      "retainedPolygonRebases",
+      "retainedPolygonTileZooms",
+      "retainedPolygonUploadBytes",
+    ] as const) {
+      expect(journey.after[counter], counter).toBe(journey.before[counter]);
+    }
+    for (const step of journey.steps) {
+      expect(step.upload).toBe(0);
+      expect(step.frames).toBeGreaterThan(0);
+    }
+  });
+});
+
 test("Canvas patterns follow a rotated map (#350)", async ({ baseURL }, testInfo) => {
   const sprite = `${SPRITE_ORIGIN}/oracle`;
   const query = { bearing: "30", cases: "pattern-fill,pattern-fill-translucent", sprite };

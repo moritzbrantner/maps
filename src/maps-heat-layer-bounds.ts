@@ -2,11 +2,12 @@
 
 import type { HeatLayerFeature, HeatLayerFeatureCollection } from "./heat-layer-types";
 import type { HeatSurfaceBounds, HeatSurfaceViewport } from "./heat-surface-render-plan";
+import type { MapScreenProject } from "./map-screen-render-frame";
 
 export type MapsHeatLayerViewportGeometry = {
   bounds: HeatSurfaceBounds;
   height: number;
-  project(coordinate: [longitude: number, latitude: number]): { x: number; y: number } | null;
+  project: MapScreenProject;
   unproject(x: number, y: number): [longitude: number, latitude: number] | null;
   width: number;
   zoom: number;

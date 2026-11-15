@@ -1,6 +1,5 @@
 "use client";
 
-import { projectMapsHeatLayerCoordinate as projectMapsHeatLayerCoordinateForRaster } from "./maps-heat-layer-bounds";
 import { createGeographicRasterMesh } from "./canvas-geographic-raster";
 
 import { useMapsAggregationRuntime } from "./aggregation-runtime-react";
@@ -59,7 +58,11 @@ import {
   type MapVectorRenderFrame,
   type MapVectorRenderPrimitive,
 } from "./map-render-frame";
-import type { MapScreenInteractionState, MapScreenProject } from "./map-screen-render-frame";
+import type {
+  MapScreenInteractionState,
+  MapScreenMapPlaneScale,
+  MapScreenProject,
+} from "./map-screen-render-frame";
 import { useMapHoveredFeature, type MapSurfaceContextValue } from "./map-surface-context";
 import type { MapsHeatLayerDescriptor } from "./maps-heat-layer-registration";
 import type {
@@ -142,6 +145,11 @@ export type MapsOverlayRetainedPoints = {
 type MapsOverlayLayersProps = {
   children: ReactNode;
   getViewport: (width: number, height: number) => ViewportAggregationQuery | null;
+  /**
+   * The screen-to-map-plane scale at a screen point under pitch, `null` without it: picking
+   * measures line widths on the map plane, as MapLibre does (#386).
+   */
+  mapPlaneScale?: (x: number, y: number) => MapScreenMapPlaneScale | null;
   project: MapsProjectCoordinate;
   /** The style sprite's images for Canvas patterns (#350), `null` until decoded. */
   canvasPatternImages?: () => CanvasMapPatternImages | null;
@@ -154,10 +162,13 @@ type MapsOverlayLayersProps = {
    * Closes feature overlays whose Map Feature left the composition and refreshes a retained
    * popup with its layer's latest feature and renderer, so popup content follows the
    * committed composition (such as a date-appropriate name) instead of the click-time props.
+   * `isSelected` reports whether a PointLayer or GeoJsonLayer's controlled `selectedFeatureId`
+   * selects the feature, so a popup closes once that selection moves away (as on MapLibre).
    */
   retireFeatureOverlays?: (
     isRendered: (overlayKey: string) => boolean,
     latestPopup?: (overlayKey: string) => MapsOverlayPopupSource | undefined,
+    isSelected?: (overlayKey: string) => boolean,
   ) => void;
   surface: MapsOverlayInteractionSurface;
   unproject: MapsUnprojectCoordinate;
@@ -273,6 +284,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       canvasPatternImages,
       children,
       getViewport,
+      mapPlaneScale,
       project,
       renderApplicationFrame,
       retainedPoints,
@@ -562,7 +574,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       if (!location) return [];
       const nearest = project(location);
       if (!nearest || Math.hypot(nearest.x - position.x, nearest.y - position.y) < 0.5) return [];
-      return hitTestCanvasMapSceneAll(scene, nearest);
+      return hitTestCanvasMapSceneAll(scene, nearest, mapPlaneScale?.(nearest.x, nearest.y));
     };
 
     /**
@@ -598,7 +610,10 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       // While a motion transform presents the retained scene, hit-test in its coordinates.
       const scenePosition = matrix ? invertOverlayMotionPoint(matrix, position) : position;
       if (!scenePosition) return [];
-      let hits = hitTestCanvasMapSceneAll(scene, scenePosition);
+      // Under pitch, line widths are measured on the map plane at the pointer (#386). A
+      // motion-transformed scene belongs to an earlier camera, so it keeps screen widths.
+      const plane = matrix ? null : mapPlaneScale?.(scenePosition.x, scenePosition.y);
+      let hits = hitTestCanvasMapSceneAll(scene, scenePosition, plane);
       if (hits.length === 0 && retainedModeRef.current && retainedSizeRef.current) {
         hits = hitTestRetainedWorldCopies(scene, scenePosition);
       }
@@ -684,10 +699,23 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
       if (reconciledEntriesRef.current === entries) return;
       reconciledEntriesRef.current = entries;
       const rendered = new Set<string>();
+      const selected = new Set<string>();
       const popups = new Map<string, MapsOverlayPopupSource>();
-      for (const interaction of snapshot.interactions.values()) {
+      // Popups follow controlled selection only where the MapLibre path's layers do.
+      const selectionLayers = new Set(
+        entries.flatMap((entry) =>
+          entry.kind === "point" || entry.kind === "geojson" ? [entry.prefix] : [],
+        ),
+      );
+      for (const [primitiveId, interaction] of snapshot.interactions) {
         rendered.add(interaction.key);
         if (interaction.popup) popups.set(interaction.key, interaction.popup);
+        if (
+          selectionLayers.has(interaction.layer) &&
+          snapshot.selectedPrimitiveIds.has(primitiveId)
+        ) {
+          selected.add(interaction.key);
+        }
       }
       const viewportLayers = entries.flatMap((entry) =>
         entry.kind === "cluster"
@@ -703,7 +731,11 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
         hoveredByLayerRef.current.delete(layer);
         interaction.clearHover();
       }
-      retireFeatureOverlays?.(isRendered, (key) => popups.get(key));
+      retireFeatureOverlays?.(
+        isRendered,
+        (key) => popups.get(key),
+        (key) => selected.has(key),
+      );
     };
 
     useLayoutEffect(() => {
@@ -891,8 +923,7 @@ export const MapsOverlayLayers = forwardRef<MapsOverlayLayersController, MapsOve
                 : createGeographicRasterMesh({
                     bounds: raster.bounds,
                     image: raster.image,
-                    project: (coordinate) =>
-                      projectMapsHeatLayerCoordinateForRaster(heatViewport, coordinate),
+                    project: heatViewport.project,
                     verticalScale: raster.projection,
                     width: scene.width,
                     height: scene.height,
@@ -1073,7 +1104,10 @@ function collectOverlayEntries(
   Children.toArray(children).forEach((child, index) => {
     if (!isValidElement(child)) throwUnsupportedMapsLayer();
 
-    const childPath = `${path}.${index}`;
+    // `Children.toArray` keys a child by its declared position (or explicit key), so a
+    // conditional sibling that comes and goes (e.g. a temporal overlay that is empty at the
+    // sampled time) does not move the stateful cluster and heat runtimes after it (#172 D).
+    const childPath = `${path}.${child.key ?? index}`;
     if (child.type === Fragment) {
       collectOverlayEntries((child.props as { children?: ReactNode }).children, childPath, entries);
       return;
