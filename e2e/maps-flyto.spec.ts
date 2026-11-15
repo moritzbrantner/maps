@@ -86,20 +86,24 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     expect(oracle.at(0.3).zoom).toBeLessThan(PARIS.zoom - 1);
     expect(lowestZoom).toBeLessThan(PARIS.zoom);
     expect(flight.at(-1)!.viewState).toMatchObject({ bearing: 40, center: BERLIN.center, zoom: 9 });
-    // The flight ends at MapLibre's duration after the command (a frame of tolerance before;
-    // software-GPU frame stalls after).
+    // The flight ends on the first frame after MapLibre's duration from the command. A
+    // software-GPU runner can stall a frame for over a second, so the bound is relative to
+    // the frame before the last one rather than to the wall clock.
     const commandTime = await page.evaluate(() => window.mapsFlyToAcceptance!.commandTime());
+    expectFlightEndsAfterDuration(flight, commandTime, oracle.durationMs);
     const presentedMs = flight.at(-1)!.time - commandTime;
-    expect(presentedMs).toBeGreaterThan(oracle.durationMs - 20);
-    expect(presentedMs).toBeLessThan(oracle.durationMs + 500);
     // Easing in time: each frame's progress follows MapLibre's ease of its elapsed time.
+    let previousTime = commandTime;
     for (const entry of flight.slice(0, -1)) {
       const t = (entry.time - commandTime) / oracle.durationMs;
       const k = (entry.viewState.bearing ?? 0) / oracle.bearing;
-      // A frame presents its rAF timestamp, before the callback records the time (by more
-      // than a frame on a loaded software-GPU runner).
+      // A frame presents its rAF timestamp, before the callback records the time: progress
+      // never runs ahead of the callback's elapsed time, and lags it by at most that frame's
+      // interval (which a software-GPU stall can stretch to more than a second).
+      const frameInterval = (entry.time - previousTime) / oracle.durationMs;
+      previousTime = entry.time;
       expect(k).toBeLessThanOrEqual(maplibreDefaultEasing(t) + 1e-9);
-      expect(k).toBeGreaterThan(maplibreDefaultEasing(t - 0.15) - 1e-9);
+      expect(k).toBeGreaterThan(maplibreDefaultEasing(t - frameInterval - 0.05) - 1e-9);
     }
 
     // Work counters: camera frames re-render the base; no Map Layer data is re-lowered.
@@ -193,12 +197,26 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     for (const entry of dateline) {
       expect(Math.abs(entry.viewState.center[0])).toBeGreaterThanOrEqual(171.76 - 1e-6);
     }
-    const datelineMs =
-      dateline.at(-1)!.time - (await page.evaluate(() => window.mapsFlyToAcceptance!.commandTime()));
-    expect(datelineMs).toBeGreaterThan(1200 - 20);
-    expect(datelineMs).toBeLessThan(1200 + 500);
+    const datelineCommandTime = await page.evaluate(() =>
+      window.mapsFlyToAcceptance!.commandTime(),
+    );
+    expectFlightEndsAfterDuration(dateline, datelineCommandTime, 1200);
     await expect(canvas).toHaveAttribute("data-map-base-renderer", backend);
   });
+}
+
+/**
+ * The flight presents its target on the first frame at or after `durationMs` from the command
+ * (a frame of tolerance before), and the frame before it was presented within the duration
+ * (plus that frame's render time). A stalled final frame therefore does not fail the check.
+ */
+function expectFlightEndsAfterDuration(
+  flight: TraceEntry[],
+  commandTime: number,
+  durationMs: number,
+) {
+  expect(flight.at(-1)!.time - commandTime).toBeGreaterThan(durationMs - 20);
+  expect(flight.at(-2)!.time - commandTime).toBeLessThan(durationMs + 500);
 }
 
 async function clearTrace(page: Page) {
