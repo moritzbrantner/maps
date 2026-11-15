@@ -16,6 +16,7 @@ pub mod images;
 pub mod layout;
 pub mod line_anchors;
 pub mod order;
+pub mod overzoom;
 pub mod polylabel;
 pub mod projection;
 pub mod query;
@@ -36,9 +37,10 @@ pub use images::{
 pub use layout::{
     IconQuad, LayerBucket, LineText, SymbolBucket, SymbolGlyph, SymbolIcon, SymbolInstance,
     SymbolLine, SymbolPaint, SymbolPlacement, SymbolText, SymbolTranslate, TileCircle, TileDash,
-    TileFill, TileLine, TileStyleBuckets, VariableText, layout_tile,
+    TileFill, TileLine, TileStyleBuckets, VariableText, layout_overscaled_tile, layout_tile,
 };
 pub use order::{SymbolDrawGroup, draw_groups, placement_order, viewport_y_order};
+pub use overzoom::{ZOOM_LEVELS_TO_OVERSCALE, slice_tile_layers, split_max_zoom};
 pub use projection::{
     LabelAxes, LineGlyphs, LineLabelContext, SymbolAlignment, TileProjection, line_label_glyphs,
 };
