@@ -4,6 +4,16 @@
 
 ### Minor Changes
 
+- Tileset style features are pickable on `flatRuntime="maps"` (#346). `tilesetLayers` takes
+  `interactiveLayerIds` (circle and symbol layers only; other ids throw) and the usual Map
+  Feature callbacks: `getFeatureId`, `onFeatureHover`, `onHoveredFeatureIdChange`,
+  `onFeatureSelect`, `onSelectedFeatureIdChange`, `renderFeatureTooltip` and
+  `renderFeaturePopup`. Rust picks the topmost feature as MapLibre's `queryRenderedFeatures`
+  does: symbols inside the collision boxes (and line labels inside the collision circles) of
+  the last placement, circle layers inside their drawn radius. The reported
+  `MapsTilesetFeature` carries the vector tile `id`, `properties`, `layer` (`id`, `type`) and
+  `sourceLayer`, without geometry. The `symbols`, `symbol-icons`, `symbol-lines` and
+  `symbol-alignment-pitch` oracle scenarios gain pointer steps.
 - The Maps WASM runtime is split by capability (#305). The new
   `@moritzbrantner/maps/wasm/core` export is a WebGPU-free module (flat runtime and camera
   planning, clustering, temporal tracks, Shortbread/MVT decode and Tileset QA kernels) of

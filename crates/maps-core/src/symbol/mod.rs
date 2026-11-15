@@ -18,13 +18,15 @@ pub mod line_anchors;
 pub mod order;
 pub mod polylabel;
 pub mod projection;
+pub mod query;
 pub mod shaping;
 pub mod style;
 pub mod variable_anchors;
 pub mod zoom;
 
 pub use collision::{
-    PlacedSymbol, PlacementTile, VariableAnchorMemory, place_symbols, symbol_tile_order,
+    PlacedSymbol, PlacementTile, SymbolCollision, VariableAnchorMemory, place_symbols,
+    place_symbols_with_collisions, symbol_tile_order,
 };
 pub use glyphs::{AtlasRect, GlyphAtlas, GlyphStore, parse_glyph_pbf};
 pub use images::{
@@ -40,5 +42,6 @@ pub use order::{SymbolDrawGroup, draw_groups, placement_order, viewport_y_order}
 pub use projection::{
     LabelAxes, LineGlyphs, LineLabelContext, SymbolAlignment, TileProjection, line_label_glyphs,
 };
+pub use query::{RenderedFeatureHit, RenderedFeatureIndex, query_layer_indices, rendered_feature};
 pub use style::{StyleLayer, StyleLayerKind};
 pub use zoom::{SizeData, SymbolDrawState, ZoomedPaint};

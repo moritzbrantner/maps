@@ -333,7 +333,14 @@ export const scenarios: Scenario[] = [
     name: "symbols",
     origin: "Milestone E cartography (#80); place labels on any vector basemap; Tileset style layers #321",
     size: MAP_SIZE,
-    steps: [],
+    steps: [
+      { at: [8.674, 47.3819], kind: "hover", label: "hover the Zürich label" },
+      { at: [7.467, 46.9167], kind: "hover", label: "hover the Bern dot" },
+      { at: [9.4676, 47.5732], kind: "hover", label: "hover the Bodensee label on its pole" },
+      { at: [8.0, 46.75], kind: "hover", label: "hover nothing" },
+      { at: [8.5481, 47.3819], kind: "click", label: "select the Zürich dot" },
+      { at: [7.67, 47.5804], kind: "click", label: "select the Basel label" },
+    ],
   },
   {
     basemap: "vector",
@@ -344,7 +351,11 @@ export const scenarios: Scenario[] = [
     name: "symbol-icons",
     origin: "Milestone E cartography (#80): POI and capital icons on any vector basemap; symbol icons (#346)",
     size: MAP_SIZE,
-    steps: [],
+    steps: [
+      { at: [9.5149, 47.135], kind: "hover", label: "hover the Vaduz star" },
+      { at: [8.5464, 47.3471], kind: "hover", label: "hover the Zürich name under its icon" },
+      { at: [9.4645, 47.5859], kind: "click", label: "select the Bodensee icon" },
+    ],
   },
   {
     basemap: "vector",
@@ -366,7 +377,11 @@ export const scenarios: Scenario[] = [
     name: "symbol-lines",
     origin: "Milestone E cartography (#80): river and road names along their lines; line placement (#346)",
     size: MAP_SIZE,
-    steps: [],
+    steps: [
+      { at: [9.2484, 47.6513], kind: "hover", label: "hover the Rhein along the lake" },
+      { at: [8.4822, 47.5846], kind: "hover", label: "hover the Rhin label" },
+      { at: [8.962, 47.6027], kind: "click", label: "select a motorway label" },
+    ],
   },
   {
     basemap: "vector",
@@ -440,7 +455,11 @@ export const scenarios: Scenario[] = [
     name: "symbol-alignment-pitch",
     origin: "Milestone E cartography (#80): names and markers that lie on the pitched map (#346)",
     size: MAP_SIZE,
-    steps: [],
+    steps: [
+      { at: [8.28, 47.0504], kind: "hover", label: "hover the Luzern icon turned with the map" },
+      { at: [7.467, 46.9167], kind: "hover", label: "hover the Bern star on the map" },
+      { at: [8.5481, 47.3819], kind: "click", label: "select the Zürich icon" },
+    ],
   },
   {
     basemap: "vector",
