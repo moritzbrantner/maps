@@ -14,6 +14,17 @@
   command, `flyTo`, pan, zoom, rotate, pointer press or unmount ends the flight where it is.
   Invalid targets or durations, and rotated or pitched flights on a `maxBounds` camera, fail
   closed and leave the camera unchanged.
+- Tileset `symbol` layers take zoom-dependent translations and variable anchors that follow
+  the zoom or the feature (#346). `text-translate` and `icon-translate` may be camera
+  functions (`interpolate` or `step` over `["literal", [x, y]]`), evaluated at the camera
+  zoom each frame for drawing and placement, as are `text-translate-anchor` and
+  `icon-translate-anchor` zoom steps. `text-variable-anchor` may be a zoom `step`, and
+  `text-variable-anchor-offset` data-driven or zoom-dependent (offsets interpolate between
+  matching anchors); both are evaluated per feature at the tile zoom, and a value that is not
+  an anchor list falls back to none, as in MapLibre. Data-driven translations or anchor
+  lists, and interpolated anchors, are rejected at parse time. Exponential `interpolate`
+  curves are no longer rejected as an unknown operator. The oracle `symbol-zoom-anchors`
+  scenario is gated.
 - Tileset style features are pickable on `flatRuntime="maps"` (#346). `tilesetLayers` takes
   `interactiveLayerIds` (circle and symbol layers only; other ids throw) and the usual Map
   Feature callbacks: `getFeatureId`, `onFeatureHover`, `onHoveredFeatureIdChange`,
