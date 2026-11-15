@@ -9,7 +9,10 @@ import { loadHostedMapsWasm } from "./maps-wasm-bootstrap";
 // `?view=inspector` shows the renderer inspector (#167) on the same engine page entry.
 const view = new URLSearchParams(location.search).get("view");
 const inspector = view === "inspector";
-if (inspector && new URLSearchParams(location.search).get("gpu") === "off") {
+if (
+  (inspector || view === "geographic-transition") &&
+  new URLSearchParams(location.search).get("gpu") === "off"
+) {
   // Same capability probe the browser runtime uses: forces the Canvas2D backend.
   Object.defineProperty(Navigator.prototype, "gpu", { configurable: true, get: () => undefined });
 }
@@ -32,6 +35,11 @@ async function bootstrap() {
   if (view === "benchmark") {
     const { EngineBenchmarkFixture } = await import("./engine/EngineBenchmarkFixture");
     root.render(<EngineBenchmarkFixture />);
+    return;
+  }
+  if (view === "geographic-transition") {
+    const { MapsGeometryTransitionAcceptance } = await import("./MapsGeometryTransitionAcceptance");
+    root.render(<MapsGeometryTransitionAcceptance />);
     return;
   }
   root.render(<EnginePage />);
