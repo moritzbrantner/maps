@@ -628,10 +628,45 @@ MapLibre GL 6.16 + `pmtiles` 4.5 against the first-party Map View over the same
 archives, interleaved, evaluated by Moonlight with the owner-approved viability policy
 (≥ 5 samples, complete candidate execution, runtime score ≥ 75). Every Pages deploy
 build runs it and publishes the outcome at `/maps/evidence/atlas-tileset-runtime.json`.
-**The Fast gate counts as measured only from such a published deploy-build run. Until
-one exists it is unavailable, not passed.**
+The Fast gate counts as measured only from such a published deploy-build run.
 
-One local capture exists so far. It is advisory and is not that run. Executed at
+**Fast: measured, passed under the approved viability policy.** The first published
+deploy-build run is Pages run
+[43664634489](https://github.com/moritzbrantner/maps/actions/runs/43664634489) at
+`55b012a762c1e4feb956e286c6ca78db61931481` (clean tree), generated
+2026-11-15T02:34:15Z. It ran on the GitHub-hosted runner with WASM SHA-256
+`b0f80af15e950dd88322f73490efb44a66b6164919316212679cd9c2333f3e88`, Chromium headless
+shell 156.0.8078.4, Playwright 1.64.1, Node 26.13.1 and environment fingerprint
+`e5ba94d298ce782821911286f126d01dde191c60c0be410bc02f443ccf2e0147`. The reference was
+`maplibre-gl@6.17.0 + pmtiles@4.5.0`, the candidate the first-party Map View on Canvas2D.
+Both read the same archives (`sha256:a1741ca6…` and `sha256:286216ea…`), so
+`sameWorkload` is true. Ten measured journeys per side over two rounds:
+
+- **Moonlight:** `passed`. Both rounds (reference first, then candidate first) scored
+  99 against the minimum of 75 with complete candidate execution. The browser bundles
+  are `comparable`. This is the viability guard the owner approved on 2026-11-08, not
+  a claim that Maps is faster than MapLibre.
+- **Journey medians (reference → candidate), advisory shared-runner timings:** first
+  useful map 830 → 468 ms; warm revisit 106 → 20 ms; source A → B ready 279 → 120 ms;
+  source B → A ready 233 → **503 ms**.
+- **Transfer:** the candidate made 89 range requests for 1,750,372 bytes and the reference
+  made 57 for 1,517,785 bytes. Neither side re-read the archive on the warm revisit. The
+  candidate's return to source A made no request.
+- **Renderer main thread (one trace each):** candidate 1,568 ms of top-level tasks with
+  three long tasks (longest 494 ms). Reference 359 ms with one long task (72 ms).
+- **Memory:** driver-process RSS medians were 110,686 KiB (reference) and 113,932 KiB
+  (candidate). This excludes Chromium. The candidate retained 85 tiles with
+  91,640,111 RGBA + MVT lower-bound bytes. GPU-buffer bytes are unavailable because
+  the backend was Canvas2D.
+- **Unavailable:** browser heap and GPU memory (#76), Rust decode and bucket-rebuild
+  timings (decodes are counted, not timed), frame time during camera motion, and the
+  WebGPU backend.
+
+The deploy run confirms what the local capture below showed. The candidate is slower
+to return to source A, transfers more data and blocks the main thread longer. These
+are observations to act on, not regressions against an earlier Maps revision.
+
+The earlier local capture below is advisory and is not the deploy-build run. Executed at
 `2ca24c67519b50247ff38b96905c0e03bb2c72aa` (clean tree), WASM SHA-256
 `3ab3375046534cab14a2e5b4dc9c2875814a4e2287b3ec0aa539bcede83bb2c6`, Chromium headless
 shell 158.0.8127.18, Playwright 1.65.0, Node 24.19.0, runtime-profiler `6d2c92e` and
