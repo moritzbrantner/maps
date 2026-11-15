@@ -20,10 +20,13 @@ bun run analyze:bundles
 ```
 
 JS entry budgets live in `scripts/verify-entry-bundles.mjs`. Package-level
-unpacked size, entry count, and stylesheet budgets live in
+entry count and stylesheet budgets live in `scripts/package-size-budget.ts`, run by
 `scripts/verify-package-size.mjs`. The compressed package and Maps WASM runtime
 sizes are measured and reported there but are not blocking ceilings (#268);
-reducing them belongs to the loading strategy.
+reducing them belongs to the loading strategy. The non-WASM unpacked size has an
+advisory ceiling (1,168,500 bytes, #173): the verifier reports the size, its change
+since the approved snapshot and the recorded growth attribution, and warns above the
+ceiling without failing.
 
 ### WASM capability modules (#305)
 
