@@ -750,6 +750,7 @@ export function createMapsBrowserRuntime(
       tileset: () => config.tileset,
       tilesetStyle: () => config.tilesetStyle,
       tilesetLayers: () => config.tilesetLayers,
+      mapMaxZoom: () => normalizeMapMaxZoom(config.maxZoom) ?? MAX_MAP_ZOOM,
       tilePersistence: () => config.tilePersistence,
       sprite: () => config.sprite,
       relief: () => config.relief,
@@ -757,6 +758,8 @@ export function createMapsBrowserRuntime(
       onError: (error) => config.onError?.(error),
       onRendererFailure: activateCanvasFallback,
       onCameraFrame: () => config.onCameraFrame?.(),
+      // Animation frame request ids are positive: a pending camera frame is truthy.
+      busy: () => flightFrame || cameraFrame || kineticFrame,
     });
     const syncFrame = frameSynchronizer.syncFrame;
     disposeFrameSynchronizer = frameSynchronizer.dispose;
@@ -1353,6 +1356,7 @@ function createFrameSynchronizer({
   tileset,
   tilesetStyle,
   tilesetLayers,
+  mapMaxZoom,
   tilePersistence,
   sprite,
   relief,
@@ -1360,6 +1364,7 @@ function createFrameSynchronizer({
   onError,
   onRendererFailure,
   onCameraFrame,
+  busy,
 }: {
   loadTile: MapsTileImageLoader["load"];
   canvas: HTMLCanvasElement;
@@ -1376,6 +1381,8 @@ function createFrameSynchronizer({
   tileset: () => MapsTileset | undefined;
   tilesetStyle: () => MapsVectorBasemapStyle | undefined;
   tilesetLayers: () => MapsTilesetLayers | undefined;
+  /** The Map View's maximum zoom: style layers split tiles up to four zooms below it (#346). */
+  mapMaxZoom: () => number;
   tilePersistence: () => boolean | MapsTilePersistenceOptions | undefined;
   sprite: () => string | undefined;
   relief: () => MapsRelief | undefined;
@@ -1383,6 +1390,8 @@ function createFrameSynchronizer({
   onError: (error: unknown) => void;
   onRendererFailure: () => void;
   onCameraFrame: () => void;
+  /** A camera frame (flight, gesture, inertia, command) is scheduled for the next frame. */
+  busy: () => unknown;
 }) {
   type VectorResource = { bytes: Uint8Array; pixels: ShortbreadTilePixels; tile: MapsRasterTileId };
   const vectors = new Map<string, VectorResource>();
@@ -1479,6 +1488,17 @@ function createFrameSynchronizer({
       return request;
     });
     return Promise.all(pending).then(() => undefined);
+  }
+
+  /**
+   * Tiles the frame laid out again past the source's maximum zoom (#346): report the ones
+   * that failed and load the glyph ranges the new layout needs.
+   */
+  function syncStyleRelayout(current: MapsWgpuBaseMapRenderer) {
+    const errors = current.takeStyleRelayout?.();
+    if (!errors) return;
+    for (const error of errors) onError(new Error(`could not lay out tileset style layers: ${error}`));
+    void loadGlyphs();
   }
 
   // The style sprite's sheet per URL (#323, #350), decoded once for the renderer's image
@@ -1742,6 +1762,12 @@ function createFrameSynchronizer({
   let lastReshape = Number.NEGATIVE_INFINITY;
   let settleHandle: number | null = null;
   let renderRequest: number | null = null;
+  // Tile arrivals are planned on the next animation frame, once for all of them (#433).
+  let syncRequest = 0;
+  // The animation frame (document timeline time) of the last plan. Every camera frame plans,
+  // and presents fresh pixels: a deferred plan or re-render skips an animation frame whose
+  // camera frame already ran.
+  let syncedFrameTime: CSSNumberish | null | undefined;
   let drawnTilesAttribute = "0";
   let pendingTilesAttribute = "0";
   let retainedTilesAttribute: string | null = null;
@@ -2006,6 +2032,7 @@ function createFrameSynchronizer({
         if (relief()) currentRenderer.setReliefCamera?.(frame.camera);
         currentRenderer.setFrameSky?.(frame.sky ?? null);
         currentRenderer.setFrameBackground?.(frame.background ?? null);
+        if (tilesetLayers()) currentRenderer.setMapMaxZoom?.(mapMaxZoom());
         const drawnTiles = currentRenderer.render(
           placements,
           frame.renderCamera,
@@ -2014,6 +2041,7 @@ function createFrameSynchronizer({
           viewportClip,
         );
         if (relief()) syncRelief(currentRenderer);
+        if (tilesetLayers()) syncStyleRelayout(currentRenderer);
         stats.lastRenderMs = performance.now() - started;
         recordFrameStats(currentRenderer);
         const hasDecodedVisibleTile = frame.placements.some((placement) =>
@@ -2067,10 +2095,34 @@ function createFrameSynchronizer({
   function requestRender() {
     invalidateRendered();
     if (disposed || renderRequest !== null) return;
-    renderRequest = requestAnimationFrame(() => {
+    renderRequest = requestAnimationFrame((frameTime) => {
       renderRequest = null;
-      if (!disposed && lastFrame && renderInvalidated) renderFrame(lastFrame);
+      // A camera frame (a flight, a gesture) already presented this animation frame, or does
+      // next: this request may have been scheduled before the camera frame and run first.
+      // A fade still in progress asks for the next one; nothing renders twice per frame (#433).
+      if (!disposed && lastFrame && renderInvalidated) {
+        if (syncedFrameTime === frameTime || busy()) requestRender();
+        else renderFrame(lastFrame);
+      }
     });
+  }
+
+  /**
+   * Plans and presents an arrived tile. During camera motion, tiles that arrived since the
+   * last frame are planned on the next animation frame, once however many arrived, unless the
+   * camera frame already planned that frame (#433); a camera at rest presents them at once.
+   */
+  function requestSync() {
+    if (!busy()) {
+      if (!syncRequest) syncFrame();
+    } else {
+      // A camera frame that already planned this animation frame planned the arrived tiles;
+      // otherwise plan them now, or leave them to the camera frame still pending.
+      syncRequest ||= requestAnimationFrame((frameTime) => {
+        syncRequest = 0;
+        if (!disposed && syncedFrameTime !== frameTime) requestSync();
+      });
+    }
   }
 
   // Painter order covers every primitive, retained groups included.
@@ -2221,6 +2273,9 @@ function createFrameSynchronizer({
       };
     }
 
+    // Unchanged groups, e.g. a controlled Map View's echo of the camera frame just presented,
+    // submit no GPU frame of their own; whatever invalidated the pixels otherwise (a tile
+    // arrival, a fade) schedules their render (#433).
     if (!unchanged || !applicationFrame || applicationFrame !== retainedApplicationFrame) {
       applicationFrame = retainedPointTransport.frame(
         retainedPoints!.kinds,
@@ -2229,11 +2284,9 @@ function createFrameSynchronizer({
       );
       retainedApplicationFrame = applicationFrame;
       invalidateRendered();
+      if (!preparingCameraFrame && lastFrame) renderFrame(lastFrame);
     }
-    if (!preparingCameraFrame) {
-      if (lastFrame) renderFrame(lastFrame);
-      else syncFrame();
-    }
+    if (!preparingCameraFrame && !lastFrame) syncFrame();
     return renderer() !== null;
   }
 
@@ -2261,6 +2314,7 @@ function createFrameSynchronizer({
   }
 
   function syncFrame(): MapsFlatRasterFrame {
+    syncedFrameTime = document.timeline?.currentTime;
     void loadSprite();
     let frame = runtime.frame();
 
@@ -2385,7 +2439,7 @@ function createFrameSynchronizer({
             if (descriptor) runtime.markSourceLoaded(requestedIdentity, tile);
             else runtime.markLoaded(tile);
             invalidateRendered(tile.key);
-            syncFrame();
+            requestSync();
           },
           (error) => {
             if (disposed || abort.signal.aborted || loads.get(tile.key) !== load) return;
@@ -2397,7 +2451,7 @@ function createFrameSynchronizer({
               error instanceof Error ? error.message : String(error);
             if (descriptor) sourceFailures.set(tile.key, canvas.dataset.mapBaseTileError);
             invalidateRendered(tile.key);
-            syncFrame();
+            requestSync();
             throw error;
           },
         )

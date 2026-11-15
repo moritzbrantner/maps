@@ -59,6 +59,15 @@ run("bun", ["run", "verify:engine-temporal-evidence"], {
   label: "temporal playback journey trace, work contract and frame observations",
 });
 
+run("bun", ["run", "verify:engine-camera-transition-evidence"], {
+  cwd: rootDir,
+  env: {
+    ...process.env,
+    MAPS_CAMERA_TRANSITION_EVIDENCE_DIR: path.join(evidenceRoot, "camera-transition"),
+  },
+  label: "camera transition journey trace, per-frame work contract and flight observations",
+});
+
 const score = run(runtimeProfiler, [
   "score",
   "--reference",

@@ -14,6 +14,14 @@
   command, `flyTo`, pan, zoom, rotate, pointer press or unmount ends the flight where it is.
   Invalid targets or durations, and rotated or pitched flights on a `maxBounds` camera, fail
   closed and leave the camera unchanged.
+- Tileset style layers follow MapLibre 6.17 past the tileset's `maxZoom` (#346). Up to
+  four zooms below the Map View's `maxZoom` (default 22), each visible tile of the camera's
+  tile zoom is sliced from the deepest source tile (128-unit buffer) and laid out as its own
+  tile; deeper, the sliced tiles are laid out again at the camera's tile zoom (MapLibre's
+  overscaled tiles). Labels therefore repeat at `symbol-spacing`, anchor, collide and are
+  picked per sliced tile, and sizes, `text-field` and other layout and paint evaluate at
+  the tile zoom instead of the tileset's `maxZoom`. Re-layout errors go to `onError`. The
+  oracle `symbol-overscaled` and `symbol-overscaled-deep` scenarios are gated.
 - Tileset `symbol` layers take zoom-dependent translations and variable anchors that follow
   the zoom or the feature (#346). `text-translate` and `icon-translate` may be camera
   functions (`interpolate` or `step` over `["literal", [x, y]]`), evaluated at the camera
@@ -84,6 +92,14 @@
 
 ### Patch Changes
 
+- On `flatRuntime="maps"`, camera motion plans and renders the base map at most once per
+  animation frame (#433 Fast). During camera motion, raster tiles that arrive are planned on
+  the camera's next frame instead of one frame plan and full render per arrived tile, and a
+  fade-in re-render never adds a second render to a camera frame. A controlled Map View's echo
+  of a camera frame no longer submits a second WebGPU frame when its retained Map Layer groups
+  are unchanged. On the Canvas fallback a 2.4 s Paris → Berlin flight went from 231 plans and
+  267 renders over 108 animation frames to one of each per animation frame.
+
 - Under a pitched camera, hovering and clicking a GeoJSON line measures its width on the map
   plane, as MapLibre does, instead of on the screen (#386): far up a pitched map the line is
   thinner and no longer picks where MapLibre does not, and near the camera it is wider. The
@@ -110,6 +126,10 @@
 
 ### Internal
 
+- `verify:package-size` treats the non-WASM unpacked size ceiling (1,168,500 bytes) as
+  advisory (#173): it still measures and reports the size, its change since the approved
+  snapshot and the growth attribution, and warns above the ceiling, but no longer fails.
+  The entry count, stylesheet budgets and required package files still fail.
 - The first-party base canvas publishes `data-map-base-retained-tiles`: the decoded tile
   images it holds, which Rust's tile cache bounds (#447). The memory that grows during
   sustained zoom on the Canvas fallback belongs to Chromium's GPU process, not to Maps;

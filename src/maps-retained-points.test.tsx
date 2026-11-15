@@ -1,4 +1,5 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MapSurfaceController, MapViewState } from "./map-display";
@@ -278,6 +279,47 @@ describe("GPU-retained application points (#155)", () => {
     expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
     expect(runtime.projectPacked).not.toHaveBeenCalled();
     expect(runtime.project).not.toHaveBeenCalled();
+  });
+
+  it("renders each camera frame once when a controlled Map View echoes it (#433)", async () => {
+    // An application keeps its camera in React state, as `onViewStateChange` → `viewState`.
+    // The echo commit redraws the layers with unchanged retained groups: that must not submit
+    // a second GPU frame for the camera frame the runtime already rendered.
+    let controller: MapSurfaceController | undefined;
+    const points = createPoints(1_000);
+    function Controlled() {
+      const [viewState, setViewState] = useState<MapViewState>({ center: [0, 0], zoom: 4 });
+      return (
+        <MapsMapView
+          mapLabel="Controlled retained points"
+          mapStyle={{ tiles: false }}
+          fitToData={false}
+          onMapControllerReady={(ready) => {
+            controller = ready;
+          }}
+          onViewStateChange={setViewState}
+          viewState={viewState}
+        >
+          <PointLayer points={points} />
+        </MapsMapView>
+      );
+    }
+    const mounted = render(<Controlled />);
+    await waitFor(() => {
+      expect(mounted.getByLabelText("Controlled retained points").dataset.mapReady).toBe("true");
+      expect(paints.at(-1)?.order).toEqual([MAPS_WGPU_APPLICATION_RETAINED_POINTS, 1, 1]);
+    });
+
+    paints.length = 0;
+    for (let step = 1; step <= 20; step += 1) {
+      act(() => {
+        controller!.setViewState({ center: [step * 0.5, step * 0.25], zoom: 4 + step * 0.1 });
+        flushAnimationFrame();
+      });
+    }
+    expect(paints).toHaveLength(20);
+    expect(renderer.setRetainedPoints).toHaveBeenCalledTimes(1);
+    expect(renderer.updateRetainedPoints).not.toHaveBeenCalled();
   });
 
   it("updates one changed point in place without re-uploading the group (#189)", async () => {

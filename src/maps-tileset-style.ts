@@ -68,6 +68,7 @@ export function tilesetStyleTable(overrides?: MapsVectorBasemapStyle) {
  * `fill-antialias` outline), `line` layers (caps, joins, dashes, `line-pattern`), `circle` layers and `symbol` layers
  * (SDF text at points or along lines, plain or SDF icons from the map style's `sprite`, and sizes and paint that follow
  * the zoom, #346) of its vector source layers, with filters, data-driven properties and MapLibre's collision placement.
+ * Past the tileset's `maxZoom`, tiles are sliced and overscaled as in MapLibre (#346).
  * Properties Maps does not implement are rejected through `onError`, never approximated.
  */
 export type MapsTilesetLayers = MapsTilesetLayerInteraction & {
