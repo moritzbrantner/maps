@@ -224,28 +224,39 @@ it("plans and renders the base once per animation frame while a flight overlaps 
     expect(canvas.dataset.mapBaseRenderer).toBe("canvas2d");
     const stats = () => host.controller!.getRendererStats();
 
-    host.controller!.flyTo({ center: [0, 0], zoom: 8 }, { durationMs: 480 });
-    let flightFrames = 0;
-    let fadingFrames = 0;
-    while (canvas.dataset.mapCameraTransition === "fly-to" && flightFrames < 60) {
-      // Tiles requested by the last frame arrive before the next one: nothing renders then.
-      const rendersBefore = stats().renders;
-      const plansBefore = vi.mocked(runtime.frame).mock.calls.length;
-      await betweenFrames();
-      expect(stats().renders).toBe(rendersBefore);
-      expect(vi.mocked(runtime.frame).mock.calls.length).toBe(plansBefore);
+    /** Flies to `zoom` over 30 frames, checking one plan and one render per frame. */
+    const fly = async (zoom: number) => {
+      host.controller!.flyTo({ center: [0, 0], zoom }, { durationMs: 480 });
+      let flightFrames = 0;
+      let fadingFrames = 0;
+      while (canvas.dataset.mapCameraTransition === "fly-to" && flightFrames < 60) {
+        // Tiles requested by the last frame arrive before the next one: nothing renders then.
+        const rendersBefore = stats().renders;
+        const plansBefore = vi.mocked(runtime.frame).mock.calls.length;
+        await betweenFrames();
+        expect(stats().renders).toBe(rendersBefore);
+        expect(vi.mocked(runtime.frame).mock.calls.length).toBe(plansBefore);
 
-      animationFrame();
-      flightFrames += 1;
-      // The flight's frame plans the arrived tiles and draws the fade: one plan, one render.
-      expect(vi.mocked(runtime.frame).mock.calls.length - plansBefore).toBe(1);
-      expect(stats().renders - rendersBefore).toBe(1);
-      if (frames.size > 1) fadingFrames += 1;
-    }
-    expect(canvas.dataset.mapCameraTransition).toBeUndefined();
-    expect(flightFrames).toBe(30);
-    // The flight crossed integer zooms with parents loaded: fade-ins overlapped it.
-    expect(fadingFrames).toBeGreaterThan(0);
+        animationFrame();
+        flightFrames += 1;
+        // The flight's frame plans the arrived tiles and draws the fade: one plan, one render.
+        expect(vi.mocked(runtime.frame).mock.calls.length - plansBefore).toBe(1);
+        expect(stats().renders - rendersBefore).toBe(1);
+        if (frames.size > 1) fadingFrames += 1;
+      }
+      expect(canvas.dataset.mapCameraTransition).toBeUndefined();
+      expect(flightFrames).toBe(30);
+      // The flight crossed integer zooms with parents loaded: fade-ins overlapped it.
+      expect(fadingFrames).toBeGreaterThan(0);
+    };
+
+    await fly(8);
+    // A fade-in still running when the next flight starts was scheduled before the flight's
+    // first frame: it runs first in that frame and must still not render twice.
+    await betweenFrames();
+    animationFrame();
+    expect(frames.size).toBeGreaterThan(0);
+    await fly(12);
 
     // After the flight, the last tiles arrive and fade in, one render per animation frame.
     const rendersAfterFlight = stats().renders;

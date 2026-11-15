@@ -758,6 +758,8 @@ export function createMapsBrowserRuntime(
       onError: (error) => config.onError?.(error),
       onRendererFailure: activateCanvasFallback,
       onCameraFrame: () => config.onCameraFrame?.(),
+      cameraMotionPending: () =>
+        flightFrame !== null || cameraFrame !== null || kineticFrame !== null,
     });
     const syncFrame = frameSynchronizer.syncFrame;
     disposeFrameSynchronizer = frameSynchronizer.dispose;
@@ -1362,6 +1364,7 @@ function createFrameSynchronizer({
   onError,
   onRendererFailure,
   onCameraFrame,
+  cameraMotionPending,
 }: {
   loadTile: MapsTileImageLoader["load"];
   canvas: HTMLCanvasElement;
@@ -1387,6 +1390,8 @@ function createFrameSynchronizer({
   onError: (error: unknown) => void;
   onRendererFailure: () => void;
   onCameraFrame: () => void;
+  /** A camera frame (flight, gesture, inertia, command) is scheduled for the next frame. */
+  cameraMotionPending: () => boolean;
 }) {
   type VectorResource = { bytes: Uint8Array; pixels: ShortbreadTilePixels; tile: MapsRasterTileId };
   const vectors = new Map<string, VectorResource>();
@@ -2094,9 +2099,10 @@ function createFrameSynchronizer({
     renderRequest = requestAnimationFrame((frameTime) => {
       renderRequest = null;
       if (disposed || !lastFrame || !renderInvalidated) return;
-      // A camera frame (a flight, a gesture) already rendered this animation frame. A fade
-      // still in progress asks for the next one; nothing renders twice per frame (#433).
-      if (renderedFrameTime === frameTime) {
+      // A camera frame (a flight, a gesture) already rendered this animation frame, or renders
+      // it next: this request may have been scheduled before the camera frame and run first.
+      // A fade still in progress asks for the next one; nothing renders twice per frame (#433).
+      if (renderedFrameTime === frameTime || cameraMotionPending()) {
         requestRender();
         return;
       }
@@ -2105,14 +2111,25 @@ function createFrameSynchronizer({
   }
 
   /**
-   * Plans and presents tiles that arrived since the last frame on the next animation frame,
-   * once however many arrived, unless a camera frame already planned that frame (#433).
+   * Plans and presents an arrived tile. During camera motion, tiles that arrived since the
+   * last frame are planned on the next animation frame, once however many arrived, unless the
+   * camera frame already planned that frame (#433); a camera at rest presents them at once.
    */
   function requestSync() {
-    if (disposed || syncRequest !== null) return;
+    if (disposed) return;
+    if (!cameraMotionPending()) {
+      if (syncRequest === null) syncFrame();
+      return;
+    }
+    if (syncRequest !== null) return;
     syncRequest = requestAnimationFrame((frameTime) => {
       syncRequest = null;
       if (disposed || syncedFrameTime === frameTime) return;
+      // The pending camera frame plans the arrived tiles itself.
+      if (cameraMotionPending()) {
+        requestSync();
+        return;
+      }
       syncFrame();
     });
   }

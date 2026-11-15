@@ -20,6 +20,7 @@ type Flight = {
   endedOnTarget: boolean;
   ending: "completed" | "superseded" | "pointer" | "unmounted";
   framesAfterEnd: number;
+  work: { animationFrames: number; framePlans: number; renders: number } | null;
 };
 type Phase = {
   durationMs: number;
@@ -84,7 +85,11 @@ const observation = JSON.parse(readFileSync(observationFile, "utf8"));
 assert.equal(observation.schemaVersion, "maps.camera-transition-journey-observation/v1");
 assert.equal(observation.scenarioId, canonical.id);
 assert.match(observation.backend, /^(wgpu|canvas2d)$/);
-assert.equal(observation.backendAtEnd, observation.backend, "the base renderer changed mid-journey");
+assert.equal(
+  observation.backendAtEnd,
+  observation.backend,
+  "the base renderer changed mid-journey",
+);
 const phases: Record<string, Phase> = observation.phases;
 assert.deepEqual(Object.keys(phases), canonical.runtimePhases);
 
@@ -119,25 +124,31 @@ for (const [name, phase] of Object.entries(phases)) {
   }
 }
 
-// One frame plan and at most one base render per animation frame of camera motion. Before
-// #433's Fast work, tile arrivals and raster fade-ins planned and rendered again inside the
-// flight's frames (about 1.8 plans and renders per frame on the Canvas fallback).
+// One frame plan and at most one base render per animation frame of a flight. Before #433's
+// Fast work, tile arrivals, raster fade-ins and the controlled echo planned and rendered again
+// inside the flight's frames (about 1.4-1.8 per frame on the Canvas fallback).
+let measuredFlights = 0;
 for (const name of MOTION_PHASES) {
   const phase = phases[name]!;
-  const animationFrames = phase.frameIntervalsMs.count + 1;
-  // A resize re-plans once outside an animation frame (ResizeObserver).
-  const slack = name === "resize" ? 2 : 0;
-  assert(
-    phase.runtime.framePlans! <= animationFrames + slack,
-    `${name}: ${phase.runtime.framePlans} frame plans in ${animationFrames} animation frames`,
-  );
-  assert(
-    phase.renderer!.renders <= animationFrames + slack,
-    `${name}: ${phase.renderer!.renders} base renders in ${animationFrames} animation frames`,
-  );
+  for (const flight of phase.flights) {
+    if (!flight.work || flight.frames < 2) continue;
+    measuredFlights += 1;
+    const { animationFrames, framePlans, renders } = flight.work;
+    // A resize re-plans once outside an animation frame (ResizeObserver).
+    const slack = name === "resize" ? 2 : 0;
+    assert(
+      framePlans <= animationFrames + slack,
+      `${name}/${flight.label}: ${framePlans} frame plans in ${animationFrames} animation frames`,
+    );
+    assert(
+      renders <= animationFrames + slack,
+      `${name}/${flight.label}: ${renders} base renders in ${animationFrames} animation frames`,
+    );
+  }
   const presented = phase.flights.reduce((sum, flight) => sum + flight.frames, 0);
   assert(presented > 0, `${name}: presented no flight frame`);
 }
+assert(measuredFlights >= 6, `only ${measuredFlights} completed flights were measured`);
 
 assert.deepEqual(
   phases.flight!.flights.map((flight) => flight.ending),

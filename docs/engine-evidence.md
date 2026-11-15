@@ -302,8 +302,9 @@ and renderers. JS heap is sampled after forced GC, including after each mid-flig
 
 The verifier fails when evidence is missing or the contract is broken:
 
-- every camera phase plans and renders the base at most once per animation frame (a resize
-  may re-plan once outside one);
+- every completed flight plans and renders the base at most once per animation frame it spans,
+  counted in the page from the command to the flight's last frame (a resize may re-plan once
+  outside one);
 - no phase outside teardown rebuilds the runtime or re-lowers a retained Map Layer group;
 - every completed flight ends on its target and every interrupted one presents no later frame;
 - successive commands supersede the flights in progress, a pointer press and each unmount end

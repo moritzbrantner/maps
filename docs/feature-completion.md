@@ -483,29 +483,32 @@ frame:
 - a controlled Map View's echo of each camera frame submitted a second WebGPU frame although
   its retained Map Layer groups were unchanged.
 
-Tile arrivals are now planned on the next animation frame, once for all of them, and skipped
-when the camera frame already planned that frame; a fade-in re-render skips a frame the camera
-already rendered; an unchanged retained redraw renders nothing of its own
+During camera motion, tile arrivals are now planned by the camera's next frame, once for all
+of them; a fade-in re-render skips a frame the camera renders; an unchanged retained redraw
+renders nothing of its own (a camera at rest still presents an arrived tile at once)
 (`src/maps-flight-frame-work.test.ts`, `src/maps-retained-points.test.tsx`,
 `e2e/maps-camera-transition-journey.spec.ts` on WebGPU and Canvas).
 
 **Measured** (runtime-profiler browser collector, Canvas fallback, same machine, the parent
-`590566f` against this change):
+`590566f` against this change; per completed flight, counted in the page from the command to
+the flight's last frame):
 
-| | Parent | This change (2 captures) |
+| Flight | Parent: frames / plans / renders | This change (2 captures) |
 | --- | --- | --- |
-| Paris ⇄ Berlin flights: animation frames / presented frames | 134 / 121 | 260–292 / 250–278 |
-| Same: base renders / frame plans | 194 / 172 | 251–279 / 250–278 |
-| Same: frame p50 / p95 / max (ms) | 33.3 / 100 / 167 | 16.7 / 16.8–33.3 / 33.4–66.7 |
-| Long tasks over the flight, successive and resize phases | 24 | 0–1 |
-| Completed flights, presented frames per second (p50) | 28.7 | 60.2 |
+| Paris → Berlin (2.4 s) | 108 / 231 / 267 | 142 / 142 / 142 |
+| Berlin → Paris (2.4 s) | 129 / 162 / 163 | 142 / 142 / 142 |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 257 / 257 / 257 |
+| Berlin, resized mid-flight | 120 / 170 / 197 | 142 / 143 / 143 |
 
-On SwiftShader WebGPU (journey run directly, not through the collector) the two Paris ⇄
-Berlin flights presented 105 frames with 106 base renders and 105 plans; #443 recorded 8–11
-frames per flight with 45–101 renders. Every interrupted flight presented no frame after its
-interruption, every completed flight ended on its target, and each `animate: false` jump
-presented one frame. JS heap after GC was 5.7 MB ready, 7.9 MB after the journey and
-5.2 MB after each of three mid-flight unmounts (growth under 0.1 MB across them).
+Frame p95 over the flight phases was 16.7–16.8 ms with no long task in both captures; the
+parent's p95 was 33.4 ms in this capture and 100 ms with 24 long tasks in an earlier one.
+On SwiftShader WebGPU (the journey run directly, not through the collector) every completed
+flight also planned and rendered once per frame: Paris ⇄ Berlin presented 65 and 64 frames,
+where #443 recorded 8–11 frames per flight with 45–101 renders. Every interrupted flight
+presented no frame after its interruption, every completed flight ended on its target, and
+each `animate: false` jump presented one frame. JS heap after GC was 5.7 MB ready, 7.9 MB
+after the journey and 5.2 MB after each of three mid-flight unmounts (growth under 0.1 MB
+across them).
 
 **Not a Fast verdict.** The parent comparison is descriptive: Moonlight has no policy for this
 journey and no MapLibre reference runs it, so `evaluation.json` records comparison and

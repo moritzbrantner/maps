@@ -601,21 +601,35 @@ Playwright 1.64.1, Node 24.19.0, Ryzen 7 5700X, Linux x64 (WSL2), WASM SHA-256
 `272c1f8b64619854e2be1f1480cc3bd7cca0fa6fedbd537f76b8ca73e9f1a9ac`. The pinned collector
 launches Chromium without WebGPU, so the Canvas fallback ran. "Parent" is the same journey
 with `src/maps-browser-runtime.ts` from `590566f`; it fails the verifier's per-frame contract.
+Per completed flight, from the command to its last frame:
 
-| Phase | Parent: frames / flight frames / renders / plans, p95 | This change (2 captures) |
+| Flight | Parent: animation frames / plans / renders | This change (2 captures) |
 | --- | --- | --- |
-| Paris ⇄ Berlin | 134 / 121 / 194 / 172, p95 100 ms, 8 long tasks | 260–292 / 250–278 / 251–279 / 250–278, p95 16.8–33.3 ms, 0–1 long task |
-| Dateline (jump, 1.2 s, 4.3 s flights) | 291 / 266 / 472 / 431, p95 33.4 ms | 343–344 / 330–332 / 335–337 / 334–336, p95 16.7–16.8 ms |
-| Successive commands | 85 / 69 / 121 / 104, p95 83.3 ms, 6 long tasks | 52–54 / 44–47 / 44–47 / 45–47, p95 16.8 ms |
-| Resize mid-flight | 149 / 132 / 202 / 185, p95 83.2 ms, 10 long tasks | 285–298 / 270–284 / 273–286 / 272–286, p95 16.7–16.8 ms |
+| Paris → Berlin | 108 / 231 / 267 | 142 / 142 / 142 |
+| Berlin → Paris | 129 / 162 / 163 | 142 / 142 / 142 |
+| Fiji → Samoa (1.2 s) | 73 / 113 / 73 | 73 / 73 / 73 |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 257 / 257 / 257 |
+| Berlin, narrowed mid-flight | 120 / 170 / 197 | 142 / 143 / 143 |
+| Paris, after superseded flights | 15 / 15 / 15 | 15–16 / 15–16 / 15–16 |
 
-Bundle manifest SHA-256: parent `2977ad5a…8220`, candidates `30ee9554…5691` and
-`f4b2ef62…fd8fda`. The successive phase is shorter in frames after the change because its
-flights are superseded after 8 presented frames, which now arrive sooner.
+| Phase | Parent: frame p50 / p95 / max (ms) | This change |
+| --- | --- | --- |
+| Paris ⇄ Berlin | 16.7 / 33.4 / 83.4 | 16.7 / 16.8 / 16.8 |
+| Dateline | 16.7 / 16.7 / 16.8 | 16.7 / 16.8 / 16.8 |
+| Resize mid-flight | 16.7 / 33.3 / 66.7 | 16.7 / 16.7–16.8 / 16.8 |
 
-On SwiftShader WebGPU (the journey run directly with `WEBGPU_SWIFTSHADER_ARGS`), the
-Paris ⇄ Berlin flights presented 105 frames with 106 GPU frames and 105 plans, at p95
-66.7 ms. The parent did not complete the journey there: one stage exceeded its 30 s wait.
+No phase of either candidate capture had a long task. An earlier parent capture on the same
+machine was slower still (Paris ⇄ Berlin p95 100 ms, 24 long tasks over the flight phases), so
+the parent's timing varies more than the candidate's. Bundle manifest SHA-256: parent
+`4e69cef2…bf9bf6`, candidates `0158f89b…c5bbb9` and `639eb2b6…070648`. JS heap after GC:
+5.7 MB ready, 7.9 MB after the journey, 5.15–5.20 MB after each mid-flight unmount, 7.2 MB
+remounted, in every capture.
+
+On SwiftShader WebGPU (the journey run directly with `WEBGPU_SWIFTSHADER_ARGS`), every
+completed flight planned and rendered once per animation frame: Paris → Berlin 65 frames,
+plans and GPU frames, Berlin → Paris 65 / 65 / 64, Samoa → Paris 67 / 67 / 67, at frame p95
+50–100 ms. An earlier attempt to run the parent there did not complete the journey (one stage
+exceeded its 30 s wait).
 
 **Not a Fast verdict.** No MapLibre reference or Moonlight policy covers this journey; GPU
 completion time, GPU and WASM memory are unavailable.

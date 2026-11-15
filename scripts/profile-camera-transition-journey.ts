@@ -58,6 +58,8 @@ type CameraJourneyViewState = {
   zoom: number;
 };
 
+type FlightWork = { animationFrames: number; framePlans: number; renders: number; done: boolean };
+
 /** One flight command and what the Map View presented for it. */
 export type FlightObservation = {
   label: string;
@@ -72,6 +74,11 @@ export type FlightObservation = {
   endedOnTarget: boolean;
   /** The last presented camera. */
   lastViewState: CameraJourneyViewState | null;
+  /**
+   * Animation frames from the command to the flight's last frame, and the frame plans and
+   * base renders over them (a completed flight); `null` for an interrupted one.
+   */
+  work: { animationFrames: number; framePlans: number; renders: number } | null;
   /** How the flight ended: completed, superseded by the next command, interrupted or unmounted. */
   ending: "completed" | "superseded" | "pointer" | "unmounted";
   /** `fly-to` frames presented after the interruption (must be 0). */
@@ -103,6 +110,7 @@ type TraceEntry = {
 
 declare global {
   interface Window {
+    cameraJourneyFlightWork?: FlightWork;
     cameraJourney: {
       commandTime: number;
       controller: unknown;
@@ -356,7 +364,35 @@ async function flight(
   const start = await page.evaluate(
     ({ options, target }) => {
       const first = window.cameraJourney.trace.length;
+      // Work over the animation frames the flight spans, read in its last frame: tile
+      // arrivals at rest between flights are not counted against it.
+      const counters = (
+        window as unknown as { mapsMixedLayerWork: { counters: Record<string, number> } }
+      ).mapsMixedLayerWork.counters;
+      const read = () => ({
+        plans: counters.framePlans!,
+        renders: window.cameraJourney.stats()?.renders ?? 0,
+      });
+      const before = read();
+      const work = { animationFrames: 0, framePlans: 0, renders: 0, done: false };
+      window.cameraJourneyFlightWork = work;
+      const tick = () => {
+        if (window.cameraJourneyFlightWork !== work) return;
+        work.animationFrames += 1;
+        const now = read();
+        work.framePlans = now.plans - before.plans;
+        work.renders = now.renders - before.renders;
+        const flying =
+          document
+            .querySelector(
+              '[aria-label="Camera transition journey"] canvas[data-flat-runtime="maps"]',
+            )
+            ?.getAttribute("data-map-camera-transition") === "fly-to";
+        if (flying) requestAnimationFrame(tick);
+        else work.done = true;
+      };
       window.cameraJourney.fly(target, options);
+      requestAnimationFrame(tick);
       return { commandTime: window.cameraJourney.commandTime, first };
     },
     { options, target },
@@ -450,8 +486,9 @@ async function observe(
   ending: FlightObservation["ending"],
   framesAtEnd: number | null,
 ): Promise<FlightObservation> {
-  const { frames, targetView } = await page.evaluate(
+  const { frames, targetView, flightWork } = await page.evaluate(
     ({ first, target }) => ({
+      flightWork: window.cameraJourneyFlightWork ?? null,
       frames: window.cameraJourney.trace.slice(first).filter((entry) => entry.reason === "fly-to"),
       targetView: window.cameraJourney.targets[target],
     }),
@@ -478,6 +515,14 @@ async function observe(
     maxFrameGapMs,
     endedOnTarget,
     lastViewState: last ?? null,
+    work:
+      ending === "completed" && flightWork?.done
+        ? {
+            animationFrames: flightWork.animationFrames,
+            framePlans: flightWork.framePlans,
+            renders: flightWork.renders,
+          }
+        : null,
     ending,
     framesAfterEnd: framesAtEnd === null ? 0 : frames.length - framesAtEnd,
     commandTime: start.commandTime,
