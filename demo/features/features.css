@@ -88,6 +88,24 @@
 .features-panel output {
   font-variant-numeric: tabular-nums;
 }
+.features-basemap-picker {
+  display: grid;
+  gap: 0.4rem;
+  font-weight: 650;
+}
+.features-basemap-picker select {
+  width: 100%;
+  padding: 0.55rem;
+  border: 1px solid #94a3a6;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #101827;
+  font: inherit;
+}
+.features-basemap-picker select:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}
 .features-list {
   display: grid;
   gap: 0.3rem;
