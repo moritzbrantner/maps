@@ -36,7 +36,10 @@ import { MapView, type FlatMapRuntime, type MapViewProps } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import type { MapMeasurementProps } from "./measurement";
 import { type HeatFieldMaskGeoJson, type HeatFieldOptions } from "./scalar-field";
-import { type HeatFieldContourOptions, type HeatFieldColorStop } from "./scalar-field-render";
+import {
+  type HeatFieldContourOptions,
+  type HeatFieldColorStop,
+} from "./scalar-field-render";
 import type { TemporalGeoJsonGeometryFeatureCollection } from "./temporal-geojson-types";
 
 export {
@@ -46,9 +49,9 @@ export {
   resolveHeatMapPointWeight,
 } from "./heat-core";
 
-export type HeatMapWeightAccessor<
-  TProperties extends Record<string, unknown> = Record<string, unknown>,
-> = (point: IndexedMapPoint<TProperties>) => number;
+export type HeatMapWeightAccessor<TProperties extends Record<string, unknown> = Record<string, unknown>> = (
+  point: IndexedMapPoint<TProperties>,
+) => number;
 
 export type HeatMapColorStop = readonly [density: number, color: string];
 
@@ -89,22 +92,19 @@ export type HeatMapFeatureCollection = {
   type: "FeatureCollection";
 };
 
-export type HeatMapWeightOptions<
-  TProperties extends Record<string, unknown> = Record<string, unknown>,
-> = {
+export type HeatMapWeightOptions<TProperties extends Record<string, unknown> = Record<string, unknown>> = {
   filterPoint?: MapPointFilter<TProperties>;
   getWeight?: HeatMapWeightAccessor<TProperties>;
   maxWeight?: number;
   weightMetric?: string;
 };
 
-export type HeatMapDensityIndexOptions<
-  TProperties extends Record<string, unknown> = Record<string, unknown>,
-> = HeatMapWeightOptions<TProperties> & {
-  maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
-  minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
-  radius?: PointAggregationIndexOptions<TProperties>["radius"];
-};
+export type HeatMapDensityIndexOptions<TProperties extends Record<string, unknown> = Record<string, unknown>> =
+  HeatMapWeightOptions<TProperties> & {
+    maxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
+    minZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
+    radius?: PointAggregationIndexOptions<TProperties>["radius"];
+  };
 
 export type HeatMapDensityIndex = {
   getFeatureCollection(query: ViewportAggregationQuery): HeatMapFeatureCollection;
@@ -114,82 +114,79 @@ export type HeatMapDensityIndex = {
 
 export type HeatMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> =
   HeatMapWeightOptions<TProperties> &
-    Pick<
-      MapViewProps,
-      "tileset" | "tilesetStyle" | "tilesetLayers" | "tileLimits" | "tilePersistence"
-    > &
+    Pick<MapViewProps, "tileset" | "tilesetStyle" | "tilesetLayers" | "tileLimits" | "tilePersistence"> &
     MapMeasurementProps & {
-      children?: React.ReactNode;
-      className?: string;
-      domainBounds?: HeatFieldOptions<TProperties>["domainBounds"];
-      domainPaddingRatio?: HeatFieldOptions<TProperties>["domainPaddingRatio"];
-      fieldCellSizeMeters?: HeatFieldOptions<TProperties>["fieldCellSizeMeters"];
-      fieldContourColor?: HeatFieldContourOptions["lineColor"];
-      fieldContourLevels?: HeatFieldContourOptions["levels"];
-      fieldContourLineWidth?: HeatFieldContourOptions["lineWidth"];
-      fieldContourOpacity?: HeatFieldContourOptions["opacity"];
-      fieldContourValueFormat?: HeatFieldContourOptions["valueFormat"];
-      fieldColorRamp?: readonly HeatFieldColorStop[];
-      fieldColumns?: HeatFieldOptions<TProperties>["fieldColumns"];
-      fieldOpacity?: HeatFieldOptions<TProperties>["opacity"];
-      fieldAsyncRender?: boolean;
-      fieldRenderMode?: HeatFieldRenderMode;
-      fieldRows?: HeatFieldOptions<TProperties>["fieldRows"];
-      fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
-      fitBoundsPadding?: number;
-      fitToData?: boolean;
-      /**
-       * The Flat Map runtime. `"maps"` uses first-party Rust/WASM with either a raster `mapStyle`
-       * or a versioned Maps `tileset`; measurement props remain MapLibre-only there and fail closed.
-       */
-      flatRuntime?: FlatMapRuntime;
-      geoJson?: GeoJsonMapSource<TProperties>;
-      geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
-      geoJsonOverlay?: GeoJsonOverlayMode;
-      geoJsonOverlayCollection?: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
-      geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
-      heatmapAggregationMaxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
-      heatmapAggregationMinZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
-      heatmapAggregationRadius?: PointAggregationIndexOptions<TProperties>["radius"];
-      heatmapAsyncRender?: boolean;
-      heatmapColorRamp?: readonly HeatMapColorStop[];
-      heatmapIntensity?: number;
-      heatmapMaxRasterPixels?: number;
-      heatmapMaxZoom?: number;
-      heatmapMinZoomDeltaForRebuild?: number;
-      heatmapOpacity?: number;
-      heatmapOverscanRatio?: number;
-      heatmapRadius?: HeatMapRadius;
-      heatmapRenderStrategy?: HeatLayerRenderStrategy;
-      heatmapSurfaceMode?: HeatMapSurfaceMode;
-      getValue?: HeatFieldOptions<TProperties>["getValue"];
-      /**
-       * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
-       */
-      initialViewState?: MapViewState;
-      interpolationEpsilonMeters?: HeatFieldOptions<TProperties>["interpolationEpsilonMeters"];
-      interpolationExtrapolate?: HeatFieldOptions<TProperties>["interpolationExtrapolate"];
-      interpolationK?: HeatFieldOptions<TProperties>["interpolationK"];
-      interpolationMaxDistanceMeters?: HeatFieldOptions<TProperties>["interpolationMaxDistanceMeters"];
-      interpolationPower?: HeatFieldOptions<TProperties>["interpolationPower"];
-      mapDisplay?: MapDisplayMode;
-      mapLabel?: string;
-      mapStyle?: string | RasterMapStyle;
-      maskGeoJson?: HeatFieldMaskGeoJson | null;
-      onMapControllerReady?: (controller: MapSurfaceController) => void;
-      onMapReady?: (map: import("maplibre-gl").Map) => void;
-      points?: readonly MapPoint<TProperties>[];
-      showAttributionControl?: boolean;
-      showDataPoints?: boolean;
-      dataPointColor?: string;
-      dataPointOpacity?: number;
-      dataPointRadius?: number;
-      dataPointStrokeColor?: string;
-      dataPointStrokeWidth?: number;
-      dataPointValueFormat?: (value: number) => string;
-      style?: React.CSSProperties;
-      valueMetric?: string;
-    } & MapViewportProps;
+    children?: React.ReactNode;
+    className?: string;
+    domainBounds?: HeatFieldOptions<TProperties>["domainBounds"];
+    domainPaddingRatio?: HeatFieldOptions<TProperties>["domainPaddingRatio"];
+    fieldCellSizeMeters?: HeatFieldOptions<TProperties>["fieldCellSizeMeters"];
+    fieldContourColor?: HeatFieldContourOptions["lineColor"];
+    fieldContourLevels?: HeatFieldContourOptions["levels"];
+    fieldContourLineWidth?: HeatFieldContourOptions["lineWidth"];
+    fieldContourOpacity?: HeatFieldContourOptions["opacity"];
+    fieldContourValueFormat?: HeatFieldContourOptions["valueFormat"];
+    fieldColorRamp?: readonly HeatFieldColorStop[];
+    fieldColumns?: HeatFieldOptions<TProperties>["fieldColumns"];
+    fieldOpacity?: HeatFieldOptions<TProperties>["opacity"];
+    fieldAsyncRender?: boolean;
+    fieldRenderMode?: HeatFieldRenderMode;
+    fieldRows?: HeatFieldOptions<TProperties>["fieldRows"];
+    fieldValueDomain?: HeatFieldOptions<TProperties>["valueDomain"];
+    fitBoundsPadding?: number;
+    fitToData?: boolean;
+    /**
+     * The Flat Map runtime. `"maps"` uses first-party Rust/WASM with either a raster `mapStyle`
+     * or a versioned Maps `tileset`; measurement props remain MapLibre-only there and fail closed.
+     */
+    flatRuntime?: FlatMapRuntime;
+    geoJson?: GeoJsonMapSource<TProperties>;
+    geoJsonOptions?: GeoJsonSourceOptions<TProperties>;
+    geoJsonOverlay?: GeoJsonOverlayMode;
+    geoJsonOverlayCollection?: TemporalGeoJsonGeometryFeatureCollection<TProperties>;
+    geoJsonOverlayProps?: Omit<GeoJsonLayerProps<TProperties>, "featureCollection">;
+    heatmapAggregationMaxZoom?: PointAggregationIndexOptions<TProperties>["maxZoom"];
+    heatmapAggregationMinZoom?: PointAggregationIndexOptions<TProperties>["minZoom"];
+    heatmapAggregationRadius?: PointAggregationIndexOptions<TProperties>["radius"];
+    heatmapAsyncRender?: boolean;
+    heatmapColorRamp?: readonly HeatMapColorStop[];
+    heatmapIntensity?: number;
+    heatmapMaxRasterPixels?: number;
+    heatmapMaxZoom?: number;
+    heatmapMinZoomDeltaForRebuild?: number;
+    heatmapOpacity?: number;
+    heatmapOverscanRatio?: number;
+    heatmapRadius?: HeatMapRadius;
+    heatmapRenderStrategy?: HeatLayerRenderStrategy;
+    heatmapSurfaceMode?: HeatMapSurfaceMode;
+    getValue?: HeatFieldOptions<TProperties>["getValue"];
+    /**
+     * @deprecated Use `defaultViewState` for an uncontrolled initial viewport.
+     */
+    initialViewState?: MapViewState;
+    interpolationEpsilonMeters?: HeatFieldOptions<TProperties>["interpolationEpsilonMeters"];
+    interpolationExtrapolate?: HeatFieldOptions<TProperties>["interpolationExtrapolate"];
+    interpolationK?: HeatFieldOptions<TProperties>["interpolationK"];
+    interpolationMaxDistanceMeters?: HeatFieldOptions<TProperties>["interpolationMaxDistanceMeters"];
+    interpolationPower?: HeatFieldOptions<TProperties>["interpolationPower"];
+    mapDisplay?: MapDisplayMode;
+    mapLabel?: string;
+    mapStyle?: string | RasterMapStyle;
+    maskGeoJson?: HeatFieldMaskGeoJson | null;
+    onMapControllerReady?: (controller: MapSurfaceController) => void;
+    onMapReady?: (map: import("maplibre-gl").Map) => void;
+    points?: readonly MapPoint<TProperties>[];
+    showAttributionControl?: boolean;
+    showDataPoints?: boolean;
+    dataPointColor?: string;
+    dataPointOpacity?: number;
+    dataPointRadius?: number;
+    dataPointStrokeColor?: string;
+    dataPointStrokeWidth?: number;
+    dataPointValueFormat?: (value: number) => string;
+    style?: React.CSSProperties;
+    valueMetric?: string;
+  } & MapViewportProps;
 
 export function HeatMap<TProperties extends Record<string, unknown> = Record<string, unknown>>({
   mapDisplay = "flat",
@@ -234,8 +231,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
   // A versioned vector Tileset supplies the basemap. Do not also request the legacy
   // raster default when first-party consumers only provide `tileset`.
   const resolvedMapStyle = mapStyle ?? (tileset ? { tiles: false } : defaultRasterMapStyle);
-  const resolvedPoints =
-    points ?? (geoJson ? createMapPointsFromGeoJson(geoJson, geoJsonOptions) : []);
+  const resolvedPoints = points ?? (geoJson ? createMapPointsFromGeoJson(geoJson, geoJsonOptions) : []);
   const resolvedGeoJsonOverlayCollection =
     geoJsonOverlayCollection ??
     (geoJson
@@ -246,9 +242,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
       : null);
   const dataBounds = mergeMapDataBounds(
     geoJson ? getBoundsFromGeoJson(geoJson) : getBoundsFromPoints(resolvedPoints),
-    resolvedGeoJsonOverlayCollection
-      ? getBoundsFromGeoJson(resolvedGeoJsonOverlayCollection)
-      : null,
+    resolvedGeoJsonOverlayCollection ? getBoundsFromGeoJson(resolvedGeoJsonOverlayCollection) : null,
   );
 
   return (
@@ -283,10 +277,7 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
           featureCollection={resolvedGeoJsonOverlayCollection}
         />
       ) : null}
-      <HeatLayer
-        {...(props as React.ComponentProps<typeof HeatLayer<TProperties>>)}
-        points={resolvedPoints}
-      />
+      <HeatLayer {...(props as React.ComponentProps<typeof HeatLayer<TProperties>>)} points={resolvedPoints} />
       {flatRuntime !== "maps" || measurementMode !== undefined || measurements !== undefined ? (
         <BeeLineMeasurementLayer
           measurementDistanceFormat={measurementDistanceFormat}
@@ -304,9 +295,10 @@ export function HeatMap<TProperties extends Record<string, unknown> = Record<str
   );
 }
 
-export type HeatFieldMapProps<
-  TProperties extends Record<string, unknown> = Record<string, unknown>,
-> = Omit<HeatMapProps<TProperties>, "heatmapSurfaceMode">;
+export type HeatFieldMapProps<TProperties extends Record<string, unknown> = Record<string, unknown>> = Omit<
+  HeatMapProps<TProperties>,
+  "heatmapSurfaceMode"
+>;
 
 export function HeatFieldMap<TProperties extends Record<string, unknown> = Record<string, unknown>>(
   props: HeatFieldMapProps<TProperties>,
