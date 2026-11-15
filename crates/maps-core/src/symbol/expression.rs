@@ -461,10 +461,14 @@ fn blend(from: &Value, to: &Value, t: f64) -> Result<Value, String> {
             .collect::<Result<Vec<_>, _>>()
             .map(Value::Array),
         (Value::String(a), Value::String(b)) => {
-            let (a, b) = (
-                Rgba::parse(a).ok_or("interpolated colors must parse")?,
-                Rgba::parse(b).ok_or("interpolated colors must parse")?,
-            );
+            let (Some(a), Some(b)) = (Rgba::parse(a), Rgba::parse(b)) else {
+                // `VariableAnchorOffsetCollection.interpolate`: anchors stay, and must match.
+                return if a == b {
+                    Ok(Value::from(a.as_str()))
+                } else {
+                    Err(format!("cannot interpolate mismatched anchors {a} and {b}"))
+                };
+            };
             let mix = |a: f64, b: f64| a * (1.0 - t) + b * t;
             Ok(Value::from(
                 Rgba {

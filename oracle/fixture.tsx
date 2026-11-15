@@ -835,6 +835,106 @@ const Z_ORDER_LAYERS: Array<Record<string, unknown>> = [
     "place-stars-bottom-up",
   ),
 ];
+/**
+ * The `symbol-zoom-anchors` style layers (#346): anchor lists and translations that follow the
+ * zoom or the feature. Lakes switch anchor lists at zoom 7 (the tile zoom); towns take anchor
+ * offsets by population and a text translation interpolated at the camera zoom, anchored to
+ * the viewport from zoom 7 under a turned camera; capitals take anchor offsets interpolated
+ * over the zoom and an exponentially growing icon translation (icons overlap freely). Blockers,
+ * placed first, take each place's first anchor.
+ */
+const ZOOM_ANCHOR_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-stepped-anchors",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-radial-offset": 0.6,
+      "text-size": 13,
+      "text-variable-anchor": ["step", ["zoom"], ["literal", ["bottom", "top"]], 7, ["literal", ["left", "right"]]],
+    },
+    paint: { "text-color": "#1e3a8a", "text-halo-color": "#eff6ff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "city"],
+    id: "town-offsets-by-population",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-padding": 1,
+      "text-size": 13,
+      "text-variable-anchor-offset": [
+        "case",
+        [">=", ["get", "population"], 500000],
+        ["literal", ["bottom-left", [0.4, -0.4], "right", [-0.8, 0], "left", [0.8, 0]]],
+        ["literal", ["bottom-left", [0.4, -0.4], "top", [0, 0.8], "bottom", [0, -0.8]]],
+      ],
+    },
+    paint: {
+      "text-color": "#111827",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1,
+      "text-translate": ["interpolate", ["linear"], ["zoom"], 6, ["literal", [0, 0]], 9, ["literal", [9, -6]]],
+      "text-translate-anchor": ["step", ["zoom"], "map", 7, "viewport"],
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-zoomed-offsets",
+    layout: {
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+      "icon-image": "capital",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": 15,
+      "text-variable-anchor-offset": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        6,
+        ["literal", ["bottom-left", [0.2, -0.2], "top", [0, 0.5], "right", [-0.5, 0]]],
+        9,
+        ["literal", ["bottom-left", [0.2, -0.2], "top", [0, 2.5], "right", [-2.5, 0]]],
+      ],
+    },
+    paint: {
+      "icon-color": "#b91c1c",
+      "icon-halo-color": "#fef3c7",
+      "icon-halo-width": 1,
+      "icon-translate": ["interpolate", ["exponential", 1.5], ["zoom"], 6, ["literal", [0, 0]], 9, ["literal", [0, -16]]],
+      "text-color": "#7f1d1d",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1.5,
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    id: "place-blockers",
+    layout: {
+      "text-allow-overlap": true,
+      "text-anchor": "bottom-left",
+      "text-field": "Xxxx",
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0.2, -0.2],
+      "text-padding": 0,
+      "text-size": 13,
+    },
+    paint: { "text-color": "#dc2626" },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
@@ -855,6 +955,8 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
                 ? { glyphs: GLYPHS_URL, layers: SORT_KEY_LAYERS }
               : name === "symbol-z-order"
                 ? { glyphs: GLYPHS_URL, layers: Z_ORDER_LAYERS }
+              : name === "symbol-zoom-anchors"
+                ? { glyphs: GLYPHS_URL, layers: ZOOM_ANCHOR_LAYERS }
               : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
               : name === "fill-pattern" || name === "fill-pattern-pitch"
@@ -978,6 +1080,11 @@ function referenceStyle(name: string) {
     case "symbol-z-order": {
       const style = { ...vectorStyle(), sprite: SPRITE_URL };
       style.layers.push(...Z_ORDER_LAYERS);
+      return style;
+    }
+    case "symbol-zoom-anchors": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...ZOOM_ANCHOR_LAYERS);
       return style;
     }
     default:
@@ -1237,6 +1344,7 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-alignment-pitch":
     case "symbol-sort-key":
     case "symbol-z-order":
+    case "symbol-zoom-anchors":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

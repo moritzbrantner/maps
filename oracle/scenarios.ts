@@ -485,6 +485,17 @@ export const scenarios: Scenario[] = [
   },
   {
     basemap: "vector",
+    camera: { bearing: -25, center: [8.6, 47.3], zoom: 7.6 },
+    capability:
+      "zoom-dependent and data-driven variable anchors (text-variable-anchor step, text-variable-anchor-offset per feature and interpolated), text/icon-translate and translate anchors at the camera zoom",
+    knownGaps: [FRAME_TIME_GAP],
+    name: "symbol-zoom-anchors",
+    origin: "Milestone E cartography (#80): place labels whose anchors and offsets follow the zoom and the place (#346)",
+    size: MAP_SIZE,
+    steps: [],
+  },
+  {
+    basemap: "vector",
     camera: { center: [9.0, 47.3], zoom: 7.6 },
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],

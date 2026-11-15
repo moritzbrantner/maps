@@ -629,8 +629,12 @@ pub fn place_symbols_with_collisions(
                 && (bucket.text_allow_overlap || !bucket.has_text() || bucket.text_optional);
             let text_size = bucket.text_size.at_zoom(zoom);
             // `text-translate` and `icon-translate` move the anchors in the tile.
-            let text_shift = bucket.text_translate.uv(bearing, tile.projection.tile_px);
-            let icon_shift = bucket.icon_translate.uv(bearing, tile.projection.tile_px);
+            let text_shift = bucket
+                .text_translate
+                .uv(zoom, bearing, tile.projection.tile_px);
+            let icon_shift = bucket
+                .icon_translate
+                .uv(zoom, bearing, tile.projection.tile_px);
             let text_project = tile.projection.shifted(text_shift);
             let icon_project = tile.projection.shifted(icon_shift);
             let text_projection = tile.projection.with(&text_project);
@@ -920,20 +924,14 @@ mod tests {
     #[test]
     fn translations_move_anchors_along_the_tile_or_the_turned_viewport() {
         use crate::symbol::layout::SymbolTranslate;
-        let map = SymbolTranslate {
-            offset: [10.0, 0.0],
-            viewport: false,
-        };
+        let map = SymbolTranslate::constant([10.0, 0.0], false);
         assert_eq!(
-            map.uv(std::f64::consts::FRAC_PI_2, 512.0),
+            map.uv(8.0, std::f64::consts::FRAC_PI_2, 512.0),
             [10.0 / 512.0, 0.0]
         );
         // Viewport right under a 90° bearing is the tile's south.
-        let viewport = SymbolTranslate {
-            viewport: true,
-            ..map
-        };
-        let [x, y] = viewport.uv(std::f64::consts::FRAC_PI_2, 512.0);
+        let viewport = SymbolTranslate::constant([10.0, 0.0], true);
+        let [x, y] = viewport.uv(8.0, std::f64::consts::FRAC_PI_2, 512.0);
         assert!(x.abs() < 1e-12 && (y - 10.0 / 512.0).abs() < 1e-12);
     }
 

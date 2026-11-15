@@ -758,7 +758,10 @@ impl StyleSymbols {
                             let icon_size = bucket.icon_size.at_zoom(zoom);
                             let icon_text_size = bucket.text_size.at_zoom(zoom);
                             let tile_projection = &placement_tiles[*tile_index].projection;
-                            let shift = bucket.icon_translate.uv(bearing, tile_projection.tile_px);
+                            let shift =
+                                bucket
+                                    .icon_translate
+                                    .uv(zoom, bearing, tile_projection.tile_px);
                             let shifted = tile_projection.shifted(shift);
                             let projection = tile_projection.with(&shifted);
                             let mut quads = Vec::new();
@@ -893,8 +896,11 @@ impl StyleSymbols {
                                 // `updateVariableAnchors`: an icon fitted to variable text sits
                                 // at the text's shifted anchor, and is hidden without one.
                                 if bucket.variable_anchors && bucket.icon_text_fit {
-                                    let text_shift =
-                                        bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                                    let text_shift = bucket.text_translate.uv(
+                                        zoom,
+                                        bearing,
+                                        tile_projection.tile_px,
+                                    );
                                     let text_plane = SymbolPlane::new(
                                         quad_context,
                                         tile_projection,
@@ -967,7 +973,10 @@ impl StyleSymbols {
                         let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                         for (tile_index, bucket, state, tile_symbols) in &tiles {
                             let tile_projection = &placement_tiles[*tile_index].projection;
-                            let shift = bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                            let shift =
+                                bucket
+                                    .text_translate
+                                    .uv(zoom, bearing, tile_projection.tile_px);
                             let shifted = tile_projection.shifted(shift);
                             let projection = &tile_projection.with(&shifted);
                             let text_size = bucket.text_size.at_zoom(zoom);

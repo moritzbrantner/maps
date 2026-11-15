@@ -18,7 +18,7 @@ use super::projection::SymbolAlignment;
 use super::shaping::{ONE_EM, ShapeOptions, Shaping, SymbolAnchor, shape_text};
 use super::style::{StyleLayer, StyleLayerKind};
 use super::variable_anchors::{self, AnchorOffset};
-use super::zoom::{PropertyKind, SizeData, camera_context, packed_size, symbol_paint};
+use super::zoom::{CameraValue, PropertyKind, SizeData, camera_context, packed_size, symbol_paint};
 use crate::line_mesh::{LineCap, LineJoin, LineLayout, LineMesh};
 use crate::mvt_features::{MvtFeature, MvtGeometryType, MvtLayer};
 
@@ -164,46 +164,66 @@ pub struct SymbolIcon {
     pub paint: [SymbolPaint; 2],
 }
 
-/// `text-translate` or `icon-translate` (CSS px) and whether its anchor is the viewport.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// `text-translate` or `icon-translate` (CSS px) and whether its anchor is the viewport, each
+/// at the camera zoom: MapLibre evaluates paint per frame.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SymbolTranslate {
-    pub offset: [f64; 2],
-    pub viewport: bool,
+    pub offset: CameraValue<[f64; 2]>,
+    pub viewport: CameraValue<bool>,
+}
+
+impl Default for SymbolTranslate {
+    fn default() -> Self {
+        Self::constant([0.0, 0.0], false)
+    }
 }
 
 impl SymbolTranslate {
-    /// MapLibre's `translatePosition` in tile-normalized units, for a tile `tile_px` CSS px
-    /// wide under the camera `bearing` (clockwise, radians): a viewport-anchored offset
-    /// turns with the bearing into the tile's axes.
+    /// A zoom-independent translation.
     #[must_use]
-    pub fn uv(&self, bearing: f64, tile_px: f64) -> [f64; 2] {
-        let [mut x, mut y] = self.offset;
+    pub fn constant(offset: [f64; 2], viewport: bool) -> Self {
+        Self {
+            offset: CameraValue::Constant(offset),
+            viewport: CameraValue::Constant(viewport),
+        }
+    }
+
+    /// MapLibre's `translatePosition` in tile-normalized units at the camera `zoom`, for a
+    /// tile `tile_px` CSS px wide under the camera `bearing` (clockwise, radians): a
+    /// viewport-anchored offset turns with the bearing into the tile's axes.
+    #[must_use]
+    pub fn uv(&self, zoom: f64, bearing: f64, tile_px: f64) -> [f64; 2] {
+        let [mut x, mut y] = self.offset.at(zoom, |a, b, t| {
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        });
         if x == 0.0 && y == 0.0 {
             return [0.0, 0.0];
         }
-        if self.viewport && bearing != 0.0 {
+        if self.viewport.at(zoom, |a, _, _| a) && bearing != 0.0 {
             let (sin, cos) = bearing.sin_cos();
             (x, y) = (x * cos - y * sin, x * sin + y * cos);
         }
         [x / tile_px, y / tile_px]
     }
 
-    fn of(
-        layer: &StyleLayer,
-        prefix: &str,
-        context: &EvaluationContext<'_>,
-    ) -> Result<Self, String> {
-        let offset = match layer.paint_value(&format!("{prefix}-translate"), context)? {
-            Some(Value::Array(values)) if values.len() == 2 => [
-                values[0].as_f64().unwrap_or(0.0),
-                values[1].as_f64().unwrap_or(0.0),
-            ],
-            _ => [0.0, 0.0],
-        };
+    fn of(layer: &StyleLayer, prefix: &str) -> Result<Self, String> {
+        let offset_key = format!("{prefix}-translate");
+        let anchor_key = format!("{prefix}-translate-anchor");
         Ok(Self {
-            offset,
-            viewport: layer.string(true, &format!("{prefix}-translate-anchor"), "map", context)?
-                == "viewport",
+            offset: CameraValue::new(layer.raw_paint(&offset_key), |zoom| {
+                Ok(
+                    match layer.paint_value(&offset_key, &camera_context(zoom))? {
+                        Some(Value::Array(values)) if values.len() == 2 => [
+                            values[0].as_f64().unwrap_or(0.0),
+                            values[1].as_f64().unwrap_or(0.0),
+                        ],
+                        _ => [0.0, 0.0],
+                    },
+                )
+            })?,
+            viewport: CameraValue::new(layer.raw_paint(&anchor_key), |zoom| {
+                Ok(layer.string(true, &anchor_key, "map", &camera_context(zoom))? == "viewport")
+            })?,
         })
     }
 }
@@ -533,8 +553,8 @@ pub fn layout_tile(
                     icons_rotated: !PropertyKind::of(layer.raw_layout("icon-rotate"))?
                         .is_feature_constant()
                         || layer.number(false, "icon-rotate", 0.0, &constant)? != 0.0,
-                    text_translate: SymbolTranslate::of(layer, "text", &constant)?,
-                    icon_translate: SymbolTranslate::of(layer, "icon", &constant)?,
+                    text_translate: SymbolTranslate::of(layer, "text")?,
+                    icon_translate: SymbolTranslate::of(layer, "icon")?,
                     text_padding: layer.number(false, "text-padding", 2.0, &constant)?,
                     icon_offset: layer.raw_layout("icon-offset").is_some(),
                     icon_text_fit,
@@ -1598,7 +1618,7 @@ fn feature_text(
         _ => [0.0, 0.0],
     };
     let radial = layer.number(false, "text-radial-offset", 0.0, tile_context)? * ONE_EM;
-    let variable = variable_anchor_offsets(layer, radial, style_offset)?;
+    let variable = variable_anchor_offsets(layer, radial, style_offset, tile_context)?;
     // Variable anchors take their offsets at placement; otherwise the style spec leaves
     // `text-offset` with `text-radial-offset` open and MapLibre goes with the radial offset.
     let offset = if variable.is_some() {
@@ -1681,23 +1701,29 @@ fn feature_text(
     }))
 }
 
-/// `getTextVariableAnchorOffset`: a label's anchors with their offsets in glyph units;
-/// `radial` and `style_offset` (`text-radial-offset`, `text-offset`) are in glyph units too.
+/// `getTextVariableAnchorOffset`: a label's anchors with their offsets in glyph units, both
+/// lists evaluated for the feature at the tile zoom; `radial` and `style_offset`
+/// (`text-radial-offset`, `text-offset`) are in glyph units too. A list that does not evaluate
+/// to anchors (a failed expression, mismatched anchors under `interpolate`) falls back to the
+/// property default, none, as in MapLibre.
 fn variable_anchor_offsets(
     layer: &StyleLayer,
     radial: f64,
     style_offset: [f64; 2],
+    context: &EvaluationContext<'_>,
 ) -> Result<Option<Vec<AnchorOffset>>, String> {
-    if let Some(value) = layer.raw_layout("text-variable-anchor-offset") {
-        let anchors = variable_anchors::parse_anchor_offsets(value)
-            .map_err(|error| format!("{}: text-variable-anchor-offset: {error}", layer.id))?;
+    if let Some(anchors) = layer
+        .value("text-variable-anchor-offset", context)?
+        .and_then(|value| variable_anchors::parse_anchor_offsets(&value).ok())
+    {
         return Ok(Some(variable_anchors::em_offsets_to_glyph_units(&anchors)));
     }
-    let Some(value) = layer.raw_layout("text-variable-anchor") else {
+    let Some(anchors) = layer
+        .value("text-variable-anchor", context)?
+        .and_then(|value| variable_anchors::parse_anchors(&value).ok())
+    else {
         return Ok(None);
     };
-    let anchors = variable_anchors::parse_anchors(value)
-        .map_err(|error| format!("{}: text-variable-anchor: {error}", layer.id))?;
     let has_radial = layer.raw_layout("text-radial-offset").is_some();
     Ok(Some(
         anchors
@@ -2035,6 +2061,82 @@ mod tests {
         assert!(fixed.variable.is_none());
         let plain = variable_text(r#""text-anchor":"left","text-radial-offset":0"#, "Rome");
         assert!(fixed.collision_box[0] > plain.collision_box[0] + 20.0);
+    }
+
+    #[test]
+    fn anchor_lists_evaluate_per_feature_at_the_tile_zoom() {
+        // A zoom step reads the tile zoom (8).
+        let stepped = |at: u8| {
+            variable_text(
+                &format!(
+                    r#""text-variable-anchor":["step",["zoom"],["literal",["top"]],{at},["literal",["left"]]]"#
+                ),
+                "Rome",
+            )
+            .variable
+            .unwrap()
+            .anchors
+        };
+        assert_eq!(stepped(8), [(SymbolAnchor::Left, [0.0, 0.0])]);
+        assert_eq!(stepped(9), [(SymbolAnchor::Top, [0.0, -7.0])]);
+        // Data-driven anchor offsets, per feature.
+        let by_name = r#""text-variable-anchor-offset":["match",["get","name"],"Rome",["literal",["left",[1,0]]],["literal",["top",[0,1]]]]"#;
+        assert_eq!(
+            variable_text(by_name, "Rome").variable.unwrap().anchors,
+            [(SymbolAnchor::Left, [24.0, 0.0])]
+        );
+        assert_eq!(
+            variable_text(by_name, "Oslo").variable.unwrap().anchors,
+            [(SymbolAnchor::Top, [0.0, 17.0])]
+        );
+        // Offsets interpolate over the zoom; anchors must match.
+        let interpolated = variable_text(
+            r#""text-variable-anchor-offset":["interpolate",["linear"],["zoom"],6,["literal",["top",[0,1]]],10,["literal",["top",[0,3]]]]"#,
+            "Rome",
+        );
+        assert_eq!(
+            interpolated.variable.unwrap().anchors,
+            [(SymbolAnchor::Top, [0.0, 41.0])]
+        );
+        // Mismatched anchors do not evaluate: the label falls back to `text-anchor`.
+        let mismatched = variable_text(
+            r#""text-variable-anchor-offset":["interpolate",["linear"],["zoom"],6,["literal",["top",[0,1]]],10,["literal",["left",[0,3]]]]"#,
+            "Rome",
+        );
+        assert!(mismatched.variable.is_none());
+    }
+
+    #[test]
+    fn translations_follow_the_camera_zoom() {
+        let layer = line_layer(
+            r#"{"id":"p","type":"symbol","source-layer":"places","layout":{"text-field":["get","name"],"text-font":["NotoSans-Regular"]},
+                "paint":{"text-translate":["interpolate",["linear"],["zoom"],4,["literal",[0,0]],8,["literal",[8,-4]]],
+                         "text-translate-anchor":["step",["zoom"],"map",6,"viewport"],
+                         "icon-translate":["literal",[2,3]]}}"#,
+        );
+        let buckets = layout_tile(
+            &[layer],
+            &[place_source("Rome")],
+            5,
+            &oracle_glyphs(),
+            &ImageStore::default(),
+        )
+        .unwrap();
+        let LayerBucket::Symbols(bucket) = &buckets.layers[0] else {
+            panic!("{buckets:?}")
+        };
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let uv = |zoom: f64, bearing: f64| bucket.text_translate.uv(zoom, bearing, 512.0);
+        assert_eq!(uv(3.0, 0.0), [0.0, 0.0]);
+        assert_eq!(uv(5.0, quarter), [2.0 / 512.0, -1.0 / 512.0]);
+        // From zoom 6 the offset is anchored to the viewport and turns with the bearing.
+        let [x, y] = uv(7.0, quarter);
+        assert!((x - 3.0 / 512.0).abs() < 1e-12 && (y - 6.0 / 512.0).abs() < 1e-12);
+        assert_eq!(uv(12.0, 0.0), [8.0 / 512.0, -4.0 / 512.0]);
+        assert_eq!(
+            bucket.icon_translate.uv(12.0, 0.0, 512.0),
+            [2.0 / 512.0, 3.0 / 512.0]
+        );
     }
 
     #[test]
