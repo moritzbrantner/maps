@@ -126,6 +126,10 @@
 
 ### Internal
 
+- `verify:package-size` treats the non-WASM unpacked size ceiling (1,168,500 bytes) as
+  advisory (#173): it still measures and reports the size, its change since the approved
+  snapshot and the growth attribution, and warns above the ceiling, but no longer fails.
+  The entry count, stylesheet budgets and required package files still fail.
 - The first-party base canvas publishes `data-map-base-retained-tiles`: the decoded tile
   images it holds, which Rust's tile cache bounds (#447). The memory that grows during
   sustained zoom on the Canvas fallback belongs to Chromium's GPU process, not to Maps;
