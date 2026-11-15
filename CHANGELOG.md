@@ -89,6 +89,10 @@
 
 ### Internal
 
+- The first-party base canvas publishes `data-map-base-retained-tiles`: the decoded tile
+  images it holds, which Rust's tile cache bounds (#447). The memory that grows during
+  sustained zoom on the Canvas fallback belongs to Chromium's GPU process, not to Maps;
+  `docs/engine-evidence.md` records the attribution.
 - Evidence tooling only, no package change: `bun run verify:engine-atlas-tileset-evidence`
   compares MapLibre GL + `pmtiles` with the first-party Map View over the same
   content-pinned Atlas archives through runtime-profiler and Moonlight (#270). Pages deploy
