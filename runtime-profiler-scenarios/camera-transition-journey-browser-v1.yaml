@@ -1,0 +1,19 @@
+schema_version: runtime-profiler/scenario/v1
+id: maps-camera-transition-journey-v1
+target:
+  type: browser-journey
+  module: scripts/profile-camera-transition-journey.ts
+  working_directory: ..
+  inherit_env:
+    - HOME
+    - MAPS_CAMERA_TRANSITION_OBSERVATION
+    - PATH
+    - PLAYWRIGHT_BROWSERS_PATH
+    - TMPDIR
+    - XDG_CACHE_HOME
+run:
+  warmup_iterations: 0
+  measurement_iterations: 1
+  timeout_seconds: 420
+collectors:
+  - browser-chromium

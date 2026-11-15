@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "maps.engine-scenario/v1",
+  "id": "camera-transition-journey-v1",
+  "description": "#433 Fast: the public MapView on flatRuntime=\"maps\", controlled from React state, flying with animated flyTo between European cities and across the antimeridian over 2,000 points and a static GeoJSON region grid, with superseding commands, a pointer interruption, a mid-flight resize, instant jumps and mid-flight unmounts (e2e/fixtures/camera-transition-journey.tsx).",
+  "fixture": {
+    "page": "/e2e/fixtures/camera-transition-journey.html",
+    "layers": ["static-regions", "points"],
+    "points": { "generator": "europe-phyllotaxis-points-v1", "count": 2000 },
+    "staticRegions": { "generator": "static-region-grid-v1", "polygons": 48 },
+    "controlled": true,
+    "build": "vite production build of the fixture with the built dist/wasm package"
+  },
+  "viewport": { "width": 1280, "height": 720, "devicePixelRatio": 1 },
+  "initialCamera": { "bearing": 0, "center": [2.3522, 48.8566], "pitch": 0, "zoom": 7 },
+  "journey": [
+    { "phase": "load", "operations": ["navigate until the Map View is presented"] },
+    { "phase": "idle", "operations": ["60 animation frames"] },
+    { "phase": "flight", "operations": ["fly Paris z7 -> Berlin z9 bearing 40", "fly back to Paris"] },
+    { "phase": "dateline", "operations": ["jump to Fiji", "fly to Samoa over 1,200 ms", "fly back to Paris"] },
+    { "phase": "successive", "operations": ["fly to Berlin, Vienna and Rome, each superseded after 8 presented frames", "fly to Paris"] },
+    { "phase": "pointer-interrupt", "operations": ["fly to Berlin", "press the pointer after 8 presented frames", "fly to Paris"] },
+    { "phase": "resize", "operations": ["fly to Berlin, narrowing the Map View to 1,000 px after 3 frames", "restore the width", "fly to Paris"] },
+    { "phase": "jumps", "operations": ["10 animate:false jumps between Berlin and Paris"] },
+    { "phase": "teardown", "operations": ["3 cycles: fly to Berlin, Rome, then Vienna, unmount after 8 presented frames, remount"] }
+  ],
+  "observations": [
+    "per-flight-presented-frames",
+    "per-flight-frame-gaps",
+    "frames-after-interruption",
+    "per-phase-runtime-work",
+    "base-renders",
+    "frame-intervals",
+    "long-tasks",
+    "slow-input-events",
+    "js-heap-after-gc"
+  ],
+  "runtimePhases": [
+    "idle",
+    "flight",
+    "dateline",
+    "successive",
+    "pointer-interrupt",
+    "resize",
+    "jumps",
+    "teardown"
+  ]
+}

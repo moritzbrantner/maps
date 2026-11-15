@@ -84,7 +84,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Capability | Developed | Correct | Fast | Current direction |
 | --- | --- | --- | --- | --- |
 | Geographic camera, project/unproject, fit/interaction | Yes | Yes | In progress | Keep Rust authoritative; profile the full camera presentation path, not camera math in isolation. |
-| Animated camera transitions (`flyTo`) | Yes (#433: `?acceptance=maps-runtime-flyto` flies center/zoom/bearing on `flatRuntime="maps"` with an `animate: false` opt-out) | Yes (#433: Rust trajectory reproduces recorded MapLibre 6.4.1 flights; host and Rust/WASM browser coverage, see [below](#animated-flyto-433)) | Not yet (work counters recorded, no comparison) | Rust owns the trajectory, constraints and cancellation; the browser host schedules one frame per animation frame. Timeline-keyframed camera sampling (#432) should reuse `CameraFlight`/`CameraPose`. |
+| Animated camera transitions (`flyTo`) | Yes (#433: `?acceptance=maps-runtime-flyto` flies center/zoom/bearing on `flatRuntime="maps"` with an `animate: false` opt-out) | Yes (#433: Rust trajectory reproduces recorded MapLibre 6.4.1 flights; host and Rust/WASM browser coverage, see [below](#animated-flyto-433)) | In progress, no verdict (#433: `camera-transition-journey-v1` measured; the journey found and fixed up to ~9 base plans and renders per animation frame, so flights now plan and render once per frame on Canvas and SwiftShader WebGPU; see [below](#animated-flyto-fast-evidence-433). No reference comparison, no hardware GPU timing) | Rust owns the trajectory, constraints and cancellation; the browser host schedules one frame per animation frame. Timeline-keyframed camera sampling (#432) should reuse `CameraFlight`/`CameraPose`. |
 | Raster tile/source lifecycle and first-party base map | Yes | Yes | In progress | Retain GPU resources, prove churn/overzoom/world-copy/memory behavior, then retire superseded paths. |
 | Points and clusters | Yes | Yes | In progress | Circle instancing landed in #153; finish packed/retained application transport under #154/#60 with representative density evidence. Labeled points are GPU-retained like the others; camera frames project only the labeled points, for the Canvas label pass (#204). Deterministic work contracts (#189, `performance:work`) hold camera pan/zoom/bearing/pitch at 1k/10k/100k points to zero point encoding and upload, and in-place updates to work linear in the changed points only. Cluster layers still use the projected path. |
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
@@ -462,8 +462,63 @@ Linux x64 (AMD Ryzen 7 5700X, WSL2), Playwright 1.62.1 Chromium, Node 24.16.0.
 
   Map Layer data is not re-lowered per frame. Base renders exceed presented frames by about
   2.3× on Canvas and up to 9× on SwiftShader WebGPU. The extra renders come from raster
-  fade-in renders and tile arrivals during the zoom-out. The flight has not been profiled
-  against a reference, so Fast remains open.
+  fade-in renders and tile arrivals during the zoom-out. These are the counts at #443, before
+  the Fast work below.
+
+### Animated flyTo Fast evidence (#433)
+
+`camera-transition-journey-v1` ([scenario](engine-scenarios.md#camera-transition-journey-v1),
+[evidence contract](engine-evidence.md#camera-transition-journey-evidence-433),
+[measurements](engine-performance.md#animated-camera-transitions-433-fast)) flies a controlled
+public Map View over 2,000 points and 48 static polygons: out and back, across the
+antimeridian, superseded by successive commands, interrupted by a pointer press, through a
+resize, as instant jumps and unmounted mid-flight.
+
+**Found and fixed.** Camera motion planned and rendered the base several times per animation
+frame:
+
+- each raster tile that arrived during a flight planned and rendered the whole base at once,
+  so a zoom-out with many arrivals did up to 9 plans and renders in one frame;
+- a fade-in re-render ran in the same frame as the flight's own render;
+- a controlled Map View's echo of each camera frame submitted a second WebGPU frame although
+  its retained Map Layer groups were unchanged.
+
+During camera motion, tile arrivals are now planned by the camera's next frame, once for all
+of them; a fade-in re-render skips a frame the camera renders; an unchanged retained redraw
+renders nothing of its own (a camera at rest still presents an arrived tile at once)
+(`src/maps-flight-frame-work.test.ts`, `src/maps-retained-points.test.tsx`,
+`e2e/maps-camera-transition-journey.spec.ts` on WebGPU and Canvas).
+
+**Measured** (runtime-profiler browser collector, Canvas fallback, same machine, the parent
+`590566f` against this change; per completed flight, counted in the page from the command to
+the flight's last frame):
+
+| Flight | Parent: frames / plans / renders | This change (2 captures) |
+| --- | --- | --- |
+| Paris → Berlin (2.4 s) | 108 / 231 / 267 | 125–128 / same / same |
+| Berlin → Paris (2.4 s) | 129 / 162 / 163 | 121–122 / same / same |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 248–252 / same / same |
+| Berlin, resized mid-flight | 120 / 170 / 197 | 124–138 / +1 / +1 |
+
+The final captures ran on a host loaded by other work (load average about 9 on 8 cores), so
+their frame timing (p95 16.8–33.4 ms, one long task) is not comparable with the parent's
+(p95 33.4 ms in this capture, 100 ms with 24 long tasks in an earlier one). An earlier
+capture of the same fix on a quieter host presented 142 frames per Paris ⇄ Berlin flight at
+p95 16.8 ms with no long task. The work counts do not depend on load.
+On SwiftShader WebGPU (the journey run directly, not through the collector) every completed
+flight also planned and rendered once per frame: Paris ⇄ Berlin presented 65 and 64 frames,
+where #443 recorded 8–11 frames per flight with 45–101 renders. Every interrupted flight
+presented no frame after its interruption, every completed flight ended on its target, and
+each `animate: false` jump presented one frame. JS heap after GC was 5.7 MB ready, 7.9 MB
+after the journey and 5.2 MB after each of three mid-flight unmounts (growth under 0.1 MB
+across them).
+
+**Not a Fast verdict.** The parent comparison is descriptive: Moonlight has no policy for this
+journey and no MapLibre reference runs it, so `evaluation.json` records comparison and
+Moonlight as unavailable. Hardware GPU timing, GPU and WASM memory are unavailable on this
+host (llvmpipe/SwiftShader only). Closing the Fast gate needs an owner-approved comparison
+policy for this journey (for example, MapLibre's `flyTo` over the same fixture, as the
+#270 Atlas journey does) and a hardware-GPU capture.
 
 ### Heat/scalar alignment evidence (#171 phase 3)
 
