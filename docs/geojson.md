@@ -209,3 +209,89 @@ const source: GeoJsonMapSource<StoreProperties> = {
 
 const points = createMapPointsFromGeoJson(source);
 ```
+
+## Regional transforms and static operations
+
+The data-only `@moritzbrantner/maps/core` entry exports
+`translateGeoJsonFeature`, `rotateGeoJsonFeature`, `scaleGeoJsonFeature` and
+`transformGeoJsonGeometry`. They work without React, a Map View or WASM.
+The Map-Scoped Timeline's `applyGeoJsonTimelineTransform` uses this same
+implementation, as does the GeoJSON Editor’s `moveGeoJsonGeometry` degree
+translation helper.
+
+- Translation takes explicit `longitudeDegrees` and `latitudeDegrees`.
+  Timeline `longitudeOffset` and `latitudeOffset` also remain **degrees**.
+- Rotation takes `degrees` (positive counterclockwise) and an optional
+  longitude/latitude `pivot`. Scaling takes a positive `factor`, optional
+  positive `factorX`/`factorY`, and the same optional pivot.
+- The default pivot is the **longitude/latitude bounding-box centre**, not a
+  centroid. An explicit geometry-transform origin requires both
+  `originLongitude` and `originLatitude`.
+- Combined transforms apply scale (axis overrides replace uniform scale), then
+  rotation, then degree translation. Rotation/scaling use a spherical
+  azimuthal-equidistant local metric frame at the geographic pivot, with Earth
+  radius 6,371,008.8 metres. Both input and metric output must lie within
+  **1,000 km** of that pivot. This preserves radial distances about the pivot;
+  it does not promise globally distortion-free shapes or ellipsoidal accuracy.
+  Degree translation alone has no local-radius restriction.
+- Identity and translation avoid projection round trips. IDs, properties,
+  multipart/ring ordering and exact ring closure are preserved. Inputs are
+  never modified. Finite coordinates, valid longitude/latitude ranges,
+  nonempty geometries and closed polygon rings with at least three distinct
+  vertices and nonzero area are required. Every multipart polygon is checked;
+  the combined hole area must be smaller than its shell area. Zero/negative scale, incomplete pivots and nonfinite
+  transform arguments fail explicitly.
+
+Rotation/scaling replace the previous timeline raw-degree computation in place;
+existing transformations can consequently produce different geography.
+
+Unsupported input or output across longitude ±180° fails closed. No silent
+wrapping is performed. Coordinate-sequence jumps exceeding 180° are rejected;
+separate noncrossing MultiPolygon parts on opposite sides remain usable.
+Standalone transforms and relationship/measurement APIs throw
+`GeoJsonGeographicOperationError` with a typed `code` (`invalid-geometry`,
+`invalid-transform`, `unsupported-antimeridian`, `unsupported-extent`, or
+`operation-failed`). Boolean, clipping, simplification, outline and overlap
+resolution APIs return an empty collection plus `issues` on invalid/unsupported
+input or failed computation; they never publish a partially computed result.
+Nonpolygon entries retain their documented `skipped-non-polygon` warning.
+Full antimeridian-aware operations remain deferred under #173.
+
+This static example subtracts an inner region, preserving a hole, then rotates
+that result using the public data-only APIs:
+
+```ts
+import {
+  differenceGeoJsonFeatures,
+  rotateGeoJsonFeature,
+  type TemporalGeoJsonGeometryFeature,
+} from "@moritzbrantner/maps/core";
+
+const region: TemporalGeoJsonGeometryFeature = {
+  type: "Feature",
+  id: "region",
+  geometry: {
+    type: "Polygon",
+    coordinates: [[[10, 50], [10.2, 50], [10.2, 50.2], [10, 50.2], [10, 50]]],
+  },
+};
+const mask: TemporalGeoJsonGeometryFeature = {
+  type: "Feature",
+  geometry: {
+    type: "Polygon",
+    coordinates: [[[10.05, 50.05], [10.1, 50.05], [10.1, 50.1], [10.05, 50.1], [10.05, 50.05]]],
+  },
+};
+const difference = differenceGeoJsonFeatures(region, mask);
+if (difference.issues.length) throw new Error(difference.issues[0]?.message);
+const rotated = difference.collection.features.map(feature =>
+  rotateGeoJsonFeature(feature, { degrees: 30, pivot: [10.1, 50.1] }),
+);
+```
+
+The regional reference fixtures compare metric scaling with an independent
+haversine oracle (micrometre-level numerical agreement on the spherical model),
+rotation against explicit regional coordinates (1e-5 degrees), and inverse
+scaling (1e-10 degrees). These are numerical regression tolerances, not source
+accuracy guarantees. First-party Map View, retained transition and authoritative
+Rust/WASM completion remain subsequent #173 phases.
