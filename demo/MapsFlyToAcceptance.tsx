@@ -41,6 +41,12 @@ const ACCEPTANCE_POINTS = [
 type Controller = MapSurfaceController & { getRendererStats(): MapsRendererStats | null };
 
 type FlyToTraceEntry = {
+  /**
+   * The animation-frame time the camera was presented for: inside a rAF callback
+   * `document.timeline.currentTime` is the callback's `now`. Unlike `time`, it excludes the
+   * frame's synchronous render, which a software-GPU runner can stall for over a second.
+   */
+  frameTime: number;
   reason: MapViewStateChangeContext["reason"];
   time: number;
   viewState: MapViewState;
@@ -97,7 +103,9 @@ export function MapsFlyToAcceptance() {
         mapStyle={{ maxZoom: 19, minZoom: 0, tileSize: 256, tiles: ACCEPTANCE_RASTER_TILE }}
         onMapControllerReady={(next) => setController(next as Controller)}
         onViewStateChange={(next, context) => {
+          const frameTime = document.timeline.currentTime;
           traceRef.current.push({
+            frameTime: typeof frameTime === "number" ? frameTime : performance.now(),
             reason: context.reason,
             time: performance.now(),
             viewState: next,

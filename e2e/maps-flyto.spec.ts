@@ -16,6 +16,7 @@ import { WEBGPU_SWIFTSHADER_ARGS } from "./helpers/webgpu-args";
 test.use({ launchOptions: { args: [...WEBGPU_SWIFTSHADER_ARGS] } });
 
 type TraceEntry = {
+  frameTime: number;
   reason: string;
   time: number;
   viewState: { bearing?: number; center: [number, number]; pitch?: number; zoom: number };
@@ -86,24 +87,19 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
     expect(oracle.at(0.3).zoom).toBeLessThan(PARIS.zoom - 1);
     expect(lowestZoom).toBeLessThan(PARIS.zoom);
     expect(flight.at(-1)!.viewState).toMatchObject({ bearing: 40, center: BERLIN.center, zoom: 9 });
-    // The flight ends on the first frame after MapLibre's duration from the command. A
-    // software-GPU runner can stall a frame for over a second, so the bound is relative to
-    // the frame before the last one rather than to the wall clock.
+    // Timing is checked on each frame's animation-frame time, from which the runtime computes
+    // its progress: a software-GPU runner stalls frames (before and inside the callback) for
+    // over a second, so wall-clock callback times would only bound the runner's speed.
     const commandTime = await page.evaluate(() => window.mapsFlyToAcceptance!.commandTime());
     expectFlightEndsAfterDuration(flight, commandTime, oracle.durationMs);
-    const presentedMs = flight.at(-1)!.time - commandTime;
-    // Easing in time: each frame's progress follows MapLibre's ease of its elapsed time.
-    let previousTime = commandTime;
+    const presentedMs = flight.at(-1)!.frameTime - commandTime;
+    // Easing in time: each frame's progress is MapLibre's ease of its elapsed frame time,
+    // measured from the flight start just after the command.
     for (const entry of flight.slice(0, -1)) {
-      const t = (entry.time - commandTime) / oracle.durationMs;
+      const t = (entry.frameTime - commandTime) / oracle.durationMs;
       const k = (entry.viewState.bearing ?? 0) / oracle.bearing;
-      // A frame presents its rAF timestamp, before the callback records the time: progress
-      // never runs ahead of the callback's elapsed time, and lags it by at most that frame's
-      // interval (which a software-GPU stall can stretch to more than a second).
-      const frameInterval = (entry.time - previousTime) / oracle.durationMs;
-      previousTime = entry.time;
-      expect(k).toBeLessThanOrEqual(maplibreDefaultEasing(t) + 1e-9);
-      expect(k).toBeGreaterThan(maplibreDefaultEasing(t - frameInterval - 0.05) - 1e-9);
+      expect(k).toBeLessThanOrEqual(maplibreDefaultEasing(t + 1 / oracle.durationMs) + 1e-9);
+      expect(k).toBeGreaterThan(maplibreDefaultEasing(t - 50 / oracle.durationMs) - 1e-9);
     }
 
     // Work counters: camera frames re-render the base; no Map Layer data is re-lowered.
@@ -206,17 +202,18 @@ for (const backend of ["wgpu", "canvas2d"] as const) {
 }
 
 /**
- * The flight presents its target on the first frame at or after `durationMs` from the command
- * (a frame of tolerance before), and the frame before it was presented within the duration
- * (plus that frame's render time). A stalled final frame therefore does not fail the check.
+ * The flight presents its target on the first animation frame at or after `durationMs` from
+ * the command (a frame of tolerance before): the frame before it was still within the
+ * duration (the flight starts a few ms after the command). A stalled final frame therefore
+ * does not fail the check.
  */
 function expectFlightEndsAfterDuration(
   flight: TraceEntry[],
   commandTime: number,
   durationMs: number,
 ) {
-  expect(flight.at(-1)!.time - commandTime).toBeGreaterThan(durationMs - 20);
-  expect(flight.at(-2)!.time - commandTime).toBeLessThan(durationMs + 500);
+  expect(flight.at(-1)!.frameTime - commandTime).toBeGreaterThan(durationMs - 20);
+  expect(flight.at(-2)!.frameTime - commandTime).toBeLessThan(durationMs + 50);
 }
 
 async function clearTrace(page: Page) {
