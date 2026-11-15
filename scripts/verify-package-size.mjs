@@ -39,11 +39,17 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // WebGPU-free core module then adds its wasm-bindgen glue and declarations (54,168 + 10,857 +
 // 4,687 bytes) and the capability loaders and docs 1,559 bytes: 1,141,229 bytes, 4 more entries.
 // Both WASM binaries stay report-only (#268) and are excluded here.
+// #173 Q7 owner-approved rebaseline (2026-11-15): same-environment clean main 9da5c4a
+// = 1,158,952 non-WASM unpacked bytes / 81 entries; phase-A PR #437 = 1,167,381 bytes /
+// 80 entries (+8,429 bytes / -1 entry). Raise only this ceiling to 1,168,500 bytes,
+// leaving every other package/consumer gate and the entry limit intact. Future feature
+// PRs must continue reporting their own matched-base delta; this snapshot is not a waiver.
+const approvedSizeBaseline = { revision: "9da5c4a", nonWasmUnpackedBytes: 1_158_952 };
 const budgets = {
   entryCount: 84,
   fullStylesheetSize: 125_000,
   stylesheetSize: 116_000,
-  unpackedSizeWithoutWasm: 1_141_500,
+  unpackedSizeWithoutWasm: 1_168_500,
 };
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
@@ -82,6 +88,12 @@ const requiredFiles = [
   "package.json",
 ];
 const errors = [];
+const nonWasmUnpackedSize =
+  typeof packageInfo?.unpackedSize === "number" &&
+  typeof wasmRuntime?.size === "number" &&
+  typeof wasmCoreRuntime?.size === "number"
+    ? packageInfo.unpackedSize - wasmRuntime.size - wasmCoreRuntime.size
+    : undefined;
 
 for (const filePath of requiredFiles) {
   if (!files.some((file) => file.path === filePath)) {
@@ -92,11 +104,7 @@ for (const filePath of requiredFiles) {
 checkPresent("compressed package size", packageInfo?.size);
 checkBudget(
   "unpacked package size without the WASM runtimes",
-  typeof packageInfo?.unpackedSize === "number" &&
-    typeof wasmRuntime?.size === "number" &&
-    typeof wasmCoreRuntime?.size === "number"
-    ? packageInfo.unpackedSize - wasmRuntime.size - wasmCoreRuntime.size
-    : undefined,
+  nonWasmUnpackedSize,
   budgets.unpackedSizeWithoutWasm,
   "bytes",
 );
@@ -109,6 +117,15 @@ checkPresent("Maps WASM core runtime size", wasmCoreRuntime?.size);
 console.log("Package size summary:");
 console.log(`- compressed size: ${formatBytes(packageInfo?.size)}`);
 console.log(`- unpacked size: ${formatBytes(packageInfo?.unpackedSize)}`);
+console.log(
+  `- non-WASM unpacked: ${formatBytes(nonWasmUnpackedSize)} / ${budgets.unpackedSizeWithoutWasm} bytes budget`,
+);
+if (typeof nonWasmUnpackedSize === "number") {
+  const delta = nonWasmUnpackedSize - approvedSizeBaseline.nonWasmUnpackedBytes;
+  console.log(
+    `- change since approved ${approvedSizeBaseline.revision} snapshot: ${delta >= 0 ? "+" : ""}${delta} bytes (historical reference, not a matched-PR delta)`,
+  );
+}
 console.log(`- entry count: ${files.length}`);
 console.log(`- stylesheet size: ${formatBytes(stylesheet?.size)}`);
 console.log(`- full stylesheet size: ${formatBytes(fullStylesheet?.size)}`);
