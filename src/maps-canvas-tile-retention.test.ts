@@ -51,6 +51,9 @@ function createRuntime(): MapsFlatRasterRuntime {
     activateTileset: vi.fn(() => "unused"),
     dispose: vi.fn(),
     fitBounds: vi.fn(),
+    flyTo: vi.fn(() => 0),
+    advanceFlight: vi.fn(() => false),
+    cancelFlight: vi.fn(),
     frame: vi.fn((): MapsFlatRasterFrame => {
       const visible = tilesAt(camera.zoom);
       const keys = new Set(visible.map((tile) => tile.key));
