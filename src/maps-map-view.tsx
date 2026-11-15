@@ -1,7 +1,12 @@
 "use client";
 
 import { validateMapsTileset, type MapsTileset } from "./maps-tileset";
-import type { MapsTilesetLayers, MapsVectorBasemapStyle } from "./maps-tileset-style";
+import {
+  resolveTilesetInteractiveLayerIds,
+  type MapsTilesetFeature,
+  type MapsTilesetLayers,
+  type MapsVectorBasemapStyle,
+} from "./maps-tileset-style";
 
 import {
   startTransition,
@@ -118,6 +123,17 @@ export function MapsMapView({
   );
   const tileSource = useMemo(() => resolveTileLayerOptions(resolvedMapStyle), [resolvedMapStyle]);
   const mapChildren = useMemo(() => splitMapViewChildren(children), [children]);
+  // Unknown ids and layers other than circle/symbol fail closed before anything renders.
+  const tilesetInteractiveLayerIds = useMemo(
+    () => resolveTilesetInteractiveLayerIds(tilesetLayers),
+    [tilesetLayers],
+  );
+  const tilesetInteractionRef = useRef({ ids: tilesetInteractiveLayerIds, layers: tilesetLayers });
+  useLayoutEffect(() => {
+    tilesetInteractionRef.current = { ids: tilesetInteractiveLayerIds, layers: tilesetLayers };
+  }, [tilesetInteractiveLayerIds, tilesetLayers]);
+  /** Whether a Tileset style feature is hovered, so leaving it reports one clear. */
+  const tilesetHoveredRef = useRef(false);
   const runtimeControllerRef = useRef<MapsCanvasFlatRuntimeController | null>(null);
   const overlayControllerRef = useRef<MapsOverlayLayersController | null>(null);
   /** Where the primary pointer went down; a click that travelled farther is a drag end. */
@@ -698,6 +714,45 @@ export function MapsMapView({
     ],
   );
 
+  /**
+   * The topmost feature of the interactive Tileset style layers under a client point, as Rust
+   * placed and drew it (#346), with the point in viewport CSS px.
+   */
+  const pickTilesetFeature = (
+    root: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ): { feature: MapsTilesetFeature | null; position: { x: number; y: number } } | null => {
+    const { ids } = tilesetInteractionRef.current;
+    const controller = runtimeControllerRef.current;
+    if (ids.length === 0 || !controller) return null;
+    const rect = root.getBoundingClientRect();
+    const position = { x: clientX - rect.left, y: clientY - rect.top };
+    return { feature: controller.queryRenderedFeatures(position, ids)[0] ?? null, position };
+  };
+  const clearTilesetHover = () => {
+    if (!tilesetHoveredRef.current) return;
+    tilesetHoveredRef.current = false;
+    surface.handleFeatureHover(null, null, tilesetInteractionRef.current.layers);
+  };
+  /** Style layers draw under the overlay layers, so their hover applies first. */
+  const hoverTilesetFeature = (root: HTMLElement, clientX: number, clientY: number) => {
+    const pick = pickTilesetFeature(root, clientX, clientY);
+    if (!pick?.feature) {
+      clearTilesetHover();
+      return false;
+    }
+    tilesetHoveredRef.current = true;
+    surface.handleFeatureHover(pick.feature, pick.position, tilesetInteractionRef.current.layers);
+    return true;
+  };
+  const clickTilesetFeature = (root: HTMLElement, clientX: number, clientY: number) => {
+    const pick = pickTilesetFeature(root, clientX, clientY);
+    if (!pick?.feature) return false;
+    surface.handleFeatureClick(pick.feature, pick.position, tilesetInteractionRef.current.layers);
+    return true;
+  };
+
   if (runtimeError) {
     throw normalizeRuntimeError(runtimeError);
   }
@@ -745,7 +800,12 @@ export function MapsMapView({
             return;
           }
 
-          if (overlayControllerRef.current?.handleClickAtClientPoint(event.clientX, event.clientY)) {
+          // Layer-scoped, as MapLibre's: the style layers and the overlay layers each pick.
+          const styleClicked = clickTilesetFeature(event.currentTarget, event.clientX, event.clientY);
+          const overlayClicked =
+            overlayControllerRef.current?.handleClickAtClientPoint(event.clientX, event.clientY) ??
+            false;
+          if (styleClicked || overlayClicked) {
             event.preventDefault();
             event.stopPropagation();
           }
@@ -761,11 +821,13 @@ export function MapsMapView({
               : { x: event.clientX, y: event.clientY };
         }}
         onPointerLeave={(event) => {
+          clearTilesetHover();
           overlayControllerRef.current?.clearHover();
           event.currentTarget.style.cursor = fallbackCursor;
         }}
         onPointerMove={(event) => {
           if (!isMapsSurfaceEventTarget(event.target, event.currentTarget)) {
+            clearTilesetHover();
             overlayControllerRef.current?.clearHover();
             event.currentTarget.style.cursor = fallbackCursor;
             return;
@@ -781,10 +843,11 @@ export function MapsMapView({
           ) {
             return;
           }
+          const styleHit = hoverTilesetFeature(event.currentTarget, event.clientX, event.clientY);
           const hit =
             overlayControllerRef.current?.handleHoverAtClientPoint(event.clientX, event.clientY) ??
             null;
-          event.currentTarget.style.cursor = hit ? "pointer" : fallbackCursor;
+          event.currentTarget.style.cursor = hit || styleHit ? "pointer" : fallbackCursor;
         }}
         onClick={(event) => {
           if (event.target === event.currentTarget || event.target instanceof HTMLCanvasElement) {

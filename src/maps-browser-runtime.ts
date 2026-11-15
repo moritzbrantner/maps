@@ -8,6 +8,7 @@ import {
 import { type MapsTileset } from "./maps-tileset";
 import {
   tilesetStyleTable,
+  type MapsTilesetFeature,
   type MapsTilesetLayers,
   type MapsVectorBasemapStyle,
 } from "./maps-tileset-style";
@@ -213,6 +214,15 @@ export type MapsCanvasFlatRuntimeController = {
   mapPlaneScale?(x: number, y: number): MapScreenMapPlaneScale | null;
   project(coordinates: [longitude: number, latitude: number]): { x: number; y: number };
   projectPacked(coordinates: Float64Array): Float64Array;
+  /**
+   * The rendered features of Tileset `circle` and `symbol` style layers at a viewport point
+   * (CSS px), topmost first, as Rust placed and drew them in the last frame (#346). Empty
+   * without the WebGPU backend, which alone draws style layers.
+   */
+  queryRenderedFeatures(
+    point: { x: number; y: number },
+    layers: readonly string[],
+  ): MapsTilesetFeature[];
   renderApplicationFrame(
     frame: MapScreenRenderFrame<unknown>,
     interaction?: MapScreenInteractionState,
@@ -869,6 +879,11 @@ export function createMapsBrowserRuntime(
         assertActive();
         return runtime.projectPacked(coordinates);
       },
+      queryRenderedFeatures(point, layers) {
+        assertActive();
+        if (!activeRenderer || layers.length === 0) return [];
+        return activeRenderer.queryRenderedFeatures(point, layers);
+      },
       renderApplicationFrame(frame, interaction = {}) {
         if (cancelled) return false;
         return frameSynchronizer.setApplicationFrame(frame, interaction);
@@ -1407,7 +1422,7 @@ function createFrameSynchronizer({
   }
   let tileReader = activeDescriptor ? createTileReader(activeDescriptor, sourceIdentity) : null;
   publishPersistenceStats();
-  let styleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
+  let styleKey = tilesetStyleKey(tilesetStyle(), tilesetLayers());
   let sourceSwitchStarted = performance.now();
   let sourceSwitchMs: number | null = null;
   let requests = 0;
@@ -1669,7 +1684,7 @@ function createFrameSynchronizer({
         cacheReuses++;
       }
     }
-    const nextStyleKey = JSON.stringify([tilesetStyle(), tilesetLayers()]);
+    const nextStyleKey = tilesetStyleKey(tilesetStyle(), tilesetLayers());
     const styleChanged = styleKey !== nextStyleKey;
     if (changed || styleChanged) {
       styleKey = nextStyleKey;
@@ -2682,4 +2697,12 @@ function getCanvasCssSize(canvas: HTMLCanvasElement) {
     height: Math.max(1, Math.round(rect.height || canvas.clientHeight || 1)),
     width: Math.max(1, Math.round(rect.width || canvas.clientWidth || 1)),
   };
+}
+
+/** What the Tileset renders from: picking callbacks and interactive layer ids lay nothing out. */
+function tilesetStyleKey(
+  style: MapsVectorBasemapStyle | undefined,
+  layers: MapsTilesetLayers | undefined,
+) {
+  return JSON.stringify([style, layers?.glyphs, layers?.layers]);
 }

@@ -10,6 +10,7 @@ import type {
   MapsRasterTileId,
   MapsRasterTilePlacement,
 } from "./flat-runtime-wasm";
+import type { MapsTilesetFeature } from "./maps-tileset-style";
 import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 
 // Mirrors PACKED_TILE_DRAW_HEADER_LENGTH / PACKED_TILE_DRAW_STRIDE in
@@ -173,6 +174,11 @@ export type MapsWgpuBaseMapRenderer = {
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   /** Glyph ranges retained tiles still need, as `"<start>:<font stack>"`. */
   missingGlyphRanges(): string[];
+  /**
+   * MapLibre's `queryRenderedFeatures` at a viewport point (CSS px) over circle and symbol
+   * style layers, against what the last frame drew, topmost first (#346).
+   */
+  queryRenderedFeatures(point: { x: number; y: number }, layers: readonly string[]): MapsTilesetFeature[];
   setVectorMaxZoom(maxZoom: number): void;
   setVectorSource(source: string): void;
   evictVectorSourceTile(source: string, tile: MapsRasterTileId): void;
@@ -267,6 +273,7 @@ type MapsWgpuBaseMapWasmRenderer = {
   uploadReliefRaster(z: number, x: number, y: number, image: ImageBitmap): void;
   addGlyphs(stack: string, start: number, bytes: Uint8Array): void;
   missingGlyphRanges(): string[];
+  queryRenderedFeatures(x: number, y: number, layers: string[]): string;
   uploadTile(z: number, x: number, y: number, image: ImageBitmap): void;
   uploadVectorTile(z: number, x: number, y: number, bytes: Uint8Array): number;
 };
@@ -610,6 +617,12 @@ export async function loadMapsWgpuBaseMapRenderer(
       missingGlyphRanges() {
         assertLive(disposed);
         return renderer.missingGlyphRanges();
+      },
+      queryRenderedFeatures(point, layers) {
+        assertLive(disposed);
+        return JSON.parse(
+          renderer.queryRenderedFeatures(point.x, point.y, [...layers]),
+        ) as MapsTilesetFeature[];
       },
       uploadTile(tile, image) {
         runRendererOperation(canvas, owner, () => {

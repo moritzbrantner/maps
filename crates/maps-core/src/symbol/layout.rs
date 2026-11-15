@@ -35,6 +35,8 @@ pub struct TileCircle {
     pub fill: [f32; 4],
     pub stroke: [f32; 4],
     pub stroke_width: f32,
+    /// The feature's index in its source layer, for `queryRenderedFeatures`.
+    pub feature_index: usize,
 }
 
 /// One glyph quad relative to its anchor, in 1/32-quantized glyph units (`ONE_EM` = 24):
@@ -572,7 +574,7 @@ fn scale(source: &MvtLayer) -> f64 {
 fn layout_circles(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<TileCircle>, String> {
     let scale = scale(source);
     let mut circles = Vec::new();
-    for feature in &source.features {
+    for (feature_index, feature) in source.features.iter().enumerate() {
         let context = context(feature, f64::from(z));
         if !layer.accepts(&context)? {
             continue;
@@ -602,6 +604,7 @@ fn layout_circles(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<Ti
             fill: fill.straight(),
             stroke: stroke.straight(),
             stroke_width: 0.0,
+            feature_index,
         };
         let blur = layer.number(true, "circle-blur", 0.0, &context)? as f32;
         let stroke_width = layer.number(true, "circle-stroke-width", 0.0, &context)? as f32;

@@ -996,7 +996,57 @@ function styleFor(): RasterMapStyle {
   return { ...rasterStyle(scenario.basemap), ...(scenario.sky ? { sky: scenario.sky } : {}) } as unknown as RasterMapStyle;
 }
 const style = styleFor();
-const styleLayers = tilesetLayers(scenario.name);
+/**
+ * Style layers picked through the Map View (#346): Maps through `tilesetLayers`
+ * `interactiveLayerIds`, MapLibre through `queryRenderedFeatures` on its own pointer events.
+ * Both report the topmost feature as `<layer id>:<name or kind>` under the `style` key.
+ */
+const STYLE_PICK_LAYERS: Record<string, string[]> = {
+  symbols: ["place-dots", "place-labels", "lake-labels"],
+  "symbol-icons": ["lake-icons", "town-icons", "capital-icons"],
+  "symbol-lines": ["river-names", "road-classes"],
+  "symbol-alignment-pitch": ["river-names", "lake-badges", "city-turned", "capital-on-map"],
+};
+const stylePickLayers = STYLE_PICK_LAYERS[scenario.name] ?? null;
+type StyleFeature = { layer: { id: string }; properties: Record<string, unknown> };
+const styleFeatureKey = (feature: StyleFeature) =>
+  `${feature.layer.id}:${String(feature.properties.name ?? feature.properties.kind)}`;
+const baseStyleLayers = tilesetLayers(scenario.name);
+const styleLayers: MapsTilesetLayers | null =
+  baseStyleLayers && stylePickLayers
+    ? {
+        ...baseStyleLayers,
+        getFeatureId: styleFeatureKey,
+        interactiveLayerIds: stylePickLayers,
+        onHoveredFeatureIdChange: record("style", "hover"),
+        onSelectedFeatureIdChange: record("style", "select"),
+      }
+    : baseStyleLayers;
+
+type MapLibrePointerMap = {
+  on(type: "mousemove" | "click", listener: (event: { point: { x: number; y: number } }) => void): void;
+  queryRenderedFeatures(point: { x: number; y: number }, options: { layers: string[] }): StyleFeature[];
+};
+
+/** The MapLibre reference of the style picks: what its layer-scoped events would report. */
+function recordMapLibreStylePicks(map: MapLibrePointerMap, layers: string[]) {
+  let hovered: string | null = null;
+  const topmost = (point: { x: number; y: number }) => {
+    const feature = map.queryRenderedFeatures(point, { layers })[0];
+    return feature ? styleFeatureKey(feature) : null;
+  };
+  map.on("mousemove", (event) => {
+    const id = topmost(event.point);
+    if (id || hovered) {
+      oracle.events.push({ id, kind: "hover", layer: "style", source: id ? "hover" : "clear" });
+    }
+    hovered = id;
+  });
+  map.on("click", (event) => {
+    const id = topmost(event.point);
+    if (id) oracle.events.push({ id, kind: "select", layer: "style", source: "click" });
+  });
+}
 
 function record(layer: string, kind: PickEvent["kind"]) {
   return (id: string | null, context: { source: string }) => {
@@ -1039,6 +1089,9 @@ function App() {
           ? {
               onMapReady: (map: OracleApi["maplibre"]) => {
                 oracle.maplibre = map;
+                if (map && stylePickLayers) {
+                  recordMapLibreStylePicks(map as unknown as MapLibrePointerMap, stylePickLayers);
+                }
               },
             }
           : {})}
