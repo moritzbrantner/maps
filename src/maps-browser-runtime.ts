@@ -1729,12 +1729,29 @@ function createFrameSynchronizer({
   let renderRequest: number | null = null;
   let drawnTilesAttribute = "0";
   let pendingTilesAttribute = "0";
+  let retainedTilesAttribute: string | null = null;
 
   function publishPendingTiles() {
     const value = String(loads.size + reliefLoads.size + (reliefDirty ? 1 : 0));
-    if (value === pendingTilesAttribute) return;
-    pendingTilesAttribute = value;
-    canvas.dataset.mapBasePendingTiles = value;
+    if (value !== pendingTilesAttribute) {
+      pendingTilesAttribute = value;
+      canvas.dataset.mapBasePendingTiles = value;
+    }
+    publishRetainedTiles();
+  }
+
+  /**
+   * Decoded tile images held for the active and inactive sources (#447). Rust's tile cache
+   * capacity bounds them and names every eviction; this is all the tile memory the Canvas
+   * fallback retains.
+   */
+  function publishRetainedTiles() {
+    let count = images.size;
+    for (const entries of inactive.values()) count += entries.size;
+    const value = String(count);
+    if (value === retainedTilesAttribute) return;
+    retainedTilesAttribute = value;
+    canvas.dataset.mapBaseRetainedTiles = value;
   }
   let vectorTilesAttribute: string | null = null;
   const stats = { lastRenderMs: 0, renders: 0, translatedFrames: 0 };
