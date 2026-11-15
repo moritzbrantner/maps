@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm. Leave unchecked to run the full release validation and `npm publish --dry-run` only."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +27,9 @@ jobs:
     with:
       package_manager: npm
       publish_enabled: true
+      # A tag push publishes. A manual run is a dry run unless `publish` is checked,
+      # so the workflow can be verified end to end without releasing a version.
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
       node_version: lts/*
       bun_version: latest
       cache_bun: true
