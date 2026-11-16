@@ -198,6 +198,7 @@
     }
   },
   "overrides": {
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#e916a46e828cb60bc7322af73586a64ef90c9ba3",
     "brace-expansion": "5.0.13",
     "browserslist": "4.29.5",
     "fast-uri": "4.2.3",
