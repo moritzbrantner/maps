@@ -106,7 +106,7 @@ export function MapsGeometryTransitionAcceptance() {
       defaultTime: 0,
       playbackRate: 250,
       timeRange: { start: 0, end: 2_000 },
-      timeStep: 50,
+      timeStep: 25,
     }),
   );
   const timeline = useMapScopedTimelineSnapshot(clock);
