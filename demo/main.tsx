@@ -17,6 +17,7 @@ import {
 import { configureMapsWasmPackage } from "../src/aggregation-wasm";
 import { App } from "./App";
 import { MapsClusterRaceAcceptance } from "./MapsClusterRaceAcceptance";
+import { MapsMeasurementRuntimeAcceptance } from "./MapsMeasurementRuntimeAcceptance";
 import { MapsOrientedRuntimeAcceptance } from "./MapsOrientedRuntimeAcceptance";
 import { MapsFlyToAcceptance } from "./MapsFlyToAcceptance";
 import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
@@ -92,6 +93,8 @@ async function bootstrap() {
     content = <MapsTemporalCompositionAcceptance />;
   } else if (acceptanceMode === "maps-runtime-historical") {
     content = <MapsHistoricalRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-measurement") {
+    content = <MapsMeasurementRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-history") {
     content = <MapsHistoryRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-oriented") {

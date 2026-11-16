@@ -3,6 +3,8 @@
 import { useContext, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import type { MapMouseEvent } from "maplibre-gl";
 
+import { MapsBeeLineMeasurementLayer } from "./maps-measurement-layer";
+import { MAP_LAYER_COMPONENT_KIND, type MapLayerComponent } from "./map-layer-component";
 import { toLatLng } from "./map-display";
 import type { FlatLayer, FlatLayerFactory, FlatLayerGroup } from "./maplibre-compat";
 import { MapSurfaceContext } from "./map-view";
@@ -30,7 +32,17 @@ export type BeeLineMeasurementLayerProps = MapMeasurementProps & {
   layerId?: string;
 };
 
-export function BeeLineMeasurementLayer({
+export function BeeLineMeasurementLayer(props: BeeLineMeasurementLayerProps) {
+  const surface = useContext(MapSurfaceContext);
+  if (surface?.mapsInteraction) {
+    return <MapsBeeLineMeasurementLayer {...props} interaction={surface.mapsInteraction} />;
+  }
+  return <MapLibreBeeLineMeasurementLayer {...props} />;
+}
+
+(BeeLineMeasurementLayer as MapLayerComponent)[MAP_LAYER_COMPONENT_KIND] = "measurement";
+
+function MapLibreBeeLineMeasurementLayer({
   measurementDistanceFormat = "metric",
   measurementDraftLineColor,
   measurementLineColor = "#0f766e",

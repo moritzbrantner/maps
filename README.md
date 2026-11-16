@@ -197,10 +197,33 @@ no sources and one `background` layer to paint it a constant `background-color`
 the explicit raster style, not as a MapLibre style URL. Replace MapLibre-specific
 `onMapReady` calls with `onMapControllerReady` when using the Maps runtime.
 The removed selector fails with a migration error for JavaScript callers; it does
-not silently choose another runtime. MapLibre styles, editing/measurement and
-Globe Maps continue to use the existing MapLibre path. This removes the private
+not silently choose another runtime. GeoJSON geometry editing and Globe Maps
+continue to use the existing MapLibre path. This removes the private
 Three.js renderer without changing the default runtime or claiming full MapLibre
 capability parity.
+
+### Controlled first-party measurement
+
+`BeeLineMeasurementLayer` works inside `MapView flatRuntime="maps"` alongside
+point, polygon, flow and heat Map Layers. Set `measurementMode="bee-line"` to
+choose two locations; retain completed measurements in application state through
+`onMeasurementCreate`, then pass them back as `measurements`. Draft and selection
+callbacks remain controlled. Distance calculations and formatting use the existing
+bee-line measurement contract; canonical distance values are metres.
+
+The Map View owns primary-pointer measurement input ahead of feature picking and
+map panning. Wheel zoom and right/control-drag orientation remain available; switch
+measurement off for primary-pointer navigation and completed-line selection.
+Escape, pointer cancellation, unexpected capture loss, mode changes and teardown
+cancel the draft. Bearing is supported using the Rust runtime project/unproject.
+Nonzero pitch cancels the draft and exposes an accessible zero-pitch requirement;
+reset tilt before starting another measurement.
+
+The small controlled example at
+`/demo-reference/?acceptance=maps-measurement` composes measurements with unrelated
+Map Layers and demonstrates consumer-owned save state. GeoJSON drawing/reshaping,
+precision inputs and full correctness/performance closure remain later phases of
+[#174](https://github.com/moritzbrantner/maps/issues/174).
 
 ### Versioned vector tile sources
 

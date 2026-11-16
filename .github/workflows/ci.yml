@@ -464,7 +464,7 @@ jobs:
     if: ${{ needs.changes.outputs.browser == 'true' }}
     name: MapLibre Oracle
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -514,7 +514,9 @@ jobs:
       - name: MapLibre oracle gate
         env:
           ORACLE_PYTHON: ${{ runner.temp }}/flip/bin/python
-        run: bun run oracle -- --out oracle-report
+        # Frame time is only enforced on a hardware GPU (#343); on CI's software adapter it is
+        # advisory and took ~16 of the job's 17 minutes. The image and interaction gates stay.
+        run: bun run oracle -- --no-timing --out oracle-report
       # The Canvas2D lane (#346): the same scenarios through the Canvas2D fallback.
       - name: MapLibre oracle gate (Canvas2D lane)
         if: ${{ !cancelled() }}
