@@ -38,7 +38,7 @@ test("PR previews preserve CI oracle authority and do not rerun publication meas
 
   const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /name: MapLibre oracle/);
-  assert.match(ci, /bun run oracle -- --out oracle-report/);
+  assert.match(ci, /bun run oracle -- --no-timing --out oracle-report/);
 });
 
 test("the Chromium the setup installs is the one runtime-profiler journeys launch", () => {
