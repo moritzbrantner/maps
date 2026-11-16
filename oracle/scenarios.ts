@@ -107,9 +107,10 @@ export const RHINE_POINT: LngLat = [8.51405, 47.58135];
 const MAP_SIZE = { height: 480, width: 720 };
 
 /**
- * Scenes that leave Maps at Chromium's WebGPU canvas floor (#343): a clear-only WebGPU page
- * takes about 1.0 ms per uncapped frame where a WebGL2 one takes 0.12 ms, so these stay
- * above MapLibre's WebGL frame time while Maps waits in `getCurrentTexture`.
+ * Scenes that leave Maps at Chromium's WebGPU canvas floor (#343). On the RTX 3060 Ti
+ * (Chrome 156, Vulkan; docs/evidence/oracle-frame-time-rtx3060ti-2026-11-16.md) Maps takes
+ * 0.8–1.0 ms per uncapped frame in every one of them, the same as `background-only`, which
+ * draws nothing but a background (0.81 ms). MapLibre's WebGL frames take 0.3–0.6 ms there.
  */
 const FRAME_TIME_GAP: KnownGap = {
   gate: "time",
@@ -193,7 +194,7 @@ export const scenarios: Scenario[] = [
   {
     camera: { center: [10.3, 50.4], zoom: 4.4 },
     capability: "density clusters: placement, counts, cluster and point picking",
-    knownGaps: [FRAME_TIME_GAP],
+    knownGaps: [],
     name: "clusters",
     origin: "demo/RendererComparison cluster journey",
     size: MAP_SIZE,
@@ -510,7 +511,7 @@ export const scenarios: Scenario[] = [
     camera: { bearing: 30, center: [7.599, 47.5665], zoom: 19.4 },
     capability:
       "symbols four zooms below the map's maxzoom (22): source tiles sliced to zoom 18, then laid out again at the overscaled tile zoom 19",
-    knownGaps: [FRAME_TIME_GAP],
+    knownGaps: [],
     name: "symbol-overscaled-deep",
     origin: "Milestone E cartography (#80): a river name at building zoom over a tileset that stops at zoom 12 (#346)",
     size: MAP_SIZE,
@@ -592,14 +593,7 @@ export const scenarios: Scenario[] = [
     camera: { bearing: -25, center: [9.0, 47.4], pitch: 50, zoom: 8 },
     capability:
       "line-pattern under a pitched camera: tileset line layers and GeoJSON lines on the projected path, on the map plane",
-    knownGaps: [
-      {
-        gate: "time",
-        issue: 387,
-        reason:
-          "pitched patterned lines are retained, but the ratio stays at line-pattern's WebGPU presentation floor (#343)",
-      },
-    ],
+    knownGaps: [FRAME_TIME_GAP],
     name: "line-pattern-pitch",
     origin: "Patterned lines under a pitched camera (#350), follow-up of line patterns (#349)",
     size: MAP_SIZE,
