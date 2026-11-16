@@ -109,6 +109,21 @@ if (unknown) {
   console.error(`unknown scenario ${unknown} (see --list)`);
   process.exit(1);
 }
+// The reference must be the pinned MapLibre: a stale install renders and handles input
+// differently, so every gate would compare against the wrong oracle.
+const pinnedMaplibre = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+const expectedMaplibre =
+  pinnedMaplibre.dependencies?.["maplibre-gl"] ?? pinnedMaplibre.devDependencies?.["maplibre-gl"];
+const installedMaplibre = maplibreVersion();
+if (expectedMaplibre && /^\d/.test(expectedMaplibre) && installedMaplibre !== expectedMaplibre) {
+  console.error(
+    `maplibre-gl ${installedMaplibre ?? "missing"} is installed, but package.json pins ${expectedMaplibre}; reinstall dependencies (bun install --frozen-lockfile)`,
+  );
+  process.exit(1);
+}
 
 /** Hardware GPU, vsync and frame-rate cap off: rAF intervals measure the frame's work. */
 const GPU_ARGS = [
@@ -188,7 +203,7 @@ const report = {
   frameTimeMargin: FRAME_TIME_MARGIN,
   timing: { ...FRAME_TIMING, retries: TIMING_RETRIES, rounds: TIMING_ROUNDS },
   generatedAt: new Date().toISOString(),
-  maplibreVersion: maplibreVersion(),
+  maplibreVersion: installedMaplibre,
   timingEnvironment: timing
     ? {
         browserVersion: timer?.version() ?? null,
