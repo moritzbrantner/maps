@@ -407,6 +407,9 @@ pub enum LayerBucket {
 /// Buckets of one tile, one per style layer (in style order).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TileStyleBuckets {
+    /// The zoom the tile was laid out at: its own zoom, or MapLibre's `overscaledZ` past the
+    /// source's maximum zoom.
+    pub zoom: u8,
     pub layers: Vec<LayerBucket>,
     /// Glyph ranges (`stack`, first codepoint) this tile needed but the store lacked.
     pub missing_glyph_ranges: BTreeSet<(String, u32)>,
@@ -438,7 +441,29 @@ pub fn layout_tile(
     glyphs: &GlyphStore,
     images: &ImageStore,
 ) -> Result<TileStyleBuckets, String> {
-    let mut buckets = TileStyleBuckets::default();
+    layout_overscaled_tile(layers, source, z, z, glyphs, images)
+}
+
+/// Lays out a tile of zoom `tile_z` at the camera's tile zoom `z` past the source's maximum
+/// zoom, as MapLibre's `WorkerTile` lays out an overscaled tile (#346): every layer evaluates
+/// at `z` (MapLibre's `overscaledZ`), and symbols take the overscaled tile size
+/// (`512 * overscaling` px over the same 8192 units), so `symbol-spacing`, line anchors and
+/// their label boxes follow the zoom; lines take the overscaled sharp-corner offset. A
+/// `z` at or below `tile_z` is the plain layout at `tile_z`.
+pub fn layout_overscaled_tile(
+    layers: &[StyleLayer],
+    source: &[MvtLayer],
+    tile_z: u8,
+    z: u8,
+    glyphs: &GlyphStore,
+    images: &ImageStore,
+) -> Result<TileStyleBuckets, String> {
+    let z = z.max(tile_z);
+    let overscaling = f64::from(z - tile_z).exp2();
+    let mut buckets = TileStyleBuckets {
+        zoom: z,
+        ..TileStyleBuckets::default()
+    };
     for layer in layers {
         let features = source
             .iter()
@@ -455,7 +480,7 @@ pub fn layout_tile(
                 opaque: opaque_fill(layer),
             },
             StyleLayerKind::Line => LayerBucket::Lines(match features {
-                Some(source) => layout_lines(layer, source, z)?,
+                Some(source) => lines_at(layer, source, z, overscaling)?,
                 None => Vec::new(),
             }),
             StyleLayerKind::Circle => LayerBucket::Circles(match features {
@@ -505,6 +530,8 @@ pub fn layout_tile(
                     || (z_order == "auto" && !sort_features_by_key))
                     && can_overlap;
                 let options = SymbolOptions {
+                    tile_pixel_ratio: EXTENT / (512.0 * overscaling),
+                    overscaling,
                     sort_features_by_key,
                     placement,
                     text_along_line,
@@ -780,6 +807,10 @@ fn resolve_tokens(text: &str, feature: &MvtFeature) -> String {
 
 /// What `performSymbolLayout` reads off the bucket for every feature.
 struct SymbolOptions<'a> {
+    /// `bucket.tilePixelRatio`: tile units per CSS px of the (overscaled) tile.
+    tile_pixel_ratio: f64,
+    /// `bucket.overscaling`: 2 to the power of the zoom past the tile's own.
+    overscaling: f64,
     placement: SymbolPlacement,
     text_along_line: bool,
     text_size: &'a SizeData,
@@ -916,8 +947,8 @@ fn layout_symbols(
     let mut compare_text: HashMap<String, Vec<[f64; 2]>> = HashMap::new();
     for (feature, symbol) in &features {
         let tile_context = context(feature, f64::from(z));
-        let spacing =
-            TILE_PIXEL_RATIO * layer.number(false, "symbol-spacing", 250.0, &tile_context)?;
+        let spacing = options.tile_pixel_ratio
+            * layer.number(false, "symbol-spacing", 250.0, &tile_context)?;
         let mut add = |anchor: [f64; 2], line: Option<(&[[f64; 2]], usize)>| {
             // addSymbolAtAnchor: neighbouring tiles own anchors in their buffers.
             if anchor[0] < 0.0 || anchor[0] >= EXTENT || anchor[1] < 0.0 || anchor[1] >= EXTENT {
@@ -968,14 +999,20 @@ fn layout_symbols(
                 let extent = LabelExtent {
                     length: text_length.max(icon_length),
                     glyph_size: ONE_EM,
-                    box_scale: TILE_PIXEL_RATIO * max_size / ONE_EM,
+                    box_scale: options.tile_pixel_ratio * max_size / ONE_EM,
                     has_text: symbol.text.is_some(),
                 };
                 if options.placement == SymbolPlacement::Line {
                     let repeat_distance = spacing / 2.0;
                     for line in clip_line(&symbol.geometry, 0.0, 0.0, EXTENT, EXTENT) {
-                        for anchor in line_anchors(&line, spacing, max_angle, &extent, 1.0, EXTENT)
-                        {
+                        for anchor in line_anchors(
+                            &line,
+                            spacing,
+                            max_angle,
+                            &extent,
+                            options.overscaling,
+                            EXTENT,
+                        ) {
                             // `anchorIsTooClose` compares text only.
                             if let Some(text) = &symbol.text {
                                 let others = compare_text.entry(text.text.clone()).or_default();
@@ -1002,9 +1039,6 @@ fn layout_symbols(
     }
     Ok(instances)
 }
-
-/// `EXTENT / tileSize`: tile units per CSS px of a 512 px tile.
-const TILE_PIXEL_RATIO: f64 = EXTENT / 512.0;
 
 /// A string layout property: `{token}` strings resolve against the feature (legacy), others
 /// evaluate as expressions. `None` for null or empty.
@@ -1766,6 +1800,16 @@ fn point_anchors(kind: MvtGeometryType, geometry: &[Vec<[f64; 2]>]) -> Vec<[f64;
 /// takes round dash ends only from a constant `line-cap: round`, and a data-driven one from
 /// each feature's cap.
 pub fn layout_lines(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<TileLine>, String> {
+    lines_at(layer, source, z, 1.0)
+}
+
+/// [`layout_lines`] on a tile laid out `overscaling` times past its own zoom.
+fn lines_at(
+    layer: &StyleLayer,
+    source: &MvtLayer,
+    z: u8,
+    overscaling: f64,
+) -> Result<Vec<TileLine>, String> {
     let scale = scale(source);
     let dash_data_driven = layer.raw_paint("line-dasharray").is_some_and(|value| {
         value
@@ -1849,7 +1893,7 @@ pub fn layout_lines(layer: &StyleLayer, source: &MvtLayer, z: u8) -> Result<Vec<
                 integer_period: dash_data_driven,
             });
         let closed = feature.geometry_type == MvtGeometryType::Polygon;
-        let mut mesh = LineMesh::new();
+        let mut mesh = LineMesh::with_units(1.0, overscaling);
         for path in &feature.geometry {
             let points: Vec<[f64; 2]> = path
                 .iter()
@@ -1968,6 +2012,71 @@ mod tests {
         assert!(line.offsets.windows(2).all(|pair| pair[0] < pair[1]));
         assert!((line.offsets[0] + line.offsets[6]).abs() < 2.0);
         assert!(line.circle_diameter.is_some());
+    }
+
+    #[test]
+    fn overscaled_tiles_lay_out_at_the_camera_tile_zoom_with_the_overscaled_tile_size() {
+        let layer = line_layer(
+            r#"{"id":"r","type":"symbol","source-layer":"streets",
+                "layout":{"symbol-placement":"line","text-font":["NotoSans-Regular"],
+                          "text-field":["step",["zoom"],["get","kind"],9,["upcase",["get","kind"]]],
+                          "text-size":["interpolate",["linear"],["zoom"],8,10,10,20]}}"#,
+        );
+        let source = MvtLayer {
+            name: "streets".to_owned(),
+            extent: 4096,
+            features: vec![MvtFeature {
+                id: None,
+                geometry_type: MvtGeometryType::LineString,
+                geometry: vec![vec![[0, 2048], [4096, 2048]]],
+                properties: BTreeMap::from([("kind".to_owned(), Value::from("primary"))]),
+            }],
+        };
+        let layout = |z: u8| {
+            let buckets = layout_overscaled_tile(
+                std::slice::from_ref(&layer),
+                std::slice::from_ref(&source),
+                8,
+                z,
+                &oracle_glyphs(),
+                &ImageStore::default(),
+            )
+            .unwrap();
+            let LayerBucket::Symbols(bucket) = &buckets.layers[0] else {
+                panic!("{buckets:?}")
+            };
+            (buckets.zoom, bucket.clone())
+        };
+        let text = |bucket: &SymbolBucket| -> String {
+            let glyphs = &bucket.instances[0].text.as_ref().unwrap().glyphs;
+            glyphs
+                .iter()
+                .filter_map(|glyph| char::from_u32(glyph.codepoint))
+                .collect()
+        };
+        let anchors = |bucket: &SymbolBucket| -> Vec<f64> {
+            bucket
+                .instances
+                .iter()
+                .map(|instance| instance.anchor[0] * EXTENT)
+                .collect()
+        };
+        // At its own zoom: the plain layout.
+        let (zoom, own) = layout(8);
+        assert_eq!(zoom, 8);
+        assert_eq!(anchors(&own), vec![2000.0, 6000.0]);
+        assert_eq!(own.text_size.at_zoom(9.5).size, 15.0);
+        assert_eq!(text(&own), "primary");
+        // One zoom past it the tile is 1024 px over the same 8192 units: `symbol-spacing`
+        // (250 px) halves in tile units, and a continued line starts a whole spacing in.
+        let (zoom, overscaled) = layout(9);
+        assert_eq!(zoom, 9);
+        assert_eq!(anchors(&overscaled), vec![2000.0, 4000.0, 6000.0]);
+        // Sizes and the text field evaluate at the overscaled zoom.
+        assert_eq!(overscaled.text_size.at_zoom(9.5).size, 17.5);
+        assert_eq!(text(&overscaled), "PRIMARY");
+        // A zoom below the tile's own is its own.
+        assert_eq!(layout(7).0, 8);
     }
 
     /// One point feature at the tile centre with a `name` property.

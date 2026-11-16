@@ -585,6 +585,58 @@ tracks on the Canvas fallback. No reference implementation or parent revision ru
 journey, so the comparison is unavailable; WebGPU timing and larger track counts are not
 measured.
 
+## Animated camera transitions (#433 Fast)
+
+`camera-transition-journey-v1` flies the public controlled Map View on `flatRuntime="maps"`
+over 2,000 points and 48 static polygons
+([scenario](engine-scenarios.md#camera-transition-journey-v1),
+[evidence contract](engine-evidence.md#camera-transition-journey-evidence-433)):
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-camera-transition-evidence
+```
+
+Three captures on 2026-11-15 from `590566f` plus this change, runtime-profiler 0.1.0,
+Playwright 1.64.1, Node 24.19.0, Ryzen 7 5700X, Linux x64 (WSL2), WASM SHA-256
+`272c1f8b64619854e2be1f1480cc3bd7cca0fa6fedbd537f76b8ca73e9f1a9ac`. The pinned collector
+launches Chromium without WebGPU, so the Canvas fallback ran. "Parent" is the same journey
+with `src/maps-browser-runtime.ts` from `590566f`; it fails the verifier's per-frame contract.
+Per completed flight, from the command to its last frame:
+
+| Flight | Parent: animation frames / plans / renders | This change (2 captures) |
+| --- | --- | --- |
+| Paris → Berlin | 108 / 231 / 267 | 128 / 128 / 128; 125 / 125 / 125 |
+| Berlin → Paris | 129 / 162 / 163 | 122 / 122 / 122; 121 / 121 / 121 |
+| Fiji → Samoa (1.2 s) | 73 / 113 / 73 | 74 / 74 / 73; 73 / 73 / 73 |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 252 / 252 / 252; 248 / 248 / 248 |
+| Berlin, narrowed mid-flight | 120 / 170 / 197 | 138 / 139 / 139; 124 / 125 / 125 |
+| Paris, after superseded flights | 15 / 15 / 15 | 24 / 24 / 23; 27 / 27 / 26 |
+
+| Phase | Parent: frame p50 / p95 / max (ms) | This change |
+| --- | --- | --- |
+| Paris ⇄ Berlin | 16.7 / 33.4 / 83.4 | 16.7 / 33.3–33.4 / 33.5–50.0 |
+| Dateline | 16.7 / 16.7 / 16.8 | 16.7 / 16.8 / 33.4 |
+| Resize mid-flight | 16.7 / 33.3 / 66.7 | 16.7 / 33.3–33.4 / 33.4–49.9 |
+
+The candidate captures ran while other work loaded the host (load average about 9 on 8
+cores); one had a single long task in the resize phase. Their timing is therefore not a
+clean comparison with the parent's. An earlier capture of the same fix on a quieter host
+presented 142 animation frames per Paris ⇄ Berlin flight with one plan and render each, at
+frame p95 16.8 ms and no long task; an earlier parent capture was slower still (Paris ⇄ Berlin
+p95 100 ms, 24 long tasks over the flight phases). Bundle manifest SHA-256: parent
+`4e69cef2…bf9bf6`, candidates `57f642ab…cab17d5` and `b4c061ee…93cd5a514`. JS heap after GC:
+5.7 MB ready, 7.9 MB after the journey, 5.13–5.20 MB after each mid-flight unmount, 7.1–7.2 MB
+remounted, in every capture.
+
+On SwiftShader WebGPU (the journey run directly with `WEBGPU_SWIFTSHADER_ARGS`), every
+completed flight planned and rendered once per animation frame: Paris → Berlin 65 frames,
+plans and GPU frames, Berlin → Paris 65 / 65 / 64, Samoa → Paris 67 / 67 / 67, at frame p95
+50–100 ms. An earlier attempt to run the parent there did not complete the journey (one stage
+exceeded its 30 s wait).
+
+**Not a Fast verdict.** No MapLibre reference or Moonlight policy covers this journey; GPU
+completion time, GPU and WASM memory are unavailable.
+
 ## Evidence tooling repair — September 30
 
 The build now copies its optimized WASM and matching glue to `public/wasm`, so
@@ -616,7 +668,7 @@ remain open. No complete Fast verdict follows from these repairs.
 #187 later raised the package budgets to the values measured on main `1740615`: WASM
 532,422 bytes (budget 534,000), compressed package 403,498 (405,500), unpacked
 1,622,346 (1,626,000). This was the owner's decision. The per-PR WASM attribution is in
-`scripts/verify-package-size.mjs`; the largest step is #151's tile prefetch (+25,560 bytes).
+`scripts/package-size-budget.ts`; the largest step is #151's tile prefetch (+25,560 bytes).
 
 ## Package acceptance repair — 2026-10-26
 

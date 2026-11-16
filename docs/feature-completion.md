@@ -84,7 +84,7 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Capability | Developed | Correct | Fast | Current direction |
 | --- | --- | --- | --- | --- |
 | Geographic camera, project/unproject, fit/interaction | Yes | Yes | In progress | Keep Rust authoritative; profile the full camera presentation path, not camera math in isolation. |
-| Animated camera transitions (`flyTo`) | Yes (#433: `?acceptance=maps-runtime-flyto` flies center/zoom/bearing on `flatRuntime="maps"` with an `animate: false` opt-out) | Yes (#433: Rust trajectory reproduces recorded MapLibre 6.4.1 flights; host and Rust/WASM browser coverage, see [below](#animated-flyto-433)) | Not yet (work counters recorded, no comparison) | Rust owns the trajectory, constraints and cancellation; the browser host schedules one frame per animation frame. Timeline-keyframed camera sampling (#432) should reuse `CameraFlight`/`CameraPose`. |
+| Animated camera transitions (`flyTo`) | Yes (#433: `?acceptance=maps-runtime-flyto` flies center/zoom/bearing on `flatRuntime="maps"` with an `animate: false` opt-out) | Yes (#433: Rust trajectory reproduces recorded MapLibre 6.4.1 flights; host and Rust/WASM browser coverage, see [below](#animated-flyto-433)) | In progress, no verdict (#433: `camera-transition-journey-v1` measured; the journey found and fixed up to ~9 base plans and renders per animation frame, so flights now plan and render once per frame on Canvas and SwiftShader WebGPU; see [below](#animated-flyto-fast-evidence-433). No reference comparison, no hardware GPU timing) | Rust owns the trajectory, constraints and cancellation; the browser host schedules one frame per animation frame. Timeline-keyframed camera sampling (#432) should reuse `CameraFlight`/`CameraPose`. |
 | Raster tile/source lifecycle and first-party base map | Yes | Yes | In progress | Retain GPU resources, prove churn/overzoom/world-copy/memory behavior, then retire superseded paths. |
 | Points and clusters | Yes | Yes | In progress | Circle instancing landed in #153; finish packed/retained application transport under #154/#60 with representative density evidence. Labeled points are GPU-retained like the others; camera frames project only the labeled points, for the Canvas label pass (#204). Deterministic work contracts (#189, `performance:work`) hold camera pan/zoom/bearing/pitch at 1k/10k/100k points to zero point encoding and upload, and in-place updates to work linear in the changed points only. Cluster layers still use the projected path. |
 | Lines and flows | Yes | Yes (#195: retained WebGPU lines and flows match the Canvas oracle) | In progress | Lines, flow direction markers and flow endpoints are GPU-retained in shape groups (#195). Frames with labeled points stay retained too (#204), and the MapLibre/Leaflet comparison is #197. |
@@ -92,7 +92,8 @@ This is a planning snapshot, not a substitute for issue/PR evidence. Update a ro
 | Picking, hover and selection | Yes | Yes | In progress | Preserve Maps feature/primitive identity; optimize misses/broad phase only from representative pointer evidence. The mixed-layer journey (#170, `mixed-layer-journey-v1`) now records pointer → Map UI latency, and a hover change repaints only the application overlay. No comparison is available yet. Historical selection validity (#170 phase D): selection, hover and popup clear in the render the Map-Scoped Timeline leaves a feature's period, with browser evidence on the Maps runtime (`e2e/maps-historical-selection.spec.ts`); no Fast evidence recorded for it. The History demo's integrated journey (#231 phase D) runs on the Maps runtime with the same composition and clock (`?acceptance=maps-runtime-history`, `e2e/maps-history-runtime.spec.ts`), and a popup now closes when the controlled selection that selected its feature moves away, as on MapLibre; no Fast evidence recorded for it. |
 | Heat/scalar surfaces | Developed: density and masked field on the public HeatLayer API, including GPU raster presentation and Canvas fallback | Correct on Chromium SwiftShader and Canvas: deterministic and retained-vs-uncached oracles, masks/holes, browser alignment during pan/zoom/orientation/resize and mutation/teardown coverage | Verified on the interleaved RTX 3060 Ti journey (#171): pitched p95 16.7–16.8 ms, zero pitched long tasks; see hardware scope and remaining transient costs below | Prepared TypeScript rasters now upload once per image to the existing wgpu backend and draw in application painter order. Camera frames retain textures; replacement/removal/disposal release them. Initial density indexing runs once after module loading. See [GPU evidence](#heatscalar-gpu-continuation-171). |
 | Moving features and Map-Scoped Timeline | Yes (#172 A: moving tracks over static regions on `flatRuntime="maps"` with one public map-scoped clock and play/pause/seek; #172 D: `TemporalClusteredMap` clustering and `TemporalHeatMap` heat over static regions on `flatRuntime="maps"`, both on one shared clock, with no MapLibre canvas, `e2e/maps-temporal-composition.spec.ts`) | Partial (#172 A–C: seek/playback parity and edge sequences against an independent naive sampler, async/source-change guards, Rust/WASM sampler parity in the browser; #172 D: clusters at the map-scoped time equal clustering the naive sample through seek, playback, backward seek and resume, and a direct seek, playback then seek, and a burst of seeks present identical cluster and heat pixels on WebGPU and the Canvas fallback; screenshots and picking while camera and features move together are not covered) | In progress (#172 E: work counters and the full-map journey `temporal-playback-journey-v1` measured, see [below](#moving-features-fast-evidence-172-phase-e); every phase inside the frame budget at 2,000 tracks on the Canvas fallback; no reference comparison, so no Fast verdict) | Rust samples moving tracks; TypeScript keeps the clock and application data. Time changes only sample and rebuild the aggregation index (declared required work); camera frames and unrelated commits do no temporal work; static regions and tiles stay retained. The counters found and fixed re-preparation on runtime status changes, a placeholder-time sample on remount and a Rust aggregation trap on empty point sets. Phase D found and fixed heat and cluster Map Layers remounting whenever a temporal overlay before them became empty or non-empty. |
-| Measurement and GeoJSON editing | Existing product capability | Existing correctness coverage | Needs first-party integration audit | Preserve editor/measurement authority while removing accidental dependency on legacy rendering responsibilities. |
+| Geographic transforms and operations (#173) | Phase A: usable standalone data-only APIs and timeline metric transform reference | Regional transform/static-operation fixtures; full runtime parity awaits B/C/E | Not measured; D/E pending | [Regional contract and public static example](geojson.md#regional-transforms-and-static-operations). TypeScript remains the phase-A reference; #173 stays open through approved A→B→C→D→E and final authoritative-path evidence. |
+| Measurement and GeoJSON editing | Partial (#174 A): controlled bee-line measurement on the first-party Map View with mixed Map Layers; geometry editing remains MapLibre-backed pending B | Partial: public integration tests and real Rust/WASM browser evidence on Canvas/WebGPU cover bearing, create/select/save, navigation ownership and draft cancellation including pitch restriction | Not yet: dense-edit/measurement profiling and work counters remain #174 E | The consumer retains document/save ownership. Exact inputs depend on #173 and phase C; wider editor correctness is phase D. A is an integrated measurement slice, not completion of #174. |
 | MVT/vector source lifecycle | Partial | Partial | Not yet | Finish the production source/cache contract and polygon geometry path before performance promotion. Opt-in raw-tile persistence (#264 phase 1) is developed with correctness coverage; its Fast evidence is not measured yet. |
 | Style-spec-compatible vector layers/expressions | Not complete | Not complete | Not started | Develop background/fill/line/circle/raster + filters/expressions, then parity, then bucket/render optimization. |
 | Labels, icons and collision placement | Not complete | Not complete | Not started | Develop the cartography model first; correctness includes shaping/collision/stability; optimize only afterward. |
@@ -462,8 +463,63 @@ Linux x64 (AMD Ryzen 7 5700X, WSL2), Playwright 1.62.1 Chromium, Node 24.16.0.
 
   Map Layer data is not re-lowered per frame. Base renders exceed presented frames by about
   2.3× on Canvas and up to 9× on SwiftShader WebGPU. The extra renders come from raster
-  fade-in renders and tile arrivals during the zoom-out. The flight has not been profiled
-  against a reference, so Fast remains open.
+  fade-in renders and tile arrivals during the zoom-out. These are the counts at #443, before
+  the Fast work below.
+
+### Animated flyTo Fast evidence (#433)
+
+`camera-transition-journey-v1` ([scenario](engine-scenarios.md#camera-transition-journey-v1),
+[evidence contract](engine-evidence.md#camera-transition-journey-evidence-433),
+[measurements](engine-performance.md#animated-camera-transitions-433-fast)) flies a controlled
+public Map View over 2,000 points and 48 static polygons: out and back, across the
+antimeridian, superseded by successive commands, interrupted by a pointer press, through a
+resize, as instant jumps and unmounted mid-flight.
+
+**Found and fixed.** Camera motion planned and rendered the base several times per animation
+frame:
+
+- each raster tile that arrived during a flight planned and rendered the whole base at once,
+  so a zoom-out with many arrivals did up to 9 plans and renders in one frame;
+- a fade-in re-render ran in the same frame as the flight's own render;
+- a controlled Map View's echo of each camera frame submitted a second WebGPU frame although
+  its retained Map Layer groups were unchanged.
+
+During camera motion, tile arrivals are now planned by the camera's next frame, once for all
+of them; a fade-in re-render skips a frame the camera renders; an unchanged retained redraw
+renders nothing of its own (a camera at rest still presents an arrived tile at once)
+(`src/maps-flight-frame-work.test.ts`, `src/maps-retained-points.test.tsx`,
+`e2e/maps-camera-transition-journey.spec.ts` on WebGPU and Canvas).
+
+**Measured** (runtime-profiler browser collector, Canvas fallback, same machine, the parent
+`590566f` against this change; per completed flight, counted in the page from the command to
+the flight's last frame):
+
+| Flight | Parent: frames / plans / renders | This change (2 captures) |
+| --- | --- | --- |
+| Paris → Berlin (2.4 s) | 108 / 231 / 267 | 125–128 / same / same |
+| Berlin → Paris (2.4 s) | 129 / 162 / 163 | 121–122 / same / same |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 248–252 / same / same |
+| Berlin, resized mid-flight | 120 / 170 / 197 | 124–138 / +1 / +1 |
+
+The final captures ran on a host loaded by other work (load average about 9 on 8 cores), so
+their frame timing (p95 16.8–33.4 ms, one long task) is not comparable with the parent's
+(p95 33.4 ms in this capture, 100 ms with 24 long tasks in an earlier one). An earlier
+capture of the same fix on a quieter host presented 142 frames per Paris ⇄ Berlin flight at
+p95 16.8 ms with no long task. The work counts do not depend on load.
+On SwiftShader WebGPU (the journey run directly, not through the collector) every completed
+flight also planned and rendered once per frame: Paris ⇄ Berlin presented 65 and 64 frames,
+where #443 recorded 8–11 frames per flight with 45–101 renders. Every interrupted flight
+presented no frame after its interruption, every completed flight ended on its target, and
+each `animate: false` jump presented one frame. JS heap after GC was 5.7 MB ready, 7.9 MB
+after the journey and 5.2 MB after each of three mid-flight unmounts (growth under 0.1 MB
+across them).
+
+**Not a Fast verdict.** The parent comparison is descriptive: Moonlight has no policy for this
+journey and no MapLibre reference runs it, so `evaluation.json` records comparison and
+Moonlight as unavailable. Hardware GPU timing, GPU and WASM memory are unavailable on this
+host (llvmpipe/SwiftShader only). Closing the Fast gate needs an owner-approved comparison
+policy for this journey (for example, MapLibre's `flyTo` over the same fixture, as the
+#270 Atlas journey does) and a hardware-GPU capture.
 
 ### Heat/scalar alignment evidence (#171 phase 3)
 
@@ -723,3 +779,22 @@ The module contract and measurements are in [Performance](performance.md#wasm-ca
   The WebGPU path is byte-identical (SHA-256 of the full module before and after:
   `9b11c5b236e8ae7c7688c4bf9117aa650e4527759b50413c18e93d08fbaa5143`). Instantiation and
   first-frame timings were not profiled; only transfer is claimed.
+
+## First-party interaction modes and measurement (#174 phase A)
+
+`BeeLineMeasurementLayer` now mounts through the public first-party Map View.
+Maps owns interaction priority (editing before measurement before navigation),
+primary-pointer ownership, capture release and Rust project/unproject; the Canvas
+measurement adapter only draws and picks lines/labels. Existing bee-line distance,
+midpoint and formatting contracts remain shared with the MapLibre reference path.
+No transform implementation or unpublished #173 code is introduced.
+
+The controlled mixed-layer example composes heat, points, a flow and a polygon
+with a consumer-owned measurement array and save action. The focused browser
+journey in `e2e/maps-measurement.spec.ts` covers 35° bearing on both WebGPU and
+Canvas2D, live drafts, create/save/select, Escape, pointer cancellation, unexpected
+capture loss, tilt cancellation and reset, and restored map panning. Focused public
+integration tests cover mode priority and controlled callback behavior. This is
+partial Correct evidence; full GeoJSON editing, exact inputs, wider real-client
+coverage and representative Fast evidence remain phases B–E. No complete feature
+or performance verdict is claimed.

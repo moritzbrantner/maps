@@ -17,6 +17,8 @@ import {
   type TimelineEditorViewport,
 } from "@moritzbrantner/timeline-editor";
 
+import { transformGeoJsonGeometry } from "./geojson-transform";
+
 import { joinClassNames } from "./map-display";
 import {
   createGeoJsonTransitionPlan,
@@ -31,7 +33,6 @@ import {
   type GeoJsonPolygonConstraint,
 } from "./geojson-editor-operations";
 import type {
-  GeoJsonPosition,
   TemporalGeoJsonGeometryFeature,
   TemporalGeoJsonGeometryFeatureCollection,
   TemporalGeoJsonSupportedGeometry,
@@ -126,7 +127,10 @@ export type GeoJsonTimelineSceneOptions<
     >,
   ) => GeoJsonTimelineTransitionSpec | undefined;
   getTransition?: (
-    previous: TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>,
+    previous: TimelineEditorItem<
+      GeoJsonTimelineItemData<TProperties>,
+      GeoJsonTimelineTransformValues
+    >,
     next: TimelineEditorItem<GeoJsonTimelineItemData<TProperties>, GeoJsonTimelineTransformValues>,
   ) => GeoJsonTimelineTransitionSpec | undefined;
 };
@@ -250,7 +254,7 @@ export function createGeoJsonTimelineDocument<
       trackId:
         trackMode === "single"
           ? SINGLE_TRACK_ID
-          : options.getTimelineTrackId?.(feature, index) ?? getGeoJsonTimelineTrackId(featureId),
+          : (options.getTimelineTrackId?.(feature, index) ?? getGeoJsonTimelineTrackId(featureId)),
       transform:
         options.getFeatureTransform?.(feature, index) ??
         readTimelineTransform(feature.properties?.timelineTransform),
@@ -389,10 +393,12 @@ export function getGeoJsonTimelineFeatureCollectionAtTime<
         return [];
       }
 
-      return [{
-        ...cloneTimelineFeature(feature),
-        geometry: transformedGeometry,
-      }];
+      return [
+        {
+          ...cloneTimelineFeature(feature),
+          geometry: transformedGeometry,
+        },
+      ];
     }),
   };
 }
@@ -514,7 +520,9 @@ function createTimelineScenes<TProperties extends Record<string, unknown>>(
     const leftEndMs = left.startMs + left.durationMs;
     const rightEndMs = right.startMs + right.durationMs;
 
-    return left.startMs - right.startMs || leftEndMs - rightEndMs || left.id.localeCompare(right.id);
+    return (
+      left.startMs - right.startMs || leftEndMs - rightEndMs || left.id.localeCompare(right.id)
+    );
   });
 
   for (const item of sortedItems) {
@@ -560,7 +568,8 @@ function findActiveTimelineScene<TProperties extends Record<string, unknown>>(
 ) {
   const active = scenes.find(
     (scene, index) =>
-      timeMs >= scene.startMs && (timeMs < scene.endMs || (index === scenes.length - 1 && timeMs <= scene.endMs)),
+      timeMs >= scene.startMs &&
+      (timeMs < scene.endMs || (index === scenes.length - 1 && timeMs <= scene.endMs)),
   );
 
   if (active || outsideItemBehavior !== "hold") {
@@ -568,9 +577,7 @@ function findActiveTimelineScene<TProperties extends Record<string, unknown>>(
   }
 
   return (
-    [...scenes]
-      .reverse()
-      .find((scene) => scene.endMs < timeMs) ??
+    [...scenes].reverse().find((scene) => scene.endMs < timeMs) ??
     scenes.find((scene) => scene.startMs > timeMs)
   );
 }
@@ -637,7 +644,8 @@ function getFeatureForTimelineItem<TProperties extends Record<string, unknown>>(
   const itemFeatureId = item.data?.featureId ?? getFeatureIdFromTimelineItemId(item.id);
 
   return collection.features.find(
-    (feature, index) => resolveTimelineFeatureId(feature, index, options.getFeatureId) === itemFeatureId,
+    (feature, index) =>
+      resolveTimelineFeatureId(feature, index, options.getFeatureId) === itemFeatureId,
   );
 }
 
@@ -655,7 +663,9 @@ function getDefaultSceneTransitionAlgorithm<TProperties extends Record<string, u
     return "topology-plan";
   }
 
-  return getDefaultTransitionAlgorithm(previousFeatures[0]?.geometry ?? nextFeatures[0]?.geometry ?? null);
+  return getDefaultTransitionAlgorithm(
+    previousFeatures[0]?.geometry ?? nextFeatures[0]?.geometry ?? null,
+  );
 }
 
 function countPolygonLikeFeatures<TProperties extends Record<string, unknown>>(
@@ -704,65 +714,10 @@ export function applyGeoJsonTimelineTransform(
   values: Partial<GeoJsonTimelineTransformValues>,
   options: GeoJsonGeometryTransformOptions = {},
 ): TemporalGeoJsonSupportedGeometry | null {
-  if (!hasTimelineTransform(values)) {
-    return constrainGeoJsonGeometryToPolygon(cloneGeometry(geometry), options.polygonConstraint);
-  }
-
-  const origin = getTransformOrigin(geometry, values);
-  let transformed: TemporalGeoJsonSupportedGeometry;
-
-  switch (geometry.type) {
-    case "Point":
-      transformed = {
-        coordinates: transformPosition(geometry.coordinates, values, origin),
-        type: "Point",
-      };
-      break;
-    case "MultiPoint":
-      transformed = {
-        coordinates: geometry.coordinates.map((position) =>
-          transformPosition(position, values, origin),
-        ),
-        type: "MultiPoint",
-      };
-      break;
-    case "LineString":
-      transformed = {
-        coordinates: geometry.coordinates.map((position) =>
-          transformPosition(position, values, origin),
-        ),
-        type: "LineString",
-      };
-      break;
-    case "MultiLineString":
-      transformed = {
-        coordinates: geometry.coordinates.map((line) =>
-          line.map((position) => transformPosition(position, values, origin)),
-        ),
-        type: "MultiLineString",
-      };
-      break;
-    case "Polygon":
-      transformed = {
-        coordinates: geometry.coordinates.map((ring) =>
-          ring.map((position) => transformPosition(position, values, origin)),
-        ),
-        type: "Polygon",
-      };
-      break;
-    case "MultiPolygon":
-      transformed = {
-        coordinates: geometry.coordinates.map((polygon) =>
-          polygon.map((ring) =>
-            ring.map((position) => transformPosition(position, values, origin)),
-          ),
-        ),
-        type: "MultiPolygon",
-      };
-      break;
-  }
-
-  return constrainGeoJsonGeometryToPolygon(transformed, options.polygonConstraint);
+  return constrainGeoJsonGeometryToPolygon(
+    transformGeoJsonGeometry(geometry, values),
+    options.polygonConstraint,
+  );
 }
 
 export function getGeoJsonTimelineItemId(featureId: string) {
@@ -855,79 +810,6 @@ function filterNumericValues(values: Record<string, unknown>) {
   }
 
   return numericValues;
-}
-
-function hasTimelineTransform(values: Partial<GeoJsonTimelineTransformValues>) {
-  return Object.values(values).some((value) => typeof value === "number" && Number.isFinite(value));
-}
-
-function transformPosition(
-  position: GeoJsonPosition,
-  values: Partial<GeoJsonTimelineTransformValues>,
-  origin: GeoJsonPosition,
-): GeoJsonPosition {
-  const longitudeOffset = values.longitudeOffset ?? 0;
-  const latitudeOffset = values.latitudeOffset ?? 0;
-  const scale = values.scale ?? 1;
-  const scaleX = values.scaleX ?? scale;
-  const scaleY = values.scaleY ?? scale;
-  const rotation = ((values.rotateDegrees ?? 0) * Math.PI) / 180;
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  const x = (position[0] - origin[0]) * scaleX;
-  const y = (position[1] - origin[1]) * scaleY;
-
-  return [
-    origin[0] + x * cos - y * sin + longitudeOffset,
-    origin[1] + x * sin + y * cos + latitudeOffset,
-  ];
-}
-
-function getTransformOrigin(
-  geometry: TemporalGeoJsonSupportedGeometry,
-  values: Partial<GeoJsonTimelineTransformValues>,
-): GeoJsonPosition {
-  if (
-    typeof values.originLongitude === "number" &&
-    Number.isFinite(values.originLongitude) &&
-    typeof values.originLatitude === "number" &&
-    Number.isFinite(values.originLatitude)
-  ) {
-    return [values.originLongitude, values.originLatitude];
-  }
-
-  const positions = getGeometryPositions(geometry);
-  const bounds = positions.reduce(
-    (current, position) => ({
-      east: Math.max(current.east, position[0]),
-      north: Math.max(current.north, position[1]),
-      south: Math.min(current.south, position[1]),
-      west: Math.min(current.west, position[0]),
-    }),
-    {
-      east: Number.NEGATIVE_INFINITY,
-      north: Number.NEGATIVE_INFINITY,
-      south: Number.POSITIVE_INFINITY,
-      west: Number.POSITIVE_INFINITY,
-    },
-  );
-
-  return [(bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2];
-}
-
-function getGeometryPositions(geometry: TemporalGeoJsonSupportedGeometry): GeoJsonPosition[] {
-  switch (geometry.type) {
-    case "Point":
-      return [geometry.coordinates];
-    case "MultiPoint":
-    case "LineString":
-      return [...geometry.coordinates];
-    case "MultiLineString":
-    case "Polygon":
-      return geometry.coordinates.flat();
-    case "MultiPolygon":
-      return geometry.coordinates.flat(2);
-  }
 }
 
 function cloneTimelineFeature<TProperties extends Record<string, unknown>>(

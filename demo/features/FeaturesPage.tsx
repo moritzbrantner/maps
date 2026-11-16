@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import {
   ClusterLayer,
   createMapScopedTimelineClock,
   FlowLayer,
   GeoJsonLayer,
-  HeatLayer,
+  HeatMap,
   MapScopedTimelineControls,
   MapView,
   PointLayer,
@@ -16,6 +16,11 @@ import {
   type MapViewState,
 } from "../../src";
 import { HeatControlsPanel } from "../components/HeatControlsPanel";
+import { createAtlasTileset } from "../atlas-source";
+import {
+  demoAtlasTemperatureBounds,
+  demoAtlasTemperaturePoints,
+} from "../data/demo-atlas-temperatures";
 import { demoFlows } from "../data/demo-flows";
 import { demoGeoJsonCollection } from "../data/demo-geojson";
 import {
@@ -29,19 +34,18 @@ import {
 import { demoTracks, formatDemoTimelineTime } from "../data/demo-timeline";
 import { formatTemperatureValue } from "../lib/format";
 import { getDemoFeatureId, getDemoGeoJsonLabel } from "../lib/geojson-features";
+import { createShowcaseTileset } from "../showcase-tileset";
 import {
   comingFeatures,
   featureRoutes,
   featureSearch,
   readFeatureRoute,
   type FeatureId,
+  type HeatBasemap,
   type FeatureRoute,
 } from "./feature-route";
 
-/**
- * A tile-free base: one constant background color and no sources. The feature pages show
- * illustrative demo data (ADR 0005) and fetch no rendered basemap tiles.
- */
+/** Explicit source-free comparison for the heat controls and other feature families. */
 const featureBackground = {
   layers: [{ id: "background", paint: { "background-color": "#e6ece8" }, type: "background" }],
   sources: {},
@@ -129,7 +133,9 @@ export function FeaturesPage() {
         </nav>
         {route.feature === "heat" ? (
           <HeatFeature
+            basemap={route.heatBasemap}
             renderMode={route.heatMode}
+            onBasemapChange={(heatBasemap) => navigate({ ...route, heatBasemap })}
             onRenderModeChange={(heatMode) => navigate({ ...route, heatMode })}
           />
         ) : null}
@@ -140,7 +146,12 @@ export function FeaturesPage() {
 
       <footer className="engine-status">
         <span>
-          <strong>Illustrative demo data</strong> · Not real-world measurements; no basemap tiles.
+          <strong>Illustrative feature data</strong> ·{" "}
+          {route.feature === "heat" && route.heatBasemap === "atlas"
+            ? "Real Liechtenstein OpenStreetMap tiles (ODbL); invented temperature values."
+            : route.feature === "heat" && route.heatBasemap === "synthetic"
+              ? "Self-hosted synthetic CC0 vector tiles; not real-world geography."
+              : "No real-world claims or geographic basemap tiles."}
         </span>
         <span>Rust/WASM runtime · flatRuntime="maps"</span>
       </footer>
@@ -149,57 +160,91 @@ export function FeaturesPage() {
 }
 
 function HeatFeature({
+  basemap,
+  onBasemapChange,
   onRenderModeChange,
   renderMode,
 }: {
+  basemap: HeatBasemap;
+  onBasemapChange: (source: HeatBasemap) => void;
   onRenderModeChange: (mode: HeatFieldRenderMode) => void;
   renderMode: HeatFieldRenderMode;
 }) {
   const [contourLineWidth, setContourLineWidth] = useState(1.25);
   const [showDataPoints, setShowDataPoints] = useState(false);
+  const tileset = useMemo(() => {
+    if (basemap === "atlas") return createAtlasTileset("liechtenstein", import.meta.env.BASE_URL);
+    if (basemap === "synthetic") return createShowcaseTileset(import.meta.env.BASE_URL);
+    return undefined;
+  }, [basemap]);
+  const isAtlas = basemap === "atlas";
+  const points = isAtlas ? demoAtlasTemperaturePoints : demoTemperaturePoints;
+  const bounds = isAtlas ? demoAtlasTemperatureBounds : demoTemperatureDomainBounds;
   return (
     <>
-      <MapView
+      <HeatMap
+        key={basemap}
         className="engine-map"
+        dataPointColor="#111827"
+        dataPointRadius={4}
+        dataPointValueFormat={formatTemperatureValue}
+        domainBounds={bounds}
+        fieldAsyncRender
+        fieldColorRamp={demoTemperatureFieldColorRamp}
+        fieldColumns={320}
+        fieldContourColor="#111827"
+        fieldContourLevels={11}
+        fieldContourLineWidth={contourLineWidth}
+        fieldContourValueFormat={formatTemperatureValue}
+        fieldOpacity={tileset ? 0.55 : 0.84}
+        fieldRenderMode={renderMode}
+        fieldRows={200}
+        fieldValueDomain={demoTemperatureValueDomain}
         flatRuntime="maps"
         fitToData={false}
-        initialViewState={{ center: [5, 50], zoom: 3.4 }}
-        mapLabel="Europe temperature surface"
-        mapStyle={featureBackground}
-        maxBounds={demoTemperatureDomainBounds}
-        maxZoom={6}
+        heatmapSurfaceMode="field"
+        initialViewState={
+          isAtlas ? { center: [9.55, 47.15], zoom: 11.5 } : { center: [5, 50], zoom: 3.4 }
+        }
+        interpolationK={10}
+        interpolationPower={2}
+        mapLabel={
+          isAtlas
+            ? "Liechtenstein tiled temperature surface"
+            : basemap === "synthetic"
+              ? "Europe tiled temperature surface"
+              : "Europe temperature surface"
+        }
+        mapStyle={tileset ? undefined : featureBackground}
+        maxBounds={bounds}
+        maxZoom={isAtlas ? 17 : 6}
+        points={points}
+        showDataPoints={showDataPoints}
         style={mapStyle}
-      >
-        <HeatLayer
-          dataPointColor="#111827"
-          dataPointRadius={4}
-          dataPointValueFormat={formatTemperatureValue}
-          domainBounds={demoTemperatureDomainBounds}
-          fieldAsyncRender
-          fieldColorRamp={demoTemperatureFieldColorRamp}
-          fieldColumns={320}
-          fieldContourColor="#111827"
-          fieldContourLevels={11}
-          fieldContourLineWidth={contourLineWidth}
-          fieldContourValueFormat={formatTemperatureValue}
-          fieldRenderMode={renderMode}
-          fieldRows={200}
-          fieldValueDomain={demoTemperatureValueDomain}
-          heatmapSurfaceMode="field"
-          interpolationK={10}
-          interpolationPower={2}
-          layerId="feature-temperature-field"
-          points={demoTemperaturePoints}
-          showDataPoints={showDataPoints}
-          valueMetric="temperature"
-        />
-      </MapView>
+        tileset={tileset}
+        valueMetric="temperature"
+      />
       <aside
         aria-label="Heat controls"
         className="features-panel"
         data-heat-render-mode={renderMode}
       >
-        <p>Inverse-distance temperature surface from {demoTemperaturePoints.length} stations.</p>
+        <label className="features-basemap-picker">
+          <span>Basemap</span>
+          <select
+            aria-label="Heat map basemap"
+            value={basemap}
+            onChange={(event) => onBasemapChange(event.currentTarget.value as HeatBasemap)}
+          >
+            <option value="synthetic">Tiled world (synthetic)</option>
+            <option value="atlas">Liechtenstein (OSM tiles)</option>
+            <option value="none">No basemap</option>
+          </select>
+        </label>
+        <p>
+          Inverse-distance surface from {points.length} {isAtlas ? "illustrative" : "demo"}{" "}
+          temperature stations.
+        </p>
         <HeatControlsPanel
           contourLineWidth={contourLineWidth}
           onContourLineWidthChange={setContourLineWidth}

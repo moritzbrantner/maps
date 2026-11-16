@@ -275,6 +275,56 @@ Limits:
   `unavailable`. This evidence is descriptive, not a Fast verdict.
 - GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
 
+## Camera transition journey evidence (#433)
+
+`runtime-profiler-scenarios/camera-transition-journey-browser-v1.yaml` captures the canonical
+`camera-transition-journey-v1` through the same `browser-chromium` collector. Its Maps-owned
+journey, `scripts/profile-camera-transition-journey.ts`, builds
+`e2e/fixtures/camera-transition-journey.html` for production, serves it with the built
+`dist/wasm` package and flies the public controlled Map View with `flyTo`. It writes a Maps
+observation (`maps.camera-transition-journey-observation/v1`) next to the immutable bundle.
+`verify:engine-runtime-evidence` runs it as `verify:engine-camera-transition-evidence`, under
+`camera-transition/` in the existing artifact:
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-camera-transition-evidence
+```
+
+Per flight the observation records the presented `fly-to` frames (from the fixture's
+`onViewStateChange` trace, on each frame's animation-frame time), the longest gap between
+them counted from the command, `fly-to` frames after an interruption, and whether a completed
+flight's last frame is its target. Per phase it records `requestAnimationFrame` intervals,
+long tasks, slow input events, the Map View's base renders (renderer stats) and the runtime
+counters (`e2e/helpers/mixed-layer-work.ts`): frame plans, each also a measured
+`runtime-profiler:js-to-wasm:frame-plan` crossing, projected coordinates, GPU frames, Canvas
+base and overlay redraws, retained point/polygon writes, tile uploads and released runtimes
+and renderers. JS heap is sampled after forced GC, including after each mid-flight unmount.
+
+The verifier fails when evidence is missing or the contract is broken:
+
+- every completed flight plans and renders the base at most once per animation frame it spans,
+  counted in the page from the command to the flight's last frame (a resize may re-plan once
+  outside one);
+- no phase outside teardown rebuilds the runtime or re-lowers a retained Map Layer group;
+- every completed flight ends on its target and every interrupted one presents no later frame;
+- successive commands supersede the flights in progress, a pointer press and each unmount end
+  a running flight, and each `animate: false` jump presents exactly one frame;
+- teardown releases one runtime per unmount, and the JS heap after GC grows by less than 1 MB
+  across the three mid-flight unmounts.
+
+It writes `evaluation.json` with a per-phase summary.
+
+Limits:
+
+- The pinned collector launches Chromium without WebGPU flags, so the capture measures the
+  Canvas fallback. `e2e/maps-camera-transition-journey.spec.ts` checks the per-frame plan and
+  render contract on SwiftShader WebGPU as well, without timing. Hardware GPU timing is not
+  measured.
+- No reference implementation or parent revision runs this journey in the evidence command,
+  so `evaluation.json` records comparison and Moonlight as `unavailable`. This evidence is
+  descriptive, not a Fast verdict.
+- GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
+
 ## Comparability
 
 Runtime evidence may only be compared when runtime-profiler considers it strictly comparable. Missing or incomparable evidence is not reinterpreted as success by Maps or Moonlight.

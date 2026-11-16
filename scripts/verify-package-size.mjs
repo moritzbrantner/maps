@@ -6,46 +6,13 @@ import { gzipSync } from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseNpmPackResult } from "./npm-pack-result.ts";
+import {
+  approvedSizeBaseline,
+  evaluatePackageSize,
+  packageSizeBudgets,
+} from "./package-size-budget.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Re-measured on main 1740615 after Milestone D (#138, 486,433-byte WASM) for #187:
-// 532,422-byte WASM, 403,498-byte compressed package, 1,622,346 bytes unpacked. WASM growth per
-// PR (wasm-opt -O1): #151 tile prefetch +25,560; #153 instanced circles +4,293; #163 overscan
-// pans -6,930; Shortbread tile-pixel retention (289765e) +7,548; camera-ahead prefetch (8e32e7f) +3,550;
-// #162 WebGPU polygons +7,015; #180 tile zoom fallback +8,143; Rust 1.99/wasm-bindgen 0.2.129
-// -2,683; smaller steps net -507. The package budgets grow by about the same amount.
-// #191 then lands the #167 retained vector basemap (Rust Shortbread buckets, retained
-// wgpu vector pipelines, shared retained-geometry module): WASM 532,422 -> 591,763
-// (+59,341), compressed package 427,892, unpacked 1,696,963.
-// Local measurements since: #194 retained points and nearby steps 591,763 -> 604,819 (+13,056);
-// #161 stencil polygons and encoded-sRGB blending +2,746; #196 retained polygons (fan, cover and
-// screen-extruded stroke pipelines) +16,264 -> 623,829 WASM, compressed package 444,281,
-// unpacked 1,750,305.
-// #268 (owner decision): the compressed package and WASM runtime sizes are measured and
-// reported only, not blocking ceilings; reducing them is a loading-strategy concern
-// ("make it work, make it right, make it fast"). Keep a small margin for the rest.
-// #343 builds the WASM for speed (opt-level 3, 705,345 -> 845,540 bytes): the unpacked budget
-// now covers everything but the report-only WASM runtime, with the allowance it had before
-// (1,752,500 - 705,345).
-// #172 phase C moves moving point track sampling to Rust (`MapsTemporalPointIndex`, the
-// temporal runtime loader and its exports): +9,192 bytes unpacked without the WASM runtime
-// (+4,516 generated WASM bindings, +4,676 JavaScript, declarations and changelog), so the
-// budget grows by the same amount.
-// #172 phase E adds the moving-track work counters (`src/temporal-work.ts`, kept by every
-// prepared playback index): +1,514 bytes of JavaScript and declarations, measured against
-// main; the budget grows by the same amount.
-// #305 re-measures main cbe2188: 1,069,958 bytes without the WASM runtime (#415, #427 and #428
-// had grown it past the budget unnoticed; package validation runs on dispatch only). The
-// WebGPU-free core module then adds its wasm-bindgen glue and declarations (54,168 + 10,857 +
-// 4,687 bytes) and the capability loaders and docs 1,559 bytes: 1,141,229 bytes, 4 more entries.
-// Both WASM binaries stay report-only (#268) and are excluded here.
-const budgets = {
-  entryCount: 84,
-  fullStylesheetSize: 125_000,
-  stylesheetSize: 116_000,
-  unpackedSizeWithoutWasm: 1_141_500,
-};
-
 const pack = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
   cwd: rootDir,
   encoding: "utf8",
@@ -66,49 +33,30 @@ try {
   process.exit(1);
 }
 
-const files = Array.isArray(packageInfo?.files) ? packageInfo.files : [];
-const stylesheet = files.find((file) => file.path === "styles.css");
-const fullStylesheet = files.find((file) => file.path === "styles.full.css");
-const mapLibreStylesheet = files.find((file) => file.path === "maplibre.css");
-const wasmRuntime = files.find((file) => file.path === "dist/wasm/maps_wasm_bg.wasm");
-const wasmCoreRuntime = files.find((file) => file.path === "dist/wasm/maps_wasm_core_bg.wasm");
-const requiredFiles = [
-  "maplibre.css",
-  "styles.css",
-  "styles.full.css",
-  "dist/wasm/maps_wasm_bg.wasm",
-  "dist/wasm/maps_wasm_core_bg.wasm",
-  "README.md",
-  "package.json",
-];
-const errors = [];
-
-for (const filePath of requiredFiles) {
-  if (!files.some((file) => file.path === filePath)) {
-    errors.push(`${filePath} is missing from the dry-run package payload`);
-  }
-}
-
-checkPresent("compressed package size", packageInfo?.size);
-checkBudget(
-  "unpacked package size without the WASM runtimes",
-  typeof packageInfo?.unpackedSize === "number" &&
-    typeof wasmRuntime?.size === "number" &&
-    typeof wasmCoreRuntime?.size === "number"
-    ? packageInfo.unpackedSize - wasmRuntime.size - wasmCoreRuntime.size
-    : undefined,
-  budgets.unpackedSizeWithoutWasm,
-  "bytes",
-);
-checkBudget("package entry count", files.length, budgets.entryCount, "entries");
-checkBudget("styles.css size", stylesheet?.size, budgets.stylesheetSize, "bytes");
-checkBudget("styles.full.css size", fullStylesheet?.size, budgets.fullStylesheetSize, "bytes");
-checkPresent("Maps WASM renderer runtime size", wasmRuntime?.size);
-checkPresent("Maps WASM core runtime size", wasmCoreRuntime?.size);
+const {
+  advisories,
+  errors,
+  files,
+  fullStylesheet,
+  mapLibreStylesheet,
+  nonWasmUnpackedSize,
+  stylesheet,
+  wasmCoreRuntime,
+  wasmRuntime,
+} = evaluatePackageSize(packageInfo);
 
 console.log("Package size summary:");
 console.log(`- compressed size: ${formatBytes(packageInfo?.size)}`);
 console.log(`- unpacked size: ${formatBytes(packageInfo?.unpackedSize)}`);
+console.log(
+  `- non-WASM unpacked: ${formatBytes(nonWasmUnpackedSize)} / ${packageSizeBudgets.advisoryUnpackedSizeWithoutWasm} bytes advisory ceiling`,
+);
+if (typeof nonWasmUnpackedSize === "number") {
+  const delta = nonWasmUnpackedSize - approvedSizeBaseline.nonWasmUnpackedBytes;
+  console.log(
+    `- change since approved ${approvedSizeBaseline.revision} snapshot: ${delta >= 0 ? "+" : ""}${delta} bytes (historical reference, not a matched-PR delta)`,
+  );
+}
 console.log(`- entry count: ${files.length}`);
 console.log(`- stylesheet size: ${formatBytes(stylesheet?.size)}`);
 console.log(`- full stylesheet size: ${formatBytes(fullStylesheet?.size)}`);
@@ -122,6 +70,14 @@ console.log(
   `- Maps WASM core runtime size (@moritzbrantner/maps/wasm/core, Canvas2D and data-only): ${formatBytes(wasmCoreRuntime?.size)} raw, ${formatBytes(gzipSize(wasmCoreRuntime))} gzip`,
 );
 
+if (advisories.length > 0) {
+  console.warn("Package size advisory (not a failure, #173):");
+
+  for (const advisory of advisories) {
+    console.warn(`- ${advisory}`);
+  }
+}
+
 if (errors.length > 0) {
   console.error("Package size verification failed:");
 
@@ -130,20 +86,6 @@ if (errors.length > 0) {
   }
 
   process.exit(1);
-}
-
-function checkPresent(label, actual) {
-  if (typeof actual !== "number") {
-    errors.push(`${label} is missing from npm pack output`);
-    return false;
-  }
-  return true;
-}
-
-function checkBudget(label, actual, max, unit) {
-  if (checkPresent(label, actual) && actual > max) {
-    errors.push(`${label} is ${actual} ${unit}, above budget ${max} ${unit}`);
-  }
 }
 
 // Transfer size of a packed file, as a gzip -9 response (reported only, #305).

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const features = [
-  { id: "heat", label: "Heat / scalar", map: "Europe temperature surface" },
+  { id: "heat", label: "Heat / scalar", map: "Europe tiled temperature surface" },
   { id: "clusters", label: "Layers & clustering", map: "Clusters and flows" },
   { id: "polygons", label: "Polygons / GeoJSON", map: "GeoJSON features" },
   { id: "timeline", label: "Timeline", map: "Freight timeline" },
@@ -85,9 +85,10 @@ test("feature URLs survive direct navigation and refresh @smoke", async ({ page 
   for (const feature of features) {
     await page.goto(`/features/?feature=${feature.id}`);
     await expectFirstPartyMap(page, feature.map);
-    await expect(
-      page.getByRole("link", { name: feature.label, exact: true }),
-    ).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("link", { name: feature.label, exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   }
   await page.reload();
   await expectFirstPartyMap(page, "Freight timeline");
@@ -99,7 +100,8 @@ test("heat controls change the first-party render mode and persist it in the URL
   page,
 }) => {
   const { errors } = watchPage(page);
-  await page.goto("/features/?feature=heat&mode=raster");
+  // Use the source-free comparison to keep the existing raster/contour pixel oracle stable.
+  await page.goto("/features/?feature=heat&mode=raster&basemap=none");
   await expectFirstPartyMap(page, "Europe temperature surface");
   const overlay = page.locator('canvas[data-map-overlay-runtime="maps"]');
   await expect
@@ -140,6 +142,79 @@ test("heat controls change the first-party render mode and persist it in the URL
   expect(errors).toEqual([]);
 });
 
+test("heat stays above same-origin PMTiles while the first-party camera moves @smoke", async ({
+  page,
+}) => {
+  const { errors, referenceRequests } = watchPage(page);
+  const tileRanges: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("showcase-pmtiles-v1.pmtiles")) {
+      tileRanges.push(request.headers()["range"] ?? "");
+    }
+  });
+  await page.goto("/features/?feature=heat");
+  await expectFirstPartyMap(page, "Europe tiled temperature surface");
+  await expect(page.getByRole("combobox", { name: "Heat map basemap" })).toHaveValue("synthetic");
+
+  const base = page.locator('canvas[data-flat-runtime="maps"]');
+  const overlay = page.locator('canvas[data-map-overlay-runtime="maps"]');
+  await expect(base).toHaveAttribute("data-map-source-id", "maps-showcase");
+  await expect(base).toHaveAttribute("data-map-source-state", "ready", { timeout: 30_000 });
+  await expect
+    .poll(async () => {
+      const gpu = (await base.getAttribute("data-map-base-renderer")) === "wgpu";
+      return Number(await base.getAttribute(gpu ? "data-map-vector-tiles" : "data-map-base-tiles"));
+    })
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-heat-layers")))
+    .toBeGreaterThan(0);
+  expect(tileRanges).toContain("bytes=0-16383");
+
+  await test.info().attach("heat-over-pmtiles-before.png", {
+    contentType: "image/png",
+    body: await page.locator('[data-map-runtime="maps"]').screenshot(),
+  });
+  const bounds = (await base.boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width * 0.6, bounds.y + bounds.height * 0.55);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width * 0.45, bounds.y + bounds.height * 0.5, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await page.mouse.wheel(0, -100);
+  await expect(base).toHaveAttribute("data-map-source-state", "ready");
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-heat-layers")))
+    .toBeGreaterThan(0);
+  await test.info().attach("heat-over-pmtiles-after.png", {
+    contentType: "image/png",
+    body: await page.locator('[data-map-runtime="maps"]').screenshot(),
+  });
+  expect(referenceRequests).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("tiled heat survives the Canvas fallback with no WebGPU", async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+  await page.goto("/features/?feature=heat&mode=raster");
+  await expectFirstPartyMap(page, "Europe tiled temperature surface");
+  const base = page.locator('canvas[data-flat-runtime="maps"]');
+  const overlay = page.locator('canvas[data-map-overlay-runtime="maps"]');
+  await expect(base).toHaveAttribute("data-map-base-renderer", "canvas2d");
+  await expect(base).toHaveAttribute("data-map-source-state", "ready");
+  await expect
+    .poll(async () => Number(await base.getAttribute("data-map-base-tiles")))
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => Number(await overlay.getAttribute("data-map-overlay-heat-layers")))
+    .toBeGreaterThan(0);
+  await test.info().attach("heat-over-pmtiles-canvas.png", {
+    contentType: "image/png",
+    body: await page.locator('[data-map-runtime="maps"]').screenshot(),
+  });
+});
+
 test("feature pages select polygons and drive the map-scoped timeline @smoke", async ({ page }) => {
   const { errors } = watchPage(page);
   await page.goto("/features/?feature=polygons");
@@ -147,9 +222,7 @@ test("feature pages select polygons and drive the map-scoped timeline @smoke", a
   const hole = page.getByRole("button", { name: /Eastern service area/ });
   await hole.click();
   await expect(hole).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("feature-selection")).toHaveText(
-    "Selected geojson-polygon-hole",
-  );
+  await expect(page.getByTestId("feature-selection")).toHaveText("Selected geojson-polygon-hole");
   await page.getByRole("button", { name: "Clear selection" }).click();
   await expect(page.getByTestId("feature-selection")).toHaveText("No selection");
 

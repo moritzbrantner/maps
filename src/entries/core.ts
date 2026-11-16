@@ -223,7 +223,12 @@ export {
   type PolygonLineDrawingResult,
 } from "../polygon-line-drawing";
 
-export { validateMapsTileset, validateMapsTilesetMetadata, type MapsTileset, type MapsTilesetMetadata } from "../maps-tileset";
+export {
+  validateMapsTileset,
+  validateMapsTilesetMetadata,
+  type MapsTileset,
+  type MapsTilesetMetadata,
+} from "../maps-tileset";
 export {
   createMapsPlaceSearchIndex,
   loadMapsPlaceSearchIndex,
@@ -261,3 +266,17 @@ export {
   type HistoricalMapFeatureRecord,
   type ResolvedHistoricalMapFeatureName,
 } from "../historical-map-features";
+
+export {
+  transformGeoJsonGeometry,
+  translateGeoJsonFeature,
+  rotateGeoJsonFeature,
+  scaleGeoJsonFeature,
+  GeoJsonGeographicOperationError,
+  GEOJSON_TRANSFORM_MAX_RADIUS_METERS,
+  type GeoJsonGeographicOperationIssueCode,
+  type GeoJsonTransformValues,
+  type GeoJsonTranslation,
+  type GeoJsonRotation,
+  type GeoJsonScale,
+} from "../geojson-transform";

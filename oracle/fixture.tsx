@@ -843,6 +843,41 @@ const Z_ORDER_LAYERS: Array<Record<string, unknown>> = [
  * over the zoom and an exponentially growing icon translation (icons overlap freely). Blockers,
  * placed first, take each place's first anchor.
  */
+/**
+ * The `symbol-overscaled` style layers (#346): symbols past the tileset's maxzoom (12), which
+ * MapLibre lays out again at the overscaled tile zoom (13 at the camera's 13.45). River names
+ * repeat at a `symbol-spacing` of the overscaled tile and grow with a camera `text-size`;
+ * the place name switches to upper case from zoom 13 and takes a composite `text-size`.
+ */
+const OVERSCALED_LAYERS: Array<Record<string, unknown>> = [
+  {
+    id: "overscaled-river-names",
+    layout: {
+      "symbol-placement": "line",
+      "symbol-spacing": 90,
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-letter-spacing": 0.05,
+      "text-size": ["interpolate", ["linear"], ["zoom"], 12, 10, 15, 22],
+    },
+    paint: { "text-color": "#1d4ed8", "text-halo-color": "#eff6ff", "text-halo-width": 1.5 },
+    source: "oracle-vector",
+    "source-layer": "water_lines",
+    type: "symbol",
+  },
+  {
+    id: "overscaled-place-names",
+    layout: {
+      "text-field": ["step", ["zoom"], ["get", "name"], 13, ["upcase", ["get", "name"]]],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 12, ["-", 18, ["get", "rank"]], 15, ["-", 34, ["get", "rank"]]],
+    },
+    paint: { "text-color": "#7c2d12", "text-halo-color": "#ffffff", "text-halo-width": 2 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
 const ZOOM_ANCHOR_LAYERS: Array<Record<string, unknown>> = [
   {
     filter: ["==", ["get", "kind"], "lake"],
@@ -957,6 +992,8 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
                 ? { glyphs: GLYPHS_URL, layers: Z_ORDER_LAYERS }
               : name === "symbol-zoom-anchors"
                 ? { glyphs: GLYPHS_URL, layers: ZOOM_ANCHOR_LAYERS }
+              : name === "symbol-overscaled" || name === "symbol-overscaled-deep"
+                ? { glyphs: GLYPHS_URL, layers: OVERSCALED_LAYERS }
               : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
               : name === "fill-pattern" || name === "fill-pattern-pitch"
@@ -1087,6 +1124,12 @@ function referenceStyle(name: string) {
       style.layers.push(...ZOOM_ANCHOR_LAYERS);
       return style;
     }
+    case "symbol-overscaled":
+    case "symbol-overscaled-deep": {
+      const style = vectorStyle();
+      style.layers.push(...OVERSCALED_LAYERS);
+      return style;
+    }
     default:
       throw new Error(`no reference style for scenario ${name}`);
   }
@@ -1113,6 +1156,7 @@ const STYLE_PICK_LAYERS: Record<string, string[]> = {
   "symbol-icons": ["lake-icons", "town-icons", "capital-icons"],
   "symbol-lines": ["river-names", "road-classes"],
   "symbol-alignment-pitch": ["river-names", "lake-badges", "city-turned", "capital-on-map"],
+  "symbol-overscaled": ["overscaled-river-names", "overscaled-place-names"],
 };
 const stylePickLayers = STYLE_PICK_LAYERS[scenario.name] ?? null;
 type StyleFeature = { layer: { id: string }; properties: Record<string, unknown> };
@@ -1345,6 +1389,8 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-sort-key":
     case "symbol-z-order":
     case "symbol-zoom-anchors":
+    case "symbol-overscaled":
+    case "symbol-overscaled-deep":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

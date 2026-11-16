@@ -11,6 +11,27 @@ const tileset = validateMapsTileset(manifest);
 <MapView flatRuntime="maps" tileset={tileset} fitToData={false} />
 ```
 
+The `HeatMap` convenience component forwards the same versioned tileset controls
+(`tileset`, `tilesetStyle`, `tilesetLayers`, `tileLimits`, `tilePersistence`) to
+the Maps-owned Map View. A tileset-only HeatMap disables the legacy raster tile
+default, so a heat layer does not accidentally request a second basemap:
+
+```tsx
+<HeatMap
+  flatRuntime="maps"
+  tileset={tileset}
+  fitToData={false}
+  heatmapSurfaceMode="field"
+  points={stations}
+  valueMetric="temperature"
+/>
+```
+
+`/features/?feature=heat` demonstrates this over same-origin synthetic PMTiles;
+`/features/?feature=heat&basemap=atlas` uses the published digest-pinned
+Liechtenstein OSM tiles with clearly synthetic temperature values. Neither path
+constructs a hidden MapLibre canvas.
+
 `MapsTileset` and `validateMapsTileset` are available from the root, `flat` and
 server-safe `core` exports. Validation copies the input into a data-only manifest
 before browser effects. Rust validates the authoritative source contract again

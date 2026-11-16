@@ -118,6 +118,7 @@
     "verify:engine-mixed-layer-evidence": "node ./scripts/verify-engine-mixed-layer-evidence.ts",
     "verify:engine-heat-scalar-evidence": "node ./scripts/verify-engine-heat-scalar-evidence.ts",
     "verify:engine-temporal-evidence": "node ./scripts/verify-engine-temporal-evidence.ts",
+    "verify:engine-camera-transition-evidence": "node ./scripts/verify-engine-camera-transition-evidence.ts",
     "verify:engine-atlas-tileset-evidence": "node ./scripts/verify-engine-atlas-tileset-evidence.ts",
     "qa:tileset": "bun ./scripts/tileset-qa.ts",
     "verify:tileset-qa": "vitest run --config vitest.tileset-qa.config.ts",
