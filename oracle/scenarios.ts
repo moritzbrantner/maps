@@ -332,8 +332,7 @@ export const scenarios: Scenario[] = [
     capability: "symbol layer: SDF glyph labels, data-driven size, halo, collision",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbols",
-    origin:
-      "Milestone E cartography (#80); place labels on any vector basemap; Tileset style layers #321",
+    origin: "Milestone E cartography (#80); place labels on any vector basemap; Tileset style layers #321",
     size: MAP_SIZE,
     steps: [
       { at: [8.674, 47.3819], kind: "hover", label: "hover the Zürich label" },
@@ -351,8 +350,7 @@ export const scenarios: Scenario[] = [
       "symbol icons from the sprite: plain (NEAREST, pixel ratio 2), SDF with color and halo, joint text/icon collision",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-icons",
-    origin:
-      "Milestone E cartography (#80): POI and capital icons on any vector basemap; symbol icons (#346)",
+    origin: "Milestone E cartography (#80): POI and capital icons on any vector basemap; symbol icons (#346)",
     size: MAP_SIZE,
     steps: [
       { at: [9.5149, 47.135], kind: "hover", label: "hover the Vaduz star" },
@@ -367,8 +365,7 @@ export const scenarios: Scenario[] = [
       "zoom-dependent symbols: camera and composite text-size and icon-size, camera and composite text/icon paint, stepped sizes",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-zoom",
-    origin:
-      "Milestone E cartography (#80): labels that grow with the zoom on any vector basemap; symbol sizes and paint (#346)",
+    origin: "Milestone E cartography (#80): labels that grow with the zoom on any vector basemap; symbol sizes and paint (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -379,8 +376,7 @@ export const scenarios: Scenario[] = [
       "line labels: symbol-placement line and line-center, glyphs along rotated lines, keep-upright, offsets, collision circles",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-lines",
-    origin:
-      "Milestone E cartography (#80): river and road names along their lines; line placement (#346)",
+    origin: "Milestone E cartography (#80): river and road names along their lines; line placement (#346)",
     size: MAP_SIZE,
     steps: [
       { at: [9.2484, 47.6513], kind: "hover", label: "hover the Rhein along the lake" },
@@ -391,12 +387,10 @@ export const scenarios: Scenario[] = [
   {
     basemap: "vector",
     camera: { bearing: -40, center: [8.9, 47.55], pitch: 45, zoom: 8.3 },
-    capability:
-      "line labels on the pitched map plane (text-pitch-alignment map): perspective sizes and gamma",
+    capability: "line labels on the pitched map plane (text-pitch-alignment map): perspective sizes and gamma",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-lines-pitch",
-    origin:
-      "Milestone E cartography (#80): river and road names along their lines under a pitched camera (#346)",
+    origin: "Milestone E cartography (#80): river and road names along their lines under a pitched camera (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -407,20 +401,17 @@ export const scenarios: Scenario[] = [
       "icons along lines (map-aligned boxes, icon-offset), icon-text-fit over stretchX/stretchY/content, icon-rotate, text-rotate, icon/text-translate",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-icon-lines",
-    origin:
-      "Milestone E cartography (#80): river arrows, road shields and turned place markers; icon extras (#346)",
+    origin: "Milestone E cartography (#80): river arrows, road shields and turned place markers; icon extras (#346)",
     size: MAP_SIZE,
     steps: [],
   },
   {
     basemap: "vector",
     camera: { bearing: -40, center: [8.9, 47.55], pitch: 45, zoom: 8.3 },
-    capability:
-      "icons along lines on the pitched map plane: projected collision boxes, perspective sizes",
+    capability: "icons along lines on the pitched map plane: projected collision boxes, perspective sizes",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-icon-lines-pitch",
-    origin:
-      "Milestone E cartography (#80): river arrows and road shields under a pitched camera (#346)",
+    origin: "Milestone E cartography (#80): river arrows and road shields under a pitched camera (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -431,20 +422,17 @@ export const scenarios: Scenario[] = [
       "variable text anchors: text-variable-anchor, text-variable-anchor-offset, text-radial-offset, auto justification, icon-text-fit moving with the chosen anchor",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-variable-anchors",
-    origin:
-      "Milestone E cartography (#80): place labels that shift around their point; variable anchors (#346)",
+    origin: "Milestone E cartography (#80): place labels that shift around their point; variable anchors (#346)",
     size: MAP_SIZE,
     steps: [],
   },
   {
     basemap: "vector",
     camera: { bearing: -30, center: [8.6, 47.3], pitch: 40, zoom: 7.8 },
-    capability:
-      "variable text anchors under a pitched and turned camera: shifts scaled by the perspective ratio",
+    capability: "variable text anchors under a pitched and turned camera: shifts scaled by the perspective ratio",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-variable-anchors-pitch",
-    origin:
-      "Milestone E cartography (#80): place labels that shift around their point under pitch (#346)",
+    origin: "Milestone E cartography (#80): place labels that shift around their point under pitch (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -481,8 +469,7 @@ export const scenarios: Scenario[] = [
       "symbol-sort-key: placement priority across tiles, overlapping symbols drawn by key across tiles",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-sort-key",
-    origin:
-      "Milestone E cartography (#80): major roads and large places win the label space (#346)",
+    origin: "Milestone E cartography (#80): major roads and large places win the label space (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -504,8 +491,7 @@ export const scenarios: Scenario[] = [
       "zoom-dependent and data-driven variable anchors (text-variable-anchor step, text-variable-anchor-offset per feature and interpolated), text/icon-translate and translate anchors at the camera zoom",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-zoom-anchors",
-    origin:
-      "Milestone E cartography (#80): place labels whose anchors and offsets follow the zoom and the place (#346)",
+    origin: "Milestone E cartography (#80): place labels whose anchors and offsets follow the zoom and the place (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -516,8 +502,7 @@ export const scenarios: Scenario[] = [
       "symbols past the source maxzoom (12): laid out again at the overscaled tile zoom, with symbol-spacing, line anchors, zoom-dependent sizes and zoom-dependent text-field",
     knownGaps: [FRAME_TIME_GAP],
     name: "symbol-overscaled",
-    origin:
-      "Milestone E cartography (#80): street-level labels over a tileset whose tiles stop at a lower zoom (#346)",
+    origin: "Milestone E cartography (#80): street-level labels over a tileset whose tiles stop at a lower zoom (#346)",
     size: MAP_SIZE,
     steps: [{ at: [7.59, 47.5804], kind: "hover", label: "hover the Basel label" }],
   },
@@ -528,8 +513,7 @@ export const scenarios: Scenario[] = [
       "symbols four zooms below the map's maxzoom (22): source tiles sliced to zoom 18, then laid out again at the overscaled tile zoom 19",
     knownGaps: [],
     name: "symbol-overscaled-deep",
-    origin:
-      "Milestone E cartography (#80): a river name at building zoom over a tileset that stops at zoom 12 (#346)",
+    origin: "Milestone E cartography (#80): a river name at building zoom over a tileset that stops at zoom 12 (#346)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -539,8 +523,7 @@ export const scenarios: Scenario[] = [
     capability: "line layer: line-dasharray, caps, joins over Tileset vector tiles",
     knownGaps: [FRAME_TIME_GAP],
     name: "tileset-lines",
-    origin:
-      "Milestone D vector style (#79): boundary and track styling; Tileset style layers (#322)",
+    origin: "Milestone D vector style (#79): boundary and track styling; Tileset style layers (#322)",
     size: MAP_SIZE,
     steps: [],
   },
@@ -571,13 +554,7 @@ export const scenarios: Scenario[] = [
       { at: [7.87, 46.76], kind: "click", label: "select the hatched frame" },
       { at: [8.02, 46.76], kind: "click", label: "click the frame's hole (clears selection)" },
       { by: [-120, 60], kind: "pan", label: "drag pan" },
-      {
-        at: [40, -30],
-        deltaY: -120,
-        kind: "wheel",
-        label: "wheel zoom in across zoom 9",
-        ticks: 3,
-      },
+      { at: [40, -30], deltaY: -120, kind: "wheel", label: "wheel zoom in across zoom 9", ticks: 3 },
     ],
   },
   {
@@ -603,8 +580,7 @@ export const scenarios: Scenario[] = [
       "fill-pattern under a pitched camera: tileset fill layer and GeoJSON fills on the projected path, perspective-correct",
     knownGaps: [],
     name: "fill-pattern-pitch",
-    origin:
-      "Patterned fills under a pitched camera (#350), follow-up of sprites and patterns (#323)",
+    origin: "Patterned fills under a pitched camera (#350), follow-up of sprites and patterns (#323)",
     size: MAP_SIZE,
     steps: [
       { at: [8.85, 46.94], kind: "hover", label: "hover the hatched hexagon" },
@@ -657,8 +633,7 @@ export const scenarios: Scenario[] = [
   {
     basemap: "style",
     camera: { bearing: 20, center: [9.0, 47.2], zoom: 8 },
-    capability:
-      "raster-dem hillshade over a raster basemap, light anchored to the rotated viewport",
+    capability: "raster-dem hillshade over a raster basemap, light anchored to the rotated viewport",
     knownGaps: [],
     name: "hillshade",
     origin: "derived hillshade tilesets (#282); raster-dem and hillshade (#324)",
@@ -671,8 +646,7 @@ export const scenarios: Scenario[] = [
     capability: "raster-dem hillshade with 3D terrain under a pitched camera",
     knownGaps: [],
     name: "hillshade-terrain",
-    origin:
-      "Milestone F terrain (#81); derived hillshade tilesets (#282); raster-dem, hillshade and terrain (#324)",
+    origin: "Milestone F terrain (#81); derived hillshade tilesets (#282); raster-dem, hillshade and terrain (#324)",
     size: MAP_SIZE,
     steps: [],
   },
