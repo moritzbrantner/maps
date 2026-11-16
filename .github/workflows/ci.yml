@@ -464,7 +464,7 @@ jobs:
     if: ${{ needs.changes.outputs.browser == 'true' }}
     name: MapLibre Oracle
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: read
@@ -515,6 +515,12 @@ jobs:
         env:
           ORACLE_PYTHON: ${{ runner.temp }}/flip/bin/python
         run: bun run oracle -- --out oracle-report
+      # The Canvas2D lane (#346): the same scenarios through the Canvas2D fallback.
+      - name: MapLibre oracle gate (Canvas2D lane)
+        if: ${{ !cancelled() }}
+        env:
+          ORACLE_PYTHON: ${{ runner.temp }}/flip/bin/python
+        run: bun run oracle -- --canvas --out oracle-report/canvas
       - name: Upload oracle report
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

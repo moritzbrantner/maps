@@ -67,6 +67,19 @@ export type Scenario = {
   tileFree?: boolean;
   /** The MapLibre style's `sky`, for raster basemaps. */
   sky?: Record<string, unknown>;
+  /** The Canvas2D lane (`bun run oracle -- --canvas`, #346); absent: the shared limits. */
+  canvas?: CanvasLane;
+};
+
+/**
+ * A scenario on the Canvas2D lane. Canvas antialiasing (Canvas2D raster edges, one CPU
+ * rasterization pass, 8-bit rounding once) is not the GPU's, so a scenario may record a
+ * measured FLIP tolerance above the shared limits; known gaps work as on the WebGPU lane.
+ */
+export type CanvasLane = {
+  flipMeanMax?: number;
+  flipP99Max?: number;
+  knownGaps?: KnownGap[];
 };
 
 /**
@@ -657,6 +670,49 @@ export const scenarios: Scenario[] = [
     steps: [],
   },
 ];
+
+// The Canvas2D lane (#346) records each scenario's Canvas gaps here, owned by #470. Tileset
+// style layers draw from the same Rust frame as on WebGPU; these gaps are other Canvas
+// fallback subsystems.
+const canvasGap = (gate: Gate, reason: string): KnownGap => ({ gate, issue: 470, reason });
+const CANVAS_BASEMAP = canvasGap(
+  "image",
+  "Canvas paints the tileset basemap per tile (paintShortbreadTile) with wider lines and outlines",
+);
+const CANVAS_RASTER = canvasGap(
+  "image",
+  "Canvas raster tile resampling and overlay rasterization differ from MapLibre's GPU",
+);
+const CANVAS_PROJECTIVE = canvasGap(
+  "image",
+  "Canvas rotated/pitched raster tiles and horizon differ from MapLibre",
+);
+const CANVAS_RELIEF = canvasGap("image", "Canvas draws no hillshade or terrain relief");
+const canvasLanes: Record<string, CanvasLane> = {
+  "atlas-flows": { knownGaps: [CANVAS_RASTER] },
+  bearing: { knownGaps: [CANVAS_PROJECTIVE] },
+  "church-site-discovery": { knownGaps: [CANVAS_RASTER] },
+  clusters: { knownGaps: [CANVAS_RASTER] },
+  hillshade: { knownGaps: [CANVAS_RELIEF] },
+  "hillshade-terrain": { knownGaps: [CANVAS_RELIEF] },
+  labels: { knownGaps: [CANVAS_RASTER] },
+  "line-dash-caps-joins": { knownGaps: [CANVAS_RASTER] },
+  "line-styles": { knownGaps: [CANVAS_RASTER] },
+  pitch: { knownGaps: [CANVAS_PROJECTIVE] },
+  "source-location": { knownGaps: [CANVAS_RASTER] },
+  "steep-pitch": { knownGaps: [CANVAS_PROJECTIVE] },
+  "steep-pitch-horizon": { knownGaps: [CANVAS_PROJECTIVE] },
+  "steep-pitch-horizon-85": { knownGaps: [CANVAS_PROJECTIVE] },
+  "steep-pitch-sky": { knownGaps: [CANVAS_PROJECTIVE] },
+  "zoom-crossfade": { knownGaps: [CANVAS_RASTER] },
+};
+for (const scenario of scenarios) {
+  // Every tileset-basemap scenario carries the basemap painting gap.
+  const tilesetBasemap = scenario.basemap === "vector";
+  const lane =
+    canvasLanes[scenario.name] ?? (tilesetBasemap ? { knownGaps: [CANVAS_BASEMAP] } : null);
+  if (lane && !scenario.canvas) scenario.canvas = lane;
+}
 
 export function findScenario(name: string): Scenario {
   const scenario = scenarios.find((entry) => entry.name === name);

@@ -4,6 +4,16 @@
 
 ### Minor Changes
 
+- Tileset style layers draw on the Canvas2D fallback (#346). Without WebGPU (or after a
+  WebGPU device loss), `MapView tilesetLayers` (`fill`, `line`, `circle` and `symbol`,
+  including dashes, `fill-pattern`, `line-pattern`, SDF text with halos and icons) draw from
+  the same Rust frame the WebGPU backend draws: Rust lays out, places and evaluates the
+  layers, and the Canvas runs the wgpu programs' vertex and fragment math on the CPU.
+  `queryRenderedFeatures` and style feature picking work on Canvas too. A Canvas fallback
+  that cannot load its style layers reports it through `onError`. The oracle gains a
+  Canvas2D lane (`bun run oracle -- --canvas`) over every scenario; its remaining Canvas
+  gaps (tileset basemap painting, raster resampling, rotated/pitched cameras, relief) are
+  recorded per scenario and owned by #470.
 - `flyTo` animates on `flatRuntime="maps"` (#433). The first-party runtime no longer jumps:
   it follows MapLibre's `flyTo` path (van Wijk & Nuij zoom-out/zoom-back curve, default
   curve 1.42 and speed 1.2, default ease; shortest path across the antimeridian and for the

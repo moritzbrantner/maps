@@ -15,14 +15,17 @@ mod engine_scenario;
 mod retained_frame;
 mod retained_points;
 mod retained_polygons;
-#[cfg(any(
-    test,
-    all(
+// Style-layer layout feeds both backends: the Canvas2D fallback reads the frames the wgpu
+// renderer draws through `style_layer_frames` (#346), so both are core.
+mod style_layer_frames;
+#[cfg_attr(
+    not(all(
         target_arch = "wasm32",
         target_os = "unknown",
         feature = "wgpu-base-map"
-    )
-))]
+    )),
+    allow(dead_code)
+)]
 mod style_symbols;
 mod vector_basemap_layout;
 #[cfg(all(
@@ -37,14 +40,15 @@ mod wgpu_base_map;
     feature = "wgpu-base-map"
 ))]
 mod wgpu_dash_atlas;
-#[cfg(any(
-    test,
-    all(
+// Target-independent; its packed tile draws also reach the Canvas2D style layers (#346).
+#[cfg_attr(
+    not(all(
         target_arch = "wasm32",
         target_os = "unknown",
         feature = "wgpu-base-map"
-    )
-))]
+    )),
+    allow(dead_code)
+)]
 mod wgpu_geometry;
 #[cfg(all(
     target_arch = "wasm32",
