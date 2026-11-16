@@ -16,6 +16,7 @@ export default defineConfig({
     globals: true,
     include: [
       "scripts/npm-pack-result.test.ts",
+      "scripts/package-size-budget.test.ts",
       "oracle/**/*.test.ts",
       "src/**/*.test.ts",
       "src/**/*.test.tsx",

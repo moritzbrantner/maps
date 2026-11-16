@@ -19,7 +19,9 @@ import { App } from "./App";
 import { MapsClusterRaceAcceptance } from "./MapsClusterRaceAcceptance";
 import { MapsMeasurementRuntimeAcceptance } from "./MapsMeasurementRuntimeAcceptance";
 import { MapsOrientedRuntimeAcceptance } from "./MapsOrientedRuntimeAcceptance";
+import { MapsFlyToAcceptance } from "./MapsFlyToAcceptance";
 import { MapsRuntimeAcceptance } from "./MapsRuntimeAcceptance";
+import { MapsTemporalCompositionAcceptance } from "./MapsTemporalCompositionAcceptance";
 import { MapsTemporalRuntimeAcceptance } from "./MapsTemporalRuntimeAcceptance";
 import { MapsHistoricalRuntimeAcceptance } from "./MapsHistoricalRuntimeAcceptance";
 import {
@@ -28,6 +30,7 @@ import {
   markRustRuntimeUnavailable,
   recordRustAggregationDiagnostic,
 } from "./rust-runtime-status";
+import { MapsHistoryRuntimeAcceptance } from "./MapsHistoryRuntimeAcceptance";
 import { ShowcaseShell } from "./ShowcaseShell";
 
 const queryClient = new QueryClient();
@@ -86,12 +89,18 @@ async function bootstrap() {
     );
   } else if (acceptanceMode === "maps-runtime-temporal") {
     content = <MapsTemporalRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-temporal-composition") {
+    content = <MapsTemporalCompositionAcceptance />;
   } else if (acceptanceMode === "maps-runtime-historical") {
     content = <MapsHistoricalRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-measurement") {
     content = <MapsMeasurementRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-history") {
+    content = <MapsHistoryRuntimeAcceptance />;
   } else if (acceptanceMode === "maps-runtime-oriented") {
     content = <MapsOrientedRuntimeAcceptance />;
+  } else if (acceptanceMode === "maps-runtime-flyto") {
+    content = <MapsFlyToAcceptance />;
   }
 
   createRoot(document.getElementById("root")!).render(

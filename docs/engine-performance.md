@@ -585,6 +585,58 @@ tracks on the Canvas fallback. No reference implementation or parent revision ru
 journey, so the comparison is unavailable; WebGPU timing and larger track counts are not
 measured.
 
+## Animated camera transitions (#433 Fast)
+
+`camera-transition-journey-v1` flies the public controlled Map View on `flatRuntime="maps"`
+over 2,000 points and 48 static polygons
+([scenario](engine-scenarios.md#camera-transition-journey-v1),
+[evidence contract](engine-evidence.md#camera-transition-journey-evidence-433)):
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-camera-transition-evidence
+```
+
+Three captures on 2026-11-15 from `590566f` plus this change, runtime-profiler 0.1.0,
+Playwright 1.64.1, Node 24.19.0, Ryzen 7 5700X, Linux x64 (WSL2), WASM SHA-256
+`272c1f8b64619854e2be1f1480cc3bd7cca0fa6fedbd537f76b8ca73e9f1a9ac`. The pinned collector
+launches Chromium without WebGPU, so the Canvas fallback ran. "Parent" is the same journey
+with `src/maps-browser-runtime.ts` from `590566f`; it fails the verifier's per-frame contract.
+Per completed flight, from the command to its last frame:
+
+| Flight | Parent: animation frames / plans / renders | This change (2 captures) |
+| --- | --- | --- |
+| Paris → Berlin | 108 / 231 / 267 | 128 / 128 / 128; 125 / 125 / 125 |
+| Berlin → Paris | 129 / 162 / 163 | 122 / 122 / 122; 121 / 121 / 121 |
+| Fiji → Samoa (1.2 s) | 73 / 113 / 73 | 74 / 74 / 73; 73 / 73 / 73 |
+| Samoa → Paris (4.3 s) | 258 / 619 / 549 | 252 / 252 / 252; 248 / 248 / 248 |
+| Berlin, narrowed mid-flight | 120 / 170 / 197 | 138 / 139 / 139; 124 / 125 / 125 |
+| Paris, after superseded flights | 15 / 15 / 15 | 24 / 24 / 23; 27 / 27 / 26 |
+
+| Phase | Parent: frame p50 / p95 / max (ms) | This change |
+| --- | --- | --- |
+| Paris ⇄ Berlin | 16.7 / 33.4 / 83.4 | 16.7 / 33.3–33.4 / 33.5–50.0 |
+| Dateline | 16.7 / 16.7 / 16.8 | 16.7 / 16.8 / 33.4 |
+| Resize mid-flight | 16.7 / 33.3 / 66.7 | 16.7 / 33.3–33.4 / 33.4–49.9 |
+
+The candidate captures ran while other work loaded the host (load average about 9 on 8
+cores); one had a single long task in the resize phase. Their timing is therefore not a
+clean comparison with the parent's. An earlier capture of the same fix on a quieter host
+presented 142 animation frames per Paris ⇄ Berlin flight with one plan and render each, at
+frame p95 16.8 ms and no long task; an earlier parent capture was slower still (Paris ⇄ Berlin
+p95 100 ms, 24 long tasks over the flight phases). Bundle manifest SHA-256: parent
+`4e69cef2…bf9bf6`, candidates `57f642ab…cab17d5` and `b4c061ee…93cd5a514`. JS heap after GC:
+5.7 MB ready, 7.9 MB after the journey, 5.13–5.20 MB after each mid-flight unmount, 7.1–7.2 MB
+remounted, in every capture.
+
+On SwiftShader WebGPU (the journey run directly with `WEBGPU_SWIFTSHADER_ARGS`), every
+completed flight planned and rendered once per animation frame: Paris → Berlin 65 frames,
+plans and GPU frames, Berlin → Paris 65 / 65 / 64, Samoa → Paris 67 / 67 / 67, at frame p95
+50–100 ms. An earlier attempt to run the parent there did not complete the journey (one stage
+exceeded its 30 s wait).
+
+**Not a Fast verdict.** No MapLibre reference or Moonlight policy covers this journey; GPU
+completion time, GPU and WASM memory are unavailable.
+
 ## Evidence tooling repair — September 30
 
 The build now copies its optimized WASM and matching glue to `public/wasm`, so
@@ -616,7 +668,7 @@ remain open. No complete Fast verdict follows from these repairs.
 #187 later raised the package budgets to the values measured on main `1740615`: WASM
 532,422 bytes (budget 534,000), compressed package 403,498 (405,500), unpacked
 1,622,346 (1,626,000). This was the owner's decision. The per-PR WASM attribution is in
-`scripts/verify-package-size.mjs`; the largest step is #151's tile prefetch (+25,560 bytes).
+`scripts/package-size-budget.ts`; the largest step is #151's tile prefetch (+25,560 bytes).
 
 ## Package acceptance repair — 2026-10-26
 
@@ -657,3 +709,83 @@ clustering oracle: the approved #47 no-WASM/SSR contract intentionally returns
 unclustered points. The reference adapter is outside all package entries and
 retains the canonical, seeded, metric, expansion, leaf and large-index checks;
 it does not restore a JavaScript production clustering authority.
+
+## Batched heat raster projection (#171)
+
+The hardware continuation exposed a second bottleneck after GPU presentation: adaptive heat
+meshes called the scalar Rust/WASM projector for every midpoint, including shared samples.
+A Chromium CPU profile attributed the largest application cost to `MapsFlatRasterRuntime.project`
+and its WASM call. The existing packed projection boundary now handles one adaptive subdivision
+round at a time; sample reuse is scoped to one draw and leaves retain their original order.
+The geographic projection and 0.5 CSS-pixel subdivision criterion are unchanged. Both GPU
+and Canvas use this preparation; no heat/scalar computation moves out of TypeScript.
+
+Deterministic tests compare the complete ordered mesh against the uncached scalar path for
+latitude and Mercator rasters, flat and pitched cameras, horizon rejection and camera changes.
+They require at most 12 projection batches per raster, no scalar calls when packed projection
+is available, no repeated sample projection, and only the initial 81 samples for an offscreen
+raster. Missing or failing packed projection retains the scalar fallback.
+
+### Interleaved hardware evidence, 2026-11-14
+
+Baseline `28dc7dd99edcabd7c5d7eaae459e21edb83debc6` (A) and candidate
+`b99e5c6ebb074f886a817bfa0cedd3ba392d624e` (B) were captured in order
+**A1, B1, B2, A2, A3, B3**, with heavy workloads paused and no concurrent verification jobs.
+Both used the same production fixture build procedure, 1,668,635-byte WASM artifact
+(`e0fcd990310e153ae5d26b131ba1d62ef2ff4c590c9f07c5d329914213d16e19`),
+Node 24.16.0, Playwright 1.62.1, Chromium 151.0.7922.34 and runtime-profiler
+`fd26af06b649d319fdd9c1cf14fce63f1abaa324`. The host was Linux x64, Ryzen 7 5700X,
+RTX 3060 Ti, NVIDIA driver 595.99.02. A same-flags Chromium adapter probe reported NVIDIA
+Ampere, `isFallbackAdapter: false`; the hardware scenario uses ANGLE/Vulkan, not SwiftShader.
+
+| Capture order | Pitched rAF p50 | Pitched rAF p95 | Worst pitched interval | Pitched long tasks |
+| --- | ---: | ---: | ---: | ---: |
+| A1 | 33.3 ms | 50.1 ms | 66.7 ms | 16 / 822 ms total |
+| B1 | 16.7 ms | 16.7 ms | 33.3 ms | 0 |
+| B2 | 16.7 ms | 16.8 ms | 33.4 ms | 0 |
+| A2 | 33.3 ms | 50.0 ms | 66.6 ms | 14 / 723 ms total |
+| A3 | 33.2 ms | 50.0 ms | 66.7 ms | 15 / 766 ms total |
+| B3 | 16.7 ms | 16.8 ms | 33.3 ms | 0 |
+
+Each capture contains the entire journey, not just the pitched phase:
+
+| Heat-lane phase | Baseline p95 range | Candidate p95 range | Candidate worst interval |
+| --- | ---: | ---: | ---: |
+| Pan | 16.7–16.8 ms | 16.7–16.8 ms | 16.8 ms |
+| Wheel zoom / density raster replacement | 33.4–50.0 ms | 49.9 ms | 50.1 ms |
+| Bearing/pitch | 50.0–50.1 ms | 16.7–16.8 ms | 33.4 ms |
+| Resize | 16.7–16.8 ms | 16.7–16.8 ms | 16.8 ms |
+| Density seeks | 16.7–16.8 ms | 16.7–16.8 ms | 33.4 ms |
+| Field refreshes | 16.7–16.8 ms | 16.7–16.8 ms | 16.8 ms |
+| Ramp changes | 16.7–16.8 ms | 16.7–16.8 ms | 33.4 ms |
+| Superseded bursts | 16.8–33.3 ms | 16.8–33.3 ms | 66.7 ms |
+| Teardown/remount | 33.3 ms | 33.2–33.3 ms | 66.7 ms |
+
+Every candidate passed the existing invalidation/upload assertions and every pair passed
+runtime-profiler strict comparability. Candidate input-to-presented p50 was 78.6–82.1 ms,
+p95/worst 146.0–164.7 ms over 18 commits per run; baseline p95 was 138.0–154.9 ms. No
+commit-latency improvement is claimed. Each candidate zoom phase had one long task; bursts
+had one and teardown had four (including forced-GC/remount work). These transient costs
+remain visible rather than being represented as uniform 60 FPS.
+
+Candidate JS heap after GC was about 9.45 MB ready, 13.25–13.26 MB after the journey,
+6.49–6.62 MB across unmounts, and 10.53 MB after remount. Baseline values were about
+9.45, 13.26, 6.47–6.61 and 10.50–10.51 MB respectively. GPU/WASM-linear/total-process
+memory and GPU completion time remain unavailable. The isolated raster helper's minified
+browser ESM grew from 4,223 to 5,693 bytes (esbuild 0.27.7, identical bundle/minify settings);
+this is a module-size measurement, not the full package size.
+
+Immutable local captures are under `.runtime-profiler/maps-171-interleaved/`, with per-pair
+`pair-N-comparability.json`, per-capture observations and host metadata. Bundle IDs:
+
+- A1: `193d6f3f989c064361c05c0d85151c1d06b9319911901e752055ca0dd5e731f8`
+- B1: `cb240c6ab26d09aa77c2109e75beeb01a4ce491ae7e223393ad5fee317eee47e`
+- B2: `574c26c7ad4071b1cba6ff38012bc2de030bef36ae06b62d40b9308376eb05eb`
+- A2: `0eb947435e29f69a7648830bbead58f30cdf9fb806bfef062b6a6b9d6bb5ab27`
+- A3: `3ffe9dff5aee829d4541c6efd7900a4448f40461e1fa3c336f05f15ddd698891`
+- B3: `901895fbdb9f86ad9d1424bcd03afad032738d84a03dad4c3c51a92f7aeaa352`
+
+This resolves the measured pitched-navigation gap on this hardware. Comparability is not
+an automated performance verdict: Moonlight browser policy remains unavailable. The earlier
+contended/software captures above are historical evidence, not members of this comparison.
+Convention resolution sourceRevision: `15f348b072188255da837578eaafc8a98f12fdf0`.

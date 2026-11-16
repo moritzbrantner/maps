@@ -4,6 +4,45 @@
 
 ### Minor Changes
 
+- `flyTo` animates on `flatRuntime="maps"` (#433). The first-party runtime no longer jumps:
+  it follows MapLibre's `flyTo` path (van Wijk & Nuij zoom-out/zoom-back curve, default
+  curve 1.42 and speed 1.2, default ease; shortest path across the antimeridian and for the
+  bearing; linear pitch) and honours `MapFlyToOptions.durationMs`. `animate: false`,
+  `durationMs: 0` and `prefers-reduced-motion` jump at once, as MapLibre. Rust owns the
+  trajectory, camera constraints and cancellation; the browser host presents one camera
+  frame per animation frame with `onViewStateChange(…, { reason: "fly-to" })`. A later camera
+  command, `flyTo`, pan, zoom, rotate, pointer press or unmount ends the flight where it is.
+  Invalid targets or durations, and rotated or pitched flights on a `maxBounds` camera, fail
+  closed and leave the camera unchanged.
+- Tileset style layers follow MapLibre 6.17 past the tileset's `maxZoom` (#346). Up to
+  four zooms below the Map View's `maxZoom` (default 22), each visible tile of the camera's
+  tile zoom is sliced from the deepest source tile (128-unit buffer) and laid out as its own
+  tile; deeper, the sliced tiles are laid out again at the camera's tile zoom (MapLibre's
+  overscaled tiles). Labels therefore repeat at `symbol-spacing`, anchor, collide and are
+  picked per sliced tile, and sizes, `text-field` and other layout and paint evaluate at
+  the tile zoom instead of the tileset's `maxZoom`. Re-layout errors go to `onError`. The
+  oracle `symbol-overscaled` and `symbol-overscaled-deep` scenarios are gated.
+- Tileset `symbol` layers take zoom-dependent translations and variable anchors that follow
+  the zoom or the feature (#346). `text-translate` and `icon-translate` may be camera
+  functions (`interpolate` or `step` over `["literal", [x, y]]`), evaluated at the camera
+  zoom each frame for drawing and placement, as are `text-translate-anchor` and
+  `icon-translate-anchor` zoom steps. `text-variable-anchor` may be a zoom `step`, and
+  `text-variable-anchor-offset` data-driven or zoom-dependent (offsets interpolate between
+  matching anchors); both are evaluated per feature at the tile zoom, and a value that is not
+  an anchor list falls back to none, as in MapLibre. Data-driven translations or anchor
+  lists, and interpolated anchors, are rejected at parse time. Exponential `interpolate`
+  curves are no longer rejected as an unknown operator. The oracle `symbol-zoom-anchors`
+  scenario is gated.
+- Tileset style features are pickable on `flatRuntime="maps"` (#346). `tilesetLayers` takes
+  `interactiveLayerIds` (circle and symbol layers only; other ids throw) and the usual Map
+  Feature callbacks: `getFeatureId`, `onFeatureHover`, `onHoveredFeatureIdChange`,
+  `onFeatureSelect`, `onSelectedFeatureIdChange`, `renderFeatureTooltip` and
+  `renderFeaturePopup`. Rust picks the topmost feature as MapLibre's `queryRenderedFeatures`
+  does: symbols inside the collision boxes (and line labels inside the collision circles) of
+  the last placement, circle layers inside their drawn radius. The reported
+  `MapsTilesetFeature` carries the vector tile `id`, `properties`, `layer` (`id`, `type`) and
+  `sourceLayer`, without geometry. The `symbols`, `symbol-icons`, `symbol-lines` and
+  `symbol-alignment-pitch` oracle scenarios gain pointer steps.
 - The Maps WASM runtime is split by capability (#305). The new
   `@moritzbrantner/maps/wasm/core` export is a WebGPU-free module (flat runtime and camera
   planning, clustering, temporal tracks, Shortbread/MVT decode and Tileset QA kernels) of
@@ -36,17 +75,65 @@
   New: `initializeMapsTemporalWasm()`, `ensureMapsTemporalWasm()` and
   `getMapsTemporalRuntimeStatus()`. Temporal GeoJSON geometry sampling is unchanged (owned by
   #173). See "Temporal computation authority" in `docs/timeline.md`.
+- Temporal clustering and heat on the first-party Flat Map (#172 phase D). `HeatMap` (and
+  `TemporalHeatMap`, `HeatFieldMap`, `FlatHeatMap`) accept `flatRuntime="maps"` like
+  `ClusteredMap`, so `TemporalClusteredMap` and `TemporalHeatMap` both run on the Maps
+  runtime over static Map Layers, sampled from one shared Map-Scoped Timeline clock. On that
+  runtime the measurement props stay MapLibre-only and fail closed.
+- Tileset `symbol` layers order their symbols, ported from MapLibre 6.17 (#346).
+  `symbol-sort-key` (constant or data-driven; zoom-dependent keys are rejected, as in the
+  style specification) places lower keys first, across tiles too, so they win collisions,
+  and symbols that may overlap draw by key across tiles. `symbol-z-order` takes `auto`,
+  `viewport-y` and `source`: overlapping symbols without keys now draw from the top of the
+  screen down by default, as in MapLibre, `viewport-y` also places each tile's symbols from
+  the bottom up, and `source` keeps layout order. A feature whose sort key is not a number
+  is reported instead of ordered arbitrarily. The oracle `symbol-sort-key` and
+  `symbol-z-order` scenarios are gated.
 
 ### Patch Changes
+
+- On `flatRuntime="maps"`, camera motion plans and renders the base map at most once per
+  animation frame (#433 Fast). During camera motion, raster tiles that arrive are planned on
+  the camera's next frame instead of one frame plan and full render per arrived tile, and a
+  fade-in re-render never adds a second render to a camera frame. A controlled Map View's echo
+  of a camera frame no longer submits a second WebGPU frame when its retained Map Layer groups
+  are unchanged. On the Canvas fallback a 2.4 s Paris → Berlin flight went from 231 plans and
+  267 renders over 108 animation frames to one of each per animation frame.
+
+- Under a pitched camera, hovering and clicking a GeoJSON line measures its width on the map
+  plane, as MapLibre does, instead of on the screen (#386): far up a pitched map the line is
+  thinner and no longer picks where MapLibre does not, and near the camera it is wider. The
+  Rust camera reports the local screen-to-map-plane scale at the pointer; unpitched picking
+  is unchanged. The oracle `line-pattern-pitch` interaction gate passes without a known gap.
+
+- On `flatRuntime="maps"`, a conditional Map Layer that comes and goes (for example a temporal
+  GeoJSON overlay that is empty at the sampled time) no longer remounts the cluster and heat
+  Map Layers declared after it, so their heat surfaces and cluster indexes are kept
+  (#172 phase D).
 
 - A clustered Map Layer with no points no longer crashes the Rust/WASM aggregation index; it
   builds an empty index (#172 phase E).
 - Temporal Convenience Maps no longer re-prepare their tracks when the WASM runtime only
   changes its loading status, and a map remounted on a shared Map-Scoped Timeline samples the
   kept time once instead of first sampling the clock's placeholder time (#172 phase E).
+- Under a pitched camera, GeoJSON Map Layers whose shapes are all lines (patterned or not)
+  stay on the WebGPU-retained path (#387). Camera frames now only update the frame uniform:
+  they no longer send every line and its screen points to WASM and rebuild every strip.
+  Frames with polygons, direction markers or flow endpoints still use the projected path under
+  pitch. Retained lines and patterns now take the camera zoom as their GeoJSON tile zoom under
+  any bearing and pitch. Before, a rotated or pitched camera could measure pattern repeats
+  one zoom level too low.
 
 ### Internal
 
+- `verify:package-size` treats the non-WASM unpacked size ceiling (1,168,500 bytes) as
+  advisory (#173): it still measures and reports the size, its change since the approved
+  snapshot and the growth attribution, and warns above the ceiling, but no longer fails.
+  The entry count, stylesheet budgets and required package files still fail.
+- The first-party base canvas publishes `data-map-base-retained-tiles`: the decoded tile
+  images it holds, which Rust's tile cache bounds (#447). The memory that grows during
+  sustained zoom on the Canvas fallback belongs to Chromium's GPU process, not to Maps;
+  `docs/engine-evidence.md` records the attribution.
 - Evidence tooling only, no package change: `bun run verify:engine-atlas-tileset-evidence`
   compares MapLibre GL + `pmtiles` with the first-party Map View over the same
   content-pinned Atlas archives through runtime-profiler and Moonlight (#270). Pages deploy

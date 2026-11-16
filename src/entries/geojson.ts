@@ -60,3 +60,17 @@ export {
   type GeoJsonRelationshipOptions,
 } from "../geojson-operations";
 export { GeoJsonMap, type GeoJsonMapProps } from "../geojson-map";
+
+export {
+  transformGeoJsonGeometry,
+  translateGeoJsonFeature,
+  rotateGeoJsonFeature,
+  scaleGeoJsonFeature,
+  GeoJsonGeographicOperationError,
+  GEOJSON_TRANSFORM_MAX_RADIUS_METERS,
+  type GeoJsonGeographicOperationIssueCode,
+  type GeoJsonTransformValues,
+  type GeoJsonTranslation,
+  type GeoJsonRotation,
+  type GeoJsonScale,
+} from "../geojson-transform";

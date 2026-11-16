@@ -256,6 +256,28 @@ static-layer writes, tile uploads), rAF intervals, long tasks, slow input events
 input → presented latency and JS heap after GC. See
 [the evidence contract](engine-evidence.md#temporal-playback-journey-evidence-172).
 
+### `camera-transition-journey-v1`
+
+Purpose: profile animated camera transitions (#433 Fast) through the public Map View, not the
+flight trajectory alone.
+
+Fixture: `e2e/fixtures/camera-transition-journey.tsx`. A `MapView` on `flatRuntime="maps"`,
+controlled from React state through `onViewStateChange` → `viewState` as an application keeps
+its camera, over 2,000 points (`europe-phyllotaxis-points-v1`) and the static grid of 48
+GeoJSON polygons, at a fixed 1280x720 viewport.
+
+Journey: idle frames; a Paris → Berlin flight across center, zoom and bearing and back; a jump
+to Fiji, a 1,200 ms flight across the antimeridian to Samoa and back to Paris; three flights
+each superseded by the next command after 8 presented frames, then one that completes; a
+flight ended by a pointer press; a flight during which the Map View narrows; 10
+`animate: false` jumps; three flights ended by unmounting the Map View, each remounted.
+
+Evidence: per-flight presented frames, the longest gap between them, frames after an
+interruption and whether a completed flight ended on its target; per-phase frame plans, base
+renders, Canvas redraws, retained Map Layer writes, tile uploads and released runtimes; rAF
+intervals, long tasks, slow input events and JS heap after GC. See
+[the evidence contract](engine-evidence.md#camera-transition-journey-evidence-433).
+
 ## Constrained-runtime browser evidence
 
 `e2e/maps-runtime.spec.ts` exercises device loss on the real Rust/WASM + WebGPU

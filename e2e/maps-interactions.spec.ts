@@ -206,10 +206,13 @@ test("measurement interaction creates, cancels, and clears measurements @smoke",
 test("interaction modes do not leak between measuring and editing", async ({ page }) => {
   await openView(page, "Points");
   await page.getByRole("button", { name: "Measure" }).click();
+  // Click only once measuring is active, or the click can still select the point.
+  await expect(page.locator(".mb-maps--measuring")).toBeVisible();
   await clickFeatureCoordinate(page, "point", "berlin");
   await expect.poll(() => getSelectedPointId(page)).toBe(null);
 
   await page.getByRole("button", { name: "Measuring" }).click();
+  await expect(page.locator(".mb-maps--measuring")).toHaveCount(0);
   // Leaving measuring re-renders the point layers before they hit-test again.
   await waitForMapIdle(page);
   await clickFeatureCoordinate(page, "point", "berlin");

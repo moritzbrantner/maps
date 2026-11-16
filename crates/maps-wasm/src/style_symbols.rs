@@ -11,10 +11,12 @@ use maps_core::symbol::layout::EXTENT;
 use maps_core::symbol::variable_anchors::render_shift;
 use maps_core::symbol::{
     AtlasRect, GlyphStore, IconQuad, ImageAtlas, ImageStore, LabelAxes, LayerBucket, LineGlyphs,
-    LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile, StyleLayer,
-    StyleLayerKind, SymbolAlignment, SymbolBucket, SymbolDrawState, SymbolGlyph, SymbolPaint,
-    SymbolText, TileProjection, TileStyleBuckets, VariableAnchorMemory, layout_tile,
-    line_label_glyphs, parse_glyph_pbf, place_symbols, symbol_tile_order,
+    LineLabelContext, LinePattern, PatternVertex, PlacedSymbol, PlacementTile,
+    RenderedFeatureIndex, StyleLayer, StyleLayerKind, SymbolAlignment, SymbolBucket,
+    SymbolDrawState, SymbolGlyph, SymbolPaint, SymbolText, TileProjection, TileStyleBuckets,
+    VariableAnchorMemory, draw_groups, layout_overscaled_tile, line_label_glyphs, parse_glyph_pbf,
+    place_symbols_with_collisions, query_layer_indices, rendered_feature, slice_tile_layers,
+    split_max_zoom, symbol_tile_order,
 };
 use maps_core::{LINE_ATLAS_HEIGHT, LineAtlas, MvtLayer, TileId, decode_mvt_layers};
 
@@ -39,6 +41,8 @@ type Projector<'a> = Box<dyn Fn([f64; 2]) -> ([f64; 2], f64) + 'a>;
 
 struct StyleTile {
     z: u8,
+    /// Sliced from a source tile past the source's maximum zoom (#346), not uploaded.
+    sliced: bool,
     source: Vec<MvtLayer>,
     buckets: TileStyleBuckets,
     /// Line strip bytes for one tile zoom, with each line layer's vertex range.
@@ -138,6 +142,9 @@ pub(crate) struct StyleFrame {
     pub(crate) tile_offsets: Vec<Option<u32>>,
     pub(crate) draws: Vec<StyleDraw>,
     pub(crate) placed_labels: u32,
+    /// `Some` when this frame sliced tiles or laid tiles out again past the source's maximum
+    /// zoom (#346), with the errors of those that failed (they draw no style layers there).
+    pub(crate) relayout: Option<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -152,6 +159,8 @@ pub(crate) struct StyleSymbols {
     fill_signature: Vec<(TileKey, u64)>,
     /// The anchors variable labels took in the last placement.
     variable_anchors: VariableAnchorMemory,
+    /// What the last frame drew, by source, for `queryRenderedFeatures` (#346).
+    rendered: Option<(String, RenderedFeatureIndex)>,
 }
 
 impl StyleSymbols {
@@ -163,6 +172,9 @@ impl StyleSymbols {
     /// every retained tile out again.
     pub(crate) fn set_layers(&mut self, json: &str, images: &mut ImageStore) -> Result<(), String> {
         self.layers = StyleLayer::parse_all(json)?;
+        // The last frame indexed the previous layers; sliced tiles kept only their layers.
+        self.rendered = None;
+        self.tiles.retain(|_, tile| !tile.sliced);
         self.relayout(images)
     }
 
@@ -216,12 +228,14 @@ impl StyleSymbols {
             .collect();
         let decoded = decode_mvt_layers(bytes, |name| wanted.contains(name))
             .map_err(|error| error.to_string())?;
-        let buckets = layout_tile(&self.layers, &decoded, key.0, &self.glyphs, images)?;
+        let buckets =
+            layout_overscaled_tile(&self.layers, &decoded, key.0, key.0, &self.glyphs, images)?;
         request_icons(&buckets, images);
         self.tiles.insert(
             (source.to_owned(), key),
             StyleTile {
                 z: key.0,
+                sliced: false,
                 source: decoded,
                 buckets,
                 lines: None,
@@ -231,14 +245,56 @@ impl StyleSymbols {
         Ok(())
     }
 
+    /// MapLibre's `queryRenderedFeatures` at a viewport point (CSS px) over the `layers` ids,
+    /// against what the last frame drew: a JSON array of features, topmost first. Only circle
+    /// and symbol layers are queryable; other ids are errors.
+    pub(crate) fn query_rendered_features<S: AsRef<str>>(
+        &self,
+        point: [f64; 2],
+        layers: &[S],
+    ) -> Result<String, String> {
+        let indices = query_layer_indices(&self.layers, layers)?;
+        let features: Vec<serde_json::Value> = self
+            .rendered
+            .iter()
+            .flat_map(|(source, index)| {
+                index
+                    .query_point(point, &indices)
+                    .into_iter()
+                    .map(move |hit| (source, hit))
+            })
+            .filter_map(|(source, hit)| {
+                let layer = self.layers.get(hit.layer)?;
+                let tile = self
+                    .tiles
+                    .get(&(source.clone(), (hit.tile.z, hit.tile.x, hit.tile.y)))?;
+                let features = &tile
+                    .source
+                    .iter()
+                    .find(|decoded| decoded.name == layer.source_layer)?
+                    .features;
+                Some(rendered_feature(layer, features.get(hit.feature_index)?))
+            })
+            .collect();
+        serde_json::to_string(&features).map_err(|error| error.to_string())
+    }
+
     pub(crate) fn evict(&mut self, source: &str, key: TileKey) {
         self.tiles.remove(&(source.to_owned(), key));
     }
 
-    /// Lays every retained tile out again, e.g. after glyphs or a sprite arrived.
+    /// Lays every retained tile out again at its current layout zoom, e.g. after glyphs or a
+    /// sprite arrived.
     pub(crate) fn relayout(&mut self, images: &mut ImageStore) -> Result<(), String> {
         for tile in self.tiles.values_mut() {
-            tile.buckets = layout_tile(&self.layers, &tile.source, tile.z, &self.glyphs, images)?;
+            tile.buckets = layout_overscaled_tile(
+                &self.layers,
+                &tile.source,
+                tile.z,
+                tile.buckets.zoom,
+                &self.glyphs,
+                images,
+            )?;
             request_icons(&tile.buckets, images);
             tile.lines = None;
             tile.fills = None;
@@ -246,21 +302,132 @@ impl StyleSymbols {
         Ok(())
     }
 
+    /// The tiles this frame draws style layers from (#346), as MapLibre 6.17 covers a vector
+    /// source past its maximum zoom: a source tile of `zooms.max_zoom` under a deeper camera
+    /// is sliced into its `visible` descendants at the camera's `tile_zoom`, down to
+    /// `zooms.split_max_zoom`; deeper still, the sliced tiles are laid out again at the
+    /// camera's tile zoom (MapLibre's `overscaledZ`). Other tiles draw as they are, as parent
+    /// tiles do while their children load. Sliced tiles the frame no longer draws are
+    /// dropped. A tile that fails to lay out keeps no buckets; `Some` with the layout errors
+    /// when any tile was laid out again.
+    fn prepare_tiles(
+        &mut self,
+        source: &str,
+        placements: &[(TileId, LocalFrame)],
+        zooms: SourceZooms,
+        tile_zoom: u8,
+        images: &mut ImageStore,
+        visible: &dyn Fn(&LocalFrame) -> bool,
+    ) -> (Vec<(TileId, LocalFrame)>, Option<Vec<String>>) {
+        let mut tiles = Vec::with_capacity(placements.len());
+        let mut layout_zooms = Vec::with_capacity(placements.len());
+        for (tile, local) in placements {
+            if tile.z != zooms.max_zoom || tile_zoom <= tile.z {
+                tiles.push((*tile, *local));
+                layout_zooms.push(tile.z);
+                continue;
+            }
+            let split_zoom = tile_zoom.min(zooms.split_max_zoom.max(tile.z));
+            let first = tiles.len();
+            visible_descendants(*tile, *local, split_zoom, visible, &mut tiles);
+            layout_zooms.resize(tiles.len(), tile_zoom);
+            if split_zoom == tile.z {
+                continue;
+            }
+            let Some(parent) = self
+                .tiles
+                .get(&(source.to_owned(), (tile.z, tile.x, tile.y)))
+            else {
+                continue;
+            };
+            let missing: Vec<TileId> = tiles[first..]
+                .iter()
+                .map(|(child, _)| *child)
+                .filter(|child| {
+                    !self
+                        .tiles
+                        .contains_key(&(source.to_owned(), (child.z, child.x, child.y)))
+                })
+                .collect();
+            let sliced: Vec<(TileId, Vec<MvtLayer>)> = missing
+                .into_iter()
+                .filter_map(|child| Some((child, slice_tile_layers(&parent.source, *tile, child)?)))
+                .collect();
+            for (child, layers) in sliced {
+                self.tiles.insert(
+                    (source.to_owned(), (child.z, child.x, child.y)),
+                    StyleTile {
+                        z: child.z,
+                        sliced: true,
+                        source: layers,
+                        // Laid out below (a sliced tile's zoom is never 0).
+                        buckets: TileStyleBuckets::default(),
+                        lines: None,
+                        fills: None,
+                    },
+                );
+            }
+        }
+        let used: BTreeSet<TileKey> = tiles
+            .iter()
+            .map(|(tile, _)| (tile.z, tile.x, tile.y))
+            .collect();
+        self.tiles.retain(|(tile_source, key), tile| {
+            !tile.sliced || (tile_source == source && used.contains(key))
+        });
+        let mut relayout: Option<Vec<String>> = None;
+        for ((tile, _), zoom) in tiles.iter().zip(layout_zooms) {
+            let Some(style_tile) = self
+                .tiles
+                .get_mut(&(source.to_owned(), (tile.z, tile.x, tile.y)))
+            else {
+                continue;
+            };
+            if style_tile.buckets.zoom == zoom {
+                continue;
+            }
+            style_tile.buckets = layout_overscaled_tile(
+                &self.layers,
+                &style_tile.source,
+                tile.z,
+                zoom,
+                &self.glyphs,
+                images,
+            )
+            .unwrap_or_else(|error| {
+                relayout.get_or_insert_default().push(error);
+                TileStyleBuckets {
+                    zoom,
+                    ..TileStyleBuckets::default()
+                }
+            });
+            relayout.get_or_insert_default();
+            request_icons(&style_tile.buckets, images);
+            style_tile.lines = None;
+            style_tile.fills = None;
+        }
+        (tiles, relayout)
+    }
+
     pub(crate) fn atlas(&mut self) -> &maps_core::symbol::GlyphAtlas {
         self.glyphs.atlas()
     }
 
-    /// Places labels and writes this frame's circle instances and glyph vertices.
+    /// Places labels and writes this frame's circle instances and glyph vertices. Past the
+    /// source's maximum zoom (`zooms`), tiles split and overscale as in MapLibre (#346).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn frame(
         &mut self,
         source: &str,
         placements: &[(TileId, LocalFrame)],
+        zooms: SourceZooms,
         view_projection: [f32; 16],
         surface: StyleSurface,
         line_atlas: &mut LineAtlas,
         images: &mut ImageStore,
     ) -> StyleFrame {
         let mut frame = StyleFrame::default();
+        self.rendered = None;
         if !self.is_active() || placements.is_empty() {
             return frame;
         }
@@ -296,6 +463,11 @@ impl StyleSymbols {
         let zoom = f64::from(first_tile.z) + (first_frame.size / 512.0).log2();
         // MapLibre's `transform.tileZoom`: dashes keep their px length at the floored zoom.
         let tile_zoom = (zoom + 1.0e-9).floor().clamp(0.0, f64::from(u8::MAX)) as u8;
+        let tile_visible = |local: &LocalFrame| tile_meets_viewport(local, &to_viewport, viewport);
+        let (placements, relayout) =
+            self.prepare_tiles(source, placements, zooms, tile_zoom, images, &tile_visible);
+        let placements = placements.as_slice();
+        frame.relayout = relayout;
         let has_lines = self
             .layers
             .iter()
@@ -399,37 +571,7 @@ impl StyleSymbols {
             else {
                 continue;
             };
-            let corners = [
-                (local.west, local.north),
-                (local.west + local.size, local.north),
-                (local.west, local.north - local.size),
-                (local.west + local.size, local.north - local.size),
-            ];
-            let projected: Vec<[f64; 2]> = corners
-                .iter()
-                .filter_map(|(x, y)| to_viewport(*x, *y).map(|(point, _)| point))
-                .collect();
-            if projected.is_empty() {
-                continue;
-            }
-            let min_x = projected.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
-            let max_x = projected
-                .iter()
-                .map(|p| p[0])
-                .fold(f64::NEG_INFINITY, f64::max);
-            let min_y = projected.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-            let max_y = projected
-                .iter()
-                .map(|p| p[1])
-                .fold(f64::NEG_INFINITY, f64::max);
-            if max_x <= 0.0 || min_x >= viewport.0 || max_y <= 0.0 || min_y >= viewport.1 {
-                continue;
-            }
-            // Under pitch and bearing a tile's projected quad can miss the viewport inside its
-            // bounding box; MapLibre's frustum culling leaves such tiles out, labels and all.
-            if let [nw, ne, sw, se] = projected[..]
-                && !quad_meets_rect([nw, ne, se, sw], [viewport.0, viewport.1])
-            {
+            if !tile_visible(local) {
                 continue;
             }
             visible.push((*tile, *local, style_tile));
@@ -517,7 +659,7 @@ impl StyleSymbols {
                 },
             })
             .collect();
-        let placed = place_symbols(
+        let (placed, collisions) = place_symbols_with_collisions(
             &placement_tiles,
             self.layers.len(),
             viewport.0,
@@ -526,6 +668,17 @@ impl StyleSymbols {
             bearing,
             &mut self.variable_anchors,
         );
+        self.rendered = Some((
+            source.to_owned(),
+            RenderedFeatureIndex::new(
+                &placement_tiles,
+                &placed,
+                &collisions,
+                &self.layers,
+                zoom,
+                bearing,
+            ),
+        ));
 
         let to_clip = |viewport_point: [f64; 2]| -> [f32; 2] {
             [
@@ -656,31 +809,41 @@ impl StyleSymbols {
                     }
                 }
                 StyleLayerKind::Symbol => {
-                    let symbols = &placed[layer_index];
                     // Symbols draw per tile in MapLibre's descending symbol tile order.
-                    let tiles: Vec<(usize, &SymbolBucket, SymbolDrawState, Vec<&PlacedSymbol>)> =
-                        (0..placement_tiles.len())
-                            .rev()
-                            .filter_map(|tile_index| {
-                                let tile = &placement_tiles[tile_index];
-                                let Some(LayerBucket::Symbols(bucket)) =
-                                    tile.buckets.layers.get(layer_index)
-                                else {
-                                    return None;
-                                };
-                                let tile_symbols: Vec<_> = symbols
+                    let draw_tiles: Vec<(usize, &SymbolBucket, SymbolDrawState)> = (0
+                        ..placement_tiles.len())
+                        .rev()
+                        .filter_map(|tile_index| {
+                            let tile = &placement_tiles[tile_index];
+                            let Some(LayerBucket::Symbols(bucket)) =
+                                tile.buckets.layers.get(layer_index)
+                            else {
+                                return None;
+                            };
+                            let state =
+                                SymbolDrawState::new(layer, zoom, f64::from(tile.buckets.zoom))
+                                    .ok()?;
+                            Some((tile_index, &**bucket, state))
+                        })
+                        .collect();
+                    // Maps-core orders each tile's symbols (`symbol-z-order`) and splits them
+                    // into sort-key segments drawn by key across tiles (`symbol-sort-key`).
+                    let groups = draw_groups(
+                        &draw_tiles
+                            .iter()
+                            .map(|(tile_index, bucket, _)| (*tile_index, *bucket))
+                            .collect::<Vec<_>>(),
+                        &placed[layer_index],
+                        bearing,
+                    );
+                    let tiles: Vec<(usize, &SymbolBucket, SymbolDrawState, Vec<PlacedSymbol>)> =
+                        groups
+                            .into_iter()
+                            .filter_map(|group| {
+                                let (_, bucket, state) = draw_tiles
                                     .iter()
-                                    .filter(|symbol| symbol.tile == tile_index)
-                                    .collect();
-                                let state =
-                                    SymbolDrawState::new(layer, zoom, f64::from(tile.tile.z))
-                                        .ok()?;
-                                (!tile_symbols.is_empty()).then_some((
-                                    tile_index,
-                                    &**bucket,
-                                    state,
-                                    tile_symbols,
-                                ))
+                                    .find(|(tile_index, _, _)| *tile_index == group.tile)?;
+                                Some((group.tile, *bucket, *state, group.symbols))
                             })
                             .collect();
                     frame.placed_labels += tiles
@@ -698,7 +861,10 @@ impl StyleSymbols {
                             let icon_size = bucket.icon_size.at_zoom(zoom);
                             let icon_text_size = bucket.text_size.at_zoom(zoom);
                             let tile_projection = &placement_tiles[*tile_index].projection;
-                            let shift = bucket.icon_translate.uv(bearing, tile_projection.tile_px);
+                            let shift =
+                                bucket
+                                    .icon_translate
+                                    .uv(zoom, bearing, tile_projection.tile_px);
                             let shifted = tile_projection.shifted(shift);
                             let projection = tile_projection.with(&shifted);
                             let mut quads = Vec::new();
@@ -833,8 +999,11 @@ impl StyleSymbols {
                                 // `updateVariableAnchors`: an icon fitted to variable text sits
                                 // at the text's shifted anchor, and is hidden without one.
                                 if bucket.variable_anchors && bucket.icon_text_fit {
-                                    let text_shift =
-                                        bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                                    let text_shift = bucket.text_translate.uv(
+                                        zoom,
+                                        bearing,
+                                        tile_projection.tile_px,
+                                    );
                                     let text_plane = SymbolPlane::new(
                                         quad_context,
                                         tile_projection,
@@ -907,7 +1076,10 @@ impl StyleSymbols {
                         let first = (frame.glyphs.len() / GLYPH_VERTEX_FLOATS) as u32;
                         for (tile_index, bucket, state, tile_symbols) in &tiles {
                             let tile_projection = &placement_tiles[*tile_index].projection;
-                            let shift = bucket.text_translate.uv(bearing, tile_projection.tile_px);
+                            let shift =
+                                bucket
+                                    .text_translate
+                                    .uv(zoom, bearing, tile_projection.tile_px);
                             let shifted = tile_projection.shifted(shift);
                             let projection = &tile_projection.with(&shifted);
                             let text_size = bucket.text_size.at_zoom(zoom);
@@ -1065,6 +1237,95 @@ impl StyleSymbols {
 
 /// Whether a convex quad (corners in order) overlaps the rectangle `0..size`: separating
 /// axes of the quad's edges (the rectangle's own axes are its bounding box test).
+/// The zooms of a vector source the frame covers past its maximum zoom (#346).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceZooms {
+    /// The source's maximum zoom: its deepest tiles.
+    pub(crate) max_zoom: u8,
+    /// The deepest zoom those tiles are sliced to ([`split_max_zoom`]).
+    pub(crate) split_max_zoom: u8,
+}
+
+impl SourceZooms {
+    /// A source of `max_zoom` on a map of `map_max_zoom`.
+    pub(crate) fn new(max_zoom: u8, map_max_zoom: f64) -> Self {
+        Self {
+            max_zoom,
+            split_max_zoom: split_max_zoom(max_zoom, map_max_zoom),
+        }
+    }
+}
+
+/// Whether a tile's local frame meets the viewport, as MapLibre's covering tiles: its
+/// projected quad's bounds overlap the viewport and, under pitch and bearing, the quad
+/// itself does (MapLibre's frustum culling leaves such tiles out, labels and all).
+fn tile_meets_viewport(
+    local: &LocalFrame,
+    to_viewport: &dyn Fn(f64, f64) -> Option<([f64; 2], f64)>,
+    viewport: (f64, f64),
+) -> bool {
+    let corners = [
+        (local.west, local.north),
+        (local.west + local.size, local.north),
+        (local.west, local.north - local.size),
+        (local.west + local.size, local.north - local.size),
+    ];
+    let projected: Vec<[f64; 2]> = corners
+        .iter()
+        .filter_map(|(x, y)| to_viewport(*x, *y).map(|(point, _)| point))
+        .collect();
+    if projected.is_empty() {
+        return false;
+    }
+    let min_x = projected.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+    let max_x = projected
+        .iter()
+        .map(|p| p[0])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_y = projected.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+    let max_y = projected
+        .iter()
+        .map(|p| p[1])
+        .fold(f64::NEG_INFINITY, f64::max);
+    if max_x <= 0.0 || min_x >= viewport.0 || max_y <= 0.0 || min_y >= viewport.1 {
+        return false;
+    }
+    if let [nw, ne, sw, se] = projected[..] {
+        return quad_meets_rect([nw, ne, se, sw], [viewport.0, viewport.1]);
+    }
+    true
+}
+
+/// The descendants of `tile` at zoom `z` whose frames are `visible`, in quadtree order;
+/// `tile` itself at its own zoom.
+fn visible_descendants(
+    tile: TileId,
+    local: LocalFrame,
+    z: u8,
+    visible: &dyn Fn(&LocalFrame) -> bool,
+    out: &mut Vec<(TileId, LocalFrame)>,
+) {
+    if !visible(&local) {
+        return;
+    }
+    if tile.z >= z {
+        out.push((tile, local));
+        return;
+    }
+    let half = local.size / 2.0;
+    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        let Some(child) = TileId::new(tile.z + 1, tile.x * 2 + dx, tile.y * 2 + dy) else {
+            continue;
+        };
+        let child_local = LocalFrame {
+            west: local.west + f64::from(dx) * half,
+            north: local.north - f64::from(dy) * half,
+            size: half,
+        };
+        visible_descendants(child, child_local, z, visible, out);
+    }
+}
+
 fn quad_meets_rect(quad: [[f64; 2]; 4], size: [f64; 2]) -> bool {
     let rect = [
         [0.0, 0.0],
@@ -1674,6 +1935,201 @@ mod tests {
         assert!(symbols.missing_glyph_ranges().is_empty());
     }
 
+    #[test]
+    fn source_tiles_split_into_the_camera_tile_zoom_then_stretch_past_the_split_zoom() {
+        let mut images = ImageStore::default();
+        let mut symbols = StyleSymbols::default();
+        symbols
+            .set_layers(
+                r##"[{"id":"labels","type":"symbol","source":"v","source-layer":"places",
+                 "layout":{"text-field":["step",["zoom"],["get","name"],8,["upcase",["get","name"]]],
+                           "text-font":["NotoSans-Regular"]}}]"##,
+                &mut images,
+            )
+            .unwrap();
+        symbols
+            .upload("s", (7, 66, 45), &places_tile(), &mut images)
+            .unwrap();
+        add_glyphs(&mut symbols, &mut images);
+        // The camera at `zoom` over the z7 tile, centred: whether tiles were laid out again,
+        // the placed labels, and each retained tile with its layout zoom and label text.
+        type Retained = Vec<(TileKey, u8, String)>;
+        let mut frame_at =
+            |zoom: f64, zooms: SourceZooms| -> (Option<Vec<String>>, u32, Retained) {
+                let mut view_projection = [0.0_f32; 16];
+                view_projection[0] = 2.0 / 720.0;
+                view_projection[5] = 2.0 / 480.0;
+                view_projection[10] = 1.0;
+                view_projection[15] = 1.0;
+                let size = 512.0 * (zoom - 7.0).exp2();
+                let local = LocalFrame {
+                    west: -size / 2.0,
+                    north: size / 2.0,
+                    size,
+                };
+                let frame = symbols.frame(
+                    "s",
+                    &[(TileId::new(7, 66, 45).unwrap(), local)],
+                    zooms,
+                    view_projection,
+                    StyleSurface {
+                        width: 720.0,
+                        height: 480.0,
+                        margin: 0.0,
+                        pixel_ratio: 1.0,
+                    },
+                    &mut LineAtlas::new(),
+                    &mut images,
+                );
+                let mut retained: Retained = symbols
+                    .tiles
+                    .iter()
+                    .map(|((_, key), tile)| {
+                        let text = match tile.buckets.layers.first() {
+                            Some(LayerBucket::Symbols(bucket)) => bucket
+                                .instances
+                                .first()
+                                .and_then(|instance| instance.text.as_ref())
+                                .map(|text| {
+                                    text.glyphs
+                                        .iter()
+                                        .filter_map(|glyph| char::from_u32(glyph.codepoint))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        (*key, tile.buckets.zoom, text)
+                    })
+                    .collect();
+                retained.sort();
+                (frame.relayout, frame.placed_labels, retained)
+            };
+        let source = |zoom: u8, text: &str| ((7, 66, 45), zoom, text.to_owned());
+        // A parent tile under a deeper camera draws as it is, as while its children load.
+        let parent = SourceZooms::new(14, 22.0);
+        assert_eq!(frame_at(8.5, parent), (None, 1, vec![source(7, "Zürich")]));
+        // Past the source's max zoom, MapLibre slices it into the visible z8 tiles. The
+        // label sits on the corner of all four; only the south-east one owns its anchor.
+        let split = SourceZooms::new(7, 22.0);
+        assert_eq!(split.split_max_zoom, 18);
+        let (relayout, placed, retained) = frame_at(8.5, split);
+        assert_eq!((relayout, placed), (Some(Vec::new()), 1));
+        assert_eq!(
+            retained,
+            vec![
+                source(7, "Zürich"),
+                ((8, 132, 90), 8, String::new()),
+                ((8, 132, 91), 8, String::new()),
+                ((8, 133, 90), 8, String::new()),
+                ((8, 133, 91), 8, "ZÜRICH".to_owned()),
+            ]
+        );
+        // Within the same tile zoom nothing is sliced or laid out again.
+        assert_eq!(frame_at(8.9, split).0, None);
+        // Back at the source zoom the sliced tiles go.
+        assert_eq!(frame_at(7.5, split), (None, 1, vec![source(7, "Zürich")]));
+        // Past the split zoom the deepest split tile stretches (here the source tile).
+        let stretched = SourceZooms {
+            max_zoom: 7,
+            split_max_zoom: 7,
+        };
+        assert_eq!(
+            frame_at(8.5, stretched),
+            (Some(Vec::new()), 1, vec![source(8, "ZÜRICH")])
+        );
+        assert_eq!(
+            frame_at(7.5, stretched),
+            (Some(Vec::new()), 1, vec![source(7, "Zürich")])
+        );
+    }
+
+    #[test]
+    fn queries_hit_drawn_circles_and_placed_labels_top_layer_first() {
+        let mut images = ImageStore::default();
+        let mut symbols = StyleSymbols::default();
+        symbols
+            .set_layers(
+                r##"[
+                {"id":"roads","type":"line","source":"v","source-layer":"streets"},
+                {"id":"dots","type":"circle","source":"v","source-layer":"places",
+                 "paint":{"circle-radius":14,"circle-stroke-width":1}},
+                {"id":"labels","type":"symbol","source":"v","source-layer":"places",
+                 "layout":{"text-field":["get","name"],"text-font":["NotoSans-Regular"],"text-anchor":"left",
+                           "text-offset":[0.6,0],"text-size":20}}
+            ]"##,
+                &mut images,
+            )
+            .unwrap();
+        symbols
+            .upload("s", (7, 66, 45), &places_tile(), &mut images)
+            .unwrap();
+        add_glyphs(&mut symbols, &mut images);
+        // Nothing is drawn before the first frame.
+        assert_eq!(
+            symbols.query_rendered_features([360.0, 240.0], &["dots", "labels"]),
+            Ok("[]".to_owned())
+        );
+        centred_frame(&mut symbols, &mut images);
+
+        let names =
+            |symbols: &StyleSymbols, point: [f64; 2], layers: &[&str]| -> Vec<(String, String)> {
+                let json = symbols.query_rendered_features(point, layers).unwrap();
+                let features: serde_json::Value = serde_json::from_str(&json).unwrap();
+                features
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|feature| {
+                        assert_eq!(feature["sourceLayer"], "places");
+                        assert_eq!(feature["properties"]["rank"], 2);
+                        (
+                            feature["layer"]["id"].as_str().unwrap().to_owned(),
+                            feature["properties"]["name"].as_str().unwrap().to_owned(),
+                        )
+                    })
+                    .collect()
+            };
+        let zurich = |layer: &str| (layer.to_owned(), "Zürich".to_owned());
+        // The circle (radius plus stroke 15 px) sits on the anchor at the screen centre.
+        assert_eq!(
+            names(&symbols, [360.0, 240.0], &["dots", "labels"]),
+            vec![zurich("dots")]
+        );
+        assert_eq!(
+            names(&symbols, [374.9, 240.0], &["dots"]),
+            vec![zurich("dots")]
+        );
+        assert!(names(&symbols, [375.0, 240.0], &["dots"]).is_empty());
+        // The label's box starts 12 px (0.6 em) right of the anchor.
+        assert_eq!(
+            names(&symbols, [400.0, 240.0], &["dots", "labels"]),
+            vec![zurich("labels")]
+        );
+        assert!(names(&symbols, [400.0, 240.0], &["dots"]).is_empty());
+        assert!(names(&symbols, [360.0, 300.0], &["dots", "labels"]).is_empty());
+        // Where both draw, the upper layer comes first.
+        assert_eq!(
+            names(&symbols, [372.0, 240.0], &["dots", "labels"]),
+            vec![zurich("labels"), zurich("dots")]
+        );
+        // Line and unknown layers are refused, not silently empty.
+        assert!(
+            symbols
+                .query_rendered_features([0.0, 0.0], &["roads"])
+                .is_err()
+        );
+        assert!(
+            symbols
+                .query_rendered_features([0.0, 0.0], &["lakes"])
+                .is_err()
+        );
+        // An evicted tile takes its features out of later frames' queries.
+        symbols.evict("s", (7, 66, 45));
+        centred_frame(&mut symbols, &mut images);
+        assert!(names(&symbols, [360.0, 240.0], &["dots", "labels"]).is_empty());
+    }
+
     fn add_glyphs(symbols: &mut StyleSymbols, images: &mut ImageStore) {
         let glyphs = std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1702,6 +2158,7 @@ mod tests {
         symbols.frame(
             "s",
             &[(tile, local)],
+            SourceZooms::new(14, 22.0),
             view_projection,
             StyleSurface {
                 width: f64::from(width),
@@ -1742,6 +2199,7 @@ mod tests {
         let frame = symbols.frame(
             "s",
             &[(tile, local)],
+            SourceZooms::new(14, 22.0),
             view_projection,
             StyleSurface {
                 width: 720.0,

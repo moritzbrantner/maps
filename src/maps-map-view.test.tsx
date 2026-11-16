@@ -10,6 +10,10 @@ import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { PointLayer } from "./point-layer";
 
+const { renderedFeatureQueries } = vi.hoisted(() => ({
+  renderedFeatureQueries: [] as Array<{ layers: string[]; point: { x: number; y: number } }>,
+}));
+
 vi.mock("./canvas-flat-runtime", async () => {
   const React = await import("react");
 
@@ -28,6 +32,10 @@ vi.mock("./canvas-flat-runtime", async () => {
     getVisibleSpansFullWorld: () => boolean;
     project: (coordinates: [number, number]) => { x: number; y: number };
     projectPacked: (coordinates: Float64Array) => Float64Array;
+    queryRenderedFeatures: (
+      point: { x: number; y: number },
+      layers: readonly string[],
+    ) => unknown[];
     setViewState: (viewState: ViewState, reason?: Reason) => void;
     unproject: (x: number, y: number) => [number, number];
   };
@@ -81,6 +89,20 @@ vi.mock("./canvas-flat-runtime", async () => {
             projected[index + 1] = 300 - coordinates[index + 1]! * 5;
           }
           return projected;
+        },
+        // A style label of Zürich drawn over a circle within 20 px of (100, 100).
+        queryRenderedFeatures(point, layers) {
+          renderedFeatureQueries.push({ layers: [...layers], point });
+          if (Math.hypot(point.x - 100, point.y - 100) > 20) return [];
+          const feature = (id: string, type: string) => ({
+            layer: { id, type },
+            properties: { name: "Zürich", rank: 2 },
+            sourceLayer: "places",
+            type: "Feature",
+          });
+          return [feature("place-labels", "symbol"), feature("place-dots", "circle")].filter(
+            (candidate) => layers.includes(candidate.layer.id),
+          );
         },
         setViewState(next, reason = "programmatic") {
           currentViewState = next;
@@ -605,6 +627,48 @@ describe("Maps-owned MapView runtime", () => {
     });
   });
 
+  test("closes a popup once the controlled selection that selected its Map Feature moves away", async () => {
+    // Parity with the MapLibre path's overlay retirement (#231 phase D): a popup closes when
+    // the layer's controlled selectedFeatureId had selected its feature and no longer does.
+    const points = [
+      { id: "berlin", label: "Berlin", latitude: 52.52, longitude: 13.405 },
+      { id: "paris", label: "Paris", latitude: 48.8566, longitude: 2.3522 },
+    ];
+    const composition = (selectedFeatureId: string | null) => (
+      <MapView flatRuntime="maps" fitToData={false} mapLabel="Selection map" mapStyle={{ tiles: false }}>
+        <PointLayer
+          points={points}
+          renderFeaturePopup={(feature) => <span>Popup {feature.point.label}</span>}
+          selectedFeatureId={selectedFeatureId}
+        />
+      </MapView>
+    );
+    const { rerender } = render(composition(null));
+    const map = screen.getByLabelText("Selection map");
+    const baseCanvas = getBaseCanvas(map);
+    await waitFor(() => expect(map.getAttribute("data-map-ready")).toBe("true"));
+
+    // A popup opened while its feature is not (yet) selected stays open on unrelated renders.
+    clickSurface(baseCanvas, 534.05, 37.4);
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+    rerender(composition(null));
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+
+    // Once the controlled selection selects it, moving the selection elsewhere closes it.
+    rerender(composition("berlin"));
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+    rerender(composition("paris"));
+    await waitFor(() => expect(screen.queryByText("Popup Berlin")).toBeNull());
+
+    // A popup opened for the feature already selected closes the same way, even when the
+    // click itself changes nothing in the composition.
+    rerender(composition("berlin"));
+    clickSurface(baseCanvas, 534.05, 37.4);
+    await waitFor(() => expect(screen.getByText("Popup Berlin")).toBeTruthy());
+    rerender(composition("paris"));
+    await waitFor(() => expect(screen.queryByText("Popup Berlin")).toBeNull());
+  });
+
   test("tells a controlled owner when a limit corrects its camera", async () => {
     const onViewStateChange = vi.fn();
     const composition = (maxZoom: number) => (
@@ -729,6 +793,111 @@ describe("Maps-owned MapView runtime", () => {
         />,
       ),
     ).toThrow(/requires an explicit raster tile style/);
+  });
+
+  test("picks the topmost Tileset style feature of the interactive layers on hover and click", async () => {
+    renderedFeatureQueries.length = 0;
+    const onHoveredFeatureIdChange = vi.fn();
+    const onSelectedFeatureIdChange = vi.fn();
+    const onFeatureSelect = vi.fn();
+    const layers = [
+      { id: "roads", source: "v", "source-layer": "streets", type: "line" },
+      { id: "place-dots", source: "v", "source-layer": "places", type: "circle" },
+      {
+        id: "place-labels",
+        layout: { "text-field": ["get", "name"] },
+        source: "v",
+        "source-layer": "places",
+        type: "symbol",
+      },
+    ];
+
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        mapLabel="Tileset style picking"
+        mapStyle={{ tiles: false }}
+        tilesetLayers={{
+          getFeatureId: (feature) => `${feature.layer.id}:${String(feature.properties.name)}`,
+          interactiveLayerIds: ["place-dots", "place-labels"],
+          layers,
+          onFeatureSelect,
+          onHoveredFeatureIdChange,
+          onSelectedFeatureIdChange,
+          renderFeatureTooltip: (feature) => <span>Style {String(feature.properties.name)}</span>,
+        }}
+      />,
+    );
+    const map = screen.getByLabelText("Tileset style picking");
+    const baseCanvas = getBaseCanvas(map);
+    await waitFor(() => expect(map.getAttribute("data-map-ready")).toBe("true"));
+
+    fireEvent.pointerMove(baseCanvas, { clientX: 104, clientY: 98, pointerId: 1 });
+    await waitFor(() =>
+      expect(onHoveredFeatureIdChange).toHaveBeenLastCalledWith(
+        "place-labels:Zürich",
+        expect.objectContaining({ source: "hover" }),
+      ),
+    );
+    // Queried top layer first, in viewport CSS px.
+    expect(renderedFeatureQueries.at(-1)).toEqual({
+      layers: ["place-dots", "place-labels"],
+      point: { x: 104, y: 98 },
+    });
+    expect(map.style.cursor).toBe("pointer");
+    expect(await screen.findByText("Style Zürich")).toBeTruthy();
+
+    fireEvent.pointerMove(baseCanvas, { clientX: 300, clientY: 300, pointerId: 1 });
+    await waitFor(() =>
+      expect(onHoveredFeatureIdChange).toHaveBeenLastCalledWith(
+        null,
+        expect.objectContaining({ source: "clear" }),
+      ),
+    );
+    expect(map.style.cursor).toBe("");
+
+    // A miss clicks nothing; a hit selects the topmost feature.
+    fireEvent.click(baseCanvas, { button: 0, clientX: 300, clientY: 300 });
+    expect(onSelectedFeatureIdChange).not.toHaveBeenCalled();
+    fireEvent.click(baseCanvas, { button: 0, clientX: 100, clientY: 100 });
+    await waitFor(() =>
+      expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
+        "place-labels:Zürich",
+        expect.objectContaining({ source: "click" }),
+      ),
+    );
+    expect(onFeatureSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ layer: { id: "place-labels", type: "symbol" } }),
+    );
+  });
+
+  test("rejects interactive Tileset style layers that are not circle or symbol layers", () => {
+    expect(() =>
+      render(
+        <MapView
+          flatRuntime="maps"
+          fitToData={false}
+          mapLabel="Unsupported Tileset style picking"
+          mapStyle={{ tiles: false }}
+          tilesetLayers={{
+            interactiveLayerIds: ["roads"],
+            layers: [{ id: "roads", source: "v", "source-layer": "streets", type: "line" }],
+          }}
+        />,
+      ),
+    ).toThrow(/only circle and symbol layers/);
+    expect(() =>
+      render(
+        <MapView
+          flatRuntime="maps"
+          fitToData={false}
+          mapLabel="Unknown Tileset style picking"
+          mapStyle={{ tiles: false }}
+          tilesetLayers={{ interactiveLayerIds: ["lakes"], layers: [] }}
+        />,
+      ),
+    ).toThrow(/no tileset style layer "lakes"/);
   });
 
   test("fails closed for the MapLibre-specific onMapReady contract", () => {

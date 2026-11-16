@@ -773,6 +773,203 @@ const ALIGNMENT_LAYERS: Array<Record<string, unknown>> = [
     type: "symbol",
   },
 ];
+/** Overlapping SDF stars along every road, coloured by road `rank` and outlined dark. */
+const roadStars = (layout: Record<string, unknown>, id: string): Record<string, unknown> => ({
+  id,
+  layout: {
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "icon-image": "capital",
+    "icon-size": 2,
+    "symbol-placement": "line",
+    "symbol-spacing": 30,
+    ...layout,
+  },
+  paint: {
+    "icon-color": ["match", ["get", "rank"], 3, "#b91c1c", 6, "#15803d", 7, "#7c3aed", 8, "#ea580c", "#1d4ed8"],
+    "icon-halo-color": "#111827",
+    "icon-halo-width": 1.5,
+  },
+  source: "oracle-vector",
+  "source-layer": "streets",
+  type: "symbol",
+});
+/** Large SDF place stars that collide with each other: which ones place shows the order. */
+const placeStars = (layout: Record<string, unknown>, id: string): Record<string, unknown> => ({
+  id,
+  layout: { "icon-image": "capital", "icon-size": 5, ...layout },
+  paint: {
+    "icon-color": ["interpolate", ["linear"], ["get", "rank"], 2, "#0f766e", 8, "#be123c"],
+    "icon-halo-color": "#fef3c7",
+    "icon-halo-width": 2,
+  },
+  source: "oracle-vector",
+  "source-layer": "places",
+  type: "symbol",
+});
+/**
+ * The `symbol-sort-key` style layers (#346). Road stars overlap and draw by road `rank`, the
+ * highest rank on top, across tiles; large place stars collide and place by population, the
+ * largest first: Zürich over Luzern and Chur over Vaduz, each pair split across z7 tiles that
+ * tile order alone would place the other way round.
+ */
+const SORT_KEY_LAYERS: Array<Record<string, unknown>> = [
+  roadStars({ "symbol-sort-key": ["get", "rank"] }, "road-stars-by-rank"),
+  placeStars({ "symbol-sort-key": ["-", 0, ["get", "population"]] }, "place-stars-by-population"),
+];
+/**
+ * The `symbol-z-order` style layers (#346), under a camera facing south-south-east. Road stars
+ * overlap and draw from the top of the screen down (`auto`); river stars, outlined so their
+ * order shows, draw in source order; large place stars place from the bottom of the screen up
+ * (`viewport-y`, ignoring their sort key): Freiburg, now below Basel in the same tile, wins.
+ */
+const Z_ORDER_LAYERS: Array<Record<string, unknown>> = [
+  roadStars({}, "road-stars-top-down"),
+  {
+    ...roadStars({ "symbol-spacing": 25, "symbol-z-order": "source" }, "river-stars-in-source-order"),
+    paint: { "icon-color": "#38bdf8", "icon-halo-color": "#0c4a6e", "icon-halo-width": 2 },
+    "source-layer": "water_lines",
+  },
+  placeStars(
+    { "symbol-sort-key": ["get", "population"], "symbol-z-order": "viewport-y" },
+    "place-stars-bottom-up",
+  ),
+];
+/**
+ * The `symbol-zoom-anchors` style layers (#346): anchor lists and translations that follow the
+ * zoom or the feature. Lakes switch anchor lists at zoom 7 (the tile zoom); towns take anchor
+ * offsets by population and a text translation interpolated at the camera zoom, anchored to
+ * the viewport from zoom 7 under a turned camera; capitals take anchor offsets interpolated
+ * over the zoom and an exponentially growing icon translation (icons overlap freely). Blockers,
+ * placed first, take each place's first anchor.
+ */
+/**
+ * The `symbol-overscaled` style layers (#346): symbols past the tileset's maxzoom (12), which
+ * MapLibre lays out again at the overscaled tile zoom (13 at the camera's 13.45). River names
+ * repeat at a `symbol-spacing` of the overscaled tile and grow with a camera `text-size`;
+ * the place name switches to upper case from zoom 13 and takes a composite `text-size`.
+ */
+const OVERSCALED_LAYERS: Array<Record<string, unknown>> = [
+  {
+    id: "overscaled-river-names",
+    layout: {
+      "symbol-placement": "line",
+      "symbol-spacing": 90,
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-letter-spacing": 0.05,
+      "text-size": ["interpolate", ["linear"], ["zoom"], 12, 10, 15, 22],
+    },
+    paint: { "text-color": "#1d4ed8", "text-halo-color": "#eff6ff", "text-halo-width": 1.5 },
+    source: "oracle-vector",
+    "source-layer": "water_lines",
+    type: "symbol",
+  },
+  {
+    id: "overscaled-place-names",
+    layout: {
+      "text-field": ["step", ["zoom"], ["get", "name"], 13, ["upcase", ["get", "name"]]],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 12, ["-", 18, ["get", "rank"]], 15, ["-", 34, ["get", "rank"]]],
+    },
+    paint: { "text-color": "#7c2d12", "text-halo-color": "#ffffff", "text-halo-width": 2 },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
+const ZOOM_ANCHOR_LAYERS: Array<Record<string, unknown>> = [
+  {
+    filter: ["==", ["get", "kind"], "lake"],
+    id: "lake-stepped-anchors",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-radial-offset": 0.6,
+      "text-size": 13,
+      "text-variable-anchor": ["step", ["zoom"], ["literal", ["bottom", "top"]], 7, ["literal", ["left", "right"]]],
+    },
+    paint: { "text-color": "#1e3a8a", "text-halo-color": "#eff6ff", "text-halo-width": 1 },
+    source: "oracle-vector",
+    "source-layer": "water_polygons",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "city"],
+    id: "town-offsets-by-population",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-padding": 1,
+      "text-size": 13,
+      "text-variable-anchor-offset": [
+        "case",
+        [">=", ["get", "population"], 500000],
+        ["literal", ["bottom-left", [0.4, -0.4], "right", [-0.8, 0], "left", [0.8, 0]]],
+        ["literal", ["bottom-left", [0.4, -0.4], "top", [0, 0.8], "bottom", [0, -0.8]]],
+      ],
+    },
+    paint: {
+      "text-color": "#111827",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1,
+      "text-translate": ["interpolate", ["linear"], ["zoom"], 6, ["literal", [0, 0]], 9, ["literal", [9, -6]]],
+      "text-translate-anchor": ["step", ["zoom"], "map", 7, "viewport"],
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    filter: ["==", ["get", "kind"], "capital"],
+    id: "capital-zoomed-offsets",
+    layout: {
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+      "icon-image": "capital",
+      "text-field": ["get", "name"],
+      "text-font": ["NotoSans-Regular"],
+      "text-size": 15,
+      "text-variable-anchor-offset": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        6,
+        ["literal", ["bottom-left", [0.2, -0.2], "top", [0, 0.5], "right", [-0.5, 0]]],
+        9,
+        ["literal", ["bottom-left", [0.2, -0.2], "top", [0, 2.5], "right", [-2.5, 0]]],
+      ],
+    },
+    paint: {
+      "icon-color": "#b91c1c",
+      "icon-halo-color": "#fef3c7",
+      "icon-halo-width": 1,
+      "icon-translate": ["interpolate", ["exponential", 1.5], ["zoom"], 6, ["literal", [0, 0]], 9, ["literal", [0, -16]]],
+      "text-color": "#7f1d1d",
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 1.5,
+    },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+  {
+    id: "place-blockers",
+    layout: {
+      "text-allow-overlap": true,
+      "text-anchor": "bottom-left",
+      "text-field": "Xxxx",
+      "text-font": ["NotoSans-Regular"],
+      "text-offset": [0.2, -0.2],
+      "text-padding": 0,
+      "text-size": 13,
+    },
+    paint: { "text-color": "#dc2626" },
+    source: "oracle-vector",
+    "source-layer": "places",
+    type: "symbol",
+  },
+];
 const SPRITE_URL = `${TILE_ORIGIN}/sprite/oracle`;
 const tilesetLayers = (name: string): MapsTilesetLayers | null =>
   name === "symbols"
@@ -789,6 +986,14 @@ const tilesetLayers = (name: string): MapsTilesetLayers | null =>
               ? { glyphs: GLYPHS_URL, layers: VARIABLE_ANCHOR_LAYERS }
               : name === "symbol-alignment" || name === "symbol-alignment-pitch"
                 ? { glyphs: GLYPHS_URL, layers: ALIGNMENT_LAYERS }
+              : name === "symbol-sort-key"
+                ? { glyphs: GLYPHS_URL, layers: SORT_KEY_LAYERS }
+              : name === "symbol-z-order"
+                ? { glyphs: GLYPHS_URL, layers: Z_ORDER_LAYERS }
+              : name === "symbol-zoom-anchors"
+                ? { glyphs: GLYPHS_URL, layers: ZOOM_ANCHOR_LAYERS }
+              : name === "symbol-overscaled" || name === "symbol-overscaled-deep"
+                ? { glyphs: GLYPHS_URL, layers: OVERSCALED_LAYERS }
               : name === "tileset-lines"
               ? { layers: LINE_LAYERS }
               : name === "fill-pattern" || name === "fill-pattern-pitch"
@@ -904,6 +1109,27 @@ function referenceStyle(name: string) {
       style.layers.push(...ALIGNMENT_LAYERS);
       return style;
     }
+    case "symbol-sort-key": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...SORT_KEY_LAYERS);
+      return style;
+    }
+    case "symbol-z-order": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...Z_ORDER_LAYERS);
+      return style;
+    }
+    case "symbol-zoom-anchors": {
+      const style = { ...vectorStyle(), sprite: SPRITE_URL };
+      style.layers.push(...ZOOM_ANCHOR_LAYERS);
+      return style;
+    }
+    case "symbol-overscaled":
+    case "symbol-overscaled-deep": {
+      const style = vectorStyle();
+      style.layers.push(...OVERSCALED_LAYERS);
+      return style;
+    }
     default:
       throw new Error(`no reference style for scenario ${name}`);
   }
@@ -920,7 +1146,58 @@ function styleFor(): RasterMapStyle {
   return { ...rasterStyle(scenario.basemap), ...(scenario.sky ? { sky: scenario.sky } : {}) } as unknown as RasterMapStyle;
 }
 const style = styleFor();
-const styleLayers = tilesetLayers(scenario.name);
+/**
+ * Style layers picked through the Map View (#346): Maps through `tilesetLayers`
+ * `interactiveLayerIds`, MapLibre through `queryRenderedFeatures` on its own pointer events.
+ * Both report the topmost feature as `<layer id>:<name or kind>` under the `style` key.
+ */
+const STYLE_PICK_LAYERS: Record<string, string[]> = {
+  symbols: ["place-dots", "place-labels", "lake-labels"],
+  "symbol-icons": ["lake-icons", "town-icons", "capital-icons"],
+  "symbol-lines": ["river-names", "road-classes"],
+  "symbol-alignment-pitch": ["river-names", "lake-badges", "city-turned", "capital-on-map"],
+  "symbol-overscaled": ["overscaled-river-names", "overscaled-place-names"],
+};
+const stylePickLayers = STYLE_PICK_LAYERS[scenario.name] ?? null;
+type StyleFeature = { layer: { id: string }; properties: Record<string, unknown> };
+const styleFeatureKey = (feature: StyleFeature) =>
+  `${feature.layer.id}:${String(feature.properties.name ?? feature.properties.kind)}`;
+const baseStyleLayers = tilesetLayers(scenario.name);
+const styleLayers: MapsTilesetLayers | null =
+  baseStyleLayers && stylePickLayers
+    ? {
+        ...baseStyleLayers,
+        getFeatureId: styleFeatureKey,
+        interactiveLayerIds: stylePickLayers,
+        onHoveredFeatureIdChange: record("style", "hover"),
+        onSelectedFeatureIdChange: record("style", "select"),
+      }
+    : baseStyleLayers;
+
+type MapLibrePointerMap = {
+  on(type: "mousemove" | "click", listener: (event: { point: { x: number; y: number } }) => void): void;
+  queryRenderedFeatures(point: { x: number; y: number }, options: { layers: string[] }): StyleFeature[];
+};
+
+/** The MapLibre reference of the style picks: what its layer-scoped events would report. */
+function recordMapLibreStylePicks(map: MapLibrePointerMap, layers: string[]) {
+  let hovered: string | null = null;
+  const topmost = (point: { x: number; y: number }) => {
+    const feature = map.queryRenderedFeatures(point, { layers })[0];
+    return feature ? styleFeatureKey(feature) : null;
+  };
+  map.on("mousemove", (event) => {
+    const id = topmost(event.point);
+    if (id || hovered) {
+      oracle.events.push({ id, kind: "hover", layer: "style", source: id ? "hover" : "clear" });
+    }
+    hovered = id;
+  });
+  map.on("click", (event) => {
+    const id = topmost(event.point);
+    if (id) oracle.events.push({ id, kind: "select", layer: "style", source: "click" });
+  });
+}
 
 function record(layer: string, kind: PickEvent["kind"]) {
   return (id: string | null, context: { source: string }) => {
@@ -963,6 +1240,9 @@ function App() {
           ? {
               onMapReady: (map: OracleApi["maplibre"]) => {
                 oracle.maplibre = map;
+                if (map && stylePickLayers) {
+                  recordMapLibreStylePicks(map as unknown as MapLibrePointerMap, stylePickLayers);
+                }
               },
             }
           : {})}
@@ -1106,6 +1386,11 @@ function renderScenario(name: string): (context: LayerContext) => ReactNode {
     case "symbol-variable-anchors-pitch":
     case "symbol-alignment":
     case "symbol-alignment-pitch":
+    case "symbol-sort-key":
+    case "symbol-z-order":
+    case "symbol-zoom-anchors":
+    case "symbol-overscaled":
+    case "symbol-overscaled-deep":
     case "tileset-lines":
     case "hillshade":
     case "hillshade-terrain":

@@ -70,6 +70,32 @@ describe("Map Feature picking work and parity", () => {
     assert.equal(hitTestCanvasMapScene(repeated, { x: 4.001, y: 0 }), null);
   });
 
+  it("measures a pitched line's width on the map plane, as MapLibre (#386)", () => {
+    const feature = line("road", [[0, 0], [100, 0]]);
+    feature.strokeWidth = 8;
+    const scene = identityScene([feature]);
+    const pointer = { x: 50, y: 5 };
+    // Without a map-plane scale, the 6 px screen tolerance (width / 2 + 2) picks it.
+    assert.deepEqual(hitTestCanvasMapSceneAll(scene, pointer), [scene.primitives[0]]);
+    // Far up a pitched map one screen pixel spans two map-plane pixels vertically, so the
+    // pointer is 10 map-plane px away: the line is thinner there and is not picked.
+    const far = [1, 0, 0, 2] as const;
+    assert.deepEqual(hitTestCanvasMapSceneAll(scene, pointer, far), []);
+    assert.equal(hitTestCanvasMapScene(scene, pointer, far), null);
+    assert.deepEqual(hitTestCanvasMapSceneAll(scene, { x: 50, y: 3 }, far), [scene.primitives[0]]);
+    // Near the camera a screen pixel spans half a map-plane pixel: the line is wider there.
+    const near = [0.5, 0, 0, 0.5] as const;
+    assert.deepEqual(hitTestCanvasMapSceneAll(scene, { x: 50, y: 12 }, near), [
+      scene.primitives[0],
+    ]);
+    assert.deepEqual(hitTestCanvasMapSceneAll(scene, { x: 50, y: 12.001 }, near), []);
+    // Circles keep MapLibre's viewport-aligned screen radius under pitch.
+    const point = identityScene([circle("point", [10, 10])]);
+    assert.deepEqual(hitTestCanvasMapSceneAll(point, { x: 17, y: 10 }, far), [
+      point.primitives[0],
+    ]);
+  });
+
   it("keeps implicit polygon closure, hole strokes and even-odd fill", () => {
     const scene = identityScene([polygon("area", [
       [[0, 0], [100, 0], [100, 100], [0, 100]],

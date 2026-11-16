@@ -85,6 +85,33 @@ impl ZoomCurve {
         }
     }
 
+    /// The zoom to sample a stop's output at: a step's base value (the `-inf` stop) below its
+    /// second stop.
+    #[must_use]
+    pub fn sample_zoom(&self, stop: f64) -> f64 {
+        if stop == f64::NEG_INFINITY {
+            self.stops.get(1).copied().unwrap_or(0.0) - 1.0
+        } else {
+            stop
+        }
+    }
+
+    /// The stops around `zoom` and how far it lies between them (0 for a step, and outside
+    /// the curve).
+    #[must_use]
+    pub fn position(&self, zoom: f64) -> (usize, usize, f64) {
+        let stops = &self.stops;
+        let mut lower = stops.len() - 1;
+        while lower > 0 && stops[lower] > zoom {
+            lower -= 1;
+        }
+        let upper = (lower + 1).min(stops.len() - 1);
+        let t = self
+            .factor(zoom, stops[lower], stops[upper])
+            .clamp(0.0, 1.0);
+        (lower, upper, t)
+    }
+
     /// `Interpolate.interpolationFactor` for this curve; a step never interpolates.
     #[must_use]
     pub fn factor(&self, zoom: f64, lower: f64, upper: f64) -> f64 {
@@ -206,18 +233,10 @@ impl SizeData {
                 }
             }
             PropertyKind::Camera(curve) => {
-                // A step's first stop is `-inf`: its base value is sampled below the second.
                 let sizes = curve
                     .stops
                     .iter()
-                    .map(|stop| {
-                        let zoom = if *stop == f64::NEG_INFINITY {
-                            curve.stops.get(1).copied().unwrap_or(0.0) - 1.0
-                        } else {
-                            *stop
-                        };
-                        evaluate(zoom)
-                    })
+                    .map(|&stop| evaluate(curve.sample_zoom(stop)))
                     .collect::<Result<_, _>>()?;
                 Self::Camera {
                     curve: curve.clone(),
@@ -254,15 +273,7 @@ impl SizeData {
                 sizes,
                 layout_size,
             } => {
-                let stops = &curve.stops;
-                let mut lower = stops.len() - 1;
-                while lower > 0 && stops[lower] > zoom {
-                    lower -= 1;
-                }
-                let upper = (lower + 1).min(stops.len() - 1);
-                let t = curve
-                    .factor(zoom, stops[lower], stops[upper])
-                    .clamp(0.0, 1.0);
+                let (lower, upper, t) = curve.position(zoom);
                 ZoomedSize {
                     size_t: 0.0,
                     size: (sizes[lower] * (1.0 - t) + sizes[upper] * t).min(*layout_size),
@@ -290,6 +301,51 @@ impl SizeData {
                 lower + (upper - lower) * zoomed.size_t
             }
             _ => zoomed.size,
+        }
+    }
+}
+
+/// A feature-constant property MapLibre evaluates at the camera zoom each frame: a constant,
+/// or a camera function's outputs at its stops. Outputs read neither the zoom nor the feature,
+/// so mixing them at the camera zoom is the curve's value there.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CameraValue<T> {
+    Constant(T),
+    Curve { curve: ZoomCurve, values: Vec<T> },
+}
+
+impl<T: Copy> CameraValue<T> {
+    /// `evaluate` gives the feature-less value at a zoom.
+    pub fn new(
+        value: Option<&Value>,
+        evaluate: impl Fn(f64) -> Result<T, String>,
+    ) -> Result<Self, String> {
+        Ok(match value.map(ZoomCurve::find).transpose()?.flatten() {
+            None => Self::Constant(evaluate(0.0)?),
+            Some(curve) => Self::Curve {
+                values: curve
+                    .stops
+                    .iter()
+                    .map(|&stop| evaluate(curve.sample_zoom(stop)))
+                    .collect::<Result<_, _>>()?,
+                curve,
+            },
+        })
+    }
+
+    /// The value at the camera `zoom`; `mix` interpolates two outputs (never called for a
+    /// step, which keeps the lower one).
+    pub fn at(&self, zoom: f64, mix: impl Fn(T, T, f64) -> T) -> T {
+        match self {
+            Self::Constant(value) => *value,
+            Self::Curve { curve, values } => {
+                let (lower, upper, t) = curve.position(zoom);
+                if t == 0.0 || lower == upper {
+                    values[lower]
+                } else {
+                    mix(values[lower], values[upper], t)
+                }
+            }
         }
     }
 }

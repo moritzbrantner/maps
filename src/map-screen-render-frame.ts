@@ -8,6 +8,14 @@ export type MapScreenProject = ((
   projectPacked?: (coordinates: Float64Array) => Float64Array | null;
 };
 
+/**
+ * The local linear map from screen offsets to map-plane offsets at one screen point, row-major
+ * `[a, b, c, d]`: a screen offset `(dx, dy)` spans `(a·dx + b·dy, c·dx + d·dy)` CSS pixels on
+ * the map plane at the camera zoom. Rust derives it from the pitched camera (#386); picking
+ * measures line widths with it as MapLibre does in tile space, so they shrink with distance.
+ */
+export type MapScreenMapPlaneScale = readonly [a: number, b: number, c: number, d: number];
+
 export type MapScreenInteractionState = {
   hoveredPrimitiveIds?: ReadonlySet<string>;
   selectedPrimitiveIds?: ReadonlySet<string>;

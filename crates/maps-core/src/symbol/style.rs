@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use super::color::Rgba;
 use super::expression::{EvaluationContext, evaluate, is_expression, uses_zoom};
 use super::variable_anchors;
-use super::zoom::ZoomCurve;
+use super::zoom::{ZoomCurve, camera_context, uses_feature};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StyleLayerKind {
@@ -68,6 +68,8 @@ const SYMBOL_LAYOUT: &[&str] = &[
     "visibility",
     "symbol-placement",
     "symbol-spacing",
+    "symbol-sort-key",
+    "symbol-z-order",
     "text-field",
     "text-font",
     "text-size",
@@ -143,10 +145,13 @@ const ZOOM_CONSTANT: &[&str] = &[
     "circle-stroke-width",
     "circle-stroke-color",
     "circle-stroke-opacity",
+    // The style specification evaluates sort keys from feature data only.
+    "symbol-sort-key",
 ];
 /// Layout properties MapLibre reads as one value for the whole layer.
 const LAYER_CONSTANT: &[&str] = &[
     "symbol-placement",
+    "symbol-z-order",
     "text-rotation-alignment",
     "text-pitch-alignment",
     "icon-rotation-alignment",
@@ -155,13 +160,19 @@ const LAYER_CONSTANT: &[&str] = &[
     "icon-keep-upright",
     "icon-text-fit",
     "icon-text-fit-padding",
-    // Constant anchor lists only: Maps does not evaluate expressions for them.
+];
+/// Properties the style specification evaluates from the zoom only, never from feature data.
+const FEATURE_CONSTANT: &[&str] = &[
     "text-variable-anchor",
-    "text-variable-anchor-offset",
-    // Translations are not data-driven; Maps takes them constant.
     "text-translate",
     "text-translate-anchor",
     "icon-translate",
+    "icon-translate-anchor",
+];
+/// Properties whose values do not interpolate: a zoom curve for them must be a `step`.
+const STEPPED: &[&str] = &[
+    "text-variable-anchor",
+    "text-translate-anchor",
     "icon-translate-anchor",
 ];
 
@@ -228,14 +239,23 @@ impl StyleLayer {
                         "layer {id}: an expression for {key} is not supported"
                     ));
                 }
-                ZoomCurve::find(value).map_err(|error| format!("layer {id}: {key}: {error}"))?;
+                if FEATURE_CONSTANT.contains(&key.as_str()) && uses_feature(value) {
+                    return Err(format!("layer {id}: data-driven {key} is not supported"));
+                }
+                let curve = ZoomCurve::find(value)
+                    .map_err(|error| format!("layer {id}: {key}: {error}"))?;
+                if STEPPED.contains(&key.as_str())
+                    && curve.is_some_and(|curve| curve.base.is_some())
+                {
+                    return Err(format!("layer {id}: {key} cannot be interpolated"));
+                }
                 if value.is_object() {
                     return Err(format!(
                         "layer {id}: legacy function for {key} is not supported"
                     ));
                 }
-                // `[anchor, [x, y], ...]` reads like an expression but is a literal list.
-                if key != "text-variable-anchor-offset" {
+                // A constant `[anchor, [x, y], ...]` reads like an expression but is a list.
+                if key != "text-variable-anchor-offset" || is_expression(value) {
                     validate_operators(value)
                         .map_err(|error| format!("layer {id}: {key}: {error}"))?;
                 }
@@ -262,6 +282,7 @@ impl StyleLayer {
             }
         };
         only("symbol-placement", &["point", "line", "line-center"])?;
+        only("symbol-z-order", &["auto", "viewport-y", "source"])?;
         only(
             "text-rotation-alignment",
             &["auto", "viewport", "map", "viewport-glyph"],
@@ -274,26 +295,23 @@ impl StyleLayer {
             .and_then(Value::as_str)
             .is_none_or(|placement| placement == "point");
         only("icon-text-fit", &["none", "width", "height", "both"])?;
-        for (key, parsed) in [
-            (
-                "text-variable-anchor",
-                layout
-                    .get("text-variable-anchor")
-                    .map(|value| variable_anchors::parse_anchors(value).map(|_| ())),
-            ),
-            (
-                "text-variable-anchor-offset",
-                layout
-                    .get("text-variable-anchor-offset")
-                    .map(|value| variable_anchors::parse_anchor_offsets(value).map(|_| ())),
-            ),
-        ] {
-            if let Some(result) = parsed {
-                result.map_err(|error| format!("layer {id}: {key}: {error}"))?;
-                // Variable anchors only apply to point labels.
-                if !point {
-                    return Err(format!("layer {id}: {key} needs symbol-placement point"));
-                }
+        for key in ["text-variable-anchor", "text-variable-anchor-offset"] {
+            let Some(value) = layout.get(key) else {
+                continue;
+            };
+            // Constant lists are checked here; expressions per feature at layout, where
+            // MapLibre falls back to no list for a value that is not one.
+            if !is_expression(value) {
+                let parsed = if key == "text-variable-anchor" {
+                    variable_anchors::parse_anchors(value).map(|_| ())
+                } else {
+                    variable_anchors::parse_anchor_offsets(value).map(|_| ())
+                };
+                parsed.map_err(|error| format!("layer {id}: {key}: {error}"))?;
+            }
+            // Variable anchors only apply to point labels.
+            if !point {
+                return Err(format!("layer {id}: {key} needs symbol-placement point"));
             }
         }
         // A fitted icon draws at its text's shifted anchor in the text's label plane, so it
@@ -310,12 +328,25 @@ impl StyleLayer {
                 "layer {id}: icon-text-fit under variable anchors needs icons and text on the same plane"
             ));
         }
-        for key in ["text-translate-anchor", "icon-translate-anchor"] {
-            if let Some(anchor) = paint.get(key).and_then(Value::as_str)
-                && anchor != "map"
-                && anchor != "viewport"
-            {
-                return Err(format!("layer {id}: {key} {anchor} is not supported"));
+        // Translations follow the camera zoom: every stop of a zoom curve must give an
+        // anchor or two numbers, as the style specification types them.
+        for prefix in ["text", "icon"] {
+            let anchor_key = format!("{prefix}-translate-anchor");
+            for anchor in stop_values(paint.get(&anchor_key))? {
+                if !matches!(anchor.as_str(), Some("map" | "viewport")) {
+                    return Err(format!(
+                        "layer {id}: {anchor_key} {anchor} is not supported"
+                    ));
+                }
+            }
+            let translate_key = format!("{prefix}-translate");
+            for offset in stop_values(paint.get(&translate_key))? {
+                if !matches!(offset.as_array().map(Vec::as_slice), Some([x, y]) if x.is_number() && y.is_number())
+                {
+                    return Err(format!(
+                        "layer {id}: {translate_key} {offset} is not two numbers"
+                    ));
+                }
             }
         }
         let zoom =
@@ -459,6 +490,25 @@ impl StyleLayer {
     }
 }
 
+/// A feature-constant value at each stop of its zoom curve (the value itself without one).
+fn stop_values(value: Option<&Value>) -> Result<Vec<Value>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let zooms = match ZoomCurve::find(value)? {
+        None => vec![0.0],
+        Some(curve) => curve
+            .stops
+            .iter()
+            .map(|&stop| curve.sample_zoom(stop))
+            .collect(),
+    };
+    zooms
+        .into_iter()
+        .map(|zoom| evaluate(value, &camera_context(zoom)))
+        .collect()
+}
+
 /// Rejects expressions with operators Maps does not evaluate. String arrays without an
 /// operator head (`text-font`) are literals, and `literal` arguments are not inspected.
 fn validate_operators(value: &Value) -> Result<(), String> {
@@ -467,10 +517,12 @@ fn validate_operators(value: &Value) -> Result<(), String> {
     };
     match items.first() {
         Some(Value::String(op)) if is_expression(value) => {
-            if op == "literal" {
-                return Ok(());
+            match op.as_str() {
+                "literal" => Ok(()),
+                // `["exponential", base]` names the interpolation, it is not an expression.
+                "interpolate" => items.iter().skip(2).try_for_each(validate_operators),
+                _ => items[1..].iter().try_for_each(validate_operators),
             }
-            items[1..].iter().try_for_each(validate_operators)
         }
         Some(Value::String(op)) if !items.iter().all(Value::is_string) => {
             Err(format!("unsupported expression operator `{op}`"))
@@ -557,6 +609,13 @@ mod tests {
             r#"{"text-variable-anchor":["top"],"text-radial-offset":1}"#,
             r#"{"text-variable-anchor-offset":["center",[0,0],"top",[0,1]]}"#,
             r#"{"text-radial-offset":["get","r"]}"#,
+            // Zoom-dependent anchors, data-driven or zoom-dependent anchor offsets (#346).
+            r#"{"text-variable-anchor":["literal",["top","left"]]}"#,
+            r#"{"text-variable-anchor":["step",["zoom"],["literal",["top"]],4,["literal",["left"]]]}"#,
+            r#"{"text-variable-anchor-offset":["literal",["top",[0,1]]]}"#,
+            r#"{"text-variable-anchor-offset":["step",["zoom"],["literal",["top",[0,1]]],4,["literal",["left",[1,0]]]]}"#,
+            r#"{"text-variable-anchor-offset":["interpolate",["linear"],["zoom"],4,["literal",["top",[0,1]]],8,["literal",["top",[0,3]]]]}"#,
+            r#"{"text-variable-anchor-offset":["match",["get","kind"],"city",["literal",["left",[1,0]]],["literal",["top",[0,1]]]]}"#,
         ] {
             assert_eq!(
                 parse(&format!(
@@ -575,10 +634,10 @@ mod tests {
             r#"{"text-variable-anchor":["middle"]}"#,
             r#"{"text-variable-anchor-offset":["top"]}"#,
             r#"{"text-variable-anchor-offset":["top",[0]]}"#,
-            // Only constant anchor lists are evaluated.
-            r#"{"text-variable-anchor":["step",["zoom"],["literal",["top"]],4,["literal",["left"]]]}"#,
-            r#"{"text-variable-anchor-offset":["literal",["top",[0,1]]]}"#,
-            r#"{"text-variable-anchor-offset":["step",["zoom"],["literal",["top",[0,1]]],4,["literal",["left",[1,0]]]]}"#,
+            r#"{"symbol-placement":"line","text-variable-anchor-offset":["step",["zoom"],["literal",["top",[0,1]]],4,["literal",["left",[1,0]]]]}"#,
+            // `text-variable-anchor` is not data-driven, and anchors do not interpolate.
+            r#"{"text-variable-anchor":["match",["get","kind"],"city",["literal",["top"]],["literal",["left"]]]}"#,
+            r#"{"text-variable-anchor":["interpolate",["linear"],["zoom"],4,["literal",["top"]],8,["literal",["left"]]]}"#,
         ] {
             assert!(
                 parse(&format!(
@@ -594,9 +653,28 @@ mod tests {
             ),
             Ok(1)
         );
+        // Exponential zoom curves.
+        assert_eq!(
+            parse(
+                r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"text-size":["interpolate",["exponential",1.2],["zoom"],5,10,9,20]}}]"#
+            ),
+            Ok(1)
+        );
+        // Zoom-dependent translations and anchors (#346).
+        assert_eq!(
+            parse(
+                r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"icon-translate":["literal",[1,2]],"text-translate":["interpolate",["exponential",1.5],["zoom"],5,["literal",[0,0]],9,["literal",[4,-8]]],"text-translate-anchor":["step",["zoom"],"map",7,"viewport"]}}]"#
+            ),
+            Ok(1)
+        );
         for rejected in [
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-image":"x","icon-text-fit":["step",["zoom"],"none",8,"both"]}}]"#,
-            r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"icon-translate":["literal",[1,2]]}}]"#,
+            // Translations are not data-driven; their anchors do not interpolate (#346).
+            r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"icon-translate":["match",["get","k"],"a",["literal",[1,2]],["literal",[0,0]]]}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"text-translate-anchor":["match",["get","k"],"a","map","viewport"]}}]"#,
+            r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"text-translate-anchor":["interpolate",["linear"],["zoom"],4,"map",8,"viewport"]}}]"#,
+            // A translation is two numbers at every zoom.
+            r#"[{"id":"a","type":"symbol","source-layer":"p","paint":{"text-translate":["step",["zoom"],["literal",[1,2]],8,["literal",[1]]]}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"icon-size":["+",["zoom"],1]}}]"#,
             r#"[{"id":"a","type":"symbol","source-layer":"p","layout":{"symbol-placement":["step",["zoom"],"point",8,"line"]}}]"#,
             r#"[{"id":"a","type":"circle","source-layer":"p","paint":{"circle-radius":["sqrt",["get","n"]]}}]"#,
@@ -606,6 +684,35 @@ mod tests {
             r#"[{"id":"a","type":"fill-extrusion","source-layer":"p"}]"#,
         ] {
             assert!(parse(rejected).is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn symbol_order_takes_data_driven_sort_keys_and_a_constant_z_order() {
+        let parse = |layout: &str| {
+            StyleLayer::parse_all(&format!(
+                r#"[{{"id":"a","type":"symbol","source-layer":"p","layout":{layout}}}]"#
+            ))
+        };
+        for layout in [
+            r#"{"symbol-sort-key":2}"#,
+            r#"{"symbol-sort-key":["get","rank"]}"#,
+            r#"{"symbol-sort-key":["-",0,["get","population"]]}"#,
+            r#"{"symbol-z-order":"auto"}"#,
+            r#"{"symbol-z-order":"viewport-y","symbol-sort-key":["get","rank"]}"#,
+            r#"{"symbol-z-order":"source"}"#,
+        ] {
+            assert!(parse(layout).is_ok(), "{layout}");
+        }
+        for layout in [
+            r#"{"symbol-z-order":"depth"}"#,
+            r#"{"symbol-z-order":["step",["zoom"],"auto",8,"source"]}"#,
+            r#"{"symbol-sort-key":["unknown-op",1]}"#,
+            // The style specification takes feature data only for sort keys, as MapLibre.
+            r#"{"symbol-sort-key":["interpolate",["linear"],["zoom"],4,["get","rank"],9,0]}"#,
+            r#"{"symbol-sort-key":["step",["zoom"],1,8,2]}"#,
+        ] {
+            assert!(parse(layout).is_err(), "{layout}");
         }
     }
 }

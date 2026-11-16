@@ -191,12 +191,34 @@ Limits:
   SwiftShader is software rendering and does not prove hardware GPU performance.
   The earlier Canvas capture used a different collector/browser and is not a matched baseline.
 - The control lane isolates the cost of the heat surfaces; it is not a reference
-  implementation. No reference or parent revision runs this journey, so `evaluation.json`
-  records comparison and Moonlight as `unavailable`. This evidence is descriptive, not a Fast
-  verdict.
+  implementation. Without `--reference`, `evaluation.json` records comparison as
+  `unavailable`. Moonlight browser performance policy remains unavailable. These captures
+  are descriptive, not an automatic Fast verdict.
 - GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
   Heat/scalar computation remains in TypeScript; prepared RGBA pixels and projected meshes
   cross into WASM for GPU presentation.
+
+### Hardware heat/scalar captures
+
+`verify:engine-heat-scalar-evidence --gpu` selects
+`heat-scalar-journey-hardware-browser-v1.yaml`: the same journey with Linux ANGLE/Vulkan
+flags instead of SwiftShader. Confirm the physical adapter on the capture host; selecting
+`wgpu` alone does not prove hardware acceleration. Keep software-rendered browser checks
+as the portable correctness lane.
+
+Supply a previous immutable bundle with `--reference /path/to/bundle` to require
+runtime-profiler's strict browser comparability check. Both captures must use the same
+scenario, journey, browser, profiler and execution environment. The command preserves
+`comparability.json`; an incompatible reference fails rather than being silently ignored.
+The no-heat control lane is still diagnostic, not a reference implementation. A comparable
+bundle is not a Moonlight performance verdict; that policy remains unavailable here.
+
+```sh
+MAPS_HEAT_SCALAR_EVIDENCE_DIR=.runtime-profiler/heat-hardware-candidate \
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler \
+bun run verify:engine-heat-scalar-evidence --gpu --reference /path/to/reference-bundle
+```
+
 
 ## Temporal playback journey evidence (#172)
 
@@ -251,6 +273,56 @@ Limits:
 - The idle phase is the same Map View paused, not a reference implementation. No reference or
   parent revision runs this journey, so `evaluation.json` records comparison and Moonlight as
   `unavailable`. This evidence is descriptive, not a Fast verdict.
+- GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
+
+## Camera transition journey evidence (#433)
+
+`runtime-profiler-scenarios/camera-transition-journey-browser-v1.yaml` captures the canonical
+`camera-transition-journey-v1` through the same `browser-chromium` collector. Its Maps-owned
+journey, `scripts/profile-camera-transition-journey.ts`, builds
+`e2e/fixtures/camera-transition-journey.html` for production, serves it with the built
+`dist/wasm` package and flies the public controlled Map View with `flyTo`. It writes a Maps
+observation (`maps.camera-transition-journey-observation/v1`) next to the immutable bundle.
+`verify:engine-runtime-evidence` runs it as `verify:engine-camera-transition-evidence`, under
+`camera-transition/` in the existing artifact:
+
+```sh
+RUNTIME_PROFILER_BIN=/path/to/runtime-profiler bun run verify:engine-camera-transition-evidence
+```
+
+Per flight the observation records the presented `fly-to` frames (from the fixture's
+`onViewStateChange` trace, on each frame's animation-frame time), the longest gap between
+them counted from the command, `fly-to` frames after an interruption, and whether a completed
+flight's last frame is its target. Per phase it records `requestAnimationFrame` intervals,
+long tasks, slow input events, the Map View's base renders (renderer stats) and the runtime
+counters (`e2e/helpers/mixed-layer-work.ts`): frame plans, each also a measured
+`runtime-profiler:js-to-wasm:frame-plan` crossing, projected coordinates, GPU frames, Canvas
+base and overlay redraws, retained point/polygon writes, tile uploads and released runtimes
+and renderers. JS heap is sampled after forced GC, including after each mid-flight unmount.
+
+The verifier fails when evidence is missing or the contract is broken:
+
+- every completed flight plans and renders the base at most once per animation frame it spans,
+  counted in the page from the command to the flight's last frame (a resize may re-plan once
+  outside one);
+- no phase outside teardown rebuilds the runtime or re-lowers a retained Map Layer group;
+- every completed flight ends on its target and every interrupted one presents no later frame;
+- successive commands supersede the flights in progress, a pointer press and each unmount end
+  a running flight, and each `animate: false` jump presents exactly one frame;
+- teardown releases one runtime per unmount, and the JS heap after GC grows by less than 1 MB
+  across the three mid-flight unmounts.
+
+It writes `evaluation.json` with a per-phase summary.
+
+Limits:
+
+- The pinned collector launches Chromium without WebGPU flags, so the capture measures the
+  Canvas fallback. `e2e/maps-camera-transition-journey.spec.ts` checks the per-frame plan and
+  render contract on SwiftShader WebGPU as well, without timing. Hardware GPU timing is not
+  measured.
+- No reference implementation or parent revision runs this journey in the evidence command,
+  so `evaluation.json` records comparison and Moonlight as `unavailable`. This evidence is
+  descriptive, not a Fast verdict.
 - GPU memory, WASM linear memory, total browser memory and GPU completion time are unavailable.
 
 ## Comparability
@@ -446,6 +518,51 @@ Read the result with these limits:
 Every Pages deploy build runs the command and publishes the bundles under
 `/maps/evidence/atlas-tileset/` and the report at
 `/maps/evidence/atlas-tileset-runtime.json`. PR previews skip it.
+
+## Canvas fallback zoom memory (#447)
+
+Sustained wheel zoom on the Canvas2D fallback makes browser memory grow. Maps does not
+hold that memory. The memory Maps owns there is bounded as follows:
+
+- **Decoded tile images.** These are the only tile memory the Canvas fallback keeps. Rust's
+  tile cache bounds them for the active and inactive sources together. Its capacity is
+  `DEFAULT_CACHE_CAPACITY` (512 tiles) in `crates/maps-core/src/flat_runtime.rs`; a Map View
+  sets another with `tileLimits.cacheCapacity`. The base canvas publishes the count as
+  `data-map-base-retained-tiles`. The browser runtime closes every image Rust evicts and
+  every image whose load was superseded.
+- **JS heap.** After a forced GC it returns to within a few MB of its starting size.
+
+`src/maps-canvas-tile-retention.test.ts` checks the eviction contract. The browser check
+`e2e/maps-canvas-zoom-memory.spec.ts` checks the live counts during a real zoom journey.
+
+The growth is in Chromium's GPU process. The page draws its 2D canvases on the CPU. Each
+presented frame of the base surface and the overlay is uploaded to a texture, and the
+compositor's GPU resource cache keeps those uploads. A Chromium memory-infra dump after 60
+zoom steps under the CI flags (`e2e/helpers/webgpu-args.ts`: Graphite on Dawn/SwiftShader,
+`--disable-accelerated-2d-canvas`) showed 1.05 GB of Skia GPU resources. They were mostly
+`TextureUploadBuffer`s: 175 of 3.96 MB, the 1328×736 base surface, and 174 of 2.09 MB,
+the 1072×480 overlay. In the renderer process, the largest allocator was V8 at 76 MB.
+
+Advisory measurements on a loaded workstation, from the `maps-runtime` acceptance page
+with 400 alternating wheel steps (zoom 6 to 15 and back):
+
+| Backend | Chromium configuration | JS heap after GC | Renderer private | GPU process |
+| --- | --- | --- | --- | --- |
+| Canvas2D | CI flags (Graphite, software 2D canvas) | 34.5 → 36.5 MB | ~165 → ~185 MB | 0.25 → 9.7 GB RSS, still growing |
+| WebGPU | CI flags | 34.8 → 37.0 MB | ~160 → ~185 MB | 0.31 → 3.4 GB RSS, still growing |
+| Canvas2D | Ganesh (`--disable-skia-graphite`), software 2D canvas | 34.5 → 36.5 MB | ~165 → ~190 MB | 145 → ~350 MB RSS, levels off from step 50 |
+| WebGPU | Ganesh, software 2D canvas | 34.8 → 36.9 MB | ~160 → ~190 MB | 195 → ~305 MB RSS |
+| Canvas2D | Graphite, accelerated 2D canvas | 34.5 → 36.5 MB | ~140 → ~165 MB | 260 → 150–335 MB RSS, no trend |
+| Canvas2D | Default headless Chromium | 34.5 → 35.9 MB | ~175 → ~200 MB | 92 MB RSS throughout |
+
+The ~350 MB level in #447 is the Ganesh row: the GPU process fills its resource cache
+and stops growing. That cache belongs to the browser; Maps sets no budget for it. Under
+Graphite on SwiftShader the uploads are not reclaimed, even after 20 s idle. A plain page
+that redraws one 2D canvas for 600 frames under the same flags stays at about 66 MB, so
+how much is kept depends on page state that this investigation did not isolate. Specs
+that zoom on the Canvas fallback therefore run in their own browser, so the next spec does
+not inherit the grown GPU process. The Moonlight evidence path still has no browser or
+GPU memory (#76); these figures are advisory and not a gate.
 
 ## MapLibre oracle gate
 
