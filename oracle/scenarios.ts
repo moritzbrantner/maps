@@ -592,14 +592,7 @@ export const scenarios: Scenario[] = [
     camera: { bearing: -25, center: [9.0, 47.4], pitch: 50, zoom: 8 },
     capability:
       "line-pattern under a pitched camera: tileset line layers and GeoJSON lines on the projected path, on the map plane",
-    knownGaps: [
-      {
-        gate: "time",
-        issue: 387,
-        reason:
-          "pitched patterned lines are retained, but the ratio stays at line-pattern's WebGPU presentation floor (#343)",
-      },
-    ],
+    knownGaps: [FRAME_TIME_GAP],
     name: "line-pattern-pitch",
     origin: "Patterned lines under a pitched camera (#350), follow-up of line patterns (#349)",
     size: MAP_SIZE,
