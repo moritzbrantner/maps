@@ -46,6 +46,8 @@ export type MapInteractionMode = "none" | "measurement" | "editing";
  * hover updates: those have their own subscriptions below (#119).
  */
 export type MapSurfaceContextValue = {
+  /** Native first-party input/render seam; absent on the MapLibre reference surface. */
+  mapsInteraction?: import("./maps-layer-interaction").MapsLayerInteraction;
   /** Closes the open feature popup; with `feature`, only when it is that feature's popup. */
   closeFeaturePopup: (feature?: unknown) => void;
   display: MapDisplayMode;
