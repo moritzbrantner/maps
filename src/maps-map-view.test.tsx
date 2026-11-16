@@ -10,7 +10,8 @@ import { MapView } from "./map-view";
 import { BeeLineMeasurementLayer } from "./measurement-map-layer";
 import { PointLayer } from "./point-layer";
 
-const { renderedFeatureQueries } = vi.hoisted(() => ({
+const { cameraFrames, renderedFeatureQueries } = vi.hoisted(() => ({
+  cameraFrames: { present: null as null | (() => void) },
   renderedFeatureQueries: [] as Array<{ layers: string[]; point: { x: number; y: number } }>,
 }));
 
@@ -43,6 +44,7 @@ vi.mock("./canvas-flat-runtime", async () => {
     viewState: ViewState;
     background?: string;
     maxBounds?: [number, number, number, number];
+    onCameraFrame?: () => void;
     onContextMenu?: (context: {
       client: { x: number; y: number };
       coordinates: [number, number];
@@ -54,6 +56,7 @@ vi.mock("./canvas-flat-runtime", async () => {
   };
 
   function MockMapsCanvasFlatRuntime(props: Props) {
+    cameraFrames.present = () => props.onCameraFrame?.();
     React.useEffect(() => {
       let currentViewState = props.viewState;
       const controller: Controller & { flushCameraFrame(): void } = {
@@ -521,6 +524,47 @@ describe("Maps-owned MapView runtime", () => {
       expect(onHoveredFeatureIdChange).toHaveBeenCalledWith(
         null,
         expect.objectContaining({ featureId: null, source: "clear" }),
+      );
+    });
+  });
+
+  test("selects on a pitched map when a camera frame presents during the click", async () => {
+    const onSelectedFeatureIdChange = vi.fn();
+
+    render(
+      <MapView
+        flatRuntime="maps"
+        fitToData={false}
+        initialViewState={{ center: [0, 0], pitch: 50, zoom: 4 }}
+        mapLabel="Pitched point Maps runtime"
+        mapStyle={{ tiles: false }}
+      >
+        <PointLayer
+          getFeatureId={() => "stable-berlin"}
+          onSelectedFeatureIdChange={onSelectedFeatureIdChange}
+          points={[{ id: "berlin", label: "Berlin", latitude: 52.52, longitude: 13.405 }]}
+        />
+      </MapView>,
+    );
+
+    const map = screen.getByLabelText("Pitched point Maps runtime");
+    const baseCanvas = getBaseCanvas(map);
+    await waitFor(() => expect(map.getAttribute("data-map-ready")).toBe("true"));
+
+    fireEvent.pointerDown(baseCanvas, {
+      button: 0,
+      clientX: 534.05,
+      clientY: 37.4,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    act(() => cameraFrames.present?.());
+    fireEvent.click(baseCanvas, { button: 0, clientX: 534.05, clientY: 37.4 });
+
+    await waitFor(() => {
+      expect(onSelectedFeatureIdChange).toHaveBeenCalledWith(
+        "stable-berlin",
+        expect.objectContaining({ featureId: "stable-berlin", source: "click" }),
       );
     });
   });

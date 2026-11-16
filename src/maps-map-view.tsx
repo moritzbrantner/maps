@@ -1007,7 +1007,14 @@ export function MapsMapView({
           maxZoom={resolvedMaxZoom}
           onCameraFrame={() => {
             overlayControllerRef.current?.redraw();
-            if ((runtimeControllerRef.current?.getViewState().pitch ?? 0) !== 0) cancelInteraction();
+            // Only an active measurement/editing mode is restricted to an unpitched camera;
+            // cancelling otherwise would swallow ordinary clicks on a pitched map.
+            if (
+              interactionModeRef.current !== "none" &&
+              (runtimeControllerRef.current?.getViewState().pitch ?? 0) !== 0
+            ) {
+              cancelInteraction();
+            }
             emitInteraction({ type: "camera" });
           }}
           onContextMenu={handleMapContextMenu}
