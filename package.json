@@ -151,9 +151,9 @@
     "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
-    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#934f40542c11c67f76e44d4f0753addee308d16e",
-    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#7c7e9d827c397d1c7a5e9aef67774226519d829a",
-    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#91da9c9443c388450ddd3207b5e84344d9d235ac",
+    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#a4c39d515bc91eeddaa02ece9eb9bd2834870d88",
+    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#c89bd161af45a7e650055ea994d175e9d3da9dfe",
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#3d9415186e8eca412079811a1ff9218beceb1391",
     "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.5",
     "@tanstack/react-query": "5.107.1",
@@ -171,7 +171,7 @@
     "geojson-vt": "5.0.4",
     "jsdom": "30.1.3",
     "leaflet": "1.9.4",
-    "mobile-analysis": "git+https://github.com/moritzbrantner/mobile-analysis.git#923f797ae6cf6519c99d95b2ee9c98514c9e5195",
+    "mobile-analysis": "git+https://github.com/moritzbrantner/mobile-analysis.git#88e8062a4aa9da366106b5d2a00d4a1d56929528",
     "oxfmt": "0.78.0",
     "oxlint": "1.93.0",
     "playwright": "1.64.1",
@@ -198,7 +198,7 @@
     }
   },
   "overrides": {
-    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#91da9c9443c388450ddd3207b5e84344d9d235ac",
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#3d9415186e8eca412079811a1ff9218beceb1391",
     "brace-expansion": "5.0.13",
     "browserslist": "4.29.5",
     "fast-uri": "4.2.3",
