@@ -151,9 +151,9 @@
     "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
-    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#a4c39d515bc91eeddaa02ece9eb9bd2834870d88",
-    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#c89bd161af45a7e650055ea994d175e9d3da9dfe",
-    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#3d9415186e8eca412079811a1ff9218beceb1391",
+    "@moenarch/editor-core": "git+https://github.com/moritzbrantner/editor-core.git#4e4988c52b6e21b535494add35edd02b84e42aa0",
+    "@moritzbrantner/timeline-editor": "git+https://github.com/moritzbrantner/timeline-editor.git#3ad3131103064c76c0c60caf43fc4c771c79ce5b",
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#14cdcdfbb2f1f7082ac443e680d7383f79cfd16a",
     "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.5",
     "@tanstack/react-query": "5.108.0",
@@ -198,7 +198,7 @@
     }
   },
   "overrides": {
-    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#3d9415186e8eca412079811a1ff9218beceb1391",
+    "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#14cdcdfbb2f1f7082ac443e680d7383f79cfd16a",
     "brace-expansion": "5.0.13",
     "browserslist": "4.29.6",
     "fast-uri": "4.2.3",
