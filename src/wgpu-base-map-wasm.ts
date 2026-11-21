@@ -18,6 +18,46 @@ import type { MapsWgpuApplicationFrame } from "./wgpu-application-frame";
 const PACKED_TILE_DRAW_HEADER_LENGTH = 22;
 const PACKED_TILE_DRAW_STRIDE = 7;
 
+/**
+ * Packs a frame's tile placements and render camera for Rust (`unpack_tile_draws`): the wgpu
+ * renderer's `renderPacked` and the Canvas2D style layers (`MapsStyleLayerFrames.frame`) read
+ * the same record. Grows and returns `buffer` (reused across frames; wasm-bindgen copies the
+ * view into WASM memory) with the packed view.
+ */
+export function packMapsTileDraws(
+  buffer: Float64Array<ArrayBuffer>,
+  placements: readonly MapsRasterTilePlacement[],
+  renderCamera: MapsRasterRenderCamera,
+  surfaceMargin: number,
+  viewportClip: { height: number; width: number } | null,
+) {
+  const capacity = PACKED_TILE_DRAW_HEADER_LENGTH + placements.length * PACKED_TILE_DRAW_STRIDE;
+  if (buffer.length < capacity) buffer = new Float64Array(capacity * 2);
+  buffer.set(renderCamera.viewProjection);
+  buffer[16] = surfaceMargin;
+  buffer[17] = viewportClip?.width ?? 0;
+  buffer[18] = viewportClip?.height ?? 0;
+  // Same ratio the host uses to size the canvas backing store.
+  buffer[19] = Math.max(1, globalThis.devicePixelRatio || 1);
+  // Pixel-grid alignment of raster tiles applies at rest only, as in MapLibre.
+  const alignment = viewportClip ? undefined : renderCamera.rasterAlignment;
+  buffer[20] = alignment?.[0] ?? 0;
+  buffer[21] = alignment?.[1] ?? 0;
+  let length = PACKED_TILE_DRAW_HEADER_LENGTH;
+  for (const placement of placements) {
+    if (viewportClip && placement.visible === false) continue;
+    buffer[length] = placement.tile.z;
+    buffer[length + 1] = placement.tile.x;
+    buffer[length + 2] = placement.tile.y;
+    buffer[length + 3] = placement.localWest;
+    buffer[length + 4] = placement.localNorth;
+    buffer[length + 5] = placement.localSize;
+    buffer[length + 6] = placement.opacity ?? 1;
+    length += PACKED_TILE_DRAW_STRIDE;
+  }
+  return { buffer, draws: buffer.subarray(0, length) };
+}
+
 // Async hosts can overlap while replacing a renderer on the same DOM canvas.
 // Only the latest request may change that canvas or submit work to its surface.
 const rendererOwners = new WeakMap<HTMLCanvasElement, object>();
@@ -424,37 +464,19 @@ export async function loadMapsWgpuBaseMapRenderer(
       ) {
         return runRendererOperation(canvas, owner, () => {
           assertLive(disposed);
-          const capacity =
-            PACKED_TILE_DRAW_HEADER_LENGTH + placements.length * PACKED_TILE_DRAW_STRIDE;
-          // Reused across frames; wasm-bindgen copies the view into WASM memory.
-          if (tileDraws.length < capacity) tileDraws = new Float64Array(capacity * 2);
-          tileDraws.set(renderCamera.viewProjection);
-          tileDraws[16] = surfaceMargin;
-          tileDraws[17] = viewportClip?.width ?? 0;
-          tileDraws[18] = viewportClip?.height ?? 0;
-          // Same ratio the host uses to size the canvas backing store.
-          tileDraws[19] = Math.max(1, globalThis.devicePixelRatio || 1);
-          // Pixel-grid alignment of raster tiles applies at rest only, as in MapLibre.
-          const alignment = viewportClip ? undefined : renderCamera.rasterAlignment;
-          tileDraws[20] = alignment?.[0] ?? 0;
-          tileDraws[21] = alignment?.[1] ?? 0;
-          let length = PACKED_TILE_DRAW_HEADER_LENGTH;
-          for (const placement of placements) {
-            if (viewportClip && placement.visible === false) continue;
-            tileDraws[length] = placement.tile.z;
-            tileDraws[length + 1] = placement.tile.x;
-            tileDraws[length + 2] = placement.tile.y;
-            tileDraws[length + 3] = placement.localWest;
-            tileDraws[length + 4] = placement.localNorth;
-            tileDraws[length + 5] = placement.localSize;
-            tileDraws[length + 6] = placement.opacity ?? 1;
-            length += PACKED_TILE_DRAW_STRIDE;
-          }
+          const packed = packMapsTileDraws(
+            tileDraws,
+            placements,
+            renderCamera,
+            surfaceMargin,
+            viewportClip,
+          );
+          tileDraws = packed.buffer;
           renderer.setFrameTime(performance.now());
           const rasters = prepareRasters(applicationFrame);
           const objectFrame = applicationFrame ? applicationObjectFrame(applicationFrame) : null;
           return renderer.renderPacked(
-            tileDraws.subarray(0, length),
+            packed.draws,
             objectFrame && rasters.length ? { ...objectFrame, rasters } : objectFrame,
             applicationFrame?.circleData ?? EMPTY_CIRCLES,
             applicationFrame?.order ?? EMPTY_ORDER,

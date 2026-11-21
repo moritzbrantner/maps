@@ -19,7 +19,13 @@
  * bun run oracle -- --no-timing        image + interaction gates only
  * bun run oracle -- --out DIR          report directory (default target/oracle)
  * bun run oracle -- --list             scenario names
+ * bun run oracle -- --canvas           the Canvas2D lane (default report target/oracle-canvas)
  * ```
+ *
+ * The Canvas2D lane (#346) hides WebGPU from the Maps page, so Maps draws through its Canvas2D
+ * fallback, and gates image and interaction against the same MapLibre reference. Frame time is
+ * not gated there. Its image limits and known gaps are each scenario's `canvas` entry: Canvas
+ * antialiasing differs from the GPU's, so measured per-scenario tolerances are recorded there.
  *
  * A failing gate listed in a scenario's `knownGaps` is reported, not failed; a listed gap that
  * passes fails the run until its entry is removed. Time gaps are judged only where the time
@@ -70,8 +76,11 @@ const option = (name: string) => {
   return index === -1 ? undefined : args[index + 1];
 };
 const only = args.flatMap((arg, index) => (args[index - 1] === "--only" ? [arg] : []));
-const timing = !args.includes("--no-timing");
-const outDir = path.resolve(option("--out") ?? path.join(root, "target/oracle"));
+const canvasLane = args.includes("--canvas");
+const timing = !args.includes("--no-timing") && !canvasLane;
+const outDir = path.resolve(
+  option("--out") ?? path.join(root, canvasLane ? "target/oracle-canvas" : "target/oracle"),
+);
 const python = process.env.ORACLE_PYTHON ?? "python3";
 /**
  * Frame timing (#338, as render-engine#30 and 2d-lab#63): an untimed warm-up, then frames back
@@ -236,9 +245,16 @@ async function runScenario(scenario: Scenario) {
   write(`${scenario.name}.maplibre-repeat.png`, floorRun.png);
   const flip = runFlip(files.maplibre, files.maps, files.flip);
   const floor = runFlip(files.maplibre, `${scenario.name}.maplibre-repeat.png`, null);
-  // A principled per-scenario limit: MapLibre's own run-to-run noise, rounded up.
-  const meanMax = Math.max(FLIP_MEAN_MAX, Math.ceil(floor.mean * 1000) / 1000);
-  const p99Max = Math.max(FLIP_P99_MAX, Math.ceil(floor.p99 * 100) / 100);
+  // A principled per-scenario limit: MapLibre's own run-to-run noise, rounded up; on the
+  // Canvas lane, also the scenario's recorded Canvas antialiasing tolerance.
+  const lane = canvasLane ? (scenario.canvas ?? {}) : {};
+  const meanMax = Math.max(
+    FLIP_MEAN_MAX,
+    Math.ceil(floor.mean * 1000) / 1000,
+    lane.flipMeanMax ?? 0,
+  );
+  const p99Max = Math.max(FLIP_P99_MAX, Math.ceil(floor.p99 * 100) / 100, lane.flipP99Max ?? 0);
+  const knownGaps = canvasLane ? (lane.knownGaps ?? []) : scenario.knownGaps;
   const imageOk = candidate.error === null && flip.mean <= meanMax && flip.p99 <= p99Max;
 
   const interaction = compareInteractions(scenario, reference.steps, candidate.steps);
@@ -275,7 +291,7 @@ async function runScenario(scenario: Scenario) {
     }
   }
   const time = measure();
-  const judged = judgeOracleGates(scenario.knownGaps, imageOk, interactionOk, time, gateTiming);
+  const judged = judgeOracleGates(knownGaps, imageOk, interactionOk, time, gateTiming);
 
   return {
     capability: scenario.capability,
@@ -284,7 +300,7 @@ async function runScenario(scenario: Scenario) {
     gates: judged.gates,
     image: { ...flip, floor, meanMax, p99Max },
     interaction,
-    knownGaps: scenario.knownGaps,
+    knownGaps,
     mapsBaseRenderer: candidate.baseRenderer,
     name: scenario.name,
     origin: scenario.origin,
@@ -360,6 +376,12 @@ async function openFixture(
   });
   // Before any page script, so both runtimes' frame callbacks are wrapped identically.
   if (attributeFrames) await page.addInitScript(installFrameAttribution);
+  // The Canvas2D lane: without `navigator.gpu`, Maps draws through its Canvas2D fallback.
+  if (canvasLane && runtime === "maps") {
+    await page.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, "gpu", { configurable: true, get: () => undefined });
+    });
+  }
   const errors: string[] = [];
   /** Console errors only explain a readiness timeout; page errors fail the capture. */
   const consoleErrors: string[] = [];
@@ -427,6 +449,9 @@ async function capture(
       .first()
       .getAttribute("data-map-base-renderer", { timeout: 1000 })
       .catch(() => null);
+    if (canvasLane && runtime === "maps" && baseRenderer !== "canvas2d") {
+      errors.unshift(`Canvas lane drew with base renderer ${baseRenderer}, not canvas2d`);
+    }
     const png = await page.locator("#map").screenshot({ animations: "disabled" });
     const steps: StepResult[] = [];
     if (interact) {

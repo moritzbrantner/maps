@@ -32,6 +32,7 @@ import {
   type MapsPanVelocity,
 } from "./canvas-flat-inertia";
 import { drawCanvasRasterTile } from "./canvas-raster-projective";
+import { loadMapsCanvasStyleLayers, type MapsCanvasStyleLayers } from "./canvas-style-layers-wasm";
 import { fadeRasterPlacements } from "./raster-tile-transition";
 import {
   areMapsViewStatesEqual,
@@ -218,8 +219,8 @@ export type MapsCanvasFlatRuntimeController = {
   projectPacked(coordinates: Float64Array): Float64Array;
   /**
    * The rendered features of Tileset `circle` and `symbol` style layers at a viewport point
-   * (CSS px), topmost first, as Rust placed and drew them in the last frame (#346). Empty
-   * without the WebGPU backend, which alone draws style layers.
+   * (CSS px), topmost first, as Rust placed and drew them in the last frame (#346), on the
+   * WebGPU backend or the Canvas2D fallback alike.
    */
   queryRenderedFeatures(
     point: { x: number; y: number },
@@ -886,8 +887,9 @@ export function createMapsBrowserRuntime(
       },
       queryRenderedFeatures(point, layers) {
         assertActive();
-        if (!activeRenderer || layers.length === 0) return [];
-        return activeRenderer.queryRenderedFeatures(point, layers);
+        if (layers.length === 0) return [];
+        if (activeRenderer) return activeRenderer.queryRenderedFeatures(point, layers);
+        return frameSynchronizer.queryCanvasStyleLayers(point, layers);
       },
       renderApplicationFrame(frame, interaction = {}) {
         if (cancelled) return false;
@@ -1357,6 +1359,21 @@ function applySurfaceGeometry(targets: HTMLCanvasElement[], margin: number) {
   };
 }
 
+/** The style-layer calls the wgpu renderer and the Canvas2D fallback share (#346). */
+type StyleLayerBackend = Pick<
+  MapsCanvasStyleLayers,
+  | "addGlyphs"
+  | "evictVectorSourceTile"
+  | "evictVectorTile"
+  | "missingGlyphRanges"
+  | "setVectorLayers"
+  | "setVectorMaxZoom"
+  | "setVectorSource"
+  | "uploadVectorTile"
+> & {
+  addSprite?(json: string, rgba: Uint8Array, width: number, height: number): number;
+};
+
 function createFrameSynchronizer({
   loadTile,
   canvas,
@@ -1455,12 +1472,65 @@ function createFrameSynchronizer({
   let decodes = 0;
   let bucketBuilds = 0;
   let cacheReuses = 0;
+  // Tileset style layers on the Canvas2D fallback (#346): the same Rust style-layer state
+  // the wgpu renderer holds, fed through the same calls (see `styleLayers`).
+  let canvasStyleLayers: MapsCanvasStyleLayers | null = null;
+  let canvasStyleLayersLoad: Promise<void> | null = null;
+  /** Where tileset style layers live: the wgpu renderer, else the Canvas fallback's. */
+  function styleLayers(): StyleLayerBackend | null {
+    return renderer() ?? canvasStyleLayers;
+  }
+  function wantsCanvasStyleLayers() {
+    return !renderer() && Boolean(tileset()) && (tilesetLayers()?.layers.length ?? 0) > 0;
+  }
+  /**
+   * Loads the Canvas fallback's style layers once they are needed (a Canvas Map View with
+   * `tilesetLayers`, or a renderer that fell back) and replays the decoded vector tiles.
+   * Resolves once loaded; a failure is reported through `onError`, never silently dropped.
+   */
+  function ensureCanvasStyleLayers(): Promise<void> {
+    if (canvasStyleLayers || !wantsCanvasStyleLayers()) return Promise.resolve();
+    canvasStyleLayersLoad ??= loadMapsCanvasStyleLayers(wasmPackage).then(
+      (loaded) => {
+        if (disposed) {
+          loaded.dispose();
+          return;
+        }
+        canvasStyleLayers = loaded;
+        configureVectorRenderer();
+        for (const { bytes, tile } of vectors.values()) {
+          try {
+            loaded.uploadVectorTile(tile, bytes);
+          } catch (error) {
+            onError(error);
+          }
+        }
+        void loadGlyphs();
+        void loadSprite();
+        requestRender();
+      },
+      (error) => {
+        onError(
+          new Error(
+            `Canvas2D fallback cannot draw tileset style layers: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
+        );
+      },
+    );
+    return canvasStyleLayersLoad;
+  }
   function configureVectorRenderer() {
-    const current = renderer();
-    if (!current || !tileset()) return;
+    if (!tileset()) return;
+    const current = styleLayers();
+    if (!current) {
+      void ensureCanvasStyleLayers();
+      return;
+    }
     current.setVectorSource(sourceIdentity);
     current.setVectorMaxZoom(tileset()!.maxZoom);
-    current.setVectorStyle(tilesetStyleTable(tilesetStyle()));
+    renderer()?.setVectorStyle(tilesetStyleTable(tilesetStyle()));
     try {
       current.setVectorLayers(JSON.stringify(tilesetLayers()?.layers ?? []));
     } catch (error) {
@@ -1469,11 +1539,11 @@ function createFrameSynchronizer({
   }
   configureVectorRenderer();
 
-  // Glyph ranges per renderer: a replaced renderer starts without glyphs.
-  const glyphRequests = new WeakMap<MapsWgpuBaseMapRenderer, Map<string, Promise<void>>>();
+  // Glyph ranges per style-layer backend: a replaced renderer starts without glyphs.
+  const glyphRequests = new WeakMap<StyleLayerBackend, Map<string, Promise<void>>>();
   /** Loads the SDF glyph ranges the renderer's tiles still need (MapLibre's GlyphManager). */
   function loadGlyphs(): Promise<void> {
-    const current = renderer();
+    const current = styleLayers();
     const template = tilesetLayers()?.glyphs;
     if (!current || !template) return Promise.resolve();
     let requests = glyphRequests.get(current);
@@ -1493,7 +1563,7 @@ function createFrameSynchronizer({
             return response.arrayBuffer();
           })
           .then((buffer) => {
-            if (disposed || renderer() !== current) return;
+            if (disposed || styleLayers() !== current) return;
             current.addGlyphs(stack, start, new Uint8Array(buffer));
             invalidateRendered();
             requestRender();
@@ -1511,7 +1581,7 @@ function createFrameSynchronizer({
    * Tiles the frame laid out again past the source's maximum zoom (#346): report the ones
    * that failed and load the glyph ranges the new layout needs.
    */
-  function syncStyleRelayout(current: MapsWgpuBaseMapRenderer) {
+  function syncStyleRelayout(current: { takeStyleRelayout?(): string[] | undefined }) {
     const errors = current.takeStyleRelayout?.();
     if (!errors) return;
     for (const error of errors) onError(new Error(`could not lay out tileset style layers: ${error}`));
@@ -1545,13 +1615,13 @@ function createFrameSynchronizer({
   }
 
   // The sprite per renderer and URL (#323): a replaced renderer starts without images.
-  const spriteRequests = new WeakMap<MapsWgpuBaseMapRenderer, Map<string, Promise<void>>>();
+  const spriteRequests = new WeakMap<StyleLayerBackend, Map<string, Promise<void>>>();
   /** Loads the style's sprite into the renderer's image atlas (MapLibre's `loadSprite`). */
   function loadSprite(): Promise<void> {
     const url = sprite();
     if (!url) return Promise.resolve();
     const sheet = loadSpriteSheet(url);
-    const current = renderer();
+    const current = styleLayers();
     if (!current?.addSprite) return sheet.then(() => undefined);
     let requests = spriteRequests.get(current);
     if (!requests) spriteRequests.set(current, (requests = new Map()));
@@ -1559,7 +1629,7 @@ function createFrameSynchronizer({
     if (!request) {
       request = sheet
         .then((loaded) => {
-          if (!loaded || disposed || renderer() !== current) return;
+          if (!loaded || disposed || styleLayers() !== current) return;
           current.addSprite!(loaded.json, loaded.rgba, loaded.width, loaded.height);
           invalidateRendered();
           requestRender();
@@ -2090,10 +2160,31 @@ function createFrameSynchronizer({
       margin,
       viewportOnly,
     );
+    let crossFading = false;
+    if (canvasStyleLayers) {
+      try {
+        if (tilesetLayers()) canvasStyleLayers.setMapMaxZoom(mapMaxZoom());
+        canvasStyleLayers.draw(
+          fallbackCanvas,
+          placements,
+          frame.renderCamera,
+          margin,
+          viewportClip,
+          now,
+        );
+        crossFading = canvasStyleLayers.isCrossFading();
+        if (tilesetLayers()) syncStyleRelayout(canvasStyleLayers);
+      } catch (error) {
+        onError(error);
+      }
+    } else {
+      void ensureCanvasStyleLayers();
+    }
     stats.lastRenderMs = performance.now() - started;
     retainRenderedFrame(frame, viewportOnly);
     setDrawnTiles(drawnTiles);
-    if (fading) requestRender();
+    // Patterns cross-fade for 300 ms after an integer zoom is crossed (#323).
+    if (fading || crossFading) requestRender();
   }
 
   function recordFrameStats(currentRenderer: MapsWgpuBaseMapRenderer) {
@@ -2353,14 +2444,14 @@ function createFrameSynchronizer({
       images.get(tile.key)?.close();
       images.delete(tile.key);
       vectors.delete(tile.key);
-      renderer()?.evictVectorTile(tile);
+      styleLayers()?.evictVectorTile(tile);
     }
 
     if (tileset()) {
       for (const [identity, z, x, y] of runtime.takeSourceEvictions()) {
         const entries = inactive.get(identity);
         const key = `${z}/${x}/${y}`;
-        renderer()?.evictVectorSourceTile(identity, { key, z, x, y });
+        styleLayers()?.evictVectorSourceTile(identity, { key, z, x, y });
         entries?.get(key)?.image.close();
         entries?.delete(key);
         if (entries?.size === 0) inactive.delete(identity);
@@ -2414,10 +2505,19 @@ function createFrameSynchronizer({
             reader!.settleTile?.(bytes, true);
             decodes++;
             vectors.set(tile.key, { bytes, pixels, tile });
-            if (renderer()) {
-              renderer()!.uploadVectorTile(tile, bytes);
+            const currentRenderer = renderer();
+            if (currentRenderer) {
+              currentRenderer.uploadVectorTile(tile, bytes);
               bucketBuilds++;
               decodes++;
+            } else if (canvasStyleLayers) {
+              canvasStyleLayers.uploadVectorTile(tile, bytes);
+            } else {
+              // Loading replays every decoded tile, this one included.
+              await ensureCanvasStyleLayers();
+              abort.signal.throwIfAborted();
+            }
+            if (styleLayers()) {
               // Labels lay out once their glyph ranges arrived, as MapLibre waits for glyphs.
               await loadGlyphs();
               abort.signal.throwIfAborted();
@@ -2463,7 +2563,7 @@ function createFrameSynchronizer({
             loads.delete(tile.key);
             runtime.markFailed(tile);
             vectors.delete(tile.key);
-            renderer()?.evictVectorTile(tile);
+            styleLayers()?.evictVectorTile(tile);
             canvas.dataset.mapBaseTileError =
               error instanceof Error ? error.message : String(error);
             if (descriptor) sourceFailures.set(tile.key, canvas.dataset.mapBaseTileError);
@@ -2485,6 +2585,10 @@ function createFrameSynchronizer({
   return {
     configureRelief,
     updateTileset,
+    /** Tileset style features the Canvas2D fallback drew at a viewport point (#346). */
+    queryCanvasStyleLayers(point: { x: number; y: number }, layers: readonly string[]) {
+      return canvasStyleLayers?.queryRenderedFeatures(point, layers) ?? [];
+    },
     /** The canvases lost their pixels (backing-store reset); the next frame renders. */
     invalidatePixels() {
       invalidateRendered();
@@ -2497,6 +2601,8 @@ function createFrameSynchronizer({
         for (const resource of entries.values()) resource.image.close();
       inactive.clear();
       vectors.clear();
+      canvasStyleLayers?.dispose();
+      canvasStyleLayers = null;
       fallbackCanvas.removeEventListener("contextrestored", restoreCanvasFrame);
       cancelSettle();
       cancelRendererRetry();

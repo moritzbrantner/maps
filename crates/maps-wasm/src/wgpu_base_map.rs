@@ -30,7 +30,10 @@ use crate::retained_polygons::{
     RETAINED_POLYGON_STROKE_VERTEX_SIZE, RetainedPolygonGeometry, RetainedPolygonState,
     RetainedPolygonUpload, RetainedPolygons,
 };
-use crate::style_symbols::{SourceZooms, StyleFrame, StyleSurface, StyleSymbols};
+use crate::style_layer_frames::{
+    DEFAULT_MAP_MAX_ZOOM, placement_zoom, style_frame_tiles, style_surface,
+};
+use crate::style_symbols::{SourceZooms, StyleFrame, StyleSymbols};
 use crate::vector_basemap_layout::{
     FILL_VERTEX_SIZE, LINE_VERTEX_SIZE, STYLE_TABLE_SIZE, fill_index_bytes, fill_vertex_bytes,
     line_index_bytes, line_vertex_bytes, style_table_bytes,
@@ -57,8 +60,6 @@ const MAP_BACKGROUND_GREEN: f64 = 244.0 / 255.0;
 const MAP_BACKGROUND_BLUE: f64 = 238.0 / 255.0;
 /// Shortbread publishes tiles up to z14; deeper cameras overzoom those tiles.
 const DEFAULT_VECTOR_MAX_ZOOM: u8 = 14;
-/// MapLibre's and the Map View's default maximum zoom.
-const DEFAULT_MAP_MAX_ZOOM: f64 = 22.0;
 
 const BASE_MAP_SHADER: &str = include_str!("shaders/base_map.wgsl");
 
@@ -2351,12 +2352,7 @@ impl MapsWgpuBaseMapRenderer {
     /// Places tileset style labels for this frame and uploads their circles and glyphs.
     /// MapLibre's per-frame zoom history and pattern cross-fade, and the atlas upload.
     fn prepare_patterns(&mut self, placements: &[WgpuRasterTilePlacement]) {
-        // The camera zoom from any placed tile: `z + log2(size / 512)`.
-        let Some(zoom) = placements.iter().find_map(|placement| {
-            let (z, _, _) = placement.key?;
-            let zoom = f64::from(z) + (placement.local_size / 512.0).log2();
-            zoom.is_finite().then_some(zoom)
-        }) else {
+        let Some(zoom) = placement_zoom(placements) else {
             return;
         };
         let now = self.frame_time;
@@ -2378,26 +2374,9 @@ impl MapsWgpuBaseMapRenderer {
         if !self.style_symbols.is_active() {
             return StyleFrame::default();
         }
-        let raster = placements.iter().filter_map(|placement| {
-            let (z, x, y) = placement.key?;
-            Some((
-                TileId::new(z, x, y)?,
-                placement.local_west,
-                placement.local_north,
-                placement.local_size,
-            ))
-        });
-        let tiles: Vec<(TileId, LocalFrame)> = vector_tile_placements(raster, self.vector_max_zoom)
-            .iter()
-            .map(|placement| (placement.tile, LocalFrame::from(placement)))
-            .collect();
-        let pixel_ratio = clip.pixel_ratio.max(f64::MIN_POSITIVE);
-        let surface = StyleSurface {
-            width: f64::from(self.config.width) / pixel_ratio,
-            height: f64::from(self.config.height) / pixel_ratio,
-            margin: clip.margin,
-            pixel_ratio,
-        };
+        // The Canvas2D fallback prepares its frames the same way (`style_layer_frames`).
+        let tiles = style_frame_tiles(placements, self.vector_max_zoom);
+        let surface = style_surface(self.config.width, self.config.height, clip);
         let mut frame = self.style_symbols.frame(
             &self.vector_source,
             &tiles,
