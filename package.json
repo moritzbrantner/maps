@@ -156,7 +156,7 @@
     "@moritzbrantner/ui": "git+https://github.com/moritzbrantner/ui.git#3d9415186e8eca412079811a1ff9218beceb1391",
     "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.5",
-    "@tanstack/react-query": "5.108.1",
+    "@tanstack/react-query": "5.108.2",
     "@testing-library/react": "16.3.3",
     "@types/d3-delaunay": "6.0.4",
     "@types/geojson": "7946.0.16",
@@ -209,7 +209,7 @@
     "postcss": "8.5.33",
     "source-map-js": "1.2.4",
     "tinypool": "2.2.0",
-    "undici": "8.12.4",
+    "undici": "8.13.1",
     "vite": "8.3.8"
   },
   "trustedDependencies": [
