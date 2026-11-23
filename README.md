@@ -13,9 +13,9 @@ bun add @moritzbrantner/maps @moritzbrantner/ui react react-dom
 npm install @moritzbrantner/maps @moritzbrantner/ui react react-dom
 ```
 
-For a commit-pinned Git dependency, list `@moritzbrantner/maps` in your app's
+For a Git dependency (by branch, such as `#main`, or by commit), list `@moritzbrantner/maps` in your app's
 `trustedDependencies` so Bun runs its `prepare` script. That script builds JS,
-CSS, and the WASM runtime from the pinned source. The install environment needs
+CSS, and the WASM runtime from that source. The install environment needs
 stable Rust with the `wasm32-unknown-unknown` target and `wasm-bindgen` 0.2.129.
 Binaryen is installed as part of the build dependencies. On Linux,
 `bash scripts/install-wasm-bindgen-ci.sh` installs the checksum-verified
