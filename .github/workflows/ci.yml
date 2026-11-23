@@ -517,6 +517,12 @@ jobs:
         # Frame time is only enforced on a hardware GPU (#343); on CI's software adapter it is
         # advisory and took ~16 of the job's 17 minutes. The image and interaction gates stay.
         run: bun run oracle -- --no-timing --out oracle-report
+      # The Canvas2D lane (#346): the same scenarios through the Canvas2D fallback.
+      - name: MapLibre oracle gate (Canvas2D lane)
+        if: ${{ !cancelled() }}
+        env:
+          ORACLE_PYTHON: ${{ runner.temp }}/flip/bin/python
+        run: bun run oracle -- --canvas --out oracle-report/canvas
       - name: Upload oracle report
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
