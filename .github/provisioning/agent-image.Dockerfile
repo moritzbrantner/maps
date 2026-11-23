@@ -2,7 +2,7 @@
 # (issue #211). It adds no version authority of its own:
 # - the base is the digest-pinned Ubuntu release matching the hosted runner;
 # - Rust comes from rust-toolchain.toml through rustup;
-# - Bun comes from package.json `packageManager`;
+# - Bun is the latest stable release (no `packageManager` pin, owner decision 2026-11-23);
 # - wasm-bindgen comes from the checksum-verified CI installer;
 # - Node uses the same major line (24) as the hosted CI jobs.
 # Application dependencies are never baked in: bun.lock and Cargo.lock stay
@@ -31,9 +31,7 @@ RUN curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rust
   && rustc --version && cargo clippy --version && cargo fmt --version \
   && chmod -R a+rwX "$CARGO_HOME" "$RUSTUP_HOME"
 
-COPY package.json /tmp/toolchain/package.json
-RUN bun_version="$(jq -er '.packageManager | capture("^bun@(?<v>.+)$").v' /tmp/toolchain/package.json)" \
-  && curl --fail --silent --show-error --location https://bun.sh/install | bash -s "bun-v${bun_version}" \
+RUN curl --fail --silent --show-error --location https://bun.sh/install | bash \
   && bun --version
 
 RUN node_version="$(curl --fail --silent --show-error "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt" \

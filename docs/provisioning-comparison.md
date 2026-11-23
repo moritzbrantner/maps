@@ -23,7 +23,7 @@ commands as CI:
 
 1. Install Rust with rustup. `rust-toolchain.toml` selects the channel,
    components and the `wasm32-unknown-unknown` target.
-2. Install Bun at the `packageManager` version in `package.json` and Node 24.
+2. Install the latest stable Bun (no `packageManager` pin since 2026-11-23) and Node 24.
 3. Run `bash scripts/install-wasm-bindgen-ci.sh` for the checksum-verified
    wasm-bindgen CLI (the script's pinned digests are the authority), or install
    wasm-bindgen-cli 0.2.129 yourself.
@@ -55,7 +55,7 @@ three variants of one task on fresh GitHub-hosted `ubuntu-26.04` runners. Since
   `nix develop` shell.
 - **container**: an image built once per run from
   `.github/provisioning/agent-image.Dockerfile`. Its base is pinned by digest. It
-  takes Rust from `rust-toolchain.toml`, Bun from `packageManager`, Node 24 and
+  takes Rust from `rust-toolchain.toml`, the latest stable Bun, Node 24 and
   the verified wasm-bindgen installer, so it adds no version authority of its own.
   Samples run the task in it with `docker run` as the runner user. There is no
   privileged mode and no nested Docker.
@@ -151,8 +151,9 @@ Readings:
 
 - Keep conventional Ubuntu provisioning with checksum-verified precompiled tools
   as the baseline for agent tasks and new CI jobs. It was fastest to the first
-  test, cold and warm, and adds no authority beyond the lockfiles,
-  `rust-toolchain.toml` and `packageManager`.
+  test, cold and warm, and adds no authority beyond the lockfiles and
+  `rust-toolchain.toml` (Bun is the latest stable release; the
+  `packageManager` pin was dropped on 2026-11-23).
 - ~~Retain the locked Nix shell as an optional local environment and in the two
   existing required jobs.~~ Superseded 2026-11-11: the owner retired Nix. It
   cost about 20 s of startup per job and showed no throughput or reliability
