@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- The latest stable Bun (`packageManager` in `package.json` is a minimum).
+- The latest stable Bun. `package.json` declares no `packageManager` (owner decision 2026-11-23); the committed `bun.lock` with `bun install --frozen-lockfile` keeps installs reproducible.
 - Node/npm available for `npm pack`.
 - Stable Rust with `clippy`, `rustfmt`, and the `wasm32-unknown-unknown`
   target when changing Maps-owned Rust computation. `rust-toolchain.toml`

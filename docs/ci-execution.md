@@ -5,7 +5,7 @@ The CI caller preserves the repository's validation commands and required
 
 - Rust format, Clippy, native tests and the WASM-target check run in the Rust
   Validation job, provisioned conventionally: the Rust toolchain action
-  (matching `rust-toolchain.toml`), `setup-bun` from `packageManager`,
+  (matching `rust-toolchain.toml`), `setup-bun` with the latest stable Bun,
   `setup-node` 24 and the checksum-verified wasm-bindgen installer.
 - Clean Git-source acceptance runs independently with the same provisioning.
   Its real install, frozen reinstall, stale-stylesheet rebuild and installed-WASM

@@ -39,7 +39,8 @@ test("the agent image adds no version authority of its own", () => {
   const image = read(".github/provisioning/agent-image.Dockerfile");
   assert.match(image, /^FROM ubuntu:[\d.]+@sha256:[a-f0-9]{64}$/m);
   assert.match(image, /COPY rust-toolchain\.toml/);
-  assert.match(image, /\.packageManager/);
+  assert.match(image, /bun\.sh\/install \| bash \\$/m, "Bun is the latest stable release");
+  assert.doesNotMatch(image, /\.packageManager|bash -s "?bun-v/, "Bun has no pinned version");
   assert.match(image, /install-wasm-bindgen-ci\.sh/);
   assert.doesNotMatch(image, /COPY (bun\.lock|Cargo\.lock|\. )/, "dependencies stay task-time locked");
 });
